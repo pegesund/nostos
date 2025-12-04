@@ -93,79 +93,10 @@ impl Runtime {
     }
 
     /// Register built-in functions for all processes.
+    /// Register builtins that need trait override support.
+    /// Most builtins are now compiled to direct instructions (no string lookup, no HashMap).
+    /// Only `show` and `copy` remain here because they can be overridden via Show/Copy traits.
     pub fn register_builtins(&mut self) {
-        self.register_native("print", 1, |args, heap| {
-            let s = heap.display_value(&args[0]);
-            Ok(GcValue::String(heap.alloc_string(s)))
-        });
-
-        self.register_native("println", 1, |args, heap| {
-            let s = heap.display_value(&args[0]);
-            println!("{}", s);
-            Ok(GcValue::Unit)
-        });
-
-        self.register_native("typeOf", 1, |args, heap| {
-            let type_name = args[0].type_name(heap).to_string();
-            Ok(GcValue::String(heap.alloc_string(type_name)))
-        });
-
-        self.register_native("length", 1, |args, heap| {
-            match &args[0] {
-                GcValue::List(ptr) => {
-                    if let Some(list) = heap.get_list(*ptr) {
-                        Ok(GcValue::Int(list.items.len() as i64))
-                    } else {
-                        Err(RuntimeError::TypeError {
-                            expected: "List".to_string(),
-                            found: "invalid list pointer".to_string(),
-                        })
-                    }
-                }
-                GcValue::String(ptr) => {
-                    if let Some(s) = heap.get_string(*ptr) {
-                        Ok(GcValue::Int(s.data.len() as i64))
-                    } else {
-                        Err(RuntimeError::TypeError {
-                            expected: "String".to_string(),
-                            found: "invalid string pointer".to_string(),
-                        })
-                    }
-                }
-                other => Err(RuntimeError::TypeError {
-                    expected: "List or String".to_string(),
-                    found: other.type_name(heap).to_string(),
-                }),
-            }
-        });
-
-        // Testing builtins
-        self.register_native("assert", 1, |args, _heap| {
-            match &args[0] {
-                GcValue::Bool(true) => Ok(GcValue::Unit),
-                GcValue::Bool(false) => Err(RuntimeError::Panic("Assertion failed".to_string())),
-                other => Err(RuntimeError::TypeError {
-                    expected: "Bool".to_string(),
-                    found: format!("{:?}", other),
-                }),
-            }
-        });
-
-        self.register_native("assert_eq", 2, |args, heap| {
-            let expected = &args[0];
-            let actual = &args[1];
-            if heap.gc_values_equal(expected, actual) {
-                Ok(GcValue::Unit)
-            } else {
-                let expected_str = heap.display_value(expected);
-                let actual_str = heap.display_value(actual);
-                Err(RuntimeError::Panic(format!(
-                    "Assertion failed: expected {}, got {}",
-                    expected_str, actual_str
-                )))
-            }
-        });
-
         // Display - converts value to string (can be overridden via Show trait)
         self.register_native("show", 1, |args, heap| {
             let s = heap.display_value(&args[0]);
@@ -175,140 +106,6 @@ impl Runtime {
         // Copy - creates a deep copy of a value (can be overridden via Copy trait)
         self.register_native("copy", 1, |args, heap| {
             Ok(heap.clone_value(&args[0]))
-        });
-
-        // List operations
-        self.register_native("head", 1, |args, heap| {
-            match &args[0] {
-                GcValue::List(ptr) => {
-                    if let Some(list) = heap.get_list(*ptr) {
-                        if !list.items.is_empty() {
-                            Ok(list.items[0].clone())
-                        } else {
-                            Err(RuntimeError::Panic("head: empty list".to_string()))
-                        }
-                    } else {
-                        Err(RuntimeError::Panic("head: invalid list".to_string()))
-                    }
-                }
-                other => Err(RuntimeError::TypeError {
-                    expected: "List".to_string(),
-                    found: other.type_name(heap).to_string(),
-                }),
-            }
-        });
-
-        self.register_native("tail", 1, |args, heap| {
-            match &args[0] {
-                GcValue::List(ptr) => {
-                    if let Some(list) = heap.get_list(*ptr) {
-                        if !list.items.is_empty() {
-                            let tail_items = list.items[1..].to_vec();
-                            Ok(GcValue::List(heap.alloc_list(tail_items)))
-                        } else {
-                            Err(RuntimeError::Panic("tail: empty list".to_string()))
-                        }
-                    } else {
-                        Err(RuntimeError::Panic("tail: invalid list".to_string()))
-                    }
-                }
-                other => Err(RuntimeError::TypeError {
-                    expected: "List".to_string(),
-                    found: other.type_name(heap).to_string(),
-                }),
-            }
-        });
-
-        self.register_native("isEmpty", 1, |args, heap| {
-            match &args[0] {
-                GcValue::List(ptr) => {
-                    if let Some(list) = heap.get_list(*ptr) {
-                        Ok(GcValue::Bool(list.items.is_empty()))
-                    } else {
-                        Err(RuntimeError::Panic("isEmpty: invalid list".to_string()))
-                    }
-                }
-                GcValue::String(ptr) => {
-                    if let Some(s) = heap.get_string(*ptr) {
-                        Ok(GcValue::Bool(s.data.is_empty()))
-                    } else {
-                        Err(RuntimeError::Panic("isEmpty: invalid string".to_string()))
-                    }
-                }
-                other => Err(RuntimeError::TypeError {
-                    expected: "List or String".to_string(),
-                    found: other.type_name(heap).to_string(),
-                }),
-            }
-        });
-
-        // Math functions
-        self.register_native("abs", 1, |args, _heap| {
-            match &args[0] {
-                GcValue::Int(i) => Ok(GcValue::Int(i.abs())),
-                GcValue::Float(f) => Ok(GcValue::Float(f.abs())),
-                other => Err(RuntimeError::TypeError {
-                    expected: "Int or Float".to_string(),
-                    found: format!("{:?}", other),
-                }),
-            }
-        });
-
-        self.register_native("sqrt", 1, |args, _heap| {
-            match &args[0] {
-                GcValue::Float(f) => Ok(GcValue::Float(f.sqrt())),
-                GcValue::Int(i) => Ok(GcValue::Float((*i as f64).sqrt())),
-                other => Err(RuntimeError::TypeError {
-                    expected: "Float or Int".to_string(),
-                    found: format!("{:?}", other),
-                }),
-            }
-        });
-
-        // Conversion functions
-        self.register_native("toInt", 1, |args, heap| {
-            match &args[0] {
-                GcValue::Int(i) => Ok(GcValue::Int(*i)),
-                GcValue::Float(f) => Ok(GcValue::Int(*f as i64)),
-                GcValue::String(ptr) => {
-                    if let Some(s) = heap.get_string(*ptr) {
-                        s.data.parse::<i64>()
-                            .map(GcValue::Int)
-                            .map_err(|_| RuntimeError::Panic(format!("Cannot convert '{}' to Int", s.data)))
-                    } else {
-                        Err(RuntimeError::Panic("toInt: invalid string".to_string()))
-                    }
-                }
-                other => Err(RuntimeError::TypeError {
-                    expected: "Int, Float, or String".to_string(),
-                    found: other.type_name(heap).to_string(),
-                }),
-            }
-        });
-
-        self.register_native("toFloat", 1, |args, heap| {
-            match &args[0] {
-                GcValue::Float(f) => Ok(GcValue::Float(*f)),
-                GcValue::Int(i) => Ok(GcValue::Float(*i as f64)),
-                GcValue::String(ptr) => {
-                    if let Some(s) = heap.get_string(*ptr) {
-                        s.data.parse::<f64>()
-                            .map(GcValue::Float)
-                            .map_err(|_| RuntimeError::Panic(format!("Cannot convert '{}' to Float", s.data)))
-                    } else {
-                        Err(RuntimeError::Panic("toFloat: invalid string".to_string()))
-                    }
-                }
-                other => Err(RuntimeError::TypeError {
-                    expected: "Int, Float, or String".to_string(),
-                    found: other.type_name(heap).to_string(),
-                }),
-            }
-        });
-
-        self.register_native("panic", 1, |args, heap| {
-            let msg = heap.display_value(&args[0]);
-            Err(RuntimeError::Panic(msg))
         });
     }
 
@@ -1787,6 +1584,143 @@ impl Runtime {
             Instruction::TestUnit(dst, src) => {
                 let is_unit = matches!(reg!(*src), GcValue::Unit);
                 set_reg!(*dst, GcValue::Bool(is_unit));
+            }
+
+            // === Builtin math (compile-time resolved, no runtime dispatch!) ===
+            Instruction::AbsInt(dst, src) => {
+                let val = match reg!(*src) {
+                    GcValue::Int(i) => *i,
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Int(val.abs()));
+            }
+
+            Instruction::AbsFloat(dst, src) => {
+                let val = match reg!(*src) {
+                    GcValue::Float(f) => *f,
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Float(val.abs()));
+            }
+
+            Instruction::SqrtFloat(dst, src) => {
+                let val = match reg!(*src) {
+                    GcValue::Float(f) => *f,
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Float(val.sqrt()));
+            }
+
+            // === Type conversions (compile-time resolved) ===
+            Instruction::IntToFloat(dst, src) => {
+                let val = match reg!(*src) {
+                    GcValue::Int(i) => *i,
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Float(val as f64));
+            }
+
+            Instruction::FloatToInt(dst, src) => {
+                let val = match reg!(*src) {
+                    GcValue::Float(f) => *f,
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Int(val as i64));
+            }
+
+            // === List operations (compile-time resolved) ===
+            Instruction::ListHead(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::List(ptr) => {
+                        if let Some(list) = proc.heap.get_list(*ptr) {
+                            if list.items.is_empty() {
+                                return Err(RuntimeError::Panic("head: empty list".to_string()));
+                            }
+                            list.items[0].clone()
+                        } else {
+                            return Err(RuntimeError::Panic("Invalid list pointer".to_string()));
+                        }
+                    }
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, result);
+            }
+
+            Instruction::ListTail(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::List(ptr) => {
+                        if let Some(list) = proc.heap.get_list(*ptr) {
+                            if list.items.is_empty() {
+                                return Err(RuntimeError::Panic("tail: empty list".to_string()));
+                            }
+                            let tail: Vec<GcValue> = list.items[1..].to_vec();
+                            GcValue::List(proc.heap.alloc_list(tail))
+                        } else {
+                            return Err(RuntimeError::Panic("Invalid list pointer".to_string()));
+                        }
+                    }
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, result);
+            }
+
+            Instruction::ListIsEmpty(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::List(ptr) => {
+                        if let Some(list) = proc.heap.get_list(*ptr) {
+                            list.items.is_empty()
+                        } else {
+                            true // Invalid pointer treated as empty
+                        }
+                    }
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Bool(result));
+            }
+
+            // === IO/Debug builtins ===
+            Instruction::Print(dst, src) => {
+                let s = proc.heap.display_value(reg!(*src));
+                let str_ptr = proc.heap.alloc_string(s.clone());
+                proc.output.push(s);
+                set_reg!(*dst, GcValue::String(str_ptr));
+            }
+
+            Instruction::Println(src) => {
+                let s = proc.heap.display_value(reg!(*src));
+                println!("{}", s);
+                proc.output.push(s);
+            }
+
+            Instruction::Panic(src) => {
+                let msg = proc.heap.display_value(reg!(*src));
+                return Err(RuntimeError::Panic(msg));
+            }
+
+            // === Assertions ===
+            Instruction::Assert(src) => {
+                match reg!(*src) {
+                    GcValue::Bool(true) => {}
+                    GcValue::Bool(false) => {
+                        return Err(RuntimeError::Panic("Assertion failed".to_string()));
+                    }
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Bool".to_string(),
+                            found: reg!(*src).type_name(&proc.heap).to_string(),
+                        });
+                    }
+                }
+            }
+
+            Instruction::AssertEq(a, b) => {
+                let va = reg!(*a);
+                let vb = reg!(*b);
+                if !proc.heap.gc_values_equal(va, vb) {
+                    let sa = proc.heap.display_value(va);
+                    let sb = proc.heap.display_value(vb);
+                    return Err(RuntimeError::Panic(format!("Assertion failed: {} != {}", sa, sb)));
+                }
             }
 
             // === Exception handling ===
