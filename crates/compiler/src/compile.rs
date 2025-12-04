@@ -2586,6 +2586,7 @@ impl Compiler {
 mod tests {
     use super::*;
     use nostos_syntax::parser::parse;
+    use nostos_vm::Runtime;
 
     fn compile_and_run(source: &str) -> Result<Value, String> {
         let (module_opt, errors) = parse(source);
@@ -2595,24 +2596,28 @@ mod tests {
         let module = module_opt.ok_or_else(|| "Parse returned no module".to_string())?;
         let compiler = compile_module(&module).map_err(|e| format!("Compile error: {:?}", e))?;
 
-        let mut vm = VM::new();
+        let mut runtime = Runtime::new();
         for (name, func) in compiler.get_all_functions() {
-            vm.functions.insert(name.clone(), func.clone());
+            runtime.register_function(&name, func.clone());
         }
-        vm.function_list = compiler.get_function_list();
+        runtime.set_function_list(compiler.get_function_list());
         for (name, type_val) in compiler.get_vm_types() {
-            vm.types.insert(name, type_val);
+            runtime.register_type(&name, type_val);
         }
 
         // Look for a main function
-        if vm.functions.contains_key("main") {
-            vm.call("main", vec![]).map_err(|e| format!("Runtime error: {:?}", e))
-        } else if let Some((name, _)) = compiler.get_all_functions().iter().next() {
-            // Run the first function with no arguments if possible
-            vm.call(name, vec![]).map_err(|e| format!("Runtime error: {:?}", e))
+        let main_func = if let Some(func) = compiler.get_function("main") {
+            func
+        } else if let Some((_, func)) = compiler.get_all_functions().iter().next() {
+            func.clone()
         } else {
-            Err("No functions to run".to_string())
-        }
+            return Err("No functions to run".to_string());
+        };
+
+        runtime.spawn_initial(main_func);
+        runtime.run_to_value()
+            .map_err(|e| format!("Runtime error: {:?}", e))?
+            .ok_or_else(|| "No result returned".to_string())
     }
 
     #[test]

@@ -176,6 +176,140 @@ impl Runtime {
         self.register_native("copy", 1, |args, heap| {
             Ok(heap.clone_value(&args[0]))
         });
+
+        // List operations
+        self.register_native("head", 1, |args, heap| {
+            match &args[0] {
+                GcValue::List(ptr) => {
+                    if let Some(list) = heap.get_list(*ptr) {
+                        if !list.items.is_empty() {
+                            Ok(list.items[0].clone())
+                        } else {
+                            Err(RuntimeError::Panic("head: empty list".to_string()))
+                        }
+                    } else {
+                        Err(RuntimeError::Panic("head: invalid list".to_string()))
+                    }
+                }
+                other => Err(RuntimeError::TypeError {
+                    expected: "List".to_string(),
+                    found: other.type_name(heap).to_string(),
+                }),
+            }
+        });
+
+        self.register_native("tail", 1, |args, heap| {
+            match &args[0] {
+                GcValue::List(ptr) => {
+                    if let Some(list) = heap.get_list(*ptr) {
+                        if !list.items.is_empty() {
+                            let tail_items = list.items[1..].to_vec();
+                            Ok(GcValue::List(heap.alloc_list(tail_items)))
+                        } else {
+                            Err(RuntimeError::Panic("tail: empty list".to_string()))
+                        }
+                    } else {
+                        Err(RuntimeError::Panic("tail: invalid list".to_string()))
+                    }
+                }
+                other => Err(RuntimeError::TypeError {
+                    expected: "List".to_string(),
+                    found: other.type_name(heap).to_string(),
+                }),
+            }
+        });
+
+        self.register_native("isEmpty", 1, |args, heap| {
+            match &args[0] {
+                GcValue::List(ptr) => {
+                    if let Some(list) = heap.get_list(*ptr) {
+                        Ok(GcValue::Bool(list.items.is_empty()))
+                    } else {
+                        Err(RuntimeError::Panic("isEmpty: invalid list".to_string()))
+                    }
+                }
+                GcValue::String(ptr) => {
+                    if let Some(s) = heap.get_string(*ptr) {
+                        Ok(GcValue::Bool(s.data.is_empty()))
+                    } else {
+                        Err(RuntimeError::Panic("isEmpty: invalid string".to_string()))
+                    }
+                }
+                other => Err(RuntimeError::TypeError {
+                    expected: "List or String".to_string(),
+                    found: other.type_name(heap).to_string(),
+                }),
+            }
+        });
+
+        // Math functions
+        self.register_native("abs", 1, |args, _heap| {
+            match &args[0] {
+                GcValue::Int(i) => Ok(GcValue::Int(i.abs())),
+                GcValue::Float(f) => Ok(GcValue::Float(f.abs())),
+                other => Err(RuntimeError::TypeError {
+                    expected: "Int or Float".to_string(),
+                    found: format!("{:?}", other),
+                }),
+            }
+        });
+
+        self.register_native("sqrt", 1, |args, _heap| {
+            match &args[0] {
+                GcValue::Float(f) => Ok(GcValue::Float(f.sqrt())),
+                GcValue::Int(i) => Ok(GcValue::Float((*i as f64).sqrt())),
+                other => Err(RuntimeError::TypeError {
+                    expected: "Float or Int".to_string(),
+                    found: format!("{:?}", other),
+                }),
+            }
+        });
+
+        // Conversion functions
+        self.register_native("toInt", 1, |args, heap| {
+            match &args[0] {
+                GcValue::Int(i) => Ok(GcValue::Int(*i)),
+                GcValue::Float(f) => Ok(GcValue::Int(*f as i64)),
+                GcValue::String(ptr) => {
+                    if let Some(s) = heap.get_string(*ptr) {
+                        s.data.parse::<i64>()
+                            .map(GcValue::Int)
+                            .map_err(|_| RuntimeError::Panic(format!("Cannot convert '{}' to Int", s.data)))
+                    } else {
+                        Err(RuntimeError::Panic("toInt: invalid string".to_string()))
+                    }
+                }
+                other => Err(RuntimeError::TypeError {
+                    expected: "Int, Float, or String".to_string(),
+                    found: other.type_name(heap).to_string(),
+                }),
+            }
+        });
+
+        self.register_native("toFloat", 1, |args, heap| {
+            match &args[0] {
+                GcValue::Float(f) => Ok(GcValue::Float(*f)),
+                GcValue::Int(i) => Ok(GcValue::Float(*i as f64)),
+                GcValue::String(ptr) => {
+                    if let Some(s) = heap.get_string(*ptr) {
+                        s.data.parse::<f64>()
+                            .map(GcValue::Float)
+                            .map_err(|_| RuntimeError::Panic(format!("Cannot convert '{}' to Float", s.data)))
+                    } else {
+                        Err(RuntimeError::Panic("toFloat: invalid string".to_string()))
+                    }
+                }
+                other => Err(RuntimeError::TypeError {
+                    expected: "Int, Float, or String".to_string(),
+                    found: other.type_name(heap).to_string(),
+                }),
+            }
+        });
+
+        self.register_native("panic", 1, |args, heap| {
+            let msg = heap.display_value(&args[0]);
+            Err(RuntimeError::Panic(msg))
+        });
     }
 
     /// Spawn the initial process and run a function.
@@ -311,6 +445,56 @@ impl Runtime {
                 ProcessStepResult::Continue => {
                     // Should not happen at this level
                 }
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Run all processes and return result as a Value (for test compatibility).
+    /// This converts the GcValue result to a Value using the initial process's heap.
+    pub fn run_to_value(&mut self) -> Result<Option<Value>, RuntimeError> {
+        self.register_builtins();
+
+        // Cache the function/native/type maps ONCE after registration
+        self.cached_functions = self.scheduler.functions.read().clone();
+        self.cached_natives = self.scheduler.natives.read().clone();
+        self.cached_types = self.scheduler.types.read().clone();
+
+        // Run until no more processes or all are waiting
+        while self.scheduler.has_processes() {
+            let Some(pid) = self.scheduler.schedule_next() else {
+                if self.scheduler.process_count() > 0 {
+                    return Err(RuntimeError::Panic("Deadlock: all processes waiting".to_string()));
+                }
+                break;
+            };
+
+            match self.run_process(pid)? {
+                ProcessStepResult::Finished(value) => {
+                    if pid == Pid(1) {
+                        // Convert GcValue to Value using the process's heap
+                        let process_handle = self.scheduler.get_process_handle(pid)
+                            .ok_or_else(|| RuntimeError::Panic("Initial process not found".to_string()))?;
+                        let proc = process_handle.lock();
+                        let result_value = proc.heap.gc_to_value(&value);
+                        return Ok(Some(result_value));
+                    }
+                    self.scheduler.process_exit(pid, ExitReason::Normal, Some(value));
+                }
+                ProcessStepResult::Error(err) => {
+                    self.scheduler.process_exit(
+                        pid,
+                        ExitReason::Error(format!("{:?}", err)),
+                        None,
+                    );
+                    if pid == Pid(1) {
+                        return Err(err);
+                    }
+                }
+                ProcessStepResult::Yield => {}
+                ProcessStepResult::Waiting => {}
+                ProcessStepResult::Continue => {}
             }
         }
 
@@ -1100,6 +1284,11 @@ impl Runtime {
                     }),
                 };
                 let result = match reg!(*value) {
+                    GcValue::Variant(ptr) => {
+                        proc.heap.get_variant(*ptr)
+                            .map(|v| v.constructor == tag)
+                            .unwrap_or(false)
+                    }
                     GcValue::Record(ptr) => {
                         proc.heap.get_record(*ptr)
                             .map(|r| r.type_name == tag)
@@ -1111,16 +1300,31 @@ impl Runtime {
             }
 
             Instruction::GetField(dst, record, field_idx) => {
-                // SAFETY: Type system guarantees this is a Record
-                let ptr = match reg!(*record) {
-                    GcValue::Record(ptr) => *ptr,
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let field_name = match &constants[*field_idx as usize] {
+                    Value::String(s) => s.to_string(),
+                    _ => return Err(RuntimeError::Panic("Field name must be string".to_string())),
                 };
-                let result = proc.heap.get_record(ptr)
-                    .and_then(|r| r.fields.get(*field_idx as usize))
-                    .cloned()
-                    .ok_or_else(|| RuntimeError::Panic("Invalid field access".to_string()))?;
-                set_reg!(*dst, result);
+                match reg!(*record) {
+                    GcValue::Record(ptr) => {
+                        let rec = proc.heap.get_record(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid record reference".to_string()))?;
+                        let idx = rec.field_names.iter().position(|n| n == &field_name)
+                            .ok_or_else(|| RuntimeError::Panic(format!("Unknown field: {}", field_name)))?;
+                        let value = rec.fields[idx].clone();
+                        set_reg!(*dst, value);
+                    }
+                    GcValue::Tuple(ptr) => {
+                        // Support tuple field access with numeric indices (t.0, t.1, etc.)
+                        let tuple = proc.heap.get_tuple(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".to_string()))?;
+                        let idx: usize = field_name.parse()
+                            .map_err(|_| RuntimeError::Panic(format!("Invalid tuple index: {}", field_name)))?;
+                        let value = tuple.items.get(idx).cloned()
+                            .ok_or_else(|| RuntimeError::Panic(format!("Tuple index {} out of bounds", idx)))?;
+                        set_reg!(*dst, value);
+                    }
+                    _ => return Err(RuntimeError::Panic("GetField expects record or tuple".to_string())),
+                }
             }
 
             // === Division (UNCHECKED types - statically typed!) ===
@@ -1146,6 +1350,484 @@ impl Runtime {
                     return Err(RuntimeError::Panic("Division by zero".to_string()));
                 }
                 set_reg!(*dst, GcValue::Int(x % y));
+            }
+
+            Instruction::NegInt(dst, src) => {
+                let v = match reg!(*src) {
+                    GcValue::Int(x) => *x,
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Int(-v));
+            }
+
+            // === Float arithmetic ===
+            Instruction::AddFloat(dst, a, b) => {
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Float(x + y));
+            }
+
+            Instruction::SubFloat(dst, a, b) => {
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Float(x - y));
+            }
+
+            Instruction::MulFloat(dst, a, b) => {
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Float(x * y));
+            }
+
+            Instruction::DivFloat(dst, a, b) => {
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Float(x / y));
+            }
+
+            Instruction::NegFloat(dst, src) => {
+                let v = match reg!(*src) {
+                    GcValue::Float(x) => *x,
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Float(-v));
+            }
+
+            Instruction::PowFloat(dst, a, b) => {
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Float(x.powf(y)));
+            }
+
+            // === More comparisons ===
+            Instruction::EqInt(dst, a, b) => {
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Bool(x == y));
+            }
+
+            Instruction::NeInt(dst, a, b) => {
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Bool(x != y));
+            }
+
+            Instruction::GeInt(dst, a, b) => {
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Bool(x >= y));
+            }
+
+            Instruction::EqFloat(dst, a, b) => {
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Bool(x == y));
+            }
+
+            Instruction::LtFloat(dst, a, b) => {
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Bool(x < y));
+            }
+
+            Instruction::LeFloat(dst, a, b) => {
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Bool(x <= y));
+            }
+
+            Instruction::EqBool(dst, a, b) => {
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Bool(x), GcValue::Bool(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Bool(x == y));
+            }
+
+            Instruction::EqStr(dst, a, b) => {
+                let (a_ptr, b_ptr) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::String(a), GcValue::String(b)) => (*a, *b),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                let a_str = proc.heap.get_string(a_ptr).map(|s| &s.data);
+                let b_str = proc.heap.get_string(b_ptr).map(|s| &s.data);
+                set_reg!(*dst, GcValue::Bool(a_str == b_str));
+            }
+
+            // === Logical ===
+            Instruction::And(dst, a, b) => {
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Bool(x), GcValue::Bool(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Bool(x && y));
+            }
+
+            Instruction::Or(dst, a, b) => {
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Bool(x), GcValue::Bool(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Bool(x || y));
+            }
+
+            // === String ===
+            Instruction::Concat(dst, a, b) => {
+                let (a_ptr, b_ptr) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::String(a), GcValue::String(b)) => (*a, *b),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                let a_str = proc.heap.get_string(a_ptr).map(|s| s.data.as_str()).unwrap_or("");
+                let b_str = proc.heap.get_string(b_ptr).map(|s| s.data.as_str()).unwrap_or("");
+                let result = format!("{}{}", a_str, b_str);
+                let result_ptr = proc.heap.alloc_string(result);
+                set_reg!(*dst, GcValue::String(result_ptr));
+            }
+
+            // === Collections ===
+            Instruction::Cons(dst, head, tail) => {
+                let head_val = reg_clone!(*head);
+                let tail_ptr = match reg!(*tail) {
+                    GcValue::List(ptr) => *ptr,
+                    _ => return Err(RuntimeError::Panic("Cons expects list tail".to_string())),
+                };
+                let tail_items = proc.heap.get_list(tail_ptr)
+                    .map(|l| l.items.clone())
+                    .unwrap_or_default();
+                let mut new_items = vec![head_val];
+                new_items.extend(tail_items);
+                let list_ptr = proc.heap.alloc_list(new_items);
+                set_reg!(*dst, GcValue::List(list_ptr));
+            }
+
+            Instruction::Decons(head_dst, tail_dst, list) => {
+                let list_ptr = match reg!(*list) {
+                    GcValue::List(ptr) => *ptr,
+                    _ => return Err(RuntimeError::Panic("Decons expects list".to_string())),
+                };
+                let items = proc.heap.get_list(list_ptr)
+                    .map(|l| l.items.clone())
+                    .unwrap_or_default();
+                if items.is_empty() {
+                    return Err(RuntimeError::Panic("Cannot decons empty list".to_string()));
+                }
+                let head = items[0].clone();
+                let tail = items[1..].to_vec();
+                let tail_ptr = proc.heap.alloc_list(tail);
+                set_reg!(*head_dst, head);
+                set_reg!(*tail_dst, GcValue::List(tail_ptr));
+            }
+
+            Instruction::ListConcat(dst, a, b) => {
+                let a_ptr = match reg!(*a) {
+                    GcValue::List(ptr) => *ptr,
+                    _ => return Err(RuntimeError::Panic("ListConcat expects list".to_string())),
+                };
+                let b_ptr = match reg!(*b) {
+                    GcValue::List(ptr) => *ptr,
+                    _ => return Err(RuntimeError::Panic("ListConcat expects list".to_string())),
+                };
+                let a_items = proc.heap.get_list(a_ptr).map(|l| l.items.clone()).unwrap_or_default();
+                let b_items = proc.heap.get_list(b_ptr).map(|l| l.items.clone()).unwrap_or_default();
+                let mut new_items = a_items;
+                new_items.extend(b_items);
+                let list_ptr = proc.heap.alloc_list(new_items);
+                set_reg!(*dst, GcValue::List(list_ptr));
+            }
+
+            Instruction::Index(dst, coll, idx) => {
+                let idx_val = match reg!(*idx) {
+                    GcValue::Int(i) => *i as usize,
+                    _ => return Err(RuntimeError::Panic("Index must be integer".to_string())),
+                };
+                let value = match reg!(*coll) {
+                    GcValue::List(ptr) => {
+                        let list = proc.heap.get_list(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid list reference".to_string()))?;
+                        list.items.get(idx_val).cloned()
+                            .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?
+                    }
+                    GcValue::Tuple(ptr) => {
+                        let tuple = proc.heap.get_tuple(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".to_string()))?;
+                        tuple.items.get(idx_val).cloned()
+                            .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?
+                    }
+                    GcValue::Array(ptr) => {
+                        let array = proc.heap.get_array(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid array reference".to_string()))?;
+                        array.items.get(idx_val).cloned()
+                            .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?
+                    }
+                    _ => return Err(RuntimeError::Panic("Index expects list, tuple, or array".to_string())),
+                };
+                set_reg!(*dst, value);
+            }
+
+            Instruction::IndexSet(coll, idx, val) => {
+                let idx_val = match reg!(*idx) {
+                    GcValue::Int(i) => *i as usize,
+                    _ => return Err(RuntimeError::Panic("Index must be integer".to_string())),
+                };
+                let new_value = reg_clone!(*val);
+                match reg!(*coll).clone() {
+                    GcValue::Array(ptr) => {
+                        let array = proc.heap.get_array_mut(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid array reference".to_string()))?;
+                        if idx_val >= array.items.len() {
+                            return Err(RuntimeError::Panic(format!("Index {} out of bounds", idx_val)));
+                        }
+                        array.items[idx_val] = new_value;
+                    }
+                    _ => return Err(RuntimeError::Panic("IndexSet expects array".to_string())),
+                }
+            }
+
+            Instruction::Length(dst, src) => {
+                let len = match reg!(*src) {
+                    GcValue::List(ptr) => proc.heap.get_list(*ptr).map(|l| l.items.len()).unwrap_or(0),
+                    GcValue::Tuple(ptr) => proc.heap.get_tuple(*ptr).map(|t| t.items.len()).unwrap_or(0),
+                    GcValue::Array(ptr) => proc.heap.get_array(*ptr).map(|a| a.items.len()).unwrap_or(0),
+                    GcValue::String(ptr) => proc.heap.get_string(*ptr).map(|s| s.data.len()).unwrap_or(0),
+                    _ => return Err(RuntimeError::Panic("Length expects collection or string".to_string())),
+                };
+                set_reg!(*dst, GcValue::Int(len as i64));
+            }
+
+            Instruction::MakeMap(dst, pairs) => {
+                let mut map = std::collections::HashMap::new();
+                for &(k, v) in pairs.iter() {
+                    let key = reg!(k).to_gc_map_key()
+                        .ok_or_else(|| RuntimeError::Panic("Map key must be hashable".to_string()))?;
+                    let value = reg!(v).clone();
+                    map.insert(key, value);
+                }
+                let map_ptr = proc.heap.alloc_map(map);
+                set_reg!(*dst, GcValue::Map(map_ptr));
+            }
+
+            Instruction::MakeSet(dst, regs) => {
+                let mut set = std::collections::HashSet::new();
+                for &r in regs.iter() {
+                    let key = reg!(r).to_gc_map_key()
+                        .ok_or_else(|| RuntimeError::Panic("Set element must be hashable".to_string()))?;
+                    set.insert(key);
+                }
+                let set_ptr = proc.heap.alloc_set(set);
+                set_reg!(*dst, GcValue::Set(set_ptr));
+            }
+
+            // === Variants ===
+            Instruction::MakeVariant(dst, type_idx, ctor_idx, field_regs) => {
+                let type_name = match &constants[*type_idx as usize] {
+                    Value::String(s) => s.to_string(),
+                    _ => return Err(RuntimeError::Panic("Variant type must be string".to_string())),
+                };
+                let constructor = match &constants[*ctor_idx as usize] {
+                    Value::String(s) => s.to_string(),
+                    _ => return Err(RuntimeError::Panic("Variant constructor must be string".to_string())),
+                };
+                let fields: Vec<GcValue> = field_regs.iter().map(|r| reg!(*r).clone()).collect();
+                let variant_ptr = proc.heap.alloc_variant(type_name, constructor, fields);
+                set_reg!(*dst, GcValue::Variant(variant_ptr));
+            }
+
+            Instruction::GetTag(dst, src) => {
+                let tag = match reg!(*src) {
+                    GcValue::Variant(ptr) => {
+                        proc.heap.get_variant(*ptr)
+                            .map(|v| v.constructor.clone())
+                            .unwrap_or_default()
+                    }
+                    _ => return Err(RuntimeError::Panic("GetTag expects variant".to_string())),
+                };
+                let tag_ptr = proc.heap.alloc_string(tag);
+                set_reg!(*dst, GcValue::String(tag_ptr));
+            }
+
+            Instruction::GetVariantField(dst, src, idx) => {
+                let value = match reg!(*src) {
+                    GcValue::Variant(ptr) => {
+                        let variant = proc.heap.get_variant(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid variant reference".to_string()))?;
+                        variant.fields.get(*idx as usize).cloned()
+                            .ok_or_else(|| RuntimeError::Panic(format!("Variant field {} out of bounds", idx)))?
+                    }
+                    // Also support Record types for unified handling
+                    GcValue::Record(ptr) => {
+                        let record = proc.heap.get_record(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid record reference".to_string()))?;
+                        record.fields.get(*idx as usize).cloned()
+                            .ok_or_else(|| RuntimeError::Panic(format!("Record field {} out of bounds", idx)))?
+                    }
+                    _ => return Err(RuntimeError::Panic("GetVariantField expects variant or record".to_string())),
+                };
+                set_reg!(*dst, value);
+            }
+
+            Instruction::GetVariantFieldByName(dst, src, name_idx) => {
+                let field_name = match &constants[*name_idx as usize] {
+                    Value::String(s) => s.to_string(),
+                    _ => return Err(RuntimeError::Panic("Field name must be string".to_string())),
+                };
+                let value = match reg!(*src) {
+                    GcValue::Variant(ptr) => {
+                        let idx: usize = field_name.parse()
+                            .map_err(|_| RuntimeError::Panic(format!("Invalid field index: {}", field_name)))?;
+                        let variant = proc.heap.get_variant(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid variant reference".to_string()))?;
+                        variant.fields.get(idx).cloned()
+                            .ok_or_else(|| RuntimeError::Panic(format!("Variant field {} out of bounds", idx)))?
+                    }
+                    // Also support Record types for unified handling
+                    GcValue::Record(ptr) => {
+                        let record = proc.heap.get_record(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid record reference".to_string()))?;
+                        let idx = record.field_names.iter().position(|n| n == &field_name)
+                            .ok_or_else(|| RuntimeError::Panic(format!("Unknown field: {}", field_name)))?;
+                        record.fields.get(idx).cloned()
+                            .ok_or_else(|| RuntimeError::Panic(format!("Record field {} out of bounds", idx)))?
+                    }
+                    _ => return Err(RuntimeError::Panic("GetVariantFieldByName expects variant or record".to_string())),
+                };
+                set_reg!(*dst, value);
+            }
+
+            Instruction::SetField(record, field_idx, value) => {
+                let field_name = match &constants[*field_idx as usize] {
+                    Value::String(s) => s.to_string(),
+                    _ => return Err(RuntimeError::Panic("Field name must be string".to_string())),
+                };
+                let new_value = reg_clone!(*value);
+                match reg!(*record).clone() {
+                    GcValue::Record(ptr) => {
+                        let rec = proc.heap.get_record(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid record reference".to_string()))?;
+                        let idx = rec.field_names.iter().position(|n| n == &field_name)
+                            .ok_or_else(|| RuntimeError::Panic(format!("Unknown field: {}", field_name)))?;
+                        if !rec.mutable_fields[idx] {
+                            return Err(RuntimeError::Panic(format!("Field {} is immutable", field_name)));
+                        }
+                        // Clone needed values before mutably borrowing heap
+                        let type_name = rec.type_name.clone();
+                        let field_names = rec.field_names.clone();
+                        let mutable_fields = rec.mutable_fields.clone();
+                        let mut new_fields = rec.fields.clone();
+                        new_fields[idx] = new_value;
+                        let new_record_ptr = proc.heap.alloc_record(
+                            type_name,
+                            field_names,
+                            new_fields,
+                            mutable_fields,
+                        );
+                        set_reg!(*record, GcValue::Record(new_record_ptr));
+                    }
+                    _ => return Err(RuntimeError::Panic("SetField expects record".to_string())),
+                }
+            }
+
+            Instruction::UpdateRecord(dst, src, type_idx, field_regs) => {
+                let rec_ptr = match reg!(*src) {
+                    GcValue::Record(ptr) => *ptr,
+                    _ => return Err(RuntimeError::Panic("UpdateRecord expects record".to_string())),
+                };
+                let rec = proc.heap.get_record(rec_ptr)
+                    .ok_or_else(|| RuntimeError::Panic("Invalid record reference".to_string()))?;
+                // Clone needed values before mutably borrowing heap
+                let type_name = match &constants[*type_idx as usize] {
+                    Value::String(s) => s.to_string(),
+                    _ => return Err(RuntimeError::Panic("Type name must be string".to_string())),
+                };
+                let field_names = rec.field_names.clone();
+                let mutable_fields = rec.mutable_fields.clone();
+                let mut new_fields = rec.fields.clone();
+                // Update with new values from field_regs
+                for (i, &r) in field_regs.iter().enumerate() {
+                    if i < new_fields.len() {
+                        new_fields[i] = reg!(r).clone();
+                    }
+                }
+                let new_record_ptr = proc.heap.alloc_record(
+                    type_name,
+                    field_names,
+                    new_fields,
+                    mutable_fields,
+                );
+                set_reg!(*dst, GcValue::Record(new_record_ptr));
+            }
+
+            Instruction::TypeOf(dst, src) => {
+                let type_name = reg!(*src).type_name(&proc.heap).to_string();
+                let type_ptr = proc.heap.alloc_string(type_name);
+                set_reg!(*dst, GcValue::String(type_ptr));
+            }
+
+            Instruction::TestUnit(dst, src) => {
+                let is_unit = matches!(reg!(*src), GcValue::Unit);
+                set_reg!(*dst, GcValue::Bool(is_unit));
+            }
+
+            // === Exception handling ===
+            Instruction::PushHandler(catch_offset) => {
+                use crate::vm::ExceptionHandler;
+                let frame_idx = proc.frames.len() - 1;
+                let catch_ip = (proc.frames[frame_idx].ip as isize + *catch_offset as isize) as usize;
+                let handler = ExceptionHandler {
+                    frame_index: frame_idx,
+                    catch_ip,
+                };
+                proc.handlers.push(handler);
+            }
+
+            Instruction::PopHandler => {
+                proc.handlers.pop();
+            }
+
+            Instruction::Throw(src) => {
+                let exception = reg_clone!(*src);
+                proc.current_exception = Some(exception.clone());
+
+                // Find a handler
+                if let Some(handler) = proc.handlers.pop() {
+                    // Unwind to the handler's frame
+                    while proc.frames.len() > handler.frame_index + 1 {
+                        proc.frames.pop();
+                    }
+                    // Jump to the catch block
+                    if let Some(frame) = proc.frames.last_mut() {
+                        frame.ip = handler.catch_ip;
+                    }
+                } else {
+                    // No handler - propagate as error
+                    return Err(RuntimeError::Panic(format!("Uncaught exception: {:?}", exception)));
+                }
+            }
+
+            Instruction::GetException(dst) => {
+                let exception = proc.current_exception.clone().unwrap_or(GcValue::Unit);
+                set_reg!(*dst, exception);
             }
 
             // === Debug ===
