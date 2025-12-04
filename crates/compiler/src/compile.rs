@@ -143,6 +143,8 @@ pub struct Compiler {
     type_traits: HashMap<String, Vec<String>>,
     /// Local variable type tracking: variable name -> type name
     local_types: HashMap<String, String>,
+    /// Current function name being compiled (for self-recursion optimization)
+    current_function_name: Option<String>,
 }
 
 /// Type information for code generation.
@@ -199,6 +201,7 @@ impl Compiler {
             trait_impls: HashMap::new(),
             type_traits: HashMap::new(),
             local_types: HashMap::new(),
+            current_function_name: None,
         }
     }
 
@@ -459,6 +462,7 @@ impl Compiler {
         let saved_chunk = std::mem::take(&mut self.chunk);
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_next_reg = self.next_reg;
+        let saved_function_name = self.current_function_name.take();
 
         // Reset for new function
         self.chunk = Chunk::new();
@@ -467,6 +471,9 @@ impl Compiler {
 
         // Use qualified name (with module path prefix)
         let name = self.qualify_name(&def.name.node);
+
+        // Track current function name for self-recursion optimization
+        self.current_function_name = Some(name.clone());
 
         // Store the function's visibility
         self.function_visibility.insert(name.clone(), def.visibility);
@@ -584,6 +591,7 @@ impl Compiler {
         self.chunk = saved_chunk;
         self.locals = saved_locals;
         self.next_reg = saved_next_reg;
+        self.current_function_name = saved_function_name;
 
         Ok(())
     }
@@ -1225,15 +1233,29 @@ impl Compiler {
 
             // Check for user-defined function
             if self.functions.contains_key(&resolved_name) {
+                // Self-recursion optimization: use CallSelf to avoid HashMap lookup
+                let is_self_call = self.current_function_name.as_ref() == Some(&resolved_name);
                 let dst = self.alloc_reg();
-                let name_idx = self.chunk.add_constant(Value::String(Rc::new(resolved_name)));
-                if is_tail {
-                    // Tail call optimization using name lookup
-                    self.chunk.emit(Instruction::TailCallByName(name_idx, arg_regs.into()), 0);
-                    return Ok(0);
+
+                if is_self_call {
+                    // Direct self-call - no lookup needed!
+                    if is_tail {
+                        self.chunk.emit(Instruction::TailCallSelf(arg_regs.into()), 0);
+                        return Ok(0);
+                    } else {
+                        self.chunk.emit(Instruction::CallSelf(dst, arg_regs.into()), 0);
+                        return Ok(dst);
+                    }
                 } else {
-                    self.chunk.emit(Instruction::CallByName(dst, name_idx, arg_regs.into()), 0);
-                    return Ok(dst);
+                    // Regular function call by name
+                    let name_idx = self.chunk.add_constant(Value::String(Rc::new(resolved_name)));
+                    if is_tail {
+                        self.chunk.emit(Instruction::TailCallByName(name_idx, arg_regs.into()), 0);
+                        return Ok(0);
+                    } else {
+                        self.chunk.emit(Instruction::CallByName(dst, name_idx, arg_regs.into()), 0);
+                        return Ok(dst);
+                    }
                 }
             }
         }

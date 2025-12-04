@@ -462,6 +462,10 @@ pub enum Instruction {
     CallByName(Reg, ConstIdx, RegList),
     /// Tail call by name
     TailCallByName(ConstIdx, RegList),
+    /// Call self (recursive call to current function - no lookup needed)
+    CallSelf(Reg, RegList),
+    /// Tail call self (tail-recursive call to current function)
+    TailCallSelf(RegList),
     /// Call native function
     CallNative(Reg, ConstIdx, RegList),
     /// Return value from function
