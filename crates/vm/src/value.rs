@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 /// Shared register list - makes instruction cloning O(1) instead of O(n).
 /// Used for function arguments, list/tuple construction, etc.
@@ -109,6 +109,8 @@ pub struct FunctionValue {
     pub source_span: Option<(usize, usize)>,
     /// JIT-compiled version (if available)
     pub jit_code: Option<JitFunction>,
+    /// Call counter for JIT hot detection (interior mutability for Rc<FunctionValue>)
+    pub call_count: Cell<u32>,
 }
 
 impl std::fmt::Debug for FunctionValue {

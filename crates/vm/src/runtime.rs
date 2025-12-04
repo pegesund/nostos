@@ -10,6 +10,12 @@
 
 use std::rc::Rc;
 
+/// JIT compilation threshold - compile after this many calls
+pub const JIT_THRESHOLD: u32 = 1000;
+
+/// JIT-compiled integer function: fn(i64) -> i64
+pub type JitIntFn = fn(i64) -> i64;
+
 use crate::gc::{GcNativeFn, GcValue, Heap};
 use crate::process::ExitReason;
 use crate::scheduler::Scheduler;
@@ -49,6 +55,8 @@ pub struct Runtime {
     cached_function_list: Vec<Rc<FunctionValue>>,
     cached_natives: std::collections::HashMap<String, Rc<GcNativeFn>>,
     cached_types: std::collections::HashMap<String, Rc<TypeValue>>,
+    /// JIT-compiled integer functions (func_index → native fn)
+    jit_int_functions: std::collections::HashMap<u16, JitIntFn>,
 }
 
 impl Runtime {
@@ -61,7 +69,13 @@ impl Runtime {
             cached_function_list: Vec::new(),
             cached_natives: std::collections::HashMap::new(),
             cached_types: std::collections::HashMap::new(),
+            jit_int_functions: std::collections::HashMap::new(),
         }
+    }
+
+    /// Register a JIT-compiled integer function.
+    pub fn register_jit_int_function(&mut self, func_index: u16, jit_fn: JitIntFn) {
+        self.jit_int_functions.insert(func_index, jit_fn);
     }
 
     /// Register a global function.
@@ -313,6 +327,7 @@ impl Runtime {
         let function_list = self.cached_function_list.clone();  // Clone to avoid borrow issues
         let natives = self.cached_natives.clone();
         let types = self.cached_types.clone();
+        let jit_int_functions = self.jit_int_functions.clone(); // JIT function cache
 
         // SINGLE LOCK for entire time slice - Erlang style!
         let mut proc = process_handle.lock();
@@ -393,7 +408,7 @@ impl Runtime {
             // SAFETY: ip < code_len was checked above, constants are immutable
             let constants = unsafe { std::slice::from_raw_parts(constants_ptr, constants_len) };
 
-            match self.execute_local_instruction_inline(&mut proc, frame_idx, instr, constants, &functions, &function_list, &natives, &types)? {
+            match self.execute_local_instruction_inline(&mut proc, frame_idx, instr, constants, &functions, &function_list, &natives, &types, &jit_int_functions)? {
                 ProcessStepResult::Continue => continue,
                 other => return Ok(other),
             }
@@ -415,6 +430,7 @@ impl Runtime {
         function_list: &[Rc<FunctionValue>],
         natives: &std::collections::HashMap<String, Rc<GcNativeFn>>,
         types: &std::collections::HashMap<String, Rc<TypeValue>>,
+        jit_int_functions: &std::collections::HashMap<u16, JitIntFn>,
     ) -> Result<ProcessStepResult, RuntimeError> {
         // Direct register access - no locking, frame_idx already computed!
         macro_rules! reg {
@@ -806,6 +822,22 @@ impl Runtime {
                 let dst = *dst;
                 let arg_count = arg_regs.len();
 
+                // Check if we have a JIT-compiled version (arity=1, int argument)
+                if arg_count == 1 {
+                    if let Some(jit_fn) = jit_int_functions.get(func_idx) {
+                        // Get the argument
+                        let arg = reg_clone!(arg_regs[0]);
+                        if let GcValue::Int(n) = arg {
+                            // Call JIT function directly!
+                            let result = jit_fn(n);
+                            set_reg!(dst, GcValue::Int(result));
+                            proc.consume_reductions(1);
+                            return Ok(ProcessStepResult::Continue);
+                        }
+                    }
+                }
+
+                // Fall back to interpreted execution
                 // Use stack array for args
                 let mut arg_buf: [GcValue; 8] = Default::default();
                 if arg_count <= 8 {
@@ -2001,6 +2033,7 @@ mod tests {
             module: None,
             source_span: None,
             jit_code: None,
+            call_count: std::cell::Cell::new(0),
         })
     }
 
@@ -2019,6 +2052,7 @@ mod tests {
             module: None,
             source_span: None,
             jit_code: None,
+            call_count: std::cell::Cell::new(0),
         })
     }
 

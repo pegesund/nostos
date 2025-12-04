@@ -1,6 +1,7 @@
 //! Nostos CLI - Command-line interface for running Nostos programs.
 
 use nostos_compiler::compile::compile_module;
+use nostos_jit::{JitCompiler, JitConfig};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::gc::GcValue;
 use nostos_vm::runtime::Runtime;
@@ -95,9 +96,29 @@ fn main() -> ExitCode {
     for (name, func) in compiler.get_all_functions() {
         runtime.register_function(&name, func.clone());
     }
-    runtime.set_function_list(compiler.get_function_list());
+    let function_list = compiler.get_function_list();
+    runtime.set_function_list(function_list.clone());
     for (name, type_val) in compiler.get_vm_types() {
         runtime.register_type(&name, type_val);
+    }
+
+    // JIT compile suitable functions
+    if let Ok(mut jit) = JitCompiler::new(JitConfig::default()) {
+        for idx in 0..function_list.len() {
+            // Queue all functions for JIT compilation
+            jit.queue_compilation(idx as u16);
+        }
+        // Process the queue
+        if let Ok(compiled) = jit.process_queue(&function_list) {
+            if compiled > 0 {
+                // Register JIT functions with the runtime
+                for (idx, _func) in function_list.iter().enumerate() {
+                    if let Some(jit_fn) = jit.get_int_function(idx as u16) {
+                        runtime.register_jit_int_function(idx as u16, jit_fn);
+                    }
+                }
+            }
+        }
     }
 
     // Get main function

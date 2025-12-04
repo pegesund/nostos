@@ -1,0 +1,18 @@
+[package]
+name = "nostos-jit"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+nostos-vm = { workspace = true }
+
+cranelift-codegen = { workspace = true }
+cranelift-frontend = { workspace = true }
+cranelift-module = { workspace = true }
+cranelift-jit = { workspace = true }
+cranelift-native = { workspace = true }
+target-lexicon = { workspace = true }
+
+thiserror = { workspace = true }

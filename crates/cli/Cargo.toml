@@ -14,3 +14,4 @@ path = "src/main.rs"
 nostos-syntax = { path = "../syntax" }
 nostos-compiler = { path = "../compiler" }
 nostos-vm = { path = "../vm" }
+nostos-jit = { path = "../jit" }

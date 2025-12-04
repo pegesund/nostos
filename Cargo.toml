@@ -16,6 +16,14 @@ thiserror = "2"
 once_cell = "1.19"
 stacker = "0.1"
 
+# Cranelift JIT
+cranelift-codegen = "0.116"
+cranelift-frontend = "0.116"
+cranelift-module = "0.116"
+cranelift-jit = "0.116"
+cranelift-native = "0.116"
+target-lexicon = "0.12"
+
 # Internal crates
 nostos-syntax = { path = "crates/syntax" }
 nostos-compiler = { path = "crates/compiler" }
@@ -23,3 +31,4 @@ nostos-vm = { path = "crates/vm" }
 nostos-types = { path = "crates/types" }
 nostos-repl = { path = "crates/repl" }
 nostos-cli = { path = "crates/cli" }
+nostos-jit = { path = "crates/jit" }

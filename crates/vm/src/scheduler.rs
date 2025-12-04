@@ -1092,6 +1092,7 @@ mod tests {
             module: None,
             source_span: None,
             jit_code: None,
+            call_count: std::cell::Cell::new(0),
         }));
 
         // Make function hot
@@ -1123,6 +1124,7 @@ mod tests {
             module: None,
             source_span: None,
             jit_code: None,
+            call_count: std::cell::Cell::new(0),
         };
 
         // NoJitBackend should never compile
