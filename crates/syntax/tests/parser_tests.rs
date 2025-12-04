@@ -247,7 +247,7 @@ mod expressions {
     #[test]
     fn test_block_expr() {
         parse_expr_ok("{ x }");
-        parse_expr_ok("{ x = 1 x + 1 }");
+        parse_expr_ok("{ x = 1, x + 1 }");
     }
 
     #[test]
@@ -589,7 +589,7 @@ mod test_defs {
 
     #[test]
     fn test_test_with_block() {
-        parse_ok("test \"complex test\" = { x = setup() result = compute(x) check(result) }");
+        parse_ok("test \"complex test\" = { x = setup(), result = compute(x), check(result) }");
     }
 }
 
@@ -623,8 +623,8 @@ mod integration {
         let src = r#"
             counter() = loop(0)
             loop(state) = receive
-                Inc(sender) -> { sender <- Value(state + 1) loop(state + 1) }
-                Get(sender) -> { sender <- Value(state) loop(state) }
+                Inc(sender) -> { sender <- Value(state + 1), loop(state + 1) }
+                Get(sender) -> { sender <- Value(state), loop(state) }
             end
         "#;
         parse_ok(src);

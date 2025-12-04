@@ -5,10 +5,14 @@ use std::fmt;
 
 /// All tokens in the Nostos language.
 #[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
-#[logos(skip r"[ \t\r\n]+")]
+#[logos(skip r"[ \t\r]+")]                // Skip spaces and tabs, but NOT newlines
 #[logos(skip r"#[^*{\n][^\n]*")]          // Single-line comment: # ... (not #* or #{)
 #[logos(skip r"#\*([^*]|\*[^#])*\*#")]    // Multi-line comment: #* ... *#
 pub enum Token {
+    // Newline token - used as implicit statement separator
+    #[regex(r"\n+")]
+    Newline,
+
     // === Keywords ===
     #[token("type")]
     Type,
@@ -323,6 +327,7 @@ impl fmt::Display for Token {
             Token::Pipe => write!(f, "|"),
             Token::Underscore => write!(f, "_"),
             Token::Hash => write!(f, "#"),
+            Token::Newline => write!(f, "newline"),
         }
     }
 }
@@ -441,6 +446,7 @@ mod tests {
         let tokens: Vec<_> = lex("foo # this is a comment\nbar").map(|(t, _)| t).collect();
         assert_eq!(tokens, vec![
             Token::LowerIdent("foo".to_string()),
+            Token::Newline,
             Token::LowerIdent("bar".to_string()),
         ]);
     }

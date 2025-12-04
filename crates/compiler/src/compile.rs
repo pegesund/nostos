@@ -4099,7 +4099,7 @@ mod tests {
             type Rectangle = { width: Int, height: Int }
             trait Area area(self) -> Int end
             Rectangle: Area area(self) = self.width * self.height end
-            main() = { r = Rectangle(4, 5) r.area() }
+            main() = { r = Rectangle(4, 5), r.area() }
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int(20)));
@@ -4152,7 +4152,7 @@ mod tests {
             trait Size size(self) -> Int end
             Point: Size size(self) = 2 end
             Rectangle: Size size(self) = 4 end
-            main() = { p = Point(0, 0) r = Rectangle(5, 10) p.size() + r.size() }
+            main() = { p = Point(0, 0), r = Rectangle(5, 10), p.size() + r.size() }
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int(6))); // 2 + 4 = 6
@@ -4165,7 +4165,7 @@ mod tests {
             type Box = { value: Int }
             trait Doubler doubler(self) -> Int end
             Box: Doubler doubler(self) = self.value * 2 end
-            main() = { b = Box(10) Box.Doubler.doubler(b) }
+            main() = { b = Box(10), Box.Doubler.doubler(b) }
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int(20)));
@@ -4204,7 +4204,7 @@ mod tests {
             type Point = { x: Int, y: Int }
             trait Cloner cloner(self) -> Point end
             Point: Cloner cloner(self) = Point(self.x, self.y) end
-            main() = { p = Point(3, 4) p2 = p.cloner() p2.x + p2.y }
+            main() = { p = Point(3, 4), p2 = p.cloner(), p2.x + p2.y }
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int(7)));
@@ -4217,7 +4217,7 @@ mod tests {
             type Base = { value: Int }
             trait Adder adder(self, x, y) -> Int end
             Base: Adder adder(self, x, y) = self.value + x + y end
-            main() = { b = Base(10) b.adder(20, 30) }
+            main() = { b = Base(10), b.adder(20, 30) }
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int(60)));
