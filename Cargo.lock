@@ -228,6 +228,7 @@ dependencies = [
 name = "nostos-vm"
 version = "0.1.0"
 dependencies = [
+ "nostos-compiler",
  "nostos-syntax",
  "nostos-types",
  "thiserror",
