@@ -1,0 +1,15 @@
+# expect: 6
+# Same trait for multiple types
+
+type Point = { x: Int, y: Int }
+type Circle = { radius: Int }
+
+trait Size size(self) -> Int end
+Point: Size size(self) = 2 end
+Circle: Size size(self) = 4 end
+
+main() = {
+    p = Point(0, 0)
+    c = Circle(5)
+    p.size() + c.size()
+}

@@ -1,0 +1,4 @@
+# expect: 42
+# Multiplication
+
+main() = 6 * 7

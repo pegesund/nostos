@@ -1,0 +1,4 @@
+# expect: true
+# Boolean literal
+
+main() = true

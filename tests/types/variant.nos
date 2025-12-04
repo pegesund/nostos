@@ -1,0 +1,4 @@
+# expect: Some(42)
+# Variant constructor (works like a record without type def)
+
+main() = Some(42)

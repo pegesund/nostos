@@ -1,0 +1,6 @@
+# expect: 120
+# Recursive factorial
+
+factorial(n) = if n <= 1 then 1 else n * factorial(n - 1)
+
+main() = factorial(5)

@@ -18,6 +18,20 @@ fn to_span(span: std::ops::Range<usize>) -> Span {
     Span::new(span.start, span.end)
 }
 
+/// Parser for visibility modifier.
+/// Returns Public if `pub` keyword is present, Private otherwise.
+fn visibility() -> impl Parser<Token, Visibility, Error = Simple<Token>> + Clone {
+    just(Token::Pub)
+        .or_not()
+        .map(|pub_token| {
+            if pub_token.is_some() {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            }
+        })
+}
+
 /// Parser for identifiers (lowercase).
 fn ident() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
     filter_map(|span, tok| match tok {
@@ -45,6 +59,84 @@ fn any_ident() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
         Token::SelfType => Ok(make_ident("Self".to_string(), to_span(span))),
         _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
     })
+}
+
+/// Parse a string into a StringLit, handling `${expr}` interpolation.
+fn parse_string_lit(s: &str) -> StringLit {
+    if !s.contains("${") {
+        return StringLit::Plain(s.to_string());
+    }
+
+    let mut parts: Vec<StringPart> = Vec::new();
+    let mut remaining = s;
+
+    while !remaining.is_empty() {
+        if let Some(start) = remaining.find("${") {
+            // Add literal part before ${
+            if start > 0 {
+                parts.push(StringPart::Lit(remaining[..start].to_string()));
+            }
+
+            // Find matching closing brace (handling nested braces)
+            let expr_start = start + 2;
+            let mut depth = 1;
+            let mut end = expr_start;
+            let chars: Vec<char> = remaining[expr_start..].chars().collect();
+
+            for (i, ch) in chars.iter().enumerate() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = expr_start + i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if depth == 0 {
+                // Successfully found matching brace
+                let expr_str = &remaining[expr_start..end];
+                // Parse the expression
+                let (parsed_expr, errors) = crate::parser::parse_expr(expr_str);
+                if let Some(expr) = parsed_expr {
+                    if errors.is_empty() {
+                        parts.push(StringPart::Expr(expr));
+                    } else {
+                        // Parsing had errors, treat as literal
+                        parts.push(StringPart::Lit(format!("${{{}}}", expr_str)));
+                    }
+                } else {
+                    // Couldn't parse, treat as literal
+                    parts.push(StringPart::Lit(format!("${{{}}}", expr_str)));
+                }
+                remaining = &remaining[end + 1..];
+            } else {
+                // Unmatched brace, treat rest as literal
+                parts.push(StringPart::Lit(remaining.to_string()));
+                break;
+            }
+        } else {
+            // No more interpolations, add remaining as literal
+            parts.push(StringPart::Lit(remaining.to_string()));
+            break;
+        }
+    }
+
+    if parts.is_empty() {
+        StringLit::Plain(String::new())
+    } else if parts.len() == 1 {
+        if let StringPart::Lit(s) = &parts[0] {
+            StringLit::Plain(s.clone())
+        } else {
+            StringLit::Interpolated(parts)
+        }
+    } else {
+        StringLit::Interpolated(parts)
+    }
 }
 
 /// Parser for type expressions.
@@ -280,7 +372,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         });
 
         let string = filter_map(|span, tok| match tok {
-            Token::String(s) => Ok(Expr::String(StringLit::Plain(s), to_span(span))),
+            Token::String(s) => Ok(Expr::String(parse_string_lit(&s), to_span(span))),
             _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
         });
 
@@ -536,8 +628,9 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                 // Method call or field access: .foo or .foo(args) or tuple index .0 .1
                 just(Token::Dot)
                     .ignore_then(
-                        // Accept either an identifier or an integer (for tuple indexing)
-                        ident().or(
+                        // Accept either an identifier (upper or lower) or an integer (for tuple indexing)
+                        // We use any_ident() to allow module paths like Outer.Inner.value()
+                        any_ident().or(
                             select! { Token::Int(n) => n }
                                 .map_with_span(|n, span| Ident { node: n.to_string(), span: to_span(span) })
                         )
@@ -787,7 +880,8 @@ fn fn_param() -> impl Parser<Token, FnParam, Error = Simple<Token>> + Clone {
 
 /// Parser for a function definition.
 fn fn_def() -> impl Parser<Token, FnDef, Error = Simple<Token>> + Clone {
-    ident()
+    visibility()
+        .then(ident())
         .then(
             fn_param()
                 .separated_by(just(Token::Comma))
@@ -797,7 +891,7 @@ fn fn_def() -> impl Parser<Token, FnDef, Error = Simple<Token>> + Clone {
         .then(just(Token::RightArrow).ignore_then(type_expr()).or_not())
         .then_ignore(just(Token::Eq))
         .then(expr())
-        .map_with_span(|((((name, params), guard), return_type), body), span| {
+        .map_with_span(|(((((vis, name), params), guard), return_type), body), span| {
             let clause = FnClause {
                 params,
                 guard,
@@ -806,6 +900,7 @@ fn fn_def() -> impl Parser<Token, FnDef, Error = Simple<Token>> + Clone {
                 span: to_span(span.clone()),
             };
             FnDef {
+                visibility: vis,
                 doc: None,
                 span: to_span(span),
                 name,
@@ -886,12 +981,14 @@ fn type_body() -> impl Parser<Token, TypeBody, Error = Simple<Token>> + Clone {
 fn type_def() -> impl Parser<Token, TypeDef, Error = Simple<Token>> + Clone {
     let mutable = just(Token::Var).or_not().map(|v| v.is_some());
 
-    mutable
+    visibility()
+        .then(mutable)
         .then_ignore(just(Token::Type))
         .then(type_name())
         .then(type_params())
         .then(just(Token::Eq).ignore_then(type_body()).or_not())
-        .map_with_span(|(((mutable, name), type_params), body), span| TypeDef {
+        .map_with_span(|((((vis, mutable), name), type_params), body), span| TypeDef {
+            visibility: vis,
             doc: None,
             mutable,
             name,
@@ -1098,26 +1195,32 @@ fn extern_decl() -> impl Parser<Token, ExternDecl, Error = Simple<Token>> + Clon
 /// Parser for top-level items (using recursive for nested modules).
 fn item() -> impl Parser<Token, Item, Error = Simple<Token>> + Clone {
     recursive(|item| {
+        // Clone the recursive reference for use in module_def
+        let item_clone = item.clone();
+
         // Module definition (uses recursive item)
-        let module_def = just(Token::Module)
-            .ignore_then(type_name())
-            .then(item.repeated())
+        let module_def = visibility()
+            .then_ignore(just(Token::Module))
+            .then(type_name())
+            .then(item_clone.clone().repeated())
             .then_ignore(just(Token::End))
-            .map_with_span(|(name, items), span| {
+            .map_with_span(|((vis, name), items), span| {
                 Item::ModuleDef(ModuleDef {
+                    visibility: vis,
                     name,
                     items,
                     span: to_span(span),
                 })
-            });
+            })
+            .boxed();
 
         choice((
+            module_def,  // Must be first to handle nested modules
             type_def().map(Item::TypeDef),
             trait_def().map(Item::TraitDef),
             trait_impl().map(Item::TraitImpl),
             test_def().map(Item::Test),
             extern_decl().map(Item::Extern),
-            module_def,
             use_stmt().map(Item::Use),
             fn_def().map(Item::FnDef),
             binding().map(Item::Binding),

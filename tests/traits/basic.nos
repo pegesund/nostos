@@ -1,0 +1,7 @@
+# expect: 21
+# Basic trait implementation
+
+trait Triple triple(self) -> Int end
+Int: Triple triple(self) = self * 3 end
+
+main() = 7.triple()

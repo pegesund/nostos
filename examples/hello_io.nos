@@ -1,0 +1,20 @@
+# Example demonstrating I/O capabilities
+
+main() = {
+    # Write to a file
+    writeFile("/tmp/nostos_test.txt", "Hello from Nostos!")
+
+    # Read the file back
+    content = readFile("/tmp/nostos_test.txt")
+    println(content)
+
+    # Append to file
+    appendFile("/tmp/nostos_test.txt", " - Second part")
+
+    # Read again
+    content2 = readFile("/tmp/nostos_test.txt")
+    println(content2)
+
+    # Check if file exists
+    fileExists("/tmp/nostos_test.txt")
+}

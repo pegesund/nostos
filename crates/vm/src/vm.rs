@@ -217,6 +217,119 @@ impl VM {
                 }),
             }
         });
+
+        // I/O functions
+        self.register_native("readFile", 1, |args| {
+            match &args[0] {
+                Value::String(path) => {
+                    match std::fs::read_to_string(path.as_ref()) {
+                        Ok(contents) => Ok(Value::String(Rc::new(contents))),
+                        Err(e) => Err(RuntimeError::IOError(e.to_string())),
+                    }
+                }
+                other => Err(RuntimeError::TypeError {
+                    expected: "String".to_string(),
+                    found: other.type_name().to_string(),
+                }),
+            }
+        });
+
+        self.register_native("writeFile", 2, |args| {
+            match (&args[0], &args[1]) {
+                (Value::String(path), Value::String(contents)) => {
+                    match std::fs::write(path.as_ref(), contents.as_ref()) {
+                        Ok(()) => Ok(Value::Unit),
+                        Err(e) => Err(RuntimeError::IOError(e.to_string())),
+                    }
+                }
+                (Value::String(_), other) => Err(RuntimeError::TypeError {
+                    expected: "String".to_string(),
+                    found: other.type_name().to_string(),
+                }),
+                (other, _) => Err(RuntimeError::TypeError {
+                    expected: "String".to_string(),
+                    found: other.type_name().to_string(),
+                }),
+            }
+        });
+
+        self.register_native("appendFile", 2, |args| {
+            use std::fs::OpenOptions;
+            use std::io::Write;
+            match (&args[0], &args[1]) {
+                (Value::String(path), Value::String(contents)) => {
+                    match OpenOptions::new().append(true).create(true).open(path.as_ref()) {
+                        Ok(mut file) => {
+                            match file.write_all(contents.as_bytes()) {
+                                Ok(()) => Ok(Value::Unit),
+                                Err(e) => Err(RuntimeError::IOError(e.to_string())),
+                            }
+                        }
+                        Err(e) => Err(RuntimeError::IOError(e.to_string())),
+                    }
+                }
+                (Value::String(_), other) => Err(RuntimeError::TypeError {
+                    expected: "String".to_string(),
+                    found: other.type_name().to_string(),
+                }),
+                (other, _) => Err(RuntimeError::TypeError {
+                    expected: "String".to_string(),
+                    found: other.type_name().to_string(),
+                }),
+            }
+        });
+
+        self.register_native("fileExists", 1, |args| {
+            match &args[0] {
+                Value::String(path) => Ok(Value::Bool(std::path::Path::new(path.as_ref()).exists())),
+                other => Err(RuntimeError::TypeError {
+                    expected: "String".to_string(),
+                    found: other.type_name().to_string(),
+                }),
+            }
+        });
+
+        self.register_native("readLine", 0, |_args| {
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            let mut line = String::new();
+            match stdin.lock().read_line(&mut line) {
+                Ok(_) => {
+                    // Remove trailing newline
+                    if line.ends_with('\n') {
+                        line.pop();
+                        if line.ends_with('\r') {
+                            line.pop();
+                        }
+                    }
+                    Ok(Value::String(Rc::new(line)))
+                }
+                Err(e) => Err(RuntimeError::IOError(e.to_string())),
+            }
+        });
+
+        self.register_native("getArgs", 0, |_args| {
+            let args: Vec<Value> = std::env::args()
+                .skip(1) // Skip the program name
+                .map(|s| Value::String(Rc::new(s)))
+                .collect();
+            Ok(Value::List(Rc::new(args)))
+        });
+
+        self.register_native("getEnv", 1, |args| {
+            match &args[0] {
+                Value::String(name) => {
+                    match std::env::var(name.as_ref()) {
+                        Ok(value) => Ok(Value::String(Rc::new(value))),
+                        Err(_) => Ok(Value::String(Rc::new(String::new()))),
+                    }
+                }
+                other => Err(RuntimeError::TypeError {
+                    expected: "String".to_string(),
+                    found: other.type_name().to_string(),
+                }),
+            }
+        });
     }
 
     pub fn register_native<F>(&mut self, name: &str, arity: usize, func: F)
@@ -900,6 +1013,30 @@ impl VM {
                             .ok_or(RuntimeError::IndexOutOfBounds {
                                 index: field_idx as i64,
                                 length: r.fields.len(),
+                            })?;
+                        set_reg!(dst, value);
+                    }
+                    other => return Err(RuntimeError::TypeError {
+                        expected: "Variant".to_string(),
+                        found: other.type_name().to_string(),
+                    }),
+                }
+            }
+            Instruction::GetVariantFieldByName(dst, variant, name_idx) => {
+                let field_name = match &constants[name_idx as usize] {
+                    Value::String(s) => s.to_string(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                match reg!(variant) {
+                    Value::Variant(v) => {
+                        let value = v.named_fields.as_ref()
+                            .and_then(|fields| fields.get(&field_name).cloned())
+                            .ok_or_else(|| RuntimeError::UnknownField {
+                                type_name: v.constructor.clone(),
+                                field: field_name.clone(),
                             })?;
                         set_reg!(dst, value);
                     }

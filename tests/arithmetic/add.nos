@@ -1,0 +1,4 @@
+# expect: 7
+# Basic addition
+
+main() = 3 + 4

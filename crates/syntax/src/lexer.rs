@@ -34,6 +34,8 @@ pub enum Token {
     Use,
     #[token("private")]
     Private,
+    #[token("pub")]
+    Pub,
     #[token("self")]
     SelfKw,
     #[token("Self")]
@@ -255,6 +257,7 @@ impl fmt::Display for Token {
             Token::End => write!(f, "end"),
             Token::Use => write!(f, "use"),
             Token::Private => write!(f, "private"),
+            Token::Pub => write!(f, "pub"),
             Token::SelfKw => write!(f, "self"),
             Token::SelfType => write!(f, "Self"),
             Token::Try => write!(f, "try"),
