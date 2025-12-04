@@ -6,8 +6,10 @@
 //! - REPL/interactive use
 //! - Full introspection
 
+pub mod gc;
 pub mod value;
 pub mod vm;
 
+pub use gc::*;
 pub use value::*;
 pub use vm::*;

@@ -93,6 +93,23 @@ pub enum Item {
     Extern(ExternDecl),
 }
 
+impl Item {
+    /// Get the span of this item.
+    pub fn span(&self) -> Span {
+        match self {
+            Item::TypeDef(def) => def.span,
+            Item::FnDef(def) => def.span,
+            Item::TraitDef(def) => def.span,
+            Item::TraitImpl(impl_) => impl_.span,
+            Item::ModuleDef(def) => def.span,
+            Item::Use(stmt) => stmt.span,
+            Item::Binding(binding) => binding.span,
+            Item::Test(test) => test.span,
+            Item::Extern(ext) => ext.span,
+        }
+    }
+}
+
 // =============================================================================
 // Type Definitions
 // =============================================================================
@@ -241,6 +258,28 @@ pub enum Pattern {
     Or(Vec<Pattern>, Span),
 }
 
+impl Pattern {
+    /// Get the span of this pattern.
+    pub fn span(&self) -> Span {
+        match self {
+            Pattern::Wildcard(s) => *s,
+            Pattern::Var(ident) => ident.span,
+            Pattern::Int(_, s) => *s,
+            Pattern::Float(_, s) => *s,
+            Pattern::String(_, s) => *s,
+            Pattern::Char(_, s) => *s,
+            Pattern::Bool(_, s) => *s,
+            Pattern::Unit(s) => *s,
+            Pattern::Tuple(_, s) => *s,
+            Pattern::List(_, s) => *s,
+            Pattern::Record(_, s) => *s,
+            Pattern::Variant(_, _, s) => *s,
+            Pattern::Pin(_, s) => *s,
+            Pattern::Or(_, s) => *s,
+        }
+    }
+}
+
 /// Fields in a variant pattern.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VariantPatternFields {
@@ -341,6 +380,45 @@ pub enum Expr {
     Quote(Box<Expr>, Span),
     /// Splice in quote: `${expr}`
     Splice(Box<Expr>, Span),
+}
+
+impl Expr {
+    /// Get the span of this expression.
+    pub fn span(&self) -> Span {
+        match self {
+            Expr::Int(_, s) => *s,
+            Expr::Float(_, s) => *s,
+            Expr::String(_, s) => *s,
+            Expr::Char(_, s) => *s,
+            Expr::Bool(_, s) => *s,
+            Expr::Unit(s) => *s,
+            Expr::Var(ident) => ident.span,
+            Expr::BinOp(_, _, _, s) => *s,
+            Expr::UnaryOp(_, _, s) => *s,
+            Expr::Call(_, _, s) => *s,
+            Expr::MethodCall(_, _, _, s) => *s,
+            Expr::FieldAccess(_, _, s) => *s,
+            Expr::Index(_, _, s) => *s,
+            Expr::Lambda(_, _, s) => *s,
+            Expr::If(_, _, _, s) => *s,
+            Expr::Match(_, _, s) => *s,
+            Expr::Tuple(_, s) => *s,
+            Expr::List(_, _, s) => *s,
+            Expr::Map(_, s) => *s,
+            Expr::Set(_, s) => *s,
+            Expr::Record(_, _, s) => *s,
+            Expr::RecordUpdate(_, _, _, s) => *s,
+            Expr::Block(_, s) => *s,
+            Expr::Try(_, _, _, s) => *s,
+            Expr::Do(_, s) => *s,
+            Expr::Receive(_, _, s) => *s,
+            Expr::Spawn(_, _, _, s) => *s,
+            Expr::Send(_, _, s) => *s,
+            Expr::Try_(_, s) => *s,
+            Expr::Quote(_, s) => *s,
+            Expr::Splice(_, s) => *s,
+        }
+    }
 }
 
 /// String literal (plain or with interpolations).

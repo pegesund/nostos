@@ -1,7 +1,7 @@
 //! Nostos CLI - Command-line interface for running Nostos programs.
 
 use nostos_compiler::compile::compile_module;
-use nostos_syntax::parse;
+use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::VM;
 use std::env;
 use std::fs;
@@ -51,10 +51,8 @@ fn main() -> ExitCode {
     // Parse
     let (module_opt, errors) = parse(&source);
     if !errors.is_empty() {
-        eprintln!("Parse errors in '{}':", file_path);
-        for error in &errors {
-            eprintln!("  {:?}", error);
-        }
+        let source_errors = parse_errors_to_source_errors(&errors);
+        eprint_errors(&source_errors, file_path, &source);
         return ExitCode::FAILURE;
     }
 
@@ -70,7 +68,8 @@ fn main() -> ExitCode {
     let compiler = match compile_module(&module) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Compile error in '{}': {:?}", file_path, e);
+            let source_error = e.to_source_error();
+            source_error.eprint(file_path, &source);
             return ExitCode::FAILURE;
         }
     };
