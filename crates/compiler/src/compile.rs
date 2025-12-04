@@ -1210,7 +1210,7 @@ impl Compiler {
         if let Some(qualified_name) = maybe_qualified_name {
             // Check for native functions (only simple names)
             let native_names = ["println", "print", "length", "head", "tail", "isEmpty",
-                              "show", "toInt", "toFloat", "abs", "sqrt", "panic", "assert", "assert_eq", "typeOf",
+                              "show", "copy", "toInt", "toFloat", "abs", "sqrt", "panic", "assert", "assert_eq", "typeOf",
                               "readFile", "writeFile", "appendFile", "fileExists", "readLine", "getArgs", "getEnv"];
 
             if !qualified_name.contains('.') && native_names.contains(&qualified_name.as_str()) {

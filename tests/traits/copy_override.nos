@@ -1,0 +1,29 @@
+# Test copy() with custom Copy trait implementation
+# When a type implements Copy, its copy() method is called instead of deep_copy
+# expect: 1
+
+type Counter = { value: Int }
+
+trait Copy
+    copy(self) -> Counter
+end
+
+# Custom copy that increments the value when copying
+Counter: Copy
+    copy(self) = Counter(self.value + 100)
+end
+
+main() = {
+    c = Counter(5)
+
+    # copy() should use our trait implementation
+    c2 = copy(c)
+
+    # The copy should have value + 100
+    assert_eq(105, c2.value)
+
+    # Original should be unchanged
+    assert_eq(5, c.value)
+
+    1
+}

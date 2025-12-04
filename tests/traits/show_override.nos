@@ -1,0 +1,25 @@
+# Test show() with custom Show trait implementation
+# When a type implements Show, its show() method is called
+# expect: 1
+
+type Point = { x: Int, y: Int }
+
+trait Show
+    show(self) -> String
+end
+
+# Custom show that formats the point nicely
+Point: Show
+    show(self) = "(" ++ show(self.x) ++ ", " ++ show(self.y) ++ ")"
+end
+
+main() = {
+    p = Point(3, 4)
+
+    # show() should use our trait implementation
+    s = show(p)
+
+    assert_eq("(3, 4)", s)
+
+    1
+}

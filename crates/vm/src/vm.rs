@@ -223,6 +223,10 @@ impl VM {
             Ok(GcValue::String(heap.alloc_string(s)))
         });
 
+        self.register_native("copy", 1, |args, heap| {
+            Ok(heap.clone_value(&args[0]))
+        });
+
         self.register_native("toInt", 1, |args, heap| {
             match &args[0] {
                 GcValue::Int(i) => Ok(GcValue::Int(*i)),
@@ -1741,18 +1745,39 @@ impl VM {
                     .map(|r| reg!(*r).clone())
                     .collect();
 
-                let native = self.natives.get(&name).cloned()
-                    .ok_or_else(|| RuntimeError::UnknownFunction(name))?;
+                // Check for trait overrides for "show" and "copy"
+                let trait_method = if !gc_args.is_empty() && (name == "show" || name == "copy") {
+                    let trait_name = if name == "show" { "Show" } else { "Copy" };
+                    let type_name = gc_args[0].type_name(&self.heap).to_string();
+                    let qualified_name = format!("{}.{}.{}", type_name, trait_name, name);
+                    self.functions.get(&qualified_name).cloned()
+                } else {
+                    None
+                };
 
-                if gc_args.len() != native.arity {
-                    return Err(RuntimeError::ArityMismatch {
-                        expected: native.arity,
-                        found: gc_args.len(),
+                if let Some(func) = trait_method {
+                    // Call the trait method instead of the native
+                    return Ok(StepResult::Call {
+                        func,
+                        args: gc_args,
+                        captures: vec![],
+                        return_reg: dst,
                     });
+                } else {
+                    // Fall back to native function
+                    let native = self.natives.get(&name).cloned()
+                        .ok_or_else(|| RuntimeError::UnknownFunction(name))?;
+
+                    if gc_args.len() != native.arity {
+                        return Err(RuntimeError::ArityMismatch {
+                            expected: native.arity,
+                            found: gc_args.len(),
+                        });
+                    }
+                    // Call native function directly with GcValue and heap
+                    let result = (native.func)(&gc_args, &mut self.heap)?;
+                    set_reg!(dst, result);
                 }
-                // Call native function directly with GcValue and heap
-                let result = (native.func)(&gc_args, &mut self.heap)?;
-                set_reg!(dst, result);
             }
             Instruction::Return(src) => {
                 let value = reg!(src).clone();

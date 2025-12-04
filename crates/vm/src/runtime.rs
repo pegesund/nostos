@@ -148,6 +148,17 @@ impl Runtime {
                 )))
             }
         });
+
+        // Display - converts value to string (can be overridden via Show trait)
+        self.register_native("show", 1, |args, heap| {
+            let s = heap.display_value(&args[0]);
+            Ok(GcValue::String(heap.alloc_string(s)))
+        });
+
+        // Copy - creates a deep copy of a value (can be overridden via Copy trait)
+        self.register_native("copy", 1, |args, heap| {
+            Ok(heap.clone_value(&args[0]))
+        });
     }
 
     /// Spawn the initial process and run a function.
@@ -673,17 +684,58 @@ impl Runtime {
                     _ => return Err(RuntimeError::Panic("Invalid native function name".to_string())),
                 };
 
-                let native = self.scheduler.natives.read().get(&*name).cloned()
-                    .ok_or_else(|| RuntimeError::Panic(format!("Undefined native: {}", name)))?;
+                // Check for trait overrides for "show" and "copy"
+                let trait_method = if !arg_values.is_empty() && (&*name == "show" || &*name == "copy") {
+                    let trait_name = if &*name == "show" { "Show" } else { "Copy" };
+                    // Get the type name of the first argument
+                    let type_name = self.scheduler.with_process(pid, |proc| {
+                        arg_values[0].type_name(&proc.heap).to_string()
+                    });
+                    if let Some(type_name) = type_name {
+                        // Look for Type.Trait.method function
+                        let qualified_name = format!("{}.{}.{}", type_name, trait_name, name);
+                        self.scheduler.functions.read().get(&qualified_name).cloned()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
 
-                let result = self.scheduler.with_process_mut(pid, |proc| {
-                    (native.func)(&arg_values, &mut proc.heap)
-                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))??;
+                if let Some(func) = trait_method {
+                    // Call the trait method instead of the native
+                    self.scheduler.with_process_mut(pid, |proc| {
+                        let mut registers = vec![GcValue::Unit; 256];
+                        for (i, arg) in arg_values.into_iter().enumerate() {
+                            if i < 256 {
+                                registers[i] = arg;
+                            }
+                        }
 
-                set_reg!(dst, result);
-                self.scheduler.with_process_mut(pid, |proc| {
-                    proc.consume_reductions(10);
-                });
+                        let frame = CallFrame {
+                            function: func,
+                            ip: 0,
+                            registers,
+                            captures: Vec::new(),
+                            return_reg: Some(dst),
+                        };
+                        proc.frames.push(frame);
+                        proc.consume_reductions(1);
+                    });
+                } else {
+                    // Fall back to the native function
+                    let native = self.scheduler.natives.read().get(&*name).cloned()
+                        .ok_or_else(|| RuntimeError::Panic(format!("Undefined native: {}", name)))?;
+
+                    let result = self.scheduler.with_process_mut(pid, |proc| {
+                        (native.func)(&arg_values, &mut proc.heap)
+                    }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))??;
+
+                    set_reg!(dst, result);
+                    self.scheduler.with_process_mut(pid, |proc| {
+                        proc.consume_reductions(10);
+                    });
+                }
             }
 
             Instruction::CallByName(dst, name_idx, ref arg_regs) => {

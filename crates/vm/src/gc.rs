@@ -1433,6 +1433,139 @@ impl Heap {
             }
         }
     }
+
+    /// Clone a value within the same heap (deep copy).
+    ///
+    /// This creates a completely independent copy of the value.
+    /// Used by the `copy` built-in function.
+    pub fn clone_value(&mut self, value: &GcValue) -> GcValue {
+        match value {
+            // Immediate values are copied directly
+            GcValue::Unit => GcValue::Unit,
+            GcValue::Bool(b) => GcValue::Bool(*b),
+            GcValue::Int(i) => GcValue::Int(*i),
+            GcValue::Float(f) => GcValue::Float(*f),
+            GcValue::Char(c) => GcValue::Char(*c),
+            GcValue::Pid(p) => GcValue::Pid(*p),
+            GcValue::Ref(r) => GcValue::Ref(*r),
+
+            // Heap values need recursive deep copy
+            GcValue::String(ptr) => {
+                let data = self.get_string(*ptr).map(|s| s.data.clone());
+                if let Some(data) = data {
+                    GcValue::String(self.alloc_string(data))
+                } else {
+                    GcValue::Unit
+                }
+            }
+            GcValue::List(ptr) => {
+                let items = self.get_list(*ptr).map(|l| l.items.clone());
+                if let Some(items) = items {
+                    let cloned: Vec<GcValue> = items.iter().map(|v| self.clone_value(v)).collect();
+                    GcValue::List(self.alloc_list(cloned))
+                } else {
+                    GcValue::Unit
+                }
+            }
+            GcValue::Array(ptr) => {
+                let items = self.get_array(*ptr).map(|a| a.items.clone());
+                if let Some(items) = items {
+                    let cloned: Vec<GcValue> = items.iter().map(|v| self.clone_value(v)).collect();
+                    GcValue::Array(self.alloc_array(cloned))
+                } else {
+                    GcValue::Unit
+                }
+            }
+            GcValue::Tuple(ptr) => {
+                let items = self.get_tuple(*ptr).map(|t| t.items.clone());
+                if let Some(items) = items {
+                    let cloned: Vec<GcValue> = items.iter().map(|v| self.clone_value(v)).collect();
+                    GcValue::Tuple(self.alloc_tuple(cloned))
+                } else {
+                    GcValue::Unit
+                }
+            }
+            GcValue::Map(ptr) => {
+                let entries = self.get_map(*ptr).map(|m| m.entries.clone());
+                if let Some(entries) = entries {
+                    let cloned: HashMap<GcMapKey, GcValue> = entries
+                        .iter()
+                        .map(|(k, v)| (self.clone_key(k), self.clone_value(v)))
+                        .collect();
+                    GcValue::Map(self.alloc_map(cloned))
+                } else {
+                    GcValue::Unit
+                }
+            }
+            GcValue::Set(ptr) => {
+                let items = self.get_set(*ptr).map(|s| s.items.clone());
+                if let Some(items) = items {
+                    let cloned: std::collections::HashSet<GcMapKey> =
+                        items.iter().map(|k| self.clone_key(k)).collect();
+                    GcValue::Set(self.alloc_set(cloned))
+                } else {
+                    GcValue::Unit
+                }
+            }
+            GcValue::Record(ptr) => {
+                let rec_data = self.get_record(*ptr).map(|r| {
+                    (r.type_name.clone(), r.field_names.clone(), r.fields.clone(), r.mutable_fields.clone())
+                });
+                if let Some((type_name, field_names, fields, mutable_fields)) = rec_data {
+                    let cloned: Vec<GcValue> = fields.iter().map(|v| self.clone_value(v)).collect();
+                    GcValue::Record(self.alloc_record(type_name, field_names, cloned, mutable_fields))
+                } else {
+                    GcValue::Unit
+                }
+            }
+            GcValue::Variant(ptr) => {
+                let var_data = self.get_variant(*ptr).map(|v| {
+                    (v.type_name.clone(), v.constructor.clone(), v.fields.clone())
+                });
+                if let Some((type_name, constructor, fields)) = var_data {
+                    let cloned: Vec<GcValue> = fields.iter().map(|v| self.clone_value(v)).collect();
+                    GcValue::Variant(self.alloc_variant(type_name, constructor, cloned))
+                } else {
+                    GcValue::Unit
+                }
+            }
+            GcValue::Closure(ptr) => {
+                let clo_data = self.get_closure(*ptr).map(|c| {
+                    (c.function.clone(), c.captures.clone(), c.capture_names.clone())
+                });
+                if let Some((function, captures, capture_names)) = clo_data {
+                    let cloned: Vec<GcValue> = captures.iter().map(|v| self.clone_value(v)).collect();
+                    GcValue::Closure(self.alloc_closure(function, cloned, capture_names))
+                } else {
+                    GcValue::Unit
+                }
+            }
+
+            // Rc-based values - just clone the Rc (shared reference)
+            GcValue::Function(f) => GcValue::Function(f.clone()),
+            GcValue::NativeFunction(n) => GcValue::NativeFunction(n.clone()),
+            GcValue::Type(t) => GcValue::Type(t.clone()),
+            GcValue::Pointer(p) => GcValue::Pointer(*p),
+        }
+    }
+
+    /// Clone a map key within the same heap.
+    fn clone_key(&mut self, key: &GcMapKey) -> GcMapKey {
+        match key {
+            GcMapKey::Unit => GcMapKey::Unit,
+            GcMapKey::Bool(b) => GcMapKey::Bool(*b),
+            GcMapKey::Int(i) => GcMapKey::Int(*i),
+            GcMapKey::Char(c) => GcMapKey::Char(*c),
+            GcMapKey::String(ptr) => {
+                let data = self.get_string(*ptr).map(|s| s.data.clone());
+                if let Some(data) = data {
+                    GcMapKey::String(self.alloc_string(data))
+                } else {
+                    GcMapKey::Unit
+                }
+            }
+        }
+    }
 }
 
 impl Default for Heap {

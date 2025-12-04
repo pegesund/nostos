@@ -1,0 +1,34 @@
+# Test basic copy() functionality without trait override
+# copy() creates a deep copy of values
+# expect: 1
+
+main() = {
+    # Test copying a list
+    original = [1, 2, 3]
+    copied = copy(original)
+
+    # The copy should be equal to the original
+    assert_eq(original, copied)
+
+    # Test copying nested structures
+    nested = [[1, 2], [3, 4]]
+    nested_copy = copy(nested)
+    assert_eq(nested, nested_copy)
+
+    # Test copying integers (immediate values)
+    x = 42
+    y = copy(x)
+    assert_eq(x, y)
+
+    # Test copying strings
+    s = "hello"
+    s2 = copy(s)
+    assert_eq(s, s2)
+
+    # Test copying tuples
+    t = (1, "two", 3)
+    t2 = copy(t)
+    assert_eq(t, t2)
+
+    1
+}
