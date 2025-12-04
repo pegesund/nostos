@@ -1,0 +1,5 @@
+# Test file for unclosed brace error
+main() = {
+    x = 42
+    y = x + 1
+# missing closing brace

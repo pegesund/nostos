@@ -1,0 +1,5 @@
+# Test file for unknown variable error
+main() = {
+    x = 42
+    y = z + x
+}

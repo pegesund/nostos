@@ -1,0 +1,2 @@
+# Test division by zero
+main() = try 1/0 catch e -> "caught: " ++ show(e) end

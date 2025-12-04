@@ -1,0 +1,2 @@
+# Test file for unknown function error
+main() = nonexistent(42)
