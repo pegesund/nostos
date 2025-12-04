@@ -1,4 +1,7 @@
-# expect: 42
+# expect: ()
 # Multiplication
 
-main() = 6 * 7
+main() = {
+    assert_eq(42, 6 * 7),
+    ()
+}

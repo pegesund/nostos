@@ -1,4 +1,7 @@
-# expect: 7
+# expect: ()
 # Subtraction
 
-main() = 10 - 3
+main() = {
+    assert_eq(7, 10 - 3),
+    ()
+}

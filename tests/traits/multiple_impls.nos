@@ -1,4 +1,4 @@
-# expect: 6
+# expect: ()
 # Same trait for multiple types
 
 type Point = { x: Int, y: Int }
@@ -9,7 +9,9 @@ Point: Size size(self) = 2 end
 Circle: Size size(self) = 4 end
 
 main() = {
-    p = Point(0, 0)
-    c = Circle(5)
-    p.size() + c.size()
+    p = Point(0, 0),
+    c = Circle(5),
+    result = p.size() + c.size(),
+    assert_eq(6, result),
+    ()
 }

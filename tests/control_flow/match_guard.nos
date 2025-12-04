@@ -1,4 +1,4 @@
-# expect: 1
+# expect: ()
 # Match with guards
 
 classify(n) = match n
@@ -7,4 +7,7 @@ classify(n) = match n
     _ -> 0
 end
 
-main() = classify(42)
+main() = {
+    assert_eq(1, classify(42)),
+    ()
+}

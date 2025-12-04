@@ -1,4 +1,7 @@
-# expect: 255
+# expect: ()
 # Hex integer literal
 
-main() = 0xFF
+main() = {
+    assert_eq(255, 0xFF),
+    ()
+}

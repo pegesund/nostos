@@ -1,4 +1,4 @@
-# expect: 3
+# expect: ()
 # Variant type matching
 
 type Option[T] = None | Some(T)
@@ -6,4 +6,7 @@ type Option[T] = None | Some(T)
 get_or(Some(x), _) = x
 get_or(None, default) = default
 
-main() = get_or(Some(3), 0)
+main() = {
+    assert_eq(3, get_or(Some(3), 0)),
+    ()
+}

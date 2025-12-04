@@ -1,4 +1,7 @@
-# expect: true
+# expect: ()
 # Logical AND
 
-main() = true && true
+main() = {
+    assert_eq(true, true && true),
+    ()
+}

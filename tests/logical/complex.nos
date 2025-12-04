@@ -1,4 +1,7 @@
-# expect: true
+# expect: ()
 # Complex logical expression
 
-main() = (true && false) || (true && !false)
+main() = {
+    assert_eq(true, (true && false) || (true && !false)),
+    ()
+}

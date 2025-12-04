@@ -1,7 +1,10 @@
-# expect: 3
+# expect: ()
 # Function with guards
 
 abs(n) when n >= 0 = n
 abs(n) = -n
 
-main() = abs(-3)
+main() = {
+    assert_eq(3, abs(-3)),
+    ()
+}

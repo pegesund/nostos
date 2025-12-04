@@ -1,4 +1,7 @@
-# expect: true
+# expect: ()
 # Not equal comparison
 
-main() = 5 != 3
+main() = {
+    assert_eq(true, 5 != 3),
+    ()
+}

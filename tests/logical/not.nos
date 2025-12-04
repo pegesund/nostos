@@ -1,4 +1,7 @@
-# expect: true
+# expect: ()
 # Logical NOT
 
-main() = !false
+main() = {
+    assert_eq(true, !false),
+    ()
+}

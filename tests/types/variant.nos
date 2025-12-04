@@ -1,4 +1,7 @@
-# expect: Some(42)
+# expect: ()
 # Variant constructor (works like a record without type def)
 
-main() = Some(42)
+main() = {
+    assert_eq(Some(42), Some(42)),
+    ()
+}

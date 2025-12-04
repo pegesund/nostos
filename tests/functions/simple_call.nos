@@ -1,6 +1,9 @@
-# expect: 10
+# expect: ()
 # Simple function call
 
 double(x) = x * 2
 
-main() = double(5)
+main() = {
+    assert_eq(10, double(5)),
+    ()
+}

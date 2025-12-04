@@ -1,4 +1,7 @@
-# expect: 3.14
+# expect: ()
 # Float literal
 
-main() = 3.14
+main() = {
+    assert_eq(3.14, 3.14),
+    ()
+}

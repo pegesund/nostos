@@ -1,8 +1,10 @@
-# expect: 15
+# expect: ()
 # Closure capturing outer variable
 
 main() = {
-    x = 10
-    addX = y => x + y
-    addX(5)
+    x = 10,
+    addX = y => x + y,
+    result = addX(5),
+    assert_eq(15, result),
+    ()
 }

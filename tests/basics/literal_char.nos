@@ -1,4 +1,7 @@
-# expect: 'a'
+# expect: ()
 # Char literal
 
-main() = 'a'
+main() = {
+    assert_eq('a', 'a'),
+    ()
+}

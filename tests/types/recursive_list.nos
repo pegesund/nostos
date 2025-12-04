@@ -1,4 +1,4 @@
-# expect: 10
+# expect: ()
 # Recursive type - custom list
 
 type List[T] = Nil | Cons(T, List[T])
@@ -7,6 +7,8 @@ sum(Nil) = 0
 sum(Cons(h, t)) = h + sum(t)
 
 main() = {
-    lst = Cons(1, Cons(2, Cons(3, Cons(4, Nil))))
-    sum(lst)
+    lst = Cons(1, Cons(2, Cons(3, Cons(4, Nil)))),
+    result = sum(lst),
+    assert_eq(10, result),
+    ()
 }

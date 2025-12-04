@@ -1,7 +1,10 @@
-# expect: 120
+# expect: ()
 # Multi-clause function (factorial)
 
 fact(0) = 1
 fact(n) = n * fact(n - 1)
 
-main() = fact(5)
+main() = {
+    assert_eq(120, fact(5)),
+    ()
+}

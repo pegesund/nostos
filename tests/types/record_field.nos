@@ -1,9 +1,11 @@
-# expect: 7
+# expect: ()
 # Record field access
 
 type Point = {x: Int, y: Int}
 
 main() = {
-    p = Point(3, 4)
-    p.x + p.y
+    p = Point(3, 4),
+    result = p.x + p.y,
+    assert_eq(7, result),
+    ()
 }

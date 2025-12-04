@@ -1,6 +1,9 @@
-# expect: 1
+# expect: ()
 # Wildcard pattern
 
 first((a, _)) = a
 
-main() = first((1, 999))
+main() = {
+    assert_eq(1, first((1, 999))),
+    ()
+}

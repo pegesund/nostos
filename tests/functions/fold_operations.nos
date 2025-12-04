@@ -1,4 +1,4 @@
-# expect: 362880
+# expect: ()
 # Various fold operations - compute 9! = 362880
 
 # Left fold
@@ -16,4 +16,7 @@ range(start, stop) = if start > stop then [] else [start | range(start + 1, stop
 product(lst) = foldl((a, b) => a * b, 1, lst)
 
 # 9! = 362880
-main() = product(range(1, 9))
+main() = {
+    assert_eq(362880, product(range(1, 9))),
+    ()
+}

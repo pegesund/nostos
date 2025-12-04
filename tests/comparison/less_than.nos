@@ -1,4 +1,7 @@
-# expect: true
+# expect: ()
 # Less than comparison
 
-main() = 3 < 5
+main() = {
+    assert_eq(true, 3 < 5),
+    ()
+}

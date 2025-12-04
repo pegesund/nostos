@@ -1,4 +1,7 @@
-# expect: -5
+# expect: ()
 # Unary negation
 
-main() = -5
+main() = {
+    assert_eq(-5, -5),
+    ()
+}
