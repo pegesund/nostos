@@ -2,6 +2,5 @@
 # String concatenation
 
 main() = {
-    assert_eq("hello world", "hello" ++ " world"),
-    ()
+    assert_eq("hello world", "hello" ++ " world")
 }

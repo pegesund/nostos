@@ -66,8 +66,7 @@ pub enum Token {
     // === Error handling ===
     #[token("panic")]
     Panic,
-    #[token("assert")]
-    Assert,
+    // Note: assert is now a builtin function, not a keyword
 
     // === FFI ===
     #[token("extern")]
@@ -270,7 +269,6 @@ impl fmt::Display for Token {
             Token::Receive => write!(f, "receive"),
             Token::After => write!(f, "after"),
             Token::Panic => write!(f, "panic"),
-            Token::Assert => write!(f, "assert"),
             Token::Extern => write!(f, "extern"),
             Token::From => write!(f, "from"),
             Token::Test => write!(f, "test"),
@@ -361,12 +359,19 @@ mod tests {
 
     #[test]
     fn test_new_keywords() {
-        let tokens: Vec<_> = lex("try catch finally do test extern from panic assert")
+        let tokens: Vec<_> = lex("try catch finally do test extern from panic")
             .map(|(t, _)| t).collect();
         assert_eq!(tokens, vec![
             Token::Try, Token::Catch, Token::Finally, Token::Do,
-            Token::Test, Token::Extern, Token::From, Token::Panic, Token::Assert,
+            Token::Test, Token::Extern, Token::From, Token::Panic,
         ]);
+    }
+
+    #[test]
+    fn test_assert_is_identifier() {
+        // assert is a builtin function, not a keyword
+        let tokens: Vec<_> = lex("assert").map(|(t, _)| t).collect();
+        assert_eq!(tokens, vec![Token::LowerIdent("assert".to_string())]);
     }
 
     #[test]

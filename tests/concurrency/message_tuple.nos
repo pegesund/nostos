@@ -1,15 +1,15 @@
-# expect: 15
+# expect: ()
 # Send and receive a tuple message
 
 worker(parent) = {
-    parent <- (5, 10),
-    ()
+    parent <- (5, 10)
 }
 
 main() = {
     me = self()
     spawn(() => worker(me))
-    receive
+    result = receive
         (a, b) -> a + b
     end
+    assert_eq(15, result)
 }

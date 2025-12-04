@@ -1,15 +1,15 @@
-# expect: 42
+# expect: ()
 # Spawn a child process that sends result back to parent
 
 child(parent) = {
-    parent <- 42,
-    ()
+    parent <- 42
 }
 
 main() = {
     me = self()
     spawn(() => child(me))
-    receive
+    result = receive
         msg -> msg
     end
+    assert_eq(42, result)
 }

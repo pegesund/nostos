@@ -2,12 +2,11 @@
 # Nested block
 
 main() = {
-    x = 5,
+    x = 5
     y = {
-        z = 10,
+        z = 10
         z + 1
-    },
-    result = x + y + 5,
-    assert_eq(21, result),
-    ()
+    }
+    result = x + y + 5
+    assert_eq(21, result)
 }

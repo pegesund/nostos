@@ -5,6 +5,5 @@ unwrap(Some(x)) = x
 unwrap(None) = 0
 
 main() = {
-    assert_eq(10, unwrap(Some(10))),
-    ()
+    assert_eq(10, unwrap(Some(10)))
 }

@@ -7,8 +7,7 @@ trait Area area(self) -> Int end
 Rectangle: Area area(self) = self.width * self.height end
 
 main() = {
-    r = Rectangle(4, 5),
-    result = r.area(),
-    assert_eq(20, result),
-    ()
+    r = Rectangle(4, 5)
+    result = r.area()
+    assert_eq(20, result)
 }

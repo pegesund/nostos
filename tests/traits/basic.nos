@@ -5,6 +5,5 @@ trait Triple triple(self) -> Int end
 Int: Triple triple(self) = self * 3 end
 
 main() = {
-    assert_eq(21, 7.triple()),
-    ()
+    assert_eq(21, 7.triple())
 }

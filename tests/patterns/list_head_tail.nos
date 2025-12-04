@@ -5,6 +5,5 @@ head([h | _]) = h
 head([]) = 0
 
 main() = {
-    assert_eq(1, head([1, 2, 3])),
-    ()
+    assert_eq(1, head([1, 2, 3]))
 }

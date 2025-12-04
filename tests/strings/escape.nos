@@ -2,6 +2,5 @@
 # String with escape sequence
 
 main() = {
-    assert_eq("hello\nworld", "hello\nworld"),
-    ()
+    assert_eq("hello\nworld", "hello\nworld")
 }

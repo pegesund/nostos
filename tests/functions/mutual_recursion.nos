@@ -8,6 +8,5 @@ is_odd(0) = false
 is_odd(n) = is_even(n - 1)
 
 main() = {
-    assert_eq(true, is_even(10)),
-    ()
+    assert_eq(true, is_even(10))
 }

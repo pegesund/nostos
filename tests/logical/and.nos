@@ -2,6 +2,5 @@
 # Logical AND
 
 main() = {
-    assert_eq(true, true && true),
-    ()
+    assert_eq(true, true && true)
 }

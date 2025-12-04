@@ -2,6 +2,5 @@
 # Multiplication
 
 main() = {
-    assert_eq(42, 6 * 7),
-    ()
+    assert_eq(42, 6 * 7)
 }

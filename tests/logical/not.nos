@@ -2,6 +2,5 @@
 # Logical NOT
 
 main() = {
-    assert_eq(true, !false),
-    ()
+    assert_eq(true, !false)
 }

@@ -2,6 +2,5 @@
 # Basic addition
 
 main() = {
-    assert_eq(7, 3 + 4),
-    ()
+    assert_eq(7, 3 + 4)
 }

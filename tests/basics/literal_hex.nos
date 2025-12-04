@@ -2,6 +2,5 @@
 # Hex integer literal
 
 main() = {
-    assert_eq(255, 0xFF),
-    ()
+    assert_eq(255, 0xFF)
 }

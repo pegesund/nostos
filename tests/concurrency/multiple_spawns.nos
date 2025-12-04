@@ -1,9 +1,8 @@
-# expect: 30
+# expect: ()
 # Spawn multiple children and collect their results
 
 worker(parent, n) = {
-    parent <- n * 2,
-    ()
+    parent <- n * 2
 }
 
 main() = {
@@ -12,9 +11,10 @@ main() = {
     spawn(() => worker(me, 10))
 
     # Receive both results and sum them
-    receive
+    result = receive
         a -> receive
             b -> a + b
         end
     end
+    assert_eq(30, result)
 }
