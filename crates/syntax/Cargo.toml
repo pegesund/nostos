@@ -1,0 +1,13 @@
+[package]
+name = "nostos-syntax"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+logos.workspace = true
+chumsky.workspace = true
+ariadne.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+insta = { version = "1.42", features = ["yaml"] }

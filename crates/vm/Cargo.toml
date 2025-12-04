@@ -1,0 +1,11 @@
+[package]
+name = "nostos-vm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nostos-syntax = { path = "../syntax" }
+nostos-types = { path = "../types" }
+thiserror = "2.0"
+
+[dev-dependencies]
