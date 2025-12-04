@@ -1143,7 +1143,7 @@ impl VM {
             }
             Instruction::MakeMap(dst, pairs) => {
                 let mut map = HashMap::new();
-                for (k, v) in pairs {
+                for &(k, v) in pairs.iter() {
                     let key = reg!(k).to_gc_map_key()
                         .ok_or_else(|| RuntimeError::TypeError {
                             expected: "hashable type".to_string(),
@@ -1157,7 +1157,7 @@ impl VM {
             }
             Instruction::MakeSet(dst, regs) => {
                 let mut set = std::collections::HashSet::new();
-                for r in regs {
+                for &r in regs.iter() {
                     let key = reg!(r).to_gc_map_key()
                         .ok_or_else(|| RuntimeError::TypeError {
                             expected: "hashable type".to_string(),
@@ -1952,7 +1952,7 @@ mod tests {
         chunk.emit(Instruction::LoadConst(2, one_idx), 1);        // 4: r2 = 1
         chunk.emit(Instruction::SubInt(3, 0, 2), 1);              // 5: r3 = n - 1
         chunk.emit(Instruction::AddInt(4, 1, 0), 1);              // 6: r4 = acc + n
-        chunk.emit(Instruction::TailCallByName(func_name_idx, vec![3, 4]), 1); // 7: tail sum(r3, r4)
+        chunk.emit(Instruction::TailCallByName(func_name_idx, vec![3, 4].into()), 1); // 7: tail sum(r3, r4)
 
         let func = FunctionValue {
             name: "sum".to_string(),
@@ -2035,7 +2035,7 @@ mod tests {
         chunk.emit(Instruction::LoadConst(2, one_idx), 1);        // 4: r2 = 1
         chunk.emit(Instruction::SubInt(3, 0, 2), 1);              // 5: r3 = n - 1
         chunk.emit(Instruction::MulInt(4, 1, 0), 1);              // 6: r4 = acc * n
-        chunk.emit(Instruction::TailCallByName(func_name_idx, vec![3, 4]), 1); // 7: tail fact(r3, r4)
+        chunk.emit(Instruction::TailCallByName(func_name_idx, vec![3, 4].into()), 1); // 7: tail fact(r3, r4)
 
         let func = FunctionValue {
             name: "fact".to_string(),
@@ -2225,7 +2225,7 @@ mod tests {
         // swap(tuple) = (tuple.1, tuple.0)
         chunk.emit(Instruction::GetTupleField(2, 0, 0), 1);  // r2 = tuple.0
         chunk.emit(Instruction::GetTupleField(3, 0, 1), 1);  // r3 = tuple.1
-        chunk.emit(Instruction::MakeTuple(0, vec![3, 2]), 1); // r0 = (r3, r2)
+        chunk.emit(Instruction::MakeTuple(0, vec![3, 2].into()), 1); // r0 = (r3, r2)
         chunk.emit(Instruction::Return(0), 1);
 
         let func = FunctionValue {
@@ -2265,7 +2265,7 @@ mod tests {
         chunk.emit(Instruction::LoadConst(3, one_idx), 1);        // 4: r3 = 1
         chunk.emit(Instruction::SubInt(4, 0, 3), 1);              // 5: r4 = n - 1
         chunk.emit(Instruction::AddInt(5, 1, 2), 1);              // 6: r5 = a + b
-        chunk.emit(Instruction::TailCallByName(func_name_idx, vec![4, 2, 5]), 1); // 7: tail fib_iter(n-1, b, a+b)
+        chunk.emit(Instruction::TailCallByName(func_name_idx, vec![4, 2, 5].into()), 1); // 7: tail fib_iter(n-1, b, a+b)
 
         let func = FunctionValue {
             name: "fib_iter".to_string(),
@@ -2297,7 +2297,7 @@ mod tests {
         // div_mod(a, b) = (a / b, a % b) as tuple
         chunk.emit(Instruction::DivInt(2, 0, 1), 1);  // r2 = a / b
         chunk.emit(Instruction::ModInt(3, 0, 1), 1);  // r3 = a % b
-        chunk.emit(Instruction::MakeTuple(0, vec![2, 3]), 1);
+        chunk.emit(Instruction::MakeTuple(0, vec![2, 3].into()), 1);
         chunk.emit(Instruction::Return(0), 1);
 
         let func = FunctionValue {
@@ -2454,7 +2454,7 @@ mod tests {
         chunk.register_count = 4;
 
         // triple(a, b, c) = [a, b, c]
-        chunk.emit(Instruction::MakeList(3, vec![0, 1, 2]), 1);
+        chunk.emit(Instruction::MakeList(3, vec![0, 1, 2].into()), 1);
         chunk.emit(Instruction::Return(3), 1);
 
         let func = FunctionValue {
@@ -2497,7 +2497,7 @@ mod tests {
         // r4 = r0 == r2 (should be false - different content)
         chunk.emit(Instruction::Eq(4, 0, 2), 5);
         // Build tuple (r3, r4) for result
-        chunk.emit(Instruction::MakeTuple(3, vec![3, 4]), 6);
+        chunk.emit(Instruction::MakeTuple(3, vec![3, 4].into()), 6);
         chunk.emit(Instruction::Return(3), 7);
 
         let func = FunctionValue {
@@ -2534,9 +2534,9 @@ mod tests {
         // r1 = 2
         chunk.emit(Instruction::LoadConst(1, int2_idx as u16), 2);
         // r2 = [1, 2]
-        chunk.emit(Instruction::MakeList(2, vec![0, 1]), 3);
+        chunk.emit(Instruction::MakeList(2, vec![0, 1].into()), 3);
         // r3 = [1, 2] (different allocation)
-        chunk.emit(Instruction::MakeList(3, vec![0, 1]), 4);
+        chunk.emit(Instruction::MakeList(3, vec![0, 1].into()), 4);
         // r4 = r2 == r3 (should be true - same content)
         chunk.emit(Instruction::Eq(4, 2, 3), 5);
         chunk.emit(Instruction::Return(4), 6);
@@ -2587,10 +2587,10 @@ mod tests {
         chunk.emit(Instruction::JumpIfFalse(2, 1), 1);            // 2: if !r2, jump to 4
         chunk.emit(Instruction::Return(0), 1);                     // 3: return n (which is 0)
         // Jump lands here (index 4) - allocate then recurse:
-        chunk.emit(Instruction::MakeList(3, vec![0, 0]), 1);      // 4: r3 = [n, n] - HEAP ALLOCATION!
+        chunk.emit(Instruction::MakeList(3, vec![0, 0].into()), 1);      // 4: r3 = [n, n] - HEAP ALLOCATION!
         chunk.emit(Instruction::LoadConst(1, one_idx), 1);        // 5: r1 = 1
         chunk.emit(Instruction::SubInt(4, 0, 1), 1);              // 6: r4 = n - 1
-        chunk.emit(Instruction::TailCallByName(func_name_idx, vec![4]), 1); // 7: tail alloc_recurse(r4)
+        chunk.emit(Instruction::TailCallByName(func_name_idx, vec![4].into()), 1); // 7: tail alloc_recurse(r4)
 
         let func = FunctionValue {
             name: "alloc_recurse".to_string(),
@@ -2646,7 +2646,7 @@ mod tests {
         chunk.emit(Instruction::JumpIfFalse(3, 1), 1);            // 2: if !r3, jump to 4
         chunk.emit(Instruction::Return(1), 1);                     // 3: return acc
         // Loop body (index 4):
-        chunk.emit(Instruction::MakeList(4, vec![0]), 1);         // 4: r4 = [n] - HEAP ALLOCATION!
+        chunk.emit(Instruction::MakeList(4, vec![0].into()), 1);         // 4: r4 = [n] - HEAP ALLOCATION!
         chunk.emit(Instruction::LoadConst(2, one_idx), 1);        // 5: r2 = 1
         chunk.emit(Instruction::SubInt(0, 0, 2), 1);              // 6: n = n - 1
         chunk.emit(Instruction::AddInt(1, 1, 2), 1);              // 7: acc = acc + 1
@@ -2830,10 +2830,10 @@ mod tests {
         // Build nested list [[1, 2], [3]] in r0-r5
         chunk.emit(Instruction::LoadConst(0, one_idx), 1);        // 0: r0 = 1
         chunk.emit(Instruction::LoadConst(1, two_idx), 1);        // 1: r1 = 2
-        chunk.emit(Instruction::MakeList(2, vec![0, 1]), 1);      // 2: r2 = [1, 2]
+        chunk.emit(Instruction::MakeList(2, vec![0, 1].into()), 1);      // 2: r2 = [1, 2]
         chunk.emit(Instruction::LoadConst(3, three_idx), 1);      // 3: r3 = 3
-        chunk.emit(Instruction::MakeList(4, vec![3]), 1);         // 4: r4 = [3]
-        chunk.emit(Instruction::MakeList(5, vec![2, 4]), 1);      // 5: r5 = [[1, 2], [3]] <- keep this!
+        chunk.emit(Instruction::MakeList(4, vec![3].into()), 1);         // 4: r4 = [3]
+        chunk.emit(Instruction::MakeList(5, vec![2, 4].into()), 1);      // 5: r5 = [[1, 2], [3]] <- keep this!
 
         // Now garbage loop to trigger GC using registers 6-9
         let count_idx = chunk.add_constant(Value::Int(50));
@@ -2925,7 +2925,7 @@ mod tests {
         chunk.emit(Instruction::JumpIfFalse(2, 1), 1);            // 2: if !r2, jump to 4
         chunk.emit(Instruction::Return(3), 1);                     // 3: return r3 (last string)
         // Loop body:
-        chunk.emit(Instruction::CallNative(3, native_name_idx, vec![0]), 1); // 4: r3 = make_string(n)
+        chunk.emit(Instruction::CallNative(3, native_name_idx, vec![0].into()), 1); // 4: r3 = make_string(n)
         chunk.emit(Instruction::LoadConst(4, one_idx), 1);        // 5: r4 = 1
         chunk.emit(Instruction::SubInt(0, 0, 4), 1);              // 6: n = n - 1
         chunk.emit(Instruction::Jump(-8), 1);                      // 7: jump back to 0

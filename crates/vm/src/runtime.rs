@@ -1335,7 +1335,7 @@ mod tests {
             "main",
             vec![
                 Instruction::LoadConst(0, 0), // Load child function
-                Instruction::Spawn(1, 0, vec![]), // Spawn child, store pid in r1
+                Instruction::Spawn(1, 0, vec![].into()), // Spawn child, store pid in r1
                 Instruction::Return(1), // Return child pid
             ],
             vec![Value::Function(child_func)],
@@ -1396,7 +1396,7 @@ mod tests {
             vec![
                 Instruction::LoadConst(0, 0),        // r0 = 2
                 Instruction::LoadConst(1, 1),        // r1 = 3
-                Instruction::CallByName(2, 2, vec![0, 1]),  // r2 = add(r0, r1)
+                Instruction::CallByName(2, 2, vec![0, 1].into()),  // r2 = add(r0, r1)
                 Instruction::Return(2),
             ],
             vec![Value::Int(2), Value::Int(3), Value::String(Rc::new("add".to_string()))],
@@ -1437,7 +1437,7 @@ mod tests {
                 Instruction::Jump(4),                // skip to Return at [9] (ip=5+4=9)
                 Instruction::LoadConst(4, 1),        // r4 = 1
                 Instruction::SubInt(5, 0, 4),        // r5 = n - 1
-                Instruction::CallByName(6, 2, vec![5]), // r6 = sum(n-1)
+                Instruction::CallByName(6, 2, vec![5].into()), // r6 = sum(n-1)
                 Instruction::AddInt(3, 0, 6),        // r3 = n + sum(n-1)
                 Instruction::Return(3),
             ],
@@ -1453,7 +1453,7 @@ mod tests {
             "main",
             vec![
                 Instruction::LoadConst(0, 0),
-                Instruction::CallByName(1, 1, vec![0]),
+                Instruction::CallByName(1, 1, vec![0].into()),
                 Instruction::Return(1),
             ],
             vec![Value::Int(3), Value::String(Rc::new("sum".to_string()))],
@@ -1488,7 +1488,7 @@ mod tests {
             "main",
             vec![
                 Instruction::LoadConst(0, 0),        // r0 = 42
-                Instruction::TailCallByName(1, vec![0]),  // tail call id(42)
+                Instruction::TailCallByName(1, vec![0].into()),  // tail call id(42)
                 Instruction::Return(0),  // This should never execute
             ],
             vec![Value::Int(42), Value::String(Rc::new("id".to_string()))],
@@ -1533,7 +1533,7 @@ mod tests {
             vec![
                 Instruction::SelfPid(0),              // r0 = self()
                 Instruction::LoadConst(1, 0),         // r1 = child_func
-                Instruction::Spawn(2, 1, vec![0]),    // r2 = spawn(child_func, [self()])
+                Instruction::Spawn(2, 1, vec![0].into()),    // r2 = spawn(child_func, [self()])
                 Instruction::Receive,                  // r0 = receive()
                 Instruction::Return(0),
             ],

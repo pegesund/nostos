@@ -14,6 +14,10 @@ use std::fmt;
 use std::rc::Rc;
 use std::cell::RefCell;
 
+/// Shared register list - makes instruction cloning O(1) instead of O(n).
+/// Used for function arguments, list/tuple construction, etc.
+pub type RegList = Rc<[Reg]>;
+
 /// A runtime value in Nostos.
 #[derive(Clone)]
 pub enum Value {
@@ -399,13 +403,13 @@ pub enum Instruction {
 
     // === Collections ===
     /// Create list from registers: dst = [regs...]
-    MakeList(Reg, Vec<Reg>),
+    MakeList(Reg, RegList),
     /// Create tuple: dst = (regs...)
-    MakeTuple(Reg, Vec<Reg>),
+    MakeTuple(Reg, RegList),
     /// Create map: dst = %{keys: values}
-    MakeMap(Reg, Vec<(Reg, Reg)>),
+    MakeMap(Reg, Rc<[(Reg, Reg)]>),
     /// Create set: dst = #{regs...}
-    MakeSet(Reg, Vec<Reg>),
+    MakeSet(Reg, RegList),
     /// List cons: dst = [head | tail]
     Cons(Reg, Reg, Reg),
     /// List concat: dst = a ++ b
@@ -423,17 +427,17 @@ pub enum Instruction {
 
     // === Records ===
     /// Create record: dst = TypeName{fields...}
-    MakeRecord(Reg, ConstIdx, Vec<Reg>),
+    MakeRecord(Reg, ConstIdx, RegList),
     /// Get field: dst = record.field
     GetField(Reg, Reg, ConstIdx),
     /// Set field: record.field = value
     SetField(Reg, ConstIdx, Reg),
     /// Update record: dst = base with new field values
-    UpdateRecord(Reg, Reg, ConstIdx, Vec<Reg>),
+    UpdateRecord(Reg, Reg, ConstIdx, RegList),
 
     // === Variants ===
     /// Create variant: dst = Constructor(fields...)
-    MakeVariant(Reg, ConstIdx, ConstIdx, Vec<Reg>), // dst, type_idx, ctor_idx, fields
+    MakeVariant(Reg, ConstIdx, ConstIdx, RegList), // dst, type_idx, ctor_idx, fields
     /// Get variant tag: dst = variant.tag (as int)
     GetTag(Reg, Reg),
     /// Get variant field: dst = variant.fields[idx]
@@ -451,21 +455,21 @@ pub enum Instruction {
 
     // === Function calls ===
     /// Call function: dst = func(args...)
-    Call(Reg, Reg, Vec<Reg>),
+    Call(Reg, Reg, RegList),
     /// Tail call (reuse current frame): return func(args...)
-    TailCall(Reg, Vec<Reg>),
+    TailCall(Reg, RegList),
     /// Call function by name (looks up in VM's function map)
-    CallByName(Reg, ConstIdx, Vec<Reg>),
+    CallByName(Reg, ConstIdx, RegList),
     /// Tail call by name
-    TailCallByName(ConstIdx, Vec<Reg>),
+    TailCallByName(ConstIdx, RegList),
     /// Call native function
-    CallNative(Reg, ConstIdx, Vec<Reg>),
+    CallNative(Reg, ConstIdx, RegList),
     /// Return value from function
     Return(Reg),
 
     // === Closures ===
     /// Create closure: dst = closure(func_idx, captures...)
-    MakeClosure(Reg, ConstIdx, Vec<Reg>),
+    MakeClosure(Reg, ConstIdx, RegList),
     /// Get captured variable: dst = captures[idx]
     GetCapture(Reg, u8),
 
@@ -483,11 +487,11 @@ pub enum Instruction {
 
     // === Concurrency ===
     /// Spawn process: dst = spawn(func, args)
-    Spawn(Reg, Reg, Vec<Reg>),
+    Spawn(Reg, Reg, RegList),
     /// Spawn linked: dst = spawn_link(func, args)
-    SpawnLink(Reg, Reg, Vec<Reg>),
+    SpawnLink(Reg, Reg, RegList),
     /// Spawn monitored: (pid, ref) = spawn_monitor(func, args)
-    SpawnMonitor(Reg, Reg, Reg, Vec<Reg>),
+    SpawnMonitor(Reg, Reg, Reg, RegList),
     /// Send message: pid <- msg
     Send(Reg, Reg),
     /// Get self PID: dst = self()

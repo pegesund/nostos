@@ -736,7 +736,7 @@ impl Compiler {
                             regs.push(reg);
                         }
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::MakeList(dst, regs), 0);
+                        self.chunk.emit(Instruction::MakeList(dst, regs.into()), 0);
                         Ok(dst)
                     }
                 }
@@ -750,7 +750,7 @@ impl Compiler {
                     regs.push(reg);
                 }
                 let dst = self.alloc_reg();
-                self.chunk.emit(Instruction::MakeTuple(dst, regs), 0);
+                self.chunk.emit(Instruction::MakeTuple(dst, regs.into()), 0);
                 Ok(dst)
             }
 
@@ -805,10 +805,10 @@ impl Compiler {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Rc::new(resolved_name)));
                         if is_tail {
-                            self.chunk.emit(Instruction::TailCallByName(name_idx, arg_regs), 0);
+                            self.chunk.emit(Instruction::TailCallByName(name_idx, arg_regs.into()), 0);
                             return Ok(0);
                         } else {
-                            self.chunk.emit(Instruction::CallByName(dst, name_idx, arg_regs), 0);
+                            self.chunk.emit(Instruction::CallByName(dst, name_idx, arg_regs.into()), 0);
                             return Ok(dst);
                         }
                     }
@@ -831,10 +831,10 @@ impl Compiler {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Rc::new(qualified_method)));
                         if is_tail {
-                            self.chunk.emit(Instruction::TailCallByName(name_idx, arg_regs), 0);
+                            self.chunk.emit(Instruction::TailCallByName(name_idx, arg_regs.into()), 0);
                             return Ok(0);
                         } else {
-                            self.chunk.emit(Instruction::CallByName(dst, name_idx, arg_regs), 0);
+                            self.chunk.emit(Instruction::CallByName(dst, name_idx, arg_regs.into()), 0);
                             return Ok(dst);
                         }
                     }
@@ -866,7 +866,7 @@ impl Compiler {
                     pair_regs.push((key_reg, val_reg));
                 }
                 let dst = self.alloc_reg();
-                self.chunk.emit(Instruction::MakeMap(dst, pair_regs), 0);
+                self.chunk.emit(Instruction::MakeMap(dst, pair_regs.into()), 0);
                 Ok(dst)
             }
 
@@ -878,7 +878,7 @@ impl Compiler {
                     regs.push(reg);
                 }
                 let dst = self.alloc_reg();
-                self.chunk.emit(Instruction::MakeSet(dst, regs), 0);
+                self.chunk.emit(Instruction::MakeSet(dst, regs.into()), 0);
                 Ok(dst)
             }
 
@@ -916,15 +916,15 @@ impl Compiler {
                 let dst = self.alloc_reg();
                 match kind {
                     SpawnKind::Normal => {
-                        self.chunk.emit(Instruction::Spawn(dst, func_reg, arg_regs), 0);
+                        self.chunk.emit(Instruction::Spawn(dst, func_reg, arg_regs.into()), 0);
                     }
                     SpawnKind::Linked => {
-                        self.chunk.emit(Instruction::SpawnLink(dst, func_reg, arg_regs), 0);
+                        self.chunk.emit(Instruction::SpawnLink(dst, func_reg, arg_regs.into()), 0);
                     }
                     SpawnKind::Monitored => {
                         // SpawnMonitor returns (pid, ref)
                         let ref_dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::SpawnMonitor(dst, ref_dst, func_reg, arg_regs), 0);
+                        self.chunk.emit(Instruction::SpawnMonitor(dst, ref_dst, func_reg, arg_regs.into()), 0);
                     }
                 }
                 Ok(dst)
@@ -1216,7 +1216,7 @@ impl Compiler {
             if !qualified_name.contains('.') && native_names.contains(&qualified_name.as_str()) {
                 let dst = self.alloc_reg();
                 let name_idx = self.chunk.add_constant(Value::String(Rc::new(qualified_name)));
-                self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs), 0);
+                self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
                 return Ok(dst);
             }
 
@@ -1229,10 +1229,10 @@ impl Compiler {
                 let name_idx = self.chunk.add_constant(Value::String(Rc::new(resolved_name)));
                 if is_tail {
                     // Tail call optimization using name lookup
-                    self.chunk.emit(Instruction::TailCallByName(name_idx, arg_regs), 0);
+                    self.chunk.emit(Instruction::TailCallByName(name_idx, arg_regs.into()), 0);
                     return Ok(0);
                 } else {
-                    self.chunk.emit(Instruction::CallByName(dst, name_idx, arg_regs), 0);
+                    self.chunk.emit(Instruction::CallByName(dst, name_idx, arg_regs.into()), 0);
                     return Ok(dst);
                 }
             }
@@ -1243,10 +1243,10 @@ impl Compiler {
         let dst = self.alloc_reg();
 
         if is_tail {
-            self.chunk.emit(Instruction::TailCall(func_reg, arg_regs), 0);
+            self.chunk.emit(Instruction::TailCall(func_reg, arg_regs.into()), 0);
             Ok(0)
         } else {
-            self.chunk.emit(Instruction::Call(dst, func_reg, arg_regs), 0);
+            self.chunk.emit(Instruction::Call(dst, func_reg, arg_regs.into()), 0);
             Ok(dst)
         }
     }
@@ -1910,7 +1910,7 @@ impl Compiler {
                     // Call `show` to convert to string
                     let dst = self.alloc_reg();
                     let name_idx = self.chunk.add_constant(Value::String(Rc::new("show".to_string())));
-                    self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![expr_reg]), 0);
+                    self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![expr_reg].into()), 0);
                     dst
                 }
             };
@@ -2031,7 +2031,7 @@ impl Compiler {
             // Has captures - create a closure
             let func_idx = self.chunk.add_constant(Value::Function(Rc::new(func)));
             let capture_regs: Vec<Reg> = captures.iter().map(|(_, reg)| *reg).collect();
-            self.chunk.emit(Instruction::MakeClosure(dst, func_idx, capture_regs), 0);
+            self.chunk.emit(Instruction::MakeClosure(dst, func_idx, capture_regs.into()), 0);
         }
 
         Ok(dst)
@@ -2055,7 +2055,7 @@ impl Compiler {
 
         let dst = self.alloc_reg();
         let type_idx = self.chunk.add_constant(Value::String(Rc::new(type_name.to_string())));
-        self.chunk.emit(Instruction::MakeRecord(dst, type_idx, field_regs), 0);
+        self.chunk.emit(Instruction::MakeRecord(dst, type_idx, field_regs.into()), 0);
         Ok(dst)
     }
 
@@ -2079,7 +2079,7 @@ impl Compiler {
 
         let dst = self.alloc_reg();
         let type_idx = self.chunk.add_constant(Value::String(Rc::new(type_name.to_string())));
-        self.chunk.emit(Instruction::UpdateRecord(dst, base_reg, type_idx, field_regs), 0);
+        self.chunk.emit(Instruction::UpdateRecord(dst, base_reg, type_idx, field_regs.into()), 0);
         Ok(dst)
     }
 

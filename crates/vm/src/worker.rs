@@ -1709,7 +1709,7 @@ mod tests {
                 Instruction::Jump(4),                   // skip to Return at [9]
                 Instruction::LoadConst(4, 1),           // r4 = 1
                 Instruction::SubInt(5, 0, 4),           // r5 = n - 1
-                Instruction::CallByName(6, 2, vec![5]), // r6 = sum(n-1)
+                Instruction::CallByName(6, 2, vec![5].into()), // r6 = sum(n-1)
                 Instruction::AddInt(3, 0, 6),           // r3 = n + sum(n-1)
                 Instruction::Return(3),
             ],
@@ -1728,7 +1728,7 @@ mod tests {
             "main",
             vec![
                 Instruction::LoadConst(0, 0),
-                Instruction::CallByName(1, 1, vec![0]),
+                Instruction::CallByName(1, 1, vec![0].into()),
                 Instruction::Return(1),
             ],
             vec![
@@ -1806,7 +1806,7 @@ mod tests {
             vec![
                 Instruction::LoadConst(0, 0), // r0 = child_func
                 Instruction::LoadConst(1, 1), // r1 = 10
-                Instruction::Spawn(2, 0, vec![1]), // r2 = spawn(child, [10])
+                Instruction::Spawn(2, 0, vec![1].into()), // r2 = spawn(child, [10])
                 Instruction::LoadConst(3, 2), // r3 = 42
                 Instruction::Return(3),
             ],
@@ -1842,7 +1842,7 @@ mod tests {
                 Instruction::Return(3),
                 Instruction::LoadConst(4, 1),             // r4 = 1
                 Instruction::SubInt(5, 0, 4),             // r5 = n - 1
-                Instruction::TailCallByName(2, vec![5]),  // tail call countdown(n-1)
+                Instruction::TailCallByName(2, vec![5].into()),  // tail call countdown(n-1)
             ],
             vec![
                 Value::Int(0),
@@ -1860,7 +1860,7 @@ mod tests {
             "main",
             vec![
                 Instruction::LoadConst(0, 0),
-                Instruction::CallByName(1, 1, vec![0]),
+                Instruction::CallByName(1, 1, vec![0].into()),
                 Instruction::Return(1),
             ],
             vec![
@@ -1907,7 +1907,7 @@ mod tests {
             vec![
                 Instruction::SelfPid(0),           // r0 = self()
                 Instruction::LoadConst(1, 0),      // r1 = child_func
-                Instruction::Spawn(2, 1, vec![0]), // r2 = spawn(child, [self()])
+                Instruction::Spawn(2, 1, vec![0].into()), // r2 = spawn(child, [self()])
                 Instruction::Receive,              // r0 = receive()
                 Instruction::Return(0),
             ],
@@ -1953,13 +1953,13 @@ mod tests {
                 // [6] SubInt(5, 0, 4)       r5 = n - 1
                 Instruction::SubInt(5, 0, 4),
                 // [7] CallByName(6, 3, [5]) r6 = fib(n-1)
-                Instruction::CallByName(6, 3, vec![5]),
+                Instruction::CallByName(6, 3, vec![5].into()),
                 // [8] LoadConst(7, 0)       r7 = 2
                 Instruction::LoadConst(7, 0),
                 // [9] SubInt(8, 0, 7)       r8 = n - 2
                 Instruction::SubInt(8, 0, 7),
                 // [10] CallByName(9, 3, [8]) r9 = fib(n-2)
-                Instruction::CallByName(9, 3, vec![8]),
+                Instruction::CallByName(9, 3, vec![8].into()),
                 // [11] AddInt(3, 6, 9)      r3 = fib(n-1) + fib(n-2)
                 Instruction::AddInt(3, 6, 9),
                 // [12] Return(3)
@@ -1982,7 +1982,7 @@ mod tests {
             "main",
             vec![
                 Instruction::LoadConst(0, 0),
-                Instruction::CallByName(1, 1, vec![0]),
+                Instruction::CallByName(1, 1, vec![0].into()),
                 Instruction::Return(1),
             ],
             vec![
