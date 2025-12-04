@@ -303,6 +303,10 @@ pub struct Scheduler {
 
     /// JIT compilation tracker (hot function detection).
     pub jit_tracker: JitTracker,
+
+    /// Active (non-exited) process count - atomic for fast access.
+    /// Avoids expensive iteration in process_count().
+    active_process_count: AtomicUsize,
 }
 
 impl Scheduler {
@@ -325,7 +329,14 @@ impl Scheduler {
             types: RwLock::new(HashMap::new()),
             globals: RwLock::new(HashMap::new()),
             jit_tracker: JitTracker::new(jit_config),
+            active_process_count: AtomicUsize::new(0),
         }
+    }
+
+    /// Get the active process count (fast, no locking).
+    #[inline]
+    pub fn active_count(&self) -> usize {
+        self.active_process_count.load(Ordering::Relaxed)
     }
 
     /// Spawn a new process.
@@ -345,6 +356,7 @@ impl Scheduler {
 
         self.processes.write().insert(pid, handle);
         self.run_queue.lock().push_back(pid);
+        self.active_process_count.fetch_add(1, Ordering::Relaxed);
 
         pid
     }
@@ -363,6 +375,7 @@ impl Scheduler {
         let handle = Arc::new(Mutex::new(process));
 
         self.processes.write().insert(pid, handle);
+        self.active_process_count.fetch_add(1, Ordering::Relaxed);
         // Don't add to run_queue - caller will manage scheduling
 
         pid
@@ -653,6 +666,7 @@ impl Scheduler {
         // Remove from queues
         self.run_queue.lock().retain(|&p| p != pid);
         self.waiting.lock().retain(|&p| p != pid);
+        self.active_process_count.fetch_sub(1, Ordering::Relaxed);
 
         let mut current_guard = self.current.lock();
         if *current_guard == Some(pid) {

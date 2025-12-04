@@ -41,6 +41,12 @@ pub struct Runtime {
 
     /// Output buffer (combined from all processes).
     pub output: Vec<String>,
+
+    /// Cached functions map - refreshed at start of run().
+    /// Avoids RwLock overhead on every function call.
+    cached_functions: std::collections::HashMap<String, Rc<FunctionValue>>,
+    cached_natives: std::collections::HashMap<String, Rc<GcNativeFn>>,
+    cached_types: std::collections::HashMap<String, Rc<TypeValue>>,
 }
 
 impl Runtime {
@@ -49,6 +55,9 @@ impl Runtime {
         Self {
             scheduler: Scheduler::new(),
             output: Vec::new(),
+            cached_functions: std::collections::HashMap::new(),
+            cached_natives: std::collections::HashMap::new(),
+            cached_types: std::collections::HashMap::new(),
         }
     }
 
@@ -164,12 +173,13 @@ impl Runtime {
     /// Spawn the initial process and run a function.
     pub fn spawn_initial(&mut self, func: Rc<FunctionValue>) -> Pid {
         let pid = self.scheduler.spawn();
+        let reg_count = func.code.register_count;
 
         self.scheduler.with_process_mut(pid, |process| {
             let frame = CallFrame {
                 function: func.clone(),
                 ip: 0,
-                registers: vec![GcValue::Unit; 256],
+                registers: vec![GcValue::Unit; reg_count],
                 captures: Vec::new(),
                 return_reg: None,
             };
@@ -222,9 +232,10 @@ impl Runtime {
                 .collect();
 
             // Set up call frame with arguments in registers
-            let mut registers = vec![GcValue::Unit; 256];
+            let reg_count = func.code.register_count;
+            let mut registers = vec![GcValue::Unit; reg_count];
             for (i, arg) in copied_args.into_iter().enumerate() {
-                if i < 256 {
+                if i < reg_count {
                     registers[i] = arg;
                 }
             }
@@ -245,6 +256,12 @@ impl Runtime {
     /// Run all processes until completion or deadlock.
     pub fn run(&mut self) -> Result<Option<GcValue>, RuntimeError> {
         self.register_builtins();
+
+        // Cache the function/native/type maps ONCE after registration
+        // This avoids RwLock overhead on every function call (~30M for fib(35))
+        self.cached_functions = self.scheduler.functions.read().clone();
+        self.cached_natives = self.scheduler.natives.read().clone();
+        self.cached_types = self.scheduler.types.read().clone();
 
         // Run until no more processes or all are waiting
         while self.scheduler.has_processes() {
@@ -301,58 +318,78 @@ impl Runtime {
         let process_handle = self.scheduler.get_process_handle(pid)
             .ok_or_else(|| RuntimeError::Panic(format!("Process {:?} not found", pid)))?;
 
+        // Clone cached maps into local variables to avoid borrow conflicts with &mut self
+        // The cache is already cloned once at start of run(), so this is O(n) Rc bumps
+        let functions = self.cached_functions.clone();
+        let natives = self.cached_natives.clone();
+        let types = self.cached_types.clone();
+
         // SINGLE LOCK for entire time slice - Erlang style!
         let mut proc = process_handle.lock();
 
+        // Yield check counter - only check every 1000 instructions for performance
+        let mut yield_check_counter = 0u32;
+
         loop {
-            // Check if we should yield or finish
-            if proc.should_yield() {
-                return Ok(ProcessStepResult::Yield);
-            }
-            if proc.frames.is_empty() {
-                return Ok(ProcessStepResult::Finished(GcValue::Unit));
+            // Only check yield every 1000 instructions (significant performance win)
+            yield_check_counter += 1;
+            if yield_check_counter >= 1000 {
+                yield_check_counter = 0;
+                if proc.should_yield() {
+                    proc.reset_reductions();
+                    if self.scheduler.active_count() > 1 {
+                        return Ok(ProcessStepResult::Yield);
+                    }
+                }
             }
 
-            // Get frame info without holding a reference
+            // Get frame count once - avoid repeated .len() calls
             let frame_len = proc.frames.len();
             if frame_len == 0 {
                 return Ok(ProcessStepResult::Finished(GcValue::Unit));
             }
             let frame_idx = frame_len - 1;
 
-            let ip = proc.frames[frame_idx].ip;
-            let code_len = proc.frames[frame_idx].function.code.code.len();
+            // Get frame data using raw pointers to avoid borrow issues
+            // SAFETY: frame_idx is valid (frame_len > 0 checked above)
+            let (ip, code_ptr, code_len, constants_ptr, constants_len) = unsafe {
+                let frame = proc.frames.get_unchecked(frame_idx);
+                let code = &frame.function.code;
+                (
+                    frame.ip,
+                    code.code.as_ptr(),
+                    code.code.len(),
+                    code.constants.as_ptr(),
+                    code.constants.len(),
+                )
+            };
 
             if ip >= code_len {
                 return Ok(ProcessStepResult::Finished(GcValue::Unit));
             }
 
-            // Check if this instruction needs inter-process communication
-            let needs_ipc = {
-                let instr = &proc.frames[frame_idx].function.code.code[ip];
-                matches!(
-                    instr,
-                    Instruction::Spawn(_, _, _)
-                    | Instruction::SpawnLink(_, _, _)
-                    | Instruction::SpawnMonitor(_, _, _, _)
-                    | Instruction::Send(_, _)
-                )
-            };
+            // SAFETY: ip < code_len checked above
+            let instr = unsafe { &*code_ptr.add(ip) };
+
+            // Check if this instruction needs IPC (rare)
+            let needs_ipc = matches!(
+                instr,
+                Instruction::Spawn(_, _, _)
+                | Instruction::SpawnLink(_, _, _)
+                | Instruction::SpawnMonitor(_, _, _, _)
+                | Instruction::Send(_, _)
+            );
 
             if needs_ipc {
-                // Clone instruction and constants for IPC (rare case)
-                let instr_clone = proc.frames[frame_idx].function.code.code[ip].clone();
-                let constants = proc.frames[frame_idx].function.code.constants.clone();
-
-                // Increment IP before release
+                let instr_clone = instr.clone();
+                let constants = unsafe { std::slice::from_raw_parts(constants_ptr, constants_len) }.to_vec();
+                let constants_values: Vec<Value> = constants.iter().cloned().collect();
                 proc.frames[frame_idx].ip += 1;
 
-                // Release lock before IPC operations to avoid deadlock
                 drop(proc);
-                let result = self.execute_ipc_instruction(pid, instr_clone, &constants)?;
+                let result = self.execute_ipc_instruction(pid, instr_clone, &constants_values)?;
                 match result {
                     ProcessStepResult::Continue => {
-                        // Re-acquire lock and continue
                         proc = process_handle.lock();
                         continue;
                     }
@@ -360,22 +397,13 @@ impl Runtime {
                 }
             }
 
-            // Fast path: execute locally
-            // Increment IP first
+            // Fast path: increment IP
             proc.frames[frame_idx].ip += 1;
 
-            // Get raw pointers to immutable instruction data to avoid borrow issues
-            // SAFETY: The instruction slice is in Rc<Chunk> which won't be modified
-            // We hold the process lock, and the chunk is immutable
-            let instr_ptr = proc.frames[frame_idx].function.code.code.as_ptr();
-            let constants_ptr = proc.frames[frame_idx].function.code.constants.as_ptr();
-            let constants_len = proc.frames[frame_idx].function.code.constants.len();
-
             // SAFETY: ip < code_len was checked above, constants are immutable
-            let instr = unsafe { &*instr_ptr.add(ip) };
             let constants = unsafe { std::slice::from_raw_parts(constants_ptr, constants_len) };
 
-            match self.execute_local_instruction_inline(&mut proc, frame_idx, instr, constants)? {
+            match self.execute_local_instruction_inline(&mut proc, frame_idx, instr, constants, &functions, &natives, &types)? {
                 ProcessStepResult::Continue => continue,
                 other => return Ok(other),
             }
@@ -385,6 +413,7 @@ impl Runtime {
     /// Execute an instruction that only accesses local process state.
     /// Takes borrowed instruction/constants - NO cloning!
     /// Called with the process lock already held - NO re-locking!
+    /// Uses cached functions/natives/types maps to avoid RwLock on every call.
     #[inline(always)]
     fn execute_local_instruction_inline(
         &mut self,
@@ -392,6 +421,9 @@ impl Runtime {
         frame_idx: usize,
         instr: &Instruction,
         constants: &[Value],
+        functions: &std::collections::HashMap<String, Rc<FunctionValue>>,
+        natives: &std::collections::HashMap<String, Rc<GcNativeFn>>,
+        types: &std::collections::HashMap<String, Rc<TypeValue>>,
     ) -> Result<ProcessStepResult, RuntimeError> {
         // Direct register access - no locking, frame_idx already computed!
         macro_rules! reg {
@@ -587,10 +619,11 @@ impl Runtime {
                     }
                 };
 
-                // Push new frame
-                let mut registers = vec![GcValue::Unit; 256];
+                // Push new frame - use actual register count
+                let reg_count = func.code.register_count;
+                let mut registers = vec![GcValue::Unit; reg_count];
                 for (i, arg) in arg_values.into_iter().enumerate() {
-                    if i < 256 {
+                    if i < reg_count {
                         registers[i] = arg;
                     }
                 }
@@ -628,18 +661,18 @@ impl Runtime {
                     }
                 };
 
-                // Replace current frame
-                let mut registers = vec![GcValue::Unit; 256];
-                for (i, arg) in arg_values.into_iter().enumerate() {
-                    if i < 256 {
-                        registers[i] = arg;
-                    }
-                }
-
+                // Replace current frame - reuse register vector
                 if let Some(frame) = proc.frames.last_mut() {
+                    let reg_count = func.code.register_count;
                     frame.function = func;
                     frame.ip = 0;
-                    frame.registers = registers;
+                    frame.registers.clear();
+                    frame.registers.resize(reg_count, GcValue::Unit);
+                    for (i, arg) in arg_values.into_iter().enumerate() {
+                        if i < reg_count {
+                            frame.registers[i] = arg;
+                        }
+                    }
                     frame.captures = captures;
                 }
                 proc.consume_reductions(1);
@@ -659,16 +692,17 @@ impl Runtime {
                     let trait_name = if &*name == "show" { "Show" } else { "Copy" };
                     let type_name = arg_values[0].type_name(&proc.heap).to_string();
                     let qualified_name = format!("{}.{}.{}", type_name, trait_name, name);
-                    self.scheduler.functions.read().get(&qualified_name).cloned()
+                    functions.get(&qualified_name).cloned()
                 } else {
                     None
                 };
 
                 if let Some(func) = trait_method {
                     // Call the trait method instead of the native
-                    let mut registers = vec![GcValue::Unit; 256];
+                    let reg_count = func.code.register_count;
+                    let mut registers = vec![GcValue::Unit; reg_count];
                     for (i, arg) in arg_values.into_iter().enumerate() {
-                        if i < 256 {
+                        if i < reg_count {
                             registers[i] = arg;
                         }
                     }
@@ -684,7 +718,7 @@ impl Runtime {
                     proc.consume_reductions(1);
                 } else {
                     // Fall back to the native function
-                    let native = self.scheduler.natives.read().get(&*name).cloned()
+                    let native = natives.get(&*name).cloned()
                         .ok_or_else(|| RuntimeError::Panic(format!("Undefined native: {}", name)))?;
 
                     let result = (native.func)(&arg_values, &mut proc.heap)?;
@@ -696,19 +730,20 @@ impl Runtime {
             Instruction::CallByName(dst, name_idx, ref arg_regs) => {
                 let dst = *dst;
                 let name = match constants.get(*name_idx as usize) {
-                    Some(Value::String(s)) => s.clone(),
+                    Some(Value::String(s)) => s,
                     _ => return Err(RuntimeError::Panic("Invalid function name".to_string())),
                 };
 
                 let arg_values: Vec<GcValue> = arg_regs.iter().map(|&r| reg_clone!(r)).collect();
 
-                let func = self.scheduler.functions.read().get(&*name).cloned()
+                let func = functions.get(&**name).cloned()
                     .ok_or_else(|| RuntimeError::UnknownFunction(name.to_string()))?;
 
-                // Push new frame (direct access)
-                let mut registers = vec![GcValue::Unit; 256];
+                // Push new frame - use actual register count
+                let reg_count = func.code.register_count;
+                let mut registers = vec![GcValue::Unit; reg_count];
                 for (i, arg) in arg_values.into_iter().enumerate() {
-                    if i < 256 {
+                    if i < reg_count {
                         registers[i] = arg;
                     }
                 }
@@ -726,28 +761,29 @@ impl Runtime {
 
             Instruction::TailCallByName(name_idx, ref arg_regs) => {
                 let name = match constants.get(*name_idx as usize) {
-                    Some(Value::String(s)) => s.clone(),
+                    Some(Value::String(s)) => s,
                     _ => return Err(RuntimeError::Panic("Invalid function name".to_string())),
                 };
 
                 let arg_values: Vec<GcValue> = arg_regs.iter().map(|&r| reg_clone!(r)).collect();
 
-                let func = self.scheduler.functions.read().get(&*name).cloned()
+                let func = functions.get(&**name).cloned()
                     .ok_or_else(|| RuntimeError::UnknownFunction(name.to_string()))?;
 
-                // Replace current frame (direct access)
-                let mut registers = vec![GcValue::Unit; 256];
-                for (i, arg) in arg_values.into_iter().enumerate() {
-                    if i < 256 {
-                        registers[i] = arg;
-                    }
-                }
-
+                // Replace current frame - reuse register vector like VM does
                 if let Some(frame) = proc.frames.last_mut() {
+                    let reg_count = func.code.register_count;
                     frame.function = func;
                     frame.ip = 0;
-                    frame.registers = registers;
-                    frame.captures = Vec::new();
+                    // Reuse existing allocation - clear and resize
+                    frame.registers.clear();
+                    frame.registers.resize(reg_count, GcValue::Unit);
+                    for (i, arg) in arg_values.into_iter().enumerate() {
+                        if i < reg_count {
+                            frame.registers[i] = arg;
+                        }
+                    }
+                    frame.captures.clear();
                 }
                 proc.consume_reductions(1);
             }
@@ -880,7 +916,7 @@ impl Runtime {
                     .map(|&r| reg_clone!(r))
                     .collect();
 
-                let type_info = self.scheduler.types.read().get(&type_name).cloned();
+                let type_info = types.get(&type_name).cloned();
                 let field_names: Vec<String> = type_info
                     .as_ref()
                     .map(|t| t.fields.iter().map(|f| f.name.clone()).collect())
