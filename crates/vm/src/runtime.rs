@@ -582,7 +582,12 @@ impl Runtime {
             Instruction::Return(src) => {
                 let return_val = reg_clone!(*src);
                 let return_reg = proc.frames.last().and_then(|f| f.return_reg);
-                proc.frames.pop();
+
+                // Pop frame and return registers to pool
+                if let Some(mut frame) = proc.frames.pop() {
+                    let regs = std::mem::take(&mut frame.registers);
+                    proc.free_registers(regs);
+                }
 
                 if proc.frames.is_empty() {
                     return Ok(ProcessStepResult::Finished(return_val));
@@ -597,9 +602,17 @@ impl Runtime {
 
             Instruction::Call(dst, func_reg, ref args) => {
                 let dst = *dst;
-                let func_val = reg_clone!(*func_reg);
-                let arg_values: Vec<GcValue> = args.iter().map(|&r| reg_clone!(r)).collect();
+                let arg_count = args.len();
 
+                // Use stack array for args (avoid heap allocation)
+                let mut arg_buf: [GcValue; 8] = Default::default();
+                if arg_count <= 8 {
+                    for (i, &r) in args.iter().enumerate() {
+                        arg_buf[i] = reg_clone!(r);
+                    }
+                }
+
+                let func_val = reg_clone!(*func_reg);
                 let (func, captures) = match &func_val {
                     GcValue::Function(f) => (f.clone(), Vec::new()),
                     GcValue::Closure(ptr) => {
@@ -618,23 +631,29 @@ impl Runtime {
                     }
                 };
 
-                // Push new frame - use actual register count
+                // Get registers from pool
                 let reg_count = func.code.register_count;
-                let mut registers = vec![GcValue::Unit; reg_count];
-                for (i, arg) in arg_values.into_iter().enumerate() {
-                    if i < reg_count {
-                        registers[i] = arg;
+                let mut registers = proc.alloc_registers(reg_count);
+
+                if arg_count <= 8 {
+                    for i in 0..arg_count {
+                        registers[i] = std::mem::take(&mut arg_buf[i]);
+                    }
+                } else {
+                    for (i, &r) in args.iter().enumerate() {
+                        if i < reg_count {
+                            registers[i] = reg_clone!(r);
+                        }
                     }
                 }
 
-                let frame = CallFrame {
+                proc.frames.push(CallFrame {
                     function: func,
                     ip: 0,
                     registers,
                     captures,
                     return_reg: Some(dst),
-                };
-                proc.frames.push(frame);
+                });
                 proc.consume_reductions(1);
             }
 
@@ -728,33 +747,47 @@ impl Runtime {
 
             Instruction::CallByName(dst, name_idx, ref arg_regs) => {
                 let dst = *dst;
+                let arg_count = arg_regs.len();
+
+                // Use stack array for args
+                let mut arg_buf: [GcValue; 8] = Default::default();
+                if arg_count <= 8 {
+                    for (i, &r) in arg_regs.iter().enumerate() {
+                        arg_buf[i] = reg_clone!(r);
+                    }
+                }
+
                 let name = match constants.get(*name_idx as usize) {
                     Some(Value::String(s)) => s,
                     _ => return Err(RuntimeError::Panic("Invalid function name".to_string())),
                 };
 
-                let arg_values: Vec<GcValue> = arg_regs.iter().map(|&r| reg_clone!(r)).collect();
-
                 let func = functions.get(&**name).cloned()
                     .ok_or_else(|| RuntimeError::UnknownFunction(name.to_string()))?;
 
-                // Push new frame - use actual register count
+                // Get registers from pool
                 let reg_count = func.code.register_count;
-                let mut registers = vec![GcValue::Unit; reg_count];
-                for (i, arg) in arg_values.into_iter().enumerate() {
-                    if i < reg_count {
-                        registers[i] = arg;
+                let mut registers = proc.alloc_registers(reg_count);
+
+                if arg_count <= 8 {
+                    for i in 0..arg_count {
+                        registers[i] = std::mem::take(&mut arg_buf[i]);
+                    }
+                } else {
+                    for (i, &r) in arg_regs.iter().enumerate() {
+                        if i < reg_count {
+                            registers[i] = reg_clone!(r);
+                        }
                     }
                 }
 
-                let frame = CallFrame {
+                proc.frames.push(CallFrame {
                     function: func,
                     ip: 0,
                     registers,
                     captures: Vec::new(),
                     return_reg: Some(dst),
-                };
-                proc.frames.push(frame);
+                });
                 proc.consume_reductions(1);
             }
 
@@ -790,28 +823,42 @@ impl Runtime {
             Instruction::CallDirect(dst, func_idx, ref arg_regs) => {
                 // Direct function call by index - no HashMap lookup!
                 let dst = *dst;
-                let func = function_list.get(*func_idx as usize).cloned()
-                    .ok_or_else(|| RuntimeError::UnknownFunction(format!("function index {}", func_idx)))?;
+                let arg_count = arg_regs.len();
 
-                let arg_values: Vec<GcValue> = arg_regs.iter().map(|&r| reg_clone!(r)).collect();
-
-                // Push new frame - use actual register count
-                let reg_count = func.code.register_count;
-                let mut registers = vec![GcValue::Unit; reg_count];
-                for (i, arg) in arg_values.into_iter().enumerate() {
-                    if i < reg_count {
-                        registers[i] = arg;
+                // Use stack array for args
+                let mut arg_buf: [GcValue; 8] = Default::default();
+                if arg_count <= 8 {
+                    for (i, &r) in arg_regs.iter().enumerate() {
+                        arg_buf[i] = reg_clone!(r);
                     }
                 }
 
-                let frame = CallFrame {
+                let func = function_list.get(*func_idx as usize).cloned()
+                    .ok_or_else(|| RuntimeError::UnknownFunction(format!("function index {}", func_idx)))?;
+
+                // Get registers from pool
+                let reg_count = func.code.register_count;
+                let mut registers = proc.alloc_registers(reg_count);
+
+                if arg_count <= 8 {
+                    for i in 0..arg_count {
+                        registers[i] = std::mem::take(&mut arg_buf[i]);
+                    }
+                } else {
+                    for (i, &r) in arg_regs.iter().enumerate() {
+                        if i < reg_count {
+                            registers[i] = reg_clone!(r);
+                        }
+                    }
+                }
+
+                proc.frames.push(CallFrame {
                     function: func,
                     ip: 0,
                     registers,
                     captures: Vec::new(),
                     return_reg: Some(dst),
-                };
-                proc.frames.push(frame);
+                });
                 proc.consume_reductions(1);
             }
 
@@ -841,29 +888,47 @@ impl Runtime {
             }
 
             Instruction::CallSelf(dst, ref arg_regs) => {
-                // Self-recursion: reuse current frame's function (no HashMap lookup!)
+                // Self-recursion: OPTIMIZED - use register pool!
                 let dst = *dst;
-                let arg_values: Vec<GcValue> = arg_regs.iter().map(|&r| reg_clone!(r)).collect();
+                let arg_count = arg_regs.len();
 
-                // Get current function directly from frame
-                let func = proc.frames[frame_idx].function.clone();
-
-                let reg_count = func.code.register_count;
-                let mut registers = vec![GcValue::Unit; reg_count];
-                for (i, arg) in arg_values.into_iter().enumerate() {
-                    if i < reg_count {
-                        registers[i] = arg;
+                // Use stack array for args (avoid heap allocation for common cases)
+                // Copy args BEFORE creating new frame to avoid borrow issues
+                let mut arg_buf: [GcValue; 8] = Default::default();
+                if arg_count <= 8 {
+                    for (i, &r) in arg_regs.iter().enumerate() {
+                        arg_buf[i] = reg_clone!(r);
                     }
                 }
 
-                let frame = CallFrame {
+                // Get function info (Rc clone unavoidable due to borrow checker)
+                let func = proc.frames[frame_idx].function.clone();
+                let reg_count = func.code.register_count;
+
+                // Get registers from pool (avoids allocation!)
+                let mut registers = proc.alloc_registers(reg_count);
+
+                // Copy args directly (no intermediate Vec for small arg counts)
+                if arg_count <= 8 {
+                    for i in 0..arg_count {
+                        registers[i] = std::mem::take(&mut arg_buf[i]);
+                    }
+                } else {
+                    // Fallback for rare >8 arg cases
+                    for (i, &r) in arg_regs.iter().enumerate() {
+                        if i < reg_count {
+                            registers[i] = reg_clone!(r);
+                        }
+                    }
+                }
+
+                proc.frames.push(CallFrame {
                     function: func,
                     ip: 0,
                     registers,
                     captures: Vec::new(),
                     return_reg: Some(dst),
-                };
-                proc.frames.push(frame);
+                });
                 proc.consume_reductions(1);
             }
 

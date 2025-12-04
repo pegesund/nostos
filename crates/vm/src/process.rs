@@ -62,6 +62,9 @@ pub struct Process {
     /// JIT code pushes/pops frames here.
     pub frames: Vec<CallFrame>,
 
+    /// Pool of reusable register vectors (avoids allocation on function calls).
+    pub register_pool: Vec<Vec<GcValue>>,
+
     /// Message queue (inbox).
     /// Messages are deep-copied into process's heap.
     pub mailbox: VecDeque<GcValue>,
@@ -107,6 +110,7 @@ impl Process {
             pid,
             heap: Heap::with_config(gc_config),
             frames: Vec::new(),
+            register_pool: Vec::new(),
             mailbox: VecDeque::new(),
             state: ProcessState::Running,
             reductions: REDUCTIONS_PER_SLICE,
@@ -118,6 +122,30 @@ impl Process {
             exit_value: None,
             output: Vec::new(),
         }
+    }
+
+    /// Get a registers vector from the pool, or allocate a new one.
+    /// The vector will be cleared and resized to the requested capacity.
+    #[inline]
+    pub fn alloc_registers(&mut self, size: usize) -> Vec<GcValue> {
+        if let Some(mut regs) = self.register_pool.pop() {
+            regs.clear();
+            regs.resize(size, GcValue::Unit);
+            regs
+        } else {
+            vec![GcValue::Unit; size]
+        }
+    }
+
+    /// Return a registers vector to the pool for reuse.
+    #[inline]
+    pub fn free_registers(&mut self, mut regs: Vec<GcValue>) {
+        // Only keep vectors up to a reasonable size in the pool
+        if regs.capacity() <= 64 && self.register_pool.len() < 16 {
+            regs.clear();
+            self.register_pool.push(regs);
+        }
+        // Otherwise just drop it
     }
 
     /// Reset reduction counter for a new time slice.

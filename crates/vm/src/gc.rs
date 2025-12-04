@@ -233,6 +233,12 @@ pub enum GcValue {
     Pointer(usize),
 }
 
+impl Default for GcValue {
+    fn default() -> Self {
+        GcValue::Unit
+    }
+}
+
 impl PartialEq for GcValue {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
