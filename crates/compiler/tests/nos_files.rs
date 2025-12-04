@@ -91,6 +91,7 @@ fn run_nos_source_concurrent(source: &str) -> Result<String, String> {
     for (name, func) in compiler.get_all_functions() {
         runtime.register_function(name, func.clone());
     }
+    runtime.set_function_list(compiler.get_function_list());
     for (name, type_val) in compiler.get_vm_types() {
         runtime.register_type(&name, type_val);
     }
@@ -127,6 +128,7 @@ fn run_nos_source(source: &str) -> Result<Value, String> {
     for (name, func) in compiler.get_all_functions() {
         vm.functions.insert(name.clone(), func.clone());
     }
+    vm.function_list = compiler.get_function_list();
     for (name, type_val) in compiler.get_vm_types() {
         vm.types.insert(name, type_val);
     }

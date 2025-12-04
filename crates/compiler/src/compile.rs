@@ -591,6 +591,13 @@ impl Compiler {
             jit_code: None,
         };
 
+        // Assign function index if not already indexed (for trait methods and late-compiled functions)
+        if !self.function_indices.contains_key(&name) {
+            let idx = self.function_list.len() as u16;
+            self.function_indices.insert(name.clone(), idx);
+            self.function_list.push(name.clone());
+        }
+
         self.functions.insert(name, Rc::new(func));
 
         // Restore compiler state
@@ -2592,6 +2599,7 @@ mod tests {
         for (name, func) in compiler.get_all_functions() {
             vm.functions.insert(name.clone(), func.clone());
         }
+        vm.function_list = compiler.get_function_list();
         for (name, type_val) in compiler.get_vm_types() {
             vm.types.insert(name, type_val);
         }
