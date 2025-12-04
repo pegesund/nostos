@@ -735,28 +735,36 @@ impl VM {
 
     /// Execute a single step and return what to do next.
     fn execute_step(&mut self) -> Result<StepResult, RuntimeError> {
-        // Get instruction first (immutable borrow)
-        let (instr, constants, frame_len) = {
+        // Get function Rc (cheap: just refcount increment) and IP
+        // We clone the Rc, NOT the function or constants - this is O(1)
+        let (func, ip, frame_len) = {
             let frame = self.frames.last().unwrap();
-            let instr = frame.function.code.code[frame.ip].clone();
-            let constants = frame.function.code.constants.clone();
-            (instr, constants, self.frames.len())
+            (frame.function.clone(), frame.ip, self.frames.len())
         };
 
+        // Clone instruction (Copy types are cheap, Vecs in Call/MakeList need clone)
+        let instr = func.code.code[ip].clone();
+        // Access constants through the Rc when needed (no clone!)
+        let constants = &func.code.constants;
+
+        // Use direct indexing with frame_len-1 instead of .last() to avoid bounds check
+        let frame_idx = frame_len - 1;
+
         // Increment IP
-        self.frames.last_mut().unwrap().ip += 1;
+        self.frames[frame_idx].ip += 1;
 
         // Helper macros to reduce boilerplate
+
         macro_rules! frame {
-            () => { self.frames.last_mut().unwrap() }
+            () => { &mut self.frames[frame_idx] }
         }
 
         macro_rules! reg {
-            ($r:expr) => { &self.frames.last().unwrap().registers[$r as usize] }
+            ($r:expr) => { &self.frames[frame_idx].registers[$r as usize] }
         }
 
         macro_rules! set_reg {
-            ($r:expr, $v:expr) => { frame!().registers[$r as usize] = $v };
+            ($r:expr, $v:expr) => { self.frames[frame_idx].registers[$r as usize] = $v };
         }
 
         // Helper to get type name for error messages
@@ -1836,7 +1844,8 @@ impl VM {
                     while self.frames.len() > handler.frame_index + 1 {
                         self.frames.pop();
                     }
-                    frame!().ip = handler.catch_ip;
+                    // Use last_mut() here since frame_idx may be stale after pops
+                    self.frames.last_mut().unwrap().ip = handler.catch_ip;
                 } else {
                     return Err(RuntimeError::Panic(format!("Uncaught exception: {:?}", exc)));
                 }

@@ -323,6 +323,7 @@ impl Runtime {
     /// Execute a single instruction for a process.
     fn execute_step(&mut self, pid: Pid) -> Result<ProcessStepResult, RuntimeError> {
         // Get instruction to execute
+        // Clone the Rc<FunctionValue> (cheap: just refcount increment), not the constants
         let step_data = self.scheduler.with_process(pid, |proc| {
             let frame = proc.frames.last()?;
 
@@ -330,19 +331,23 @@ impl Runtime {
                 return None;
             }
 
-            let instr = frame.function.code.code[frame.ip].clone();
-            let constants = frame.function.code.constants.clone();
-            Some((instr, constants, frame.function.name.clone(), frame.ip))
+            let func = frame.function.clone(); // Cheap: Rc clone
+            let ip = frame.ip;
+            Some((func, ip))
         });
 
-        let (instr, constants, _func_name, _ip_before) = match step_data {
+        let (func, ip) = match step_data {
             Some(Some(data)) => data,
             Some(None) => return Ok(ProcessStepResult::Finished(GcValue::Unit)),
             None => return Err(RuntimeError::Panic("Process not found".to_string())),
         };
 
+        // Clone instruction and get constants reference
+        let instr = func.code.code[ip].clone();
+        let constants = &func.code.constants;
+
         // Debug output for tracing - uncomment when debugging
-        // eprintln!("[{:?}:{}:{}] {:?}", pid, _func_name, _ip_before, instr);
+        // eprintln!("[{:?}:{}:{}] {:?}", pid, func.name, ip, instr);
 
         // Increment IP
         self.scheduler.with_process_mut(pid, |proc| {
@@ -352,7 +357,7 @@ impl Runtime {
         });
 
         // Execute the instruction
-        self.execute_instruction(pid, instr, &constants)
+        self.execute_instruction(pid, instr, constants)
     }
 
     /// Execute a single instruction.
