@@ -1,0 +1,4 @@
+# expect: 6.28
+# Float multiplication
+
+main() = 3.14 * 2.0

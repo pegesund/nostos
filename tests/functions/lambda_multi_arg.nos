@@ -1,0 +1,7 @@
+# expect: 15
+# Lambda with multiple arguments
+
+main() = {
+    add = (a, b) => a + b
+    add(5, 10)
+}

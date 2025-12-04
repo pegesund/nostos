@@ -1,0 +1,4 @@
+# expect: true
+# Equality comparison
+
+main() = 5 == 5

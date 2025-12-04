@@ -1,0 +1,4 @@
+# expect: true
+# Logical NOT
+
+main() = !false

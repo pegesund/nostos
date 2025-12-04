@@ -1,0 +1,4 @@
+# expect: []
+# Empty list
+
+main() = []

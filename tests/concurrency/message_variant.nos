@@ -1,0 +1,15 @@
+# expect: 100
+# Send and receive a simple integer message
+
+worker(parent) = {
+    parent <- 100,
+    ()
+}
+
+main() = {
+    me = self()
+    spawn(() => worker(me))
+    receive
+        n -> n
+    end
+}

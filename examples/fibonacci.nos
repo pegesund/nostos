@@ -1,0 +1,25 @@
+# Fibonacci sequence example
+# Demonstrates recursion and pattern matching
+
+# Naive recursive fibonacci
+fib(0) = 0
+fib(1) = 1
+fib(n) = fib(n - 1) + fib(n - 2)
+
+# Tail-recursive fibonacci (efficient)
+fib_fast(n) = fib_helper(n, 0, 1)
+
+fib_helper(0, a, _) = a
+fib_helper(n, a, b) = fib_helper(n - 1, b, a + b)
+
+# Generate first n fibonacci numbers as a list
+fibs(0) = []
+fibs(n) = fibs_helper(n, [])
+
+fibs_helper(0, acc) = acc
+fibs_helper(n, acc) = fibs_helper(n - 1, [fib_fast(n - 1) | acc])
+
+main() = {
+    # Print first 10 fibonacci numbers
+    fibs(10)
+}

@@ -1,0 +1,6 @@
+# expect: "The answer is 42"
+# String concatenation (interpolation not fully implemented at runtime)
+
+answer() = "42"
+
+main() = "The answer is " ++ answer()

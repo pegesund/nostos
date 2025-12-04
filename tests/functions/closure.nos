@@ -1,0 +1,8 @@
+# expect: 15
+# Closure capturing outer variable
+
+main() = {
+    x = 10
+    addX = y => x + y
+    addX(5)
+}

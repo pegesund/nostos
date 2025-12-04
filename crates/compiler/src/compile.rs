@@ -892,6 +892,123 @@ impl Compiler {
                 self.compile_try_propagate(inner_expr)
             }
 
+            // === Concurrency expressions ===
+
+            // Send: pid <- msg
+            Expr::Send(pid_expr, msg_expr, _) => {
+                let pid_reg = self.compile_expr_tail(pid_expr, false)?;
+                let msg_reg = self.compile_expr_tail(msg_expr, false)?;
+                self.chunk.emit(Instruction::Send(pid_reg, msg_reg), 0);
+                // Send returns unit
+                let dst = self.alloc_reg();
+                self.chunk.emit(Instruction::LoadUnit(dst), 0);
+                Ok(dst)
+            }
+
+            // Spawn: spawn(func) or spawn(() => expr)
+            Expr::Spawn(kind, func_expr, args, _) => {
+                let func_reg = self.compile_expr_tail(func_expr, false)?;
+                let mut arg_regs = Vec::new();
+                for arg in args {
+                    let reg = self.compile_expr_tail(arg, false)?;
+                    arg_regs.push(reg);
+                }
+                let dst = self.alloc_reg();
+                match kind {
+                    SpawnKind::Normal => {
+                        self.chunk.emit(Instruction::Spawn(dst, func_reg, arg_regs), 0);
+                    }
+                    SpawnKind::Linked => {
+                        self.chunk.emit(Instruction::SpawnLink(dst, func_reg, arg_regs), 0);
+                    }
+                    SpawnKind::Monitored => {
+                        // SpawnMonitor returns (pid, ref)
+                        let ref_dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::SpawnMonitor(dst, ref_dst, func_reg, arg_regs), 0);
+                    }
+                }
+                Ok(dst)
+            }
+
+            // Receive: receive pattern -> body ... end
+            Expr::Receive(arms, _after, _) => {
+                // Emit receive instruction - this blocks until a message arrives
+                // and places it in register 0
+                self.chunk.emit(Instruction::Receive, 0);
+
+                // The message is in register 0 after Receive completes
+                // We need to match it against the arms
+                // Reserve register 0 for the message (ensure it's not overwritten)
+                let msg_reg = 0 as Reg;
+
+                let dst = self.alloc_reg();
+                let mut end_jumps = Vec::new();
+
+                for (i, arm) in arms.iter().enumerate() {
+                    let is_last = i == arms.len() - 1;
+
+                    // Try to match the pattern against the message
+                    let (match_success, bindings) = self.compile_pattern_test(&arm.pattern, msg_reg)?;
+
+                    let next_arm_jump = if !is_last {
+                        Some(self.chunk.emit(Instruction::JumpIfFalse(match_success, 0), 0))
+                    } else {
+                        None
+                    };
+
+                    // Bind pattern variables
+                    for (name, reg) in bindings {
+                        self.locals.insert(name, reg);
+                    }
+
+                    // Compile guard if present
+                    if let Some(ref guard) = arm.guard {
+                        let guard_reg = self.compile_expr_tail(guard, false)?;
+                        if !is_last {
+                            let guard_fail = self.chunk.emit(Instruction::JumpIfFalse(guard_reg, 0), 0);
+                            // Compile body
+                            let body_reg = self.compile_expr_tail(&arm.body, is_tail)?;
+                            self.chunk.emit(Instruction::Move(dst, body_reg), 0);
+                            end_jumps.push(self.chunk.emit(Instruction::Jump(0), 0));
+                            // Patch guard fail jump
+                            let here = self.chunk.code.len() as i16;
+                            if let Instruction::JumpIfFalse(_, ref mut offset) = self.chunk.code[guard_fail] {
+                                *offset = here;
+                            }
+                        } else {
+                            // Last arm - no jump needed for guard failure
+                            let body_reg = self.compile_expr_tail(&arm.body, is_tail)?;
+                            self.chunk.emit(Instruction::Move(dst, body_reg), 0);
+                        }
+                    } else {
+                        // No guard - compile body directly
+                        let body_reg = self.compile_expr_tail(&arm.body, is_tail)?;
+                        self.chunk.emit(Instruction::Move(dst, body_reg), 0);
+                        if !is_last {
+                            end_jumps.push(self.chunk.emit(Instruction::Jump(0), 0));
+                        }
+                    }
+
+                    // Patch next arm jump
+                    if let Some(jump_idx) = next_arm_jump {
+                        let here = self.chunk.code.len() as i16;
+                        if let Instruction::JumpIfFalse(_, ref mut offset) = self.chunk.code[jump_idx] {
+                            *offset = here;
+                        }
+                    }
+                }
+
+                // Patch end jumps
+                let end = self.chunk.code.len() as i16;
+                for jump_idx in end_jumps {
+                    if let Instruction::Jump(ref mut offset) = self.chunk.code[jump_idx] {
+                        *offset = end;
+                    }
+                }
+
+                Ok(dst)
+            }
+
             _ => Err(CompileError::NotImplemented {
                 feature: format!("expr: {:?}", expr),
                 span: expr.span(),
@@ -1073,6 +1190,12 @@ impl Compiler {
                 // Return a unit register since execution won't continue
                 let dst = self.alloc_reg();
                 self.chunk.emit(Instruction::LoadUnit(dst), 0);
+                return Ok(dst);
+            }
+            // Handle self() - get current process ID
+            if name == "self" && args.is_empty() {
+                let dst = self.alloc_reg();
+                self.chunk.emit(Instruction::SelfPid(dst), 0);
                 return Ok(dst);
             }
         }

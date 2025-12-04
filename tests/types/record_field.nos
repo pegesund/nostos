@@ -1,0 +1,9 @@
+# expect: 7
+# Record field access
+
+type Point = {x: Int, y: Int}
+
+main() = {
+    p = Point(3, 4)
+    p.x + p.y
+}

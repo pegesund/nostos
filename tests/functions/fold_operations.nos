@@ -1,0 +1,19 @@
+# expect: 362880
+# Various fold operations - compute 9! = 362880
+
+# Left fold
+foldl(_, acc, []) = acc
+foldl(f, acc, [h | t]) = foldl(f, f(acc, h), t)
+
+# Right fold
+foldr(_, acc, []) = acc
+foldr(f, acc, [h | t]) = f(h, foldr(f, acc, t))
+
+# Generate range
+range(start, stop) = if start > stop then [] else [start | range(start + 1, stop)]
+
+# Product using foldl
+product(lst) = foldl((a, b) => a * b, 1, lst)
+
+# 9! = 362880
+main() = product(range(1, 9))

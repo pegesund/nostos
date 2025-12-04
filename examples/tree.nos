@@ -1,0 +1,46 @@
+# Binary tree example
+# Demonstrates recursive types and tree operations
+
+type Tree[T] = Leaf | Node(T, Tree[T], Tree[T])
+
+# Calculate tree depth
+depth(Leaf) = 0
+depth(Node(_, left, right)) = 1 + max(depth(left), depth(right))
+
+max(a, b) = if a > b then a else b
+
+# Sum all values in tree
+sum_tree(Leaf) = 0
+sum_tree(Node(v, left, right)) = v + sum_tree(left) + sum_tree(right)
+
+# Count nodes
+count(Leaf) = 0
+count(Node(_, left, right)) = 1 + count(left) + count(right)
+
+# In-order traversal to list
+inorder(Leaf) = []
+inorder(Node(v, left, right)) = append(inorder(left), [v | inorder(right)])
+
+# Simple append
+append([], ys) = ys
+append([x | xs], ys) = [x | append(xs, ys)]
+
+# Map a function over tree
+map_tree(_, Leaf) = Leaf
+map_tree(f, Node(v, left, right)) = Node(f(v), map_tree(f, left), map_tree(f, right))
+
+main() = {
+    # Create a tree:
+    #       4
+    #      / \
+    #     2   6
+    #    / \ / \
+    #   1  3 5  7
+    tree = Node(4,
+        Node(2, Node(1, Leaf, Leaf), Node(3, Leaf, Leaf)),
+        Node(6, Node(5, Leaf, Leaf), Node(7, Leaf, Leaf))
+    )
+
+    # Sum all values: 1+2+3+4+5+6+7 = 28
+    sum_tree(tree)
+}

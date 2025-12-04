@@ -1,0 +1,15 @@
+# expect: 15
+# Send and receive a tuple message
+
+worker(parent) = {
+    parent <- (5, 10),
+    ()
+}
+
+main() = {
+    me = self()
+    spawn(() => worker(me))
+    receive
+        (a, b) -> a + b
+    end
+}

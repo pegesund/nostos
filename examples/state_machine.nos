@@ -1,0 +1,64 @@
+# State machine example
+# Demonstrates encoding state machines with variant types
+
+type TrafficLight = Red | Yellow | Green
+
+type DoorState = Open | Closed | Locked
+
+# Traffic light transitions
+next_light(Red) = Green
+next_light(Green) = Yellow
+next_light(Yellow) = Red
+
+# Count transitions to get back to initial state
+cycles_to_initial(initial, current, count) =
+    if count > 0 && state_eq(initial, current)
+    then count
+    else cycles_to_initial(initial, next_light(current), count + 1)
+
+# Simple state equality (would use traits normally)
+state_eq(Red, Red) = true
+state_eq(Green, Green) = true
+state_eq(Yellow, Yellow) = true
+state_eq(_, _) = false
+
+# Door state machine
+open_door(Closed) = Open
+open_door(Open) = Open
+open_door(Locked) = Locked
+
+close_door(Open) = Closed
+close_door(Closed) = Closed
+close_door(Locked) = Locked
+
+lock_door(Closed) = Locked
+lock_door(Open) = Open
+lock_door(Locked) = Locked
+
+unlock_door(Locked) = Closed
+unlock_door(state) = state
+
+# Test door operations
+test_door() = {
+    initial = Closed
+    s1 = lock_door(initial)      # Locked
+    s2 = open_door(s1)           # Locked (can't open)
+    s3 = unlock_door(s2)         # Closed
+    s4 = open_door(s3)           # Open
+    door_to_int(s4)
+}
+
+# Convert door state to int for testing
+door_to_int(Open) = 1
+door_to_int(Closed) = 2
+door_to_int(Locked) = 3
+
+main() = {
+    # Traffic light cycles back to Red in 3 steps
+    light_cycles = cycles_to_initial(Red, Red, 0)
+
+    # Door state machine test
+    door_result = test_door()
+
+    light_cycles + door_result
+}

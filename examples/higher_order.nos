@@ -1,0 +1,54 @@
+# Higher-order functions example
+# Demonstrates closures, currying, and function composition
+
+# Identity function
+id(x) = x
+
+# Constant function
+const(x) = _ => x
+
+# Function composition
+compose(f, g) = x => f(g(x))
+
+# Apply a function n times
+apply_n(0, _, x) = x
+apply_n(n, f, x) = apply_n(n - 1, f, f(x))
+
+# Curry a binary function
+curry(f) = a => b => f(a, b)
+
+# Uncurry a curried function
+uncurry(f) = (a, b) => f(a)(b)
+
+# Flip argument order
+flip(f) = (a, b) => f(b, a)
+
+# Create an adder (partial application)
+add(a, b) = a + b
+make_adder(n) = curry(add)(n)
+
+# Create a multiplier
+mul(a, b) = a * b
+make_multiplier(n) = curry(mul)(n)
+
+main() = {
+    # Create specialized functions
+    add5 = make_adder(5)
+    double = make_multiplier(2)
+
+    # Compose: first double, then add 5
+    double_then_add5 = compose(add5, double)
+
+    # Apply to 10: double(10) = 20, add5(20) = 25
+    result1 = double_then_add5(10)
+
+    # Apply double 4 times: 2^4 * 3 = 48
+    result2 = apply_n(4, double, 3)
+
+    # Use flip
+    sub(a, b) = a - b
+    flipped_sub = flip(sub)
+    result3 = flipped_sub(3, 10)  # 10 - 3 = 7
+
+    result1 + result2 + result3
+}

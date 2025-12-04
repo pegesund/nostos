@@ -1,0 +1,4 @@
+# expect: "hello\nworld"
+# String with escape sequence
+
+main() = "hello\nworld"

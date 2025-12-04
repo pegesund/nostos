@@ -1,0 +1,4 @@
+# expect: 1000000
+# Numbers with underscores for readability
+
+main() = 1_000_000

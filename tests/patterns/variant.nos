@@ -1,0 +1,7 @@
+# expect: 10
+# Variant pattern matching
+
+unwrap(Some(x)) = x
+unwrap(None) = 0
+
+main() = unwrap(Some(10))

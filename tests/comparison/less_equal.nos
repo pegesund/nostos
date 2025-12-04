@@ -1,0 +1,4 @@
+# expect: true
+# Less than or equal comparison
+
+main() = 5 <= 5

@@ -1,0 +1,11 @@
+# expect: 21
+# Nested block
+
+main() = {
+    x = 5
+    y = {
+        z = 10
+        z + 1
+    }
+    x + y + 5
+}

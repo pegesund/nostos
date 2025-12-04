@@ -1,0 +1,15 @@
+# expect: 42
+# Spawn a child process that sends result back to parent
+
+child(parent) = {
+    parent <- 42,
+    ()
+}
+
+main() = {
+    me = self()
+    spawn(() => child(me))
+    receive
+        msg -> msg
+    end
+}

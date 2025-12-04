@@ -1,0 +1,66 @@
+# Parallel Map example
+# Map a function over a list using multiple processes
+
+# Worker: apply function and send result back
+worker(parent, f, x, idx) = {
+    result = f(x)
+    parent <- (idx, result)
+    ()
+}
+
+# Spawn workers for each element
+spawn_workers(_, _, [], _) = ()
+spawn_workers(parent, f, [h | t], idx) = {
+    spawn(worker, parent, f, h, idx)
+    spawn_workers(parent, f, t, idx + 1)
+}
+
+# Collect n results into a list (unordered)
+collect(0, acc) = acc
+collect(n, acc) = receive
+    (idx, result) -> collect(n - 1, [(idx, result) | acc])
+end
+
+# Sort by index and extract values
+sort_by_index([]) = []
+sort_by_index(pairs) = extract_values(insertion_sort(pairs))
+
+insertion_sort([]) = []
+insertion_sort([h | t]) = insert(h, insertion_sort(t))
+
+insert(x, []) = [x]
+insert((i1, v1), [(i2, v2) | t]) =
+    if i1 <= i2
+    then [(i1, v1), (i2, v2) | t]
+    else [(i2, v2) | insert((i1, v1), t)]
+
+extract_values([]) = []
+extract_values([(_, v) | t]) = [v | extract_values(t)]
+
+# Length of list
+length([]) = 0
+length([_ | t]) = 1 + length(t)
+
+# Parallel map
+pmap(f, lst) = {
+    me = self()
+    n = length(lst)
+    spawn_workers(me, f, lst, 0)
+    results = collect(n, [])
+    sort_by_index(results)
+}
+
+# Example: square each number in parallel
+square(x) = x * x
+
+# Sum a list
+sum([]) = 0
+sum([h | t]) = h + sum(t)
+
+main() = {
+    input = [1, 2, 3, 4, 5]
+    squared = pmap(square, input)
+    # [1, 4, 9, 16, 25]
+    sum(squared)
+    # 1 + 4 + 9 + 16 + 25 = 55
+}

@@ -1,0 +1,6 @@
+# expect: 1
+# Wildcard pattern
+
+first((a, _)) = a
+
+main() = first((1, 999))

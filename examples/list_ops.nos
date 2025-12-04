@@ -1,0 +1,50 @@
+# List operations example
+# Demonstrates higher-order functions and pattern matching
+
+# Map a function over a list
+map(_, []) = []
+map(f, [h | t]) = [f(h) | map(f, t)]
+
+# Filter elements that satisfy a predicate
+filter(_, []) = []
+filter(p, [h | t]) = if p(h) then [h | filter(p, t)] else filter(p, t)
+
+# Fold (reduce) a list with an accumulator
+fold(_, acc, []) = acc
+fold(f, acc, [h | t]) = fold(f, f(acc, h), t)
+
+# Sum all elements in a list
+sum(lst) = fold((a, b) => a + b, 0, lst)
+
+# Product of all elements
+product(lst) = fold((a, b) => a * b, 1, lst)
+
+# Length of a list
+length([]) = 0
+length([_ | t]) = 1 + length(t)
+
+# Reverse a list
+reverse(lst) = fold((acc, x) => [x | acc], [], lst)
+
+# Take first n elements
+take(0, _) = []
+take(_, []) = []
+take(n, [h | t]) = [h | take(n - 1, t)]
+
+# Drop first n elements
+drop(0, lst) = lst
+drop(_, []) = []
+drop(n, [_ | t]) = drop(n - 1, t)
+
+main() = {
+    nums = [1, 2, 3, 4, 5]
+
+    # Double each number
+    doubled = map(x => x * 2, nums)
+
+    # Filter even numbers
+    evens = filter(x => x % 2 == 0, doubled)
+
+    # Sum the result
+    sum(evens)
+}

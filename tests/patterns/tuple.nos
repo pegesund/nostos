@@ -1,0 +1,9 @@
+# expect: 7
+# Tuple destructuring
+
+swap((a, b)) = (b, a)
+
+main() = {
+    (x, y) = swap((3, 4))
+    x + y
+}

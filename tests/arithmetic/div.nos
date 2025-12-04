@@ -1,0 +1,4 @@
+# expect: 5
+# Integer division
+
+main() = 15 / 3

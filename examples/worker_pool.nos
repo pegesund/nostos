@@ -1,0 +1,47 @@
+# Worker Pool example
+# A pool of workers that process tasks
+
+# Worker process
+worker(pool) = receive
+    Task(client, work) -> {
+        result = work()
+        client <- Result(result)
+        worker(pool)
+    }
+    Stop -> ()
+end
+
+# Start n workers
+start_workers(0, _) = []
+start_workers(n, pool) = [spawn(worker, pool) | start_workers(n - 1, pool)]
+
+# Round-robin task distribution
+submit_task([], _, _) = ()
+submit_task([w | _], client, work) = w <- Task(client, work)
+
+# Simple work functions
+compute_fib() = fib(10)
+
+fib(0) = 0
+fib(1) = 1
+fib(n) = fib(n - 1) + fib(n - 2)
+
+compute_fact() = fact(5)
+
+fact(0) = 1
+fact(n) = n * fact(n - 1)
+
+main() = {
+    me = self()
+
+    # Start 2 workers
+    workers = start_workers(2, me)
+
+    # Submit tasks to workers
+    submit_task(workers, me, compute_fib)
+
+    # Wait for result
+    receive
+        Result(r) -> r
+    end
+}

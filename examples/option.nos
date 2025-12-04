@@ -1,0 +1,52 @@
+# Option type example
+# Demonstrates variant types and null-safe programming
+
+type Option[T] = None | Some(T)
+
+# Map a function over an Option
+map_opt(_, None) = None
+map_opt(f, Some(x)) = Some(f(x))
+
+# Flat map (bind) for Option
+flat_map(_, None) = None
+flat_map(f, Some(x)) = f(x)
+
+# Get value or default
+get_or(Some(x), _) = x
+get_or(None, default) = default
+
+# Check if Some
+is_some(Some(_)) = true
+is_some(None) = false
+
+# Check if None
+is_none(None) = true
+is_none(Some(_)) = false
+
+# Filter an Option
+filter_opt(p, Some(x)) = if p(x) then Some(x) else None
+filter_opt(_, None) = None
+
+# Safe division (returns None for division by zero)
+safe_div(_, 0) = None
+safe_div(a, b) = Some(a / b)
+
+# Example: chain safe operations
+calculate(a, b, c) = {
+    # Safe chain: divide a by b, then by c
+    result = flat_map(
+        x => safe_div(x, c),
+        safe_div(a, b)
+    )
+    get_or(result, -1)
+}
+
+main() = {
+    # 100 / 5 / 2 = 10
+    result1 = calculate(100, 5, 2)
+
+    # 100 / 0 / 2 = -1 (division by zero handled)
+    result2 = calculate(100, 0, 2)
+
+    result1 + result2
+}

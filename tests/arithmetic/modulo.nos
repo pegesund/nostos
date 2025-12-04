@@ -1,0 +1,4 @@
+# expect: 2
+# Modulo operator
+
+main() = 17 % 5

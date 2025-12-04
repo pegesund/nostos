@@ -1,0 +1,4 @@
+# expect: 8
+# Power operator (requires floats)
+
+main() = 2.0 ** 3.0

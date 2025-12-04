@@ -1,0 +1,4 @@
+# expect: true
+# Complex logical expression
+
+main() = (true && false) || (true && !false)

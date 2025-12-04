@@ -1,0 +1,7 @@
+# expect: 6
+# Recursive list pattern sum
+
+sum([]) = 0
+sum([h | t]) = h + sum(t)
+
+main() = sum([1, 2, 3])

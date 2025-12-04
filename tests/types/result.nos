@@ -1,0 +1,9 @@
+# expect: 10
+# Result type
+
+type Result[T, E] = Ok(T) | Err(E)
+
+unwrap_or(Ok(x), _) = x
+unwrap_or(Err(_), default) = default
+
+main() = unwrap_or(Ok(10), 0)

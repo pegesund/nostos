@@ -1,0 +1,4 @@
+# expect: true
+# Logical OR
+
+main() = false || true

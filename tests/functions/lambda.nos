@@ -1,0 +1,7 @@
+# expect: 8
+# Lambda expression
+
+main() = {
+    double = x => x * 2
+    double(4)
+}

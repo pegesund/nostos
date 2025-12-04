@@ -1,0 +1,4 @@
+# expect: 3.14
+# Float literal
+
+main() = 3.14

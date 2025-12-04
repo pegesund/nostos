@@ -1,0 +1,4 @@
+# expect: 255
+# Hex integer literal
+
+main() = 0xFF

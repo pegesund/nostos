@@ -1,0 +1,28 @@
+# expect: [1, 2, 3, 4, 5, 6]
+# Flatten a nested list structure
+
+type NestedList[T] = Item(T) | List(List[NestedList[T]])
+
+# Append lists
+append([], ys) = ys
+append([x | xs], ys) = [x | append(xs, ys)]
+
+# Extract inner list from List variant
+get_list(List(lst)) = lst
+
+# Flatten nested structure using helper for list matching
+# (workaround for nested list pattern matching in variants)
+flatten(Item(x)) = [x]
+flatten(lst) = flatten_list(get_list(lst))
+
+flatten_list([]) = []
+flatten_list([h | t]) = append(flatten(h), flatten_list(t))
+
+main() = {
+    nested = List([
+        Item(1),
+        List([Item(2), Item(3)]),
+        List([List([Item(4), Item(5)]), Item(6)])
+    ]),
+    flatten(nested)
+}

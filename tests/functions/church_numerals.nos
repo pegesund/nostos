@@ -1,0 +1,29 @@
+# expect: 8
+# Church numerals - representing numbers as functions
+
+# Church numeral: n is represented as f applied n times to x
+# zero = x => x (apply f zero times)
+# succ(n) = apply f one more time
+
+# Convert church numeral to int
+to_int(n) = n(x => x + 1, 0)
+
+# Church zero
+zero(f, x) = x
+
+# Church successor
+succ(n) = (f, x) => f(n(f, x))
+
+# Church addition
+add(m, n) = (f, x) => m(f, n(f, x))
+
+# Church multiplication
+mul(m, n) = (f, x) => m(y => n(f, y), x)
+
+# 2 * 4 = 8
+main() = {
+    one = succ(zero),
+    two = succ(one),
+    four = add(two, two),
+    to_int(mul(two, four))
+}

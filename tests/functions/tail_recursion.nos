@@ -1,0 +1,8 @@
+# expect: 5050
+# Tail recursive function - sum 1 to n
+
+sum_helper(n, acc) = if n == 0 then acc else sum_helper(n - 1, acc + n)
+
+sum(n) = sum_helper(n, 0)
+
+main() = sum(100)

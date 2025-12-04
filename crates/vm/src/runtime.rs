@@ -13,6 +13,7 @@ use std::rc::Rc;
 use crate::gc::{GcNativeFn, GcValue, Heap};
 use crate::process::ExitReason;
 use crate::scheduler::Scheduler;
+use crate::value::TypeValue;
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, Value};
 use crate::vm::CallFrame;
 
@@ -54,6 +55,11 @@ impl Runtime {
     /// Register a global function.
     pub fn register_function(&mut self, name: &str, func: Rc<FunctionValue>) {
         self.scheduler.functions.write().insert(name.to_string(), func);
+    }
+
+    /// Register a type definition.
+    pub fn register_type(&mut self, name: &str, type_val: Rc<TypeValue>) {
+        self.scheduler.types.write().insert(name.to_string(), type_val);
     }
 
     /// Register a native function.
@@ -135,11 +141,12 @@ impl Runtime {
         pid
     }
 
-    /// Spawn a new process running a function with arguments.
+    /// Spawn a new process running a function with arguments and captures.
     pub fn spawn_process(
         &mut self,
         func: Rc<FunctionValue>,
         args: Vec<GcValue>,
+        captures: Vec<GcValue>,
         parent_pid: Pid,
     ) -> Pid {
         let child_pid = self.scheduler.spawn();
@@ -170,6 +177,12 @@ impl Runtime {
                 .map(|arg| child.heap.deep_copy(arg, &parent.heap))
                 .collect();
 
+            // Deep copy captures from parent heap to child heap
+            let copied_captures: Vec<GcValue> = captures
+                .iter()
+                .map(|cap| child.heap.deep_copy(cap, &parent.heap))
+                .collect();
+
             // Set up call frame with arguments in registers
             let mut registers = vec![GcValue::Unit; 256];
             for (i, arg) in copied_args.into_iter().enumerate() {
@@ -182,7 +195,7 @@ impl Runtime {
                 function: func,
                 ip: 0,
                 registers,
-                captures: Vec::new(),
+                captures: copied_captures,
                 return_reg: None,
             };
             child.frames.push(frame);
@@ -290,8 +303,8 @@ impl Runtime {
             None => return Err(RuntimeError::Panic("Process not found".to_string())),
         };
 
-        // Uncomment for debugging:
-        // eprintln!("[{}:{}] {:?}", _func_name, _ip_before, instr);
+        // Debug output for tracing - uncomment when debugging
+        // eprintln!("[{:?}:{}:{}] {:?}", pid, _func_name, _ip_before, instr);
 
         // Increment IP
         self.scheduler.with_process_mut(pid, |proc| {
@@ -726,6 +739,34 @@ impl Runtime {
                 set_reg!(dst, GcValue::Tuple(ptr));
             }
 
+            Instruction::GetTupleField(dst, tuple_reg, idx) => {
+                let tuple_val = get_reg!(tuple_reg);
+                match tuple_val {
+                    GcValue::Tuple(ptr) => {
+                        let item = self.scheduler.with_process(pid, |proc| {
+                            proc.heap.get_tuple(ptr)
+                                .and_then(|t| t.items.get(idx as usize).cloned())
+                        }).flatten();
+                        match item {
+                            Some(val) => set_reg!(dst, val),
+                            None => return Err(RuntimeError::IndexOutOfBounds {
+                                index: idx as i64,
+                                length: 0,
+                            }),
+                        }
+                    }
+                    other => {
+                        let type_name = self.scheduler.with_process(pid, |proc| {
+                            other.type_name(&proc.heap).to_string()
+                        }).unwrap_or_else(|| "unknown".to_string());
+                        return Err(RuntimeError::TypeError {
+                            expected: "Tuple".to_string(),
+                            found: type_name,
+                        });
+                    }
+                }
+            }
+
             Instruction::GetCapture(dst, idx) => {
                 let val = self.scheduler.with_process(pid, |proc| {
                     proc.frames.last()
@@ -734,6 +775,31 @@ impl Runtime {
                         .unwrap_or(GcValue::Unit)
                 }).unwrap_or(GcValue::Unit);
                 set_reg!(dst, val);
+            }
+
+            Instruction::MakeClosure(dst, func_idx, ref capture_regs) => {
+                let func = match constants.get(func_idx as usize) {
+                    Some(Value::Function(f)) => f.clone(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Function".to_string(),
+                        found: "non-function".to_string(),
+                    }),
+                };
+
+                // Collect captures from registers
+                let gc_captures: Vec<GcValue> = capture_regs.iter()
+                    .map(|&r| get_reg!(r))
+                    .collect();
+                let capture_names: Vec<String> = (0..gc_captures.len())
+                    .map(|i| format!("capture_{}", i))
+                    .collect();
+
+                // Allocate closure on process heap
+                let closure_ptr = self.scheduler.with_process_mut(pid, |proc| {
+                    proc.heap.alloc_closure(func, gc_captures, capture_names)
+                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
+
+                set_reg!(dst, GcValue::Closure(closure_ptr));
             }
 
             // === Concurrency ===
@@ -745,12 +811,13 @@ impl Runtime {
                 let func_val = get_reg!(func_reg);
                 let args: Vec<GcValue> = arg_regs.iter().map(|&r| get_reg!(r)).collect();
 
-                let func = self.scheduler.with_process(pid, |proc| {
+                // Extract function and captures (captures are empty for plain functions)
+                let (func, captures) = self.scheduler.with_process(pid, |proc| {
                     match &func_val {
-                        GcValue::Function(f) => Ok(f.clone()),
+                        GcValue::Function(f) => Ok((f.clone(), Vec::new())),
                         GcValue::Closure(ptr) => {
                             proc.heap.get_closure(*ptr)
-                                .map(|c| c.function.clone())
+                                .map(|c| (c.function.clone(), c.captures.clone()))
                                 .ok_or_else(|| RuntimeError::TypeError {
                                     expected: "Function".to_string(),
                                     found: "invalid closure".to_string(),
@@ -765,7 +832,7 @@ impl Runtime {
                     }
                 }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))??;
 
-                let child_pid = self.spawn_process(func, args, pid);
+                let child_pid = self.spawn_process(func, args, captures, pid);
                 set_reg!(dst, GcValue::Pid(child_pid.0));
 
                 self.scheduler.with_process_mut(pid, |proc| {
@@ -822,15 +889,28 @@ impl Runtime {
                 let func_val = get_reg!(func_reg);
                 let args: Vec<GcValue> = arg_regs.iter().map(|&r| get_reg!(r)).collect();
 
-                let func = match func_val {
-                    GcValue::Function(f) => f,
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "Function".to_string(),
-                        found: "other".to_string(),
-                    }),
-                };
+                // Extract function and captures
+                let (func, captures) = self.scheduler.with_process(pid, |proc| {
+                    match &func_val {
+                        GcValue::Function(f) => Ok((f.clone(), Vec::new())),
+                        GcValue::Closure(ptr) => {
+                            proc.heap.get_closure(*ptr)
+                                .map(|c| (c.function.clone(), c.captures.clone()))
+                                .ok_or_else(|| RuntimeError::TypeError {
+                                    expected: "Function".to_string(),
+                                    found: "invalid closure".to_string(),
+                                })
+                        }
+                        other => {
+                            Err(RuntimeError::TypeError {
+                                expected: "Function".to_string(),
+                                found: other.type_name(&proc.heap).to_string(),
+                            })
+                        }
+                    }
+                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))??;
 
-                let child_pid = self.spawn_process(func, args, pid);
+                let child_pid = self.spawn_process(func, args, captures, pid);
 
                 // Create link - use scheduler's spawn_link lock ordering
                 let (first_pid, second_pid) = if pid.0 < child_pid.0 {
@@ -862,15 +942,28 @@ impl Runtime {
                 let func_val = get_reg!(func_reg);
                 let args: Vec<GcValue> = arg_regs.iter().map(|&r| get_reg!(r)).collect();
 
-                let func = match func_val {
-                    GcValue::Function(f) => f,
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "Function".to_string(),
-                        found: "other".to_string(),
-                    }),
-                };
+                // Extract function and captures
+                let (func, captures) = self.scheduler.with_process(pid, |proc| {
+                    match &func_val {
+                        GcValue::Function(f) => Ok((f.clone(), Vec::new())),
+                        GcValue::Closure(ptr) => {
+                            proc.heap.get_closure(*ptr)
+                                .map(|c| (c.function.clone(), c.captures.clone()))
+                                .ok_or_else(|| RuntimeError::TypeError {
+                                    expected: "Function".to_string(),
+                                    found: "invalid closure".to_string(),
+                                })
+                        }
+                        other => {
+                            Err(RuntimeError::TypeError {
+                                expected: "Function".to_string(),
+                                found: other.type_name(&proc.heap).to_string(),
+                            })
+                        }
+                    }
+                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))??;
 
-                let child_pid = self.spawn_process(func, args, pid);
+                let child_pid = self.spawn_process(func, args, captures, pid);
                 let ref_id = self.scheduler.make_ref();
 
                 // Set up monitor - use lock ordering
@@ -902,6 +995,133 @@ impl Runtime {
 
             Instruction::ReceiveTimeout(_timeout_reg) => {
                 return Err(RuntimeError::Panic("ReceiveTimeout not yet implemented".to_string()));
+            }
+
+            // === Pattern matching ===
+            Instruction::TestConst(dst, value, const_idx) => {
+                let constant = &constants[const_idx as usize];
+                let result = self.scheduler.with_process_mut(pid, |proc| {
+                    let gc_const = proc.heap.value_to_gc(constant);
+                    proc.heap.gc_values_equal(&get_reg!(value), &gc_const)
+                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
+                set_reg!(dst, GcValue::Bool(result));
+            }
+
+            Instruction::TestNil(dst, list) => {
+                let result = self.scheduler.with_process(pid, |proc| {
+                    match get_reg!(list) {
+                        GcValue::List(ptr) => {
+                            proc.heap.get_list(ptr)
+                                .map(|l| l.items.is_empty())
+                                .unwrap_or(false)
+                        }
+                        _ => false,
+                    }
+                }).unwrap_or(false);
+                set_reg!(dst, GcValue::Bool(result));
+            }
+
+            // === Records/Variants ===
+            Instruction::MakeRecord(dst, type_idx, ref field_regs) => {
+                let type_name = match constants.get(type_idx as usize) {
+                    Some(Value::String(s)) => s.to_string(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let fields: Vec<GcValue> = field_regs.iter()
+                    .map(|&r| get_reg!(r))
+                    .collect();
+
+                let type_info = self.scheduler.types.read().get(&type_name).cloned();
+                let field_names: Vec<String> = type_info
+                    .as_ref()
+                    .map(|t| t.fields.iter().map(|f| f.name.clone()).collect())
+                    .unwrap_or_else(|| (0..fields.len()).map(|i| format!("_{}", i)).collect());
+                let mutable_fields: Vec<bool> = type_info
+                    .as_ref()
+                    .map(|t| t.fields.iter().map(|f| f.mutable).collect())
+                    .unwrap_or_else(|| vec![false; fields.len()]);
+
+                let record_ptr = self.scheduler.with_process_mut(pid, |proc| {
+                    proc.heap.alloc_record(type_name, field_names, fields, mutable_fields)
+                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
+                set_reg!(dst, GcValue::Record(record_ptr));
+            }
+
+            Instruction::TestTag(dst, value, tag_idx) => {
+                let tag = match constants.get(tag_idx as usize) {
+                    Some(Value::String(s)) => s.to_string(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let result = self.scheduler.with_process(pid, |proc| {
+                    match get_reg!(value) {
+                        GcValue::Record(ptr) => {
+                            proc.heap.get_record(ptr)
+                                .map(|r| r.type_name == tag)
+                                .unwrap_or(false)
+                        }
+                        _ => false,
+                    }
+                }).unwrap_or(false);
+                set_reg!(dst, GcValue::Bool(result));
+            }
+
+            Instruction::GetField(dst, record, field_idx) => {
+                let result = self.scheduler.with_process(pid, |proc| {
+                    match get_reg!(record) {
+                        GcValue::Record(ptr) => {
+                            proc.heap.get_record(ptr)
+                                .and_then(|r| r.fields.get(field_idx as usize))
+                                .cloned()
+                                .ok_or_else(|| RuntimeError::Panic("Invalid field access".to_string()))
+                        }
+                        _ => Err(RuntimeError::TypeError {
+                            expected: "Record".to_string(),
+                            found: "other".to_string(),
+                        }),
+                    }
+                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))??;
+                set_reg!(dst, result);
+            }
+
+            // === Division ===
+            Instruction::DivInt(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                match (va, vb) {
+                    (GcValue::Int(x), GcValue::Int(y)) => {
+                        if y == 0 {
+                            return Err(RuntimeError::Panic("Division by zero".to_string()));
+                        }
+                        set_reg!(dst, GcValue::Int(x / y));
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "other".to_string(),
+                    }),
+                }
+            }
+
+            Instruction::ModInt(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                match (va, vb) {
+                    (GcValue::Int(x), GcValue::Int(y)) => {
+                        if y == 0 {
+                            return Err(RuntimeError::Panic("Division by zero".to_string()));
+                        }
+                        set_reg!(dst, GcValue::Int(x % y));
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "other".to_string(),
+                    }),
+                }
             }
 
             // === Debug ===

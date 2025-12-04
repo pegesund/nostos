@@ -1,0 +1,4 @@
+# expect: ()
+# Unit literal
+
+main() = ()

@@ -1,0 +1,4 @@
+# expect: 10
+# Binary integer literal
+
+main() = 0b1010

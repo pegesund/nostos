@@ -1,0 +1,20 @@
+# expect: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+# Quicksort implementation
+
+# Append two lists
+append([], ys) = ys
+append([x | xs], ys) = [x | append(xs, ys)]
+
+# Filter list by predicate
+filter(_, []) = []
+filter(p, [h | t]) = if p(h) then [h | filter(p, t)] else filter(p, t)
+
+# Quicksort
+quicksort([]) = []
+quicksort([pivot | rest]) = {
+    less = filter(x => x < pivot, rest)
+    greater = filter(x => x >= pivot, rest)
+    append(quicksort(less), [pivot | quicksort(greater)])
+}
+
+main() = quicksort([5, 3, 8, 1, 9, 2, 7, 4, 6])

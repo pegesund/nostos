@@ -1,0 +1,9 @@
+# expect: 3
+# Variant type matching
+
+type Option[T] = None | Some(T)
+
+get_or(Some(x), _) = x
+get_or(None, default) = default
+
+main() = get_or(Some(3), 0)

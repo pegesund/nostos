@@ -1,0 +1,4 @@
+# expect: [1, 2, 3]
+# List cons pattern
+
+main() = [1 | [2, 3]]

@@ -1,0 +1,4 @@
+# expect: 'a'
+# Char literal
+
+main() = 'a'

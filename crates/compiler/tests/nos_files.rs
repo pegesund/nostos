@@ -5,7 +5,7 @@
 
 use nostos_compiler::compile::compile_module;
 use nostos_syntax::parse;
-use nostos_vm::{value::Value, VM};
+use nostos_vm::{value::Value, VM, Runtime, GcValue};
 use std::fs;
 use std::path::Path;
 
@@ -54,6 +54,62 @@ fn value_to_string(value: &Value) -> String {
     }
 }
 
+/// Convert GcValue to string for comparison (used by Runtime-based tests).
+/// Only handles simple value types - complex heap-allocated types show as placeholders.
+fn gc_value_to_string(value: &GcValue) -> String {
+    match value {
+        GcValue::Int(n) => n.to_string(),
+        GcValue::Float(f) => f.to_string(),
+        GcValue::Bool(b) => b.to_string(),
+        GcValue::Char(c) => format!("'{}'", c),
+        GcValue::Unit => "()".to_string(),
+        GcValue::Pid(pid) => format!("Pid({})", pid),
+        // For heap-allocated types, we can't display them properly without heap access
+        GcValue::String(_) => "<string>".to_string(),
+        GcValue::List(_) => "<list>".to_string(),
+        GcValue::Tuple(_) => "<tuple>".to_string(),
+        GcValue::Record(_) => "<record>".to_string(),
+        GcValue::Variant(_) => "<variant>".to_string(),
+        _ => format!("{:?}", value),
+    }
+}
+
+/// Compile and run a Nostos source file using the Runtime (supports concurrency).
+fn run_nos_source_concurrent(source: &str) -> Result<String, String> {
+    // Parse
+    let (module_opt, errors) = parse(source);
+    if !errors.is_empty() {
+        return Err(format!("Parse error: {:?}", errors));
+    }
+    let module = module_opt.ok_or_else(|| "Parse returned no module".to_string())?;
+
+    // Compile
+    let compiler = compile_module(&module).map_err(|e| format!("Compile error: {:?}", e))?;
+
+    // Create Runtime and load functions/types
+    let mut runtime = Runtime::new();
+    for (name, func) in compiler.get_all_functions() {
+        runtime.register_function(name, func.clone());
+    }
+    for (name, type_val) in compiler.get_vm_types() {
+        runtime.register_type(&name, type_val);
+    }
+
+    // Get main function
+    let main_func = compiler.get_function("main")
+        .ok_or_else(|| "No main function".to_string())?;
+
+    // Spawn initial process and run
+    runtime.spawn_initial(main_func);
+    let result = runtime.run().map_err(|e| format!("Runtime error: {:?}", e))?;
+
+    // Convert result to string
+    match result {
+        Some(value) => Ok(gc_value_to_string(&value)),
+        None => Ok("()".to_string()),
+    }
+}
+
 /// Compile and run a Nostos source file, returning the result of main().
 fn run_nos_source(source: &str) -> Result<Value, String> {
     // Parse
@@ -91,8 +147,31 @@ fn run_test_file(path: &Path) -> Result<(), String> {
     let expected = parse_expected(&source)
         .ok_or_else(|| format!("{}: Missing '# expect:' comment", path.display()))?;
 
-    let result = run_nos_source(&source)?;
+    let result = run_nos_source(&source)
+        .map_err(|e| format!("{}: {}", path.display(), e))?;
     let actual = value_to_string(&result);
+
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}: Expected {}, got {}",
+            path.display(),
+            expected,
+            actual
+        ))
+    }
+}
+
+/// Run a single test file with concurrency support (using Runtime).
+fn run_test_file_concurrent(path: &Path) -> Result<(), String> {
+    let source = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+
+    let expected = parse_expected(&source)
+        .ok_or_else(|| format!("{}: Missing '# expect:' comment", path.display()))?;
+
+    let actual = run_nos_source_concurrent(&source)?;
 
     if actual == expected {
         Ok(())
@@ -142,6 +221,12 @@ fn test_all_nos_files() {
     let mut passed = 0;
 
     for file in &files {
+        // Skip concurrency tests - they're tested separately with the concurrent runner
+        if file.to_str().map(|s| s.contains("/concurrency/")).unwrap_or(false) {
+            println!("SKIP: {} (uses concurrent runner)", file.display());
+            continue;
+        }
+
         match run_test_file(file) {
             Ok(()) => {
                 passed += 1;
@@ -183,6 +268,24 @@ mod basics {
 
     #[test]
     fn literal_string() { run_category_test("literal_string"); }
+
+    #[test]
+    fn literal_float() { run_category_test("literal_float"); }
+
+    #[test]
+    fn literal_char() { run_category_test("literal_char"); }
+
+    #[test]
+    fn literal_unit() { run_category_test("literal_unit"); }
+
+    #[test]
+    fn literal_hex() { run_category_test("literal_hex"); }
+
+    #[test]
+    fn literal_binary() { run_category_test("literal_binary"); }
+
+    #[test]
+    fn underscore_in_numbers() { run_category_test("underscore_in_numbers"); }
 }
 
 mod arithmetic {
@@ -206,6 +309,30 @@ mod arithmetic {
 
     #[test]
     fn precedence() { run_category_test("precedence"); }
+
+    #[test]
+    fn sub() { run_category_test("sub"); }
+
+    #[test]
+    fn div() { run_category_test("div"); }
+
+    #[test]
+    fn modulo() { run_category_test("modulo"); }
+
+    #[test]
+    fn power() { run_category_test("power"); }
+
+    #[test]
+    fn negation() { run_category_test("negation"); }
+
+    #[test]
+    fn float_add() { run_category_test("float_add"); }
+
+    #[test]
+    fn float_mul() { run_category_test("float_mul"); }
+
+    #[test]
+    fn complex_expr() { run_category_test("complex_expr"); }
 }
 
 mod functions {
@@ -229,6 +356,30 @@ mod functions {
 
     #[test]
     fn higher_order() { run_category_test("higher_order"); }
+
+    #[test]
+    fn lambda() { run_category_test("lambda"); }
+
+    #[test]
+    fn lambda_multi_arg() { run_category_test("lambda_multi_arg"); }
+
+    #[test]
+    fn closure() { run_category_test("closure"); }
+
+    #[test]
+    fn tail_recursion() { run_category_test("tail_recursion"); }
+
+    #[test]
+    fn multi_clause() { run_category_test("multi_clause"); }
+
+    #[test]
+    fn guards() { run_category_test("guards"); }
+
+    #[test]
+    fn mutual_recursion() { run_category_test("mutual_recursion"); }
+
+    #[test]
+    fn fibonacci() { run_category_test("fibonacci"); }
 }
 
 mod types {
@@ -249,6 +400,18 @@ mod types {
 
     #[test]
     fn variant() { run_category_test("variant"); }
+
+    #[test]
+    fn record_field() { run_category_test("record_field"); }
+
+    #[test]
+    fn variant_match() { run_category_test("variant_match"); }
+
+    #[test]
+    fn result() { run_category_test("result"); }
+
+    #[test]
+    fn recursive_list() { run_category_test("recursive_list"); }
 }
 
 mod patterns {
@@ -269,6 +432,24 @@ mod patterns {
 
     #[test]
     fn list() { run_category_test("list"); }
+
+    #[test]
+    fn tuple() { run_category_test("tuple"); }
+
+    #[test]
+    fn wildcard() { run_category_test("wildcard"); }
+
+    #[test]
+    fn nested() { run_category_test("nested"); }
+
+    #[test]
+    fn variant() { run_category_test("variant"); }
+
+    #[test]
+    fn list_head_tail() { run_category_test("list_head_tail"); }
+
+    #[test]
+    fn list_recursive() { run_category_test("list_recursive"); }
 }
 
 mod traits {
@@ -292,4 +473,176 @@ mod traits {
 
     #[test]
     fn multiple_impls() { run_category_test("multiple_impls"); }
+}
+
+mod comparison {
+    use super::*;
+
+    fn run_category_test(name: &str) {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let workspace_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let file = workspace_root.join("tests").join("comparison").join(format!("{}.nos", name));
+
+        if let Err(e) = run_test_file(&file) {
+            panic!("{}", e);
+        }
+    }
+
+    #[test]
+    fn equal() { run_category_test("equal"); }
+
+    #[test]
+    fn not_equal() { run_category_test("not_equal"); }
+
+    #[test]
+    fn less_than() { run_category_test("less_than"); }
+
+    #[test]
+    fn greater_than() { run_category_test("greater_than"); }
+
+    #[test]
+    fn less_equal() { run_category_test("less_equal"); }
+
+    #[test]
+    fn greater_equal() { run_category_test("greater_equal"); }
+}
+
+mod logical {
+    use super::*;
+
+    fn run_category_test(name: &str) {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let workspace_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let file = workspace_root.join("tests").join("logical").join(format!("{}.nos", name));
+
+        if let Err(e) = run_test_file(&file) {
+            panic!("{}", e);
+        }
+    }
+
+    #[test]
+    fn and() { run_category_test("and"); }
+
+    #[test]
+    fn or() { run_category_test("or"); }
+
+    #[test]
+    fn not() { run_category_test("not"); }
+
+    #[test]
+    fn complex() { run_category_test("complex"); }
+}
+
+mod control_flow {
+    use super::*;
+
+    fn run_category_test(name: &str) {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let workspace_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let file = workspace_root.join("tests").join("control_flow").join(format!("{}.nos", name));
+
+        if let Err(e) = run_test_file(&file) {
+            panic!("{}", e);
+        }
+    }
+
+    #[test]
+    fn if_else() { run_category_test("if_else"); }
+
+    #[test]
+    fn nested_if() { run_category_test("nested_if"); }
+
+    #[test]
+    fn match_simple() { run_category_test("match_simple"); }
+
+    #[test]
+    fn match_guard() { run_category_test("match_guard"); }
+
+    #[test]
+    fn block() { run_category_test("block"); }
+
+    #[test]
+    fn nested_block() { run_category_test("nested_block"); }
+}
+
+mod strings {
+    use super::*;
+
+    fn run_category_test(name: &str) {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let workspace_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let file = workspace_root.join("tests").join("strings").join(format!("{}.nos", name));
+
+        if let Err(e) = run_test_file(&file) {
+            panic!("{}", e);
+        }
+    }
+
+    #[test]
+    fn concat() { run_category_test("concat"); }
+
+    #[test]
+    fn interpolation() { run_category_test("interpolation"); }
+
+    #[test]
+    fn escape() { run_category_test("escape"); }
+}
+
+mod collections {
+    use super::*;
+
+    fn run_category_test(name: &str) {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let workspace_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let file = workspace_root.join("tests").join("collections").join(format!("{}.nos", name));
+
+        if let Err(e) = run_test_file(&file) {
+            panic!("{}", e);
+        }
+    }
+
+    #[test]
+    fn tuple() { run_category_test("tuple"); }
+
+    #[test]
+    fn list_literal() { run_category_test("list_literal"); }
+
+    #[test]
+    fn list_empty() { run_category_test("list_empty"); }
+
+    #[test]
+    fn list_cons() { run_category_test("list_cons"); }
+}
+
+mod concurrency {
+    use super::*;
+
+    fn run_category_test(name: &str) {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let workspace_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let file = workspace_root.join("tests").join("concurrency").join(format!("{}.nos", name));
+
+        // Use concurrent runner for concurrency tests
+        if let Err(e) = run_test_file_concurrent(&file) {
+            panic!("{}", e);
+        }
+    }
+
+    #[test]
+    fn self_pid() { run_category_test("self_pid"); }
+
+    #[test]
+    fn spawn_simple() { run_category_test("spawn_simple"); }
+
+    #[test]
+    fn spawn_compute() { run_category_test("spawn_compute"); }
+
+    #[test]
+    fn message_tuple() { run_category_test("message_tuple"); }
+
+    #[test]
+    fn message_variant() { run_category_test("message_variant"); }
+
+    #[test]
+    fn multiple_spawns() { run_category_test("multiple_spawns"); }
 }

@@ -1,0 +1,4 @@
+# expect: true
+# Greater than comparison
+
+main() = 5 > 3

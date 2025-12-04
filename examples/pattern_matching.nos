@@ -1,0 +1,61 @@
+# Pattern matching showcase
+# Demonstrates various pattern matching capabilities
+
+type Shape =
+    | Circle(Float)
+    | Rectangle(Float, Float)
+    | Triangle(Float, Float, Float)
+
+# Calculate area using pattern matching
+area(Circle(r)) = 3.14159 * r * r
+area(Rectangle(w, h)) = w * h
+area(Triangle(a, b, c)) = {
+    # Heron's formula
+    s = (a + b + c) / 2.0
+    s * (s - a) * (s - b) * (s - c)
+}
+
+# Describe a shape
+describe(Circle(r)) = "circle with radius"
+describe(Rectangle(w, h)) = "rectangle"
+describe(Triangle(_, _, _)) = "triangle"
+
+# Pattern matching with guards
+classify_number(n) when n > 0 = "positive"
+classify_number(n) when n < 0 = "negative"
+classify_number(0) = "zero"
+
+# Match on multiple conditions
+compare(a, b) = match (a > b, a < b)
+    (true, _) -> "greater"
+    (_, true) -> "less"
+    _ -> "equal"
+end
+
+# List patterns
+describe_list([]) = "empty"
+describe_list([_]) = "singleton"
+describe_list([_, _]) = "pair"
+describe_list([_, _ | _]) = "many"
+
+main() = {
+    circle = Circle(5.0)
+    rect = Rectangle(3.0, 4.0)
+
+    # Calculate areas
+    a1 = area(circle)
+    a2 = area(rect)
+
+    # Test number classification
+    c1 = classify_number(42)
+    c2 = classify_number(-5)
+    c3 = classify_number(0)
+
+    # Test list patterns
+    d1 = describe_list([])
+    d2 = describe_list([1])
+    d3 = describe_list([1, 2, 3, 4])
+
+    # Return total area (circle + rect)
+    a1 + a2
+}

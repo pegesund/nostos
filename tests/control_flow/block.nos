@@ -1,0 +1,8 @@
+# expect: 15
+# Block expression with let bindings
+
+main() = {
+    x = 5
+    y = 10
+    x + y
+}

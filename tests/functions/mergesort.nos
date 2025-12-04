@@ -1,0 +1,28 @@
+# expect: [1, 2, 3, 4, 5, 6]
+# Merge sort implementation
+
+# Split list into two halves
+split([]) = ([], [])
+split([x]) = ([x], [])
+split([x, y | rest]) = {
+    (left, right) = split(rest),
+    ([x | left], [y | right])
+}
+
+# Merge two sorted lists
+merge([], ys) = ys
+merge(xs, []) = xs
+merge([x | xs], [y | ys]) =
+    if x <= y
+    then [x | merge(xs, [y | ys])]
+    else [y | merge([x | xs], ys)]
+
+# Merge sort
+mergesort([]) = []
+mergesort([x]) = [x]
+mergesort(lst) = {
+    (left, right) = split(lst),
+    merge(mergesort(left), mergesort(right))
+}
+
+main() = mergesort([4, 2, 6, 1, 5, 3])

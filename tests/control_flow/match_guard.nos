@@ -1,0 +1,10 @@
+# expect: 1
+# Match with guards
+
+classify(n) = match n
+    x when x > 0 -> 1
+    x when x < 0 -> -1
+    _ -> 0
+end
+
+main() = classify(42)

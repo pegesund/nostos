@@ -1,0 +1,4 @@
+# expect: true
+# Not equal comparison
+
+main() = 5 != 3

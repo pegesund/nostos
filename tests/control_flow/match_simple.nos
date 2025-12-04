@@ -1,0 +1,10 @@
+# expect: 10
+# Simple match expression
+
+classify(n) = match n
+    0 -> 0
+    1 -> 10
+    _ -> 100
+end
+
+main() = classify(1)

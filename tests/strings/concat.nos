@@ -1,0 +1,4 @@
+# expect: "hello world"
+# String concatenation
+
+main() = "hello" ++ " world"

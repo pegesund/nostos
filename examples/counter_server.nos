@@ -1,0 +1,72 @@
+# Counter Server example
+# A stateful process that maintains a counter
+
+# Counter loop with state
+counter_loop(state) = receive
+    Inc(sender) -> {
+        sender <- Ok(state + 1)
+        counter_loop(state + 1)
+    }
+    Dec(sender) -> {
+        sender <- Ok(state - 1)
+        counter_loop(state - 1)
+    }
+    Get(sender) -> {
+        sender <- Value(state)
+        counter_loop(state)
+    }
+    Stop -> state
+end
+
+# Start a counter with initial value
+start_counter(initial) = spawn(counter_loop, initial)
+
+# Client operations
+increment(counter) = {
+    counter <- Inc(self())
+    receive
+        Ok(n) -> n
+    end
+}
+
+decrement(counter) = {
+    counter <- Dec(self())
+    receive
+        Ok(n) -> n
+    end
+}
+
+get_value(counter) = {
+    counter <- Get(self())
+    receive
+        Value(n) -> n
+    end
+}
+
+stop(counter) = {
+    counter <- Stop
+    ()
+}
+
+main() = {
+    # Start counter at 0
+    c = start_counter(0)
+
+    # Increment 3 times
+    increment(c)
+    increment(c)
+    increment(c)
+
+    # Get value (should be 3)
+    v1 = get_value(c)
+
+    # Decrement once
+    decrement(c)
+
+    # Get final value (should be 2)
+    v2 = get_value(c)
+
+    stop(c)
+
+    v1 + v2
+}
