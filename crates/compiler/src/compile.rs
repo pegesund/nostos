@@ -125,6 +125,10 @@ pub struct Compiler {
     capture_indices: HashMap<String, u8>,
     /// Compiled functions
     functions: HashMap<String, Rc<FunctionValue>>,
+    /// Function name -> index mapping for direct calls (no HashMap lookup at runtime!)
+    function_indices: HashMap<String, u16>,
+    /// Ordered list of function names (index -> name)
+    function_list: Vec<String>,
     /// Type definitions
     types: HashMap<String, TypeInfo>,
     /// Current scope depth
@@ -192,6 +196,8 @@ impl Compiler {
             next_reg: 0,
             capture_indices: HashMap::new(),
             functions: HashMap::new(),
+            function_indices: HashMap::new(),
+            function_list: Vec::new(),
             types: HashMap::new(),
             scope_depth: 0,
             module_path: Vec::new(),
@@ -811,12 +817,14 @@ impl Compiler {
                         }
 
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Rc::new(resolved_name)));
+                        // Direct function call by index (no HashMap lookup at runtime!)
+                        let func_idx = *self.function_indices.get(&resolved_name)
+                            .expect("Function should have been assigned an index");
                         if is_tail {
-                            self.chunk.emit(Instruction::TailCallByName(name_idx, arg_regs.into()), 0);
+                            self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), 0);
                             return Ok(0);
                         } else {
-                            self.chunk.emit(Instruction::CallByName(dst, name_idx, arg_regs.into()), 0);
+                            self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), 0);
                             return Ok(dst);
                         }
                     }
@@ -837,12 +845,14 @@ impl Compiler {
                         }
 
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Rc::new(qualified_method)));
+                        // Direct function call by index (no HashMap lookup at runtime!)
+                        let func_idx = *self.function_indices.get(&qualified_method)
+                            .expect("Trait method should have been assigned an index");
                         if is_tail {
-                            self.chunk.emit(Instruction::TailCallByName(name_idx, arg_regs.into()), 0);
+                            self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), 0);
                             return Ok(0);
                         } else {
-                            self.chunk.emit(Instruction::CallByName(dst, name_idx, arg_regs.into()), 0);
+                            self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), 0);
                             return Ok(dst);
                         }
                     }
@@ -1247,13 +1257,14 @@ impl Compiler {
                         return Ok(dst);
                     }
                 } else {
-                    // Regular function call by name
-                    let name_idx = self.chunk.add_constant(Value::String(Rc::new(resolved_name)));
+                    // Direct function call by index (no HashMap lookup at runtime!)
+                    let func_idx = *self.function_indices.get(&resolved_name)
+                        .expect("Function should have been assigned an index");
                     if is_tail {
-                        self.chunk.emit(Instruction::TailCallByName(name_idx, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), 0);
                         return Ok(0);
                     } else {
-                        self.chunk.emit(Instruction::CallByName(dst, name_idx, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), 0);
                         return Ok(dst);
                     }
                 }
@@ -2122,6 +2133,14 @@ impl Compiler {
         &self.functions
     }
 
+    /// Get the ordered function list for direct indexed calls.
+    /// Returns functions in the same order as their indices (for CallDirect).
+    pub fn get_function_list(&self) -> Vec<Rc<FunctionValue>> {
+        self.function_list.iter()
+            .map(|name| self.functions.get(name).cloned().expect("Function should exist"))
+            .collect()
+    }
+
     /// Get all types for the VM.
     pub fn get_vm_types(&self) -> HashMap<String, Rc<TypeValue>> {
         use nostos_vm::value::{TypeValue, TypeKind, FieldInfo, ConstructorInfo};
@@ -2482,6 +2501,13 @@ impl Compiler {
                 jit_code: None,
             };
             self.functions.insert(name.clone(), Rc::new(placeholder));
+
+            // Assign function index for direct calls (no HashMap lookup at runtime!)
+            if !self.function_indices.contains_key(name) {
+                let idx = self.function_list.len() as u16;
+                self.function_indices.insert(name.clone(), idx);
+                self.function_list.push(name.clone());
+            }
         }
 
         // Fifth pass: compile functions with merged clauses

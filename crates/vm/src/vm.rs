@@ -41,8 +41,10 @@ pub struct VM {
     pub frames: Vec<CallFrame>,
     /// Global variables (kept as Value for now - mostly static)
     pub globals: HashMap<String, Value>,
-    /// Global functions
+    /// Global functions (by name, for CallByName - SLOW)
     pub functions: HashMap<String, Rc<FunctionValue>>,
+    /// Global functions (by index, for CallDirect - FAST!)
+    pub function_list: Vec<Rc<FunctionValue>>,
     /// Native functions (GC-aware, work directly with GcValue)
     pub natives: HashMap<String, Rc<GcNativeFn>>,
     /// Type definitions (for introspection)
@@ -80,6 +82,7 @@ impl VM {
             frames: Vec::new(),
             globals: HashMap::new(),
             functions: HashMap::new(),
+            function_list: Vec::new(),
             natives: HashMap::new(),
             types: HashMap::new(),
             handlers: Vec::new(),
@@ -1715,6 +1718,35 @@ impl VM {
                         found: args.len(),
                     });
                 }
+                return Ok(StepResult::TailCall {
+                    func,
+                    args,
+                    captures: vec![],
+                });
+            }
+            Instruction::CallDirect(dst, func_idx, arg_regs) => {
+                // Direct function call by index - no HashMap lookup!
+                let func = self.function_list.get(func_idx as usize).cloned()
+                    .ok_or_else(|| RuntimeError::UnknownFunction(format!("function index {}", func_idx)))?;
+                let args: Vec<GcValue> = arg_regs.iter()
+                    .map(|r| reg!(*r).clone())
+                    .collect();
+
+                return Ok(StepResult::Call {
+                    func,
+                    args,
+                    captures: vec![],
+                    return_reg: dst,
+                });
+            }
+            Instruction::TailCallDirect(func_idx, arg_regs) => {
+                // Direct tail call by index - no HashMap lookup!
+                let func = self.function_list.get(func_idx as usize).cloned()
+                    .ok_or_else(|| RuntimeError::UnknownFunction(format!("function index {}", func_idx)))?;
+                let args: Vec<GcValue> = arg_regs.iter()
+                    .map(|r| reg!(*r).clone())
+                    .collect();
+
                 return Ok(StepResult::TailCall {
                     func,
                     args,

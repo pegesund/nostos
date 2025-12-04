@@ -45,6 +45,8 @@ pub struct Runtime {
     /// Cached functions map - refreshed at start of run().
     /// Avoids RwLock overhead on every function call.
     cached_functions: std::collections::HashMap<String, Rc<FunctionValue>>,
+    /// Cached function list for CallDirect - indexed access, no HashMap lookup!
+    cached_function_list: Vec<Rc<FunctionValue>>,
     cached_natives: std::collections::HashMap<String, Rc<GcNativeFn>>,
     cached_types: std::collections::HashMap<String, Rc<TypeValue>>,
 }
@@ -56,6 +58,7 @@ impl Runtime {
             scheduler: Scheduler::new(),
             output: Vec::new(),
             cached_functions: std::collections::HashMap::new(),
+            cached_function_list: Vec::new(),
             cached_natives: std::collections::HashMap::new(),
             cached_types: std::collections::HashMap::new(),
         }
@@ -64,6 +67,11 @@ impl Runtime {
     /// Register a global function.
     pub fn register_function(&mut self, name: &str, func: Rc<FunctionValue>) {
         self.scheduler.functions.write().insert(name.to_string(), func);
+    }
+
+    /// Set the function list for direct indexed calls (CallDirect - no HashMap lookup!).
+    pub fn set_function_list(&mut self, functions: Vec<Rc<FunctionValue>>) {
+        self.cached_function_list = functions;
     }
 
     /// Register a type definition.
@@ -321,6 +329,7 @@ impl Runtime {
         // Clone cached maps into local variables to avoid borrow conflicts with &mut self
         // The cache is already cloned once at start of run(), so this is O(n) Rc bumps
         let functions = self.cached_functions.clone();
+        let function_list = self.cached_function_list.clone();  // Clone to avoid borrow issues
         let natives = self.cached_natives.clone();
         let types = self.cached_types.clone();
 
@@ -403,7 +412,7 @@ impl Runtime {
             // SAFETY: ip < code_len was checked above, constants are immutable
             let constants = unsafe { std::slice::from_raw_parts(constants_ptr, constants_len) };
 
-            match self.execute_local_instruction_inline(&mut proc, frame_idx, instr, constants, &functions, &natives, &types)? {
+            match self.execute_local_instruction_inline(&mut proc, frame_idx, instr, constants, &functions, &function_list, &natives, &types)? {
                 ProcessStepResult::Continue => continue,
                 other => return Ok(other),
             }
@@ -422,6 +431,7 @@ impl Runtime {
         instr: &Instruction,
         constants: &[Value],
         functions: &std::collections::HashMap<String, Rc<FunctionValue>>,
+        function_list: &[Rc<FunctionValue>],
         natives: &std::collections::HashMap<String, Rc<GcNativeFn>>,
         types: &std::collections::HashMap<String, Rc<TypeValue>>,
     ) -> Result<ProcessStepResult, RuntimeError> {
@@ -758,6 +768,59 @@ impl Runtime {
 
                 let func = functions.get(&**name).cloned()
                     .ok_or_else(|| RuntimeError::UnknownFunction(name.to_string()))?;
+
+                // Replace current frame - reuse register vector like VM does
+                if let Some(frame) = proc.frames.last_mut() {
+                    let reg_count = func.code.register_count;
+                    frame.function = func;
+                    frame.ip = 0;
+                    // Reuse existing allocation - clear and resize
+                    frame.registers.clear();
+                    frame.registers.resize(reg_count, GcValue::Unit);
+                    for (i, arg) in arg_values.into_iter().enumerate() {
+                        if i < reg_count {
+                            frame.registers[i] = arg;
+                        }
+                    }
+                    frame.captures.clear();
+                }
+                proc.consume_reductions(1);
+            }
+
+            Instruction::CallDirect(dst, func_idx, ref arg_regs) => {
+                // Direct function call by index - no HashMap lookup!
+                let dst = *dst;
+                let func = function_list.get(*func_idx as usize).cloned()
+                    .ok_or_else(|| RuntimeError::UnknownFunction(format!("function index {}", func_idx)))?;
+
+                let arg_values: Vec<GcValue> = arg_regs.iter().map(|&r| reg_clone!(r)).collect();
+
+                // Push new frame - use actual register count
+                let reg_count = func.code.register_count;
+                let mut registers = vec![GcValue::Unit; reg_count];
+                for (i, arg) in arg_values.into_iter().enumerate() {
+                    if i < reg_count {
+                        registers[i] = arg;
+                    }
+                }
+
+                let frame = CallFrame {
+                    function: func,
+                    ip: 0,
+                    registers,
+                    captures: Vec::new(),
+                    return_reg: Some(dst),
+                };
+                proc.frames.push(frame);
+                proc.consume_reductions(1);
+            }
+
+            Instruction::TailCallDirect(func_idx, ref arg_regs) => {
+                // Direct tail call by index - no HashMap lookup!
+                let func = function_list.get(*func_idx as usize).cloned()
+                    .ok_or_else(|| RuntimeError::UnknownFunction(format!("function index {}", func_idx)))?;
+
+                let arg_values: Vec<GcValue> = arg_regs.iter().map(|&r| reg_clone!(r)).collect();
 
                 // Replace current frame - reuse register vector like VM does
                 if let Some(frame) = proc.frames.last_mut() {

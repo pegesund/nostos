@@ -458,10 +458,14 @@ pub enum Instruction {
     Call(Reg, Reg, RegList),
     /// Tail call (reuse current frame): return func(args...)
     TailCall(Reg, RegList),
-    /// Call function by name (looks up in VM's function map)
+    /// Call function by name (looks up in VM's function map) - SLOW, use for dynamic dispatch only
     CallByName(Reg, ConstIdx, RegList),
-    /// Tail call by name
+    /// Tail call by name - SLOW, use for dynamic dispatch only
     TailCallByName(ConstIdx, RegList),
+    /// Call function directly by index (no HashMap lookup!)
+    CallDirect(Reg, u16, RegList),
+    /// Tail call function directly by index (no HashMap lookup!)
+    TailCallDirect(u16, RegList),
     /// Call self (recursive call to current function - no lookup needed)
     CallSelf(Reg, RegList),
     /// Tail call self (tail-recursive call to current function)

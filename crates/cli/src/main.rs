@@ -104,6 +104,8 @@ fn main() -> ExitCode {
         for (name, func) in compiler.get_all_functions() {
             runtime.register_function(&name, func.clone());
         }
+        // Set function list for direct indexed calls (CallDirect)
+        runtime.set_function_list(compiler.get_function_list());
         for (name, type_val) in compiler.get_vm_types() {
             runtime.register_type(&name, type_val);
         }
@@ -139,6 +141,8 @@ fn main() -> ExitCode {
         for (name, func) in compiler.get_all_functions() {
             vm.functions.insert(name.clone(), func.clone());
         }
+        // Populate function_list for direct indexed calls (CallDirect)
+        vm.function_list = compiler.get_function_list();
         for (name, type_val) in compiler.get_vm_types() {
             vm.types.insert(name, type_val);
         }
