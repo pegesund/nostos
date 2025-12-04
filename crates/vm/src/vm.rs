@@ -807,50 +807,44 @@ impl VM {
             };
         }
 
+        // UNCHECKED accessors - safe because Nostos is statically typed!
+        // The type checker guarantees these will always succeed.
         macro_rules! get_int {
             ($r:expr) => {
+                // SAFETY: Type system guarantees this register contains an Int
                 match reg!($r) {
                     GcValue::Int(i) => *i,
-                    other => return Err(RuntimeError::TypeError {
-                        expected: "Int".to_string(),
-                        found: gc_type_name!(other).to_string(),
-                    }),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
                 }
             };
         }
 
         macro_rules! get_float {
             ($r:expr) => {
+                // SAFETY: Type system guarantees this register contains a Float
                 match reg!($r) {
                     GcValue::Float(f) => *f,
-                    other => return Err(RuntimeError::TypeError {
-                        expected: "Float".to_string(),
-                        found: gc_type_name!(other).to_string(),
-                    }),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
                 }
             };
         }
 
         macro_rules! get_bool {
             ($r:expr) => {
+                // SAFETY: Type system guarantees this register contains a Bool
                 match reg!($r) {
                     GcValue::Bool(b) => *b,
-                    other => return Err(RuntimeError::TypeError {
-                        expected: "Bool".to_string(),
-                        found: gc_type_name!(other).to_string(),
-                    }),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
                 }
             };
         }
 
         macro_rules! get_string_ptr {
             ($r:expr) => {
+                // SAFETY: Type system guarantees this register contains a String
                 match reg!($r) {
                     GcValue::String(ptr) => *ptr,
-                    other => return Err(RuntimeError::TypeError {
-                        expected: "String".to_string(),
-                        found: gc_type_name!(other).to_string(),
-                    }),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
                 }
             };
         }

@@ -464,66 +464,56 @@ impl Runtime {
             Instruction::LoadTrue(dst) => set_reg!(*dst, GcValue::Bool(true)),
             Instruction::LoadFalse(dst) => set_reg!(*dst, GcValue::Bool(false)),
 
-            // === Arithmetic (HOT PATH - no cloning!) ===
+            // === Arithmetic (HOT PATH - UNCHECKED since Nostos is statically typed!) ===
             Instruction::AddInt(dst, a, b) => {
-                match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => set_reg!(*dst, GcValue::Int(x + y)),
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "Int".to_string(),
-                        found: "other".to_string(),
-                    }),
-                }
+                // SAFETY: Type system guarantees these are Int
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Int(x + y));
             }
 
             Instruction::SubInt(dst, a, b) => {
-                match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => set_reg!(*dst, GcValue::Int(x - y)),
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "Int".to_string(),
-                        found: "other".to_string(),
-                    }),
-                }
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Int(x - y));
             }
 
             Instruction::MulInt(dst, a, b) => {
-                match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => set_reg!(*dst, GcValue::Int(x * y)),
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "Int".to_string(),
-                        found: "other".to_string(),
-                    }),
-                }
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Int(x * y));
             }
 
-            // === Comparison (HOT PATH) ===
+            // === Comparison (HOT PATH - UNCHECKED) ===
             Instruction::LtInt(dst, a, b) => {
-                match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => set_reg!(*dst, GcValue::Bool(*x < *y)),
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "Int".to_string(),
-                        found: "other".to_string(),
-                    }),
-                }
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Bool(x < y));
             }
 
             Instruction::LeInt(dst, a, b) => {
-                match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => set_reg!(*dst, GcValue::Bool(*x <= *y)),
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "Int".to_string(),
-                        found: "other".to_string(),
-                    }),
-                }
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Bool(x <= y));
             }
 
             Instruction::GtInt(dst, a, b) => {
-                match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => set_reg!(*dst, GcValue::Bool(*x > *y)),
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "Int".to_string(),
-                        found: "other".to_string(),
-                    }),
-                }
+                // SAFETY: Type system guarantees these are Int
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Bool(x > y));
             }
 
             Instruction::Eq(dst, a, b) => {
@@ -533,15 +523,14 @@ impl Runtime {
                 set_reg!(*dst, GcValue::Bool(eq));
             }
 
-            // === Logical ===
+            // === Logical (UNCHECKED - statically typed!) ===
             Instruction::Not(dst, src) => {
-                match reg!(*src) {
-                    GcValue::Bool(b) => set_reg!(*dst, GcValue::Bool(!b)),
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "Bool".to_string(),
-                        found: "other".to_string(),
-                    }),
-                }
+                // SAFETY: Type system guarantees this is Bool
+                let b = match reg!(*src) {
+                    GcValue::Bool(b) => *b,
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Bool(!b));
             }
 
             // === Control flow (HOT PATH) ===
@@ -851,24 +840,19 @@ impl Runtime {
             }
 
             Instruction::GetTupleField(dst, tuple_reg, idx) => {
-                match reg!(*tuple_reg) {
-                    GcValue::Tuple(ptr) => {
-                        let item = proc.heap.get_tuple(*ptr)
-                            .and_then(|t| t.items.get(*idx as usize).cloned());
-                        match item {
-                            Some(val) => set_reg!(*dst, val),
-                            None => return Err(RuntimeError::IndexOutOfBounds {
-                                index: *idx as i64,
-                                length: 0,
-                            }),
-                        }
-                    }
-                    other => {
-                        return Err(RuntimeError::TypeError {
-                            expected: "Tuple".to_string(),
-                            found: other.type_name(&proc.heap).to_string(),
-                        });
-                    }
+                // SAFETY: Type system guarantees this is a Tuple
+                let ptr = match reg!(*tuple_reg) {
+                    GcValue::Tuple(ptr) => *ptr,
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                let item = proc.heap.get_tuple(ptr)
+                    .and_then(|t| t.items.get(*idx as usize).cloned());
+                match item {
+                    Some(val) => set_reg!(*dst, val),
+                    None => return Err(RuntimeError::IndexOutOfBounds {
+                        index: *idx as i64,
+                        length: 0,
+                    }),
                 }
             }
 
@@ -999,52 +983,41 @@ impl Runtime {
             }
 
             Instruction::GetField(dst, record, field_idx) => {
-                match reg!(*record) {
-                    GcValue::Record(ptr) => {
-                        let result = proc.heap.get_record(*ptr)
-                            .and_then(|r| r.fields.get(*field_idx as usize))
-                            .cloned()
-                            .ok_or_else(|| RuntimeError::Panic("Invalid field access".to_string()))?;
-                        set_reg!(*dst, result);
-                    }
-                    _ => {
-                        return Err(RuntimeError::TypeError {
-                            expected: "Record".to_string(),
-                            found: "other".to_string(),
-                        });
-                    }
-                }
+                // SAFETY: Type system guarantees this is a Record
+                let ptr = match reg!(*record) {
+                    GcValue::Record(ptr) => *ptr,
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                let result = proc.heap.get_record(ptr)
+                    .and_then(|r| r.fields.get(*field_idx as usize))
+                    .cloned()
+                    .ok_or_else(|| RuntimeError::Panic("Invalid field access".to_string()))?;
+                set_reg!(*dst, result);
             }
 
-            // === Division (direct access) ===
+            // === Division (UNCHECKED types - statically typed!) ===
             Instruction::DivInt(dst, a, b) => {
-                match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => {
-                        if *y == 0 {
-                            return Err(RuntimeError::Panic("Division by zero".to_string()));
-                        }
-                        set_reg!(*dst, GcValue::Int(x / y));
-                    }
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "Int".to_string(),
-                        found: "other".to_string(),
-                    }),
+                // SAFETY: Type system guarantees these are Int
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                if y == 0 {
+                    return Err(RuntimeError::Panic("Division by zero".to_string()));
                 }
+                set_reg!(*dst, GcValue::Int(x / y));
             }
 
             Instruction::ModInt(dst, a, b) => {
-                match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => {
-                        if *y == 0 {
-                            return Err(RuntimeError::Panic("Division by zero".to_string()));
-                        }
-                        set_reg!(*dst, GcValue::Int(x % y));
-                    }
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "Int".to_string(),
-                        found: "other".to_string(),
-                    }),
+                // SAFETY: Type system guarantees these are Int
+                let (x, y) = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                if y == 0 {
+                    return Err(RuntimeError::Panic("Division by zero".to_string()));
                 }
+                set_reg!(*dst, GcValue::Int(x % y));
             }
 
             // === Debug ===
