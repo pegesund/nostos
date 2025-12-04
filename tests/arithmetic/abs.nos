@@ -1,0 +1,15 @@
+# expect: ()
+# Absolute value function
+
+main() = {
+    # Int absolute value
+    assert_eq(abs(-5), 5)
+    assert_eq(abs(5), 5)
+    assert_eq(abs(0), 0)
+    assert_eq(abs(-100), 100)
+
+    # Float absolute value
+    assert_eq(abs(-3.14), 3.14)
+    assert_eq(abs(3.14), 3.14)
+    assert_eq(abs(-0.0), 0.0)
+}
