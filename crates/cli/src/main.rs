@@ -421,6 +421,30 @@ fn main() -> ExitCode {
         for (name, func) in compiler.get_all_functions() {
             scheduler.functions.write().insert(name.clone(), func.clone());
         }
+        // Also set function_list for index-based lookup (CallDirect/TailCallDirect)
+        let function_list = compiler.get_function_list();
+        *scheduler.function_list.write() = function_list.clone();
+
+        // JIT compile suitable functions
+        if enable_jit {
+            if let Ok(mut jit) = JitCompiler::new(JitConfig::default()) {
+                for idx in 0..function_list.len() {
+                    jit.queue_compilation(idx as u16);
+                }
+                if let Ok(compiled) = jit.process_queue(&function_list) {
+                    if compiled > 0 {
+                        for (idx, _func) in function_list.iter().enumerate() {
+                            if let Some(jit_fn) = jit.get_int_function(idx as u16) {
+                                scheduler.jit_int_functions.write().insert(idx as u16, jit_fn);
+                            }
+                            if let Some(jit_fn) = jit.get_loop_int64_array_function(idx as u16) {
+                                scheduler.jit_loop_array_functions.write().insert(idx as u16, jit_fn);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         let config = WorkerPoolConfig {
             num_workers,

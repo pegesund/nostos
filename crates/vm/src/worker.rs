@@ -1300,6 +1300,149 @@ impl Worker {
                 });
             }
 
+            Instruction::TailCallDirect(func_idx, ref arg_regs) => {
+                // Check for JIT-compiled version (1-arg int function)
+                if arg_regs.len() == 1 {
+                    if let Some(jit_fn) = self.scheduler.jit_int_functions.read().get(&func_idx).copied() {
+                        let arg = get_reg!(arg_regs[0]);
+                        if let GcValue::Int64(n) = arg {
+                            let result = jit_fn(n);
+                            // For tail call: pop current frame, set result in parent
+                            self.scheduler.with_process_mut(pid, |proc| {
+                                let return_reg = proc.frames.last().and_then(|f| f.return_reg);
+                                proc.frames.pop();
+                                if let Some(dst) = return_reg {
+                                    if let Some(parent) = proc.frames.last_mut() {
+                                        parent.registers[dst as usize] = GcValue::Int64(result);
+                                    }
+                                }
+                            });
+                            return Ok(ProcessResult::Continue);
+                        }
+                    }
+                }
+
+                // Fall back to interpreted execution
+                let func = self
+                    .scheduler
+                    .function_list
+                    .read()
+                    .get(func_idx as usize)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError::UnknownFunction(format!("index {}", func_idx)))?;
+
+                let arg_values: Vec<GcValue> = arg_regs.iter().map(|&r| get_reg!(r)).collect();
+
+                self.scheduler.with_process_mut(pid, |proc| {
+                    let mut registers = vec![GcValue::Unit; 256];
+                    for (i, arg) in arg_values.into_iter().enumerate() {
+                        if i < 256 {
+                            registers[i] = arg;
+                        }
+                    }
+
+                    if let Some(frame) = proc.frames.last_mut() {
+                        frame.function = func;
+                        frame.ip = 0;
+                        frame.registers = registers;
+                        frame.captures = Vec::new();
+                    }
+
+                    proc.consume_reductions(1);
+                });
+            }
+
+            Instruction::TailCallSelf(ref arg_regs) => {
+                // Self tail-recursion: reuse current frame
+                let arg_values: Vec<GcValue> = arg_regs.iter().map(|&r| get_reg!(r)).collect();
+                self.scheduler.with_process_mut(pid, |proc| {
+                    let frame = proc.frames.last_mut().unwrap();
+                    let reg_count = frame.function.code.register_count;
+                    frame.ip = 0;
+                    frame.registers.clear();
+                    frame.registers.resize(reg_count, GcValue::Unit);
+                    for (i, arg) in arg_values.into_iter().enumerate() {
+                        if i < reg_count {
+                            frame.registers[i] = arg;
+                        }
+                    }
+                });
+            }
+
+            Instruction::CallDirect(dst, func_idx, ref arg_regs) => {
+                // Check for JIT-compiled version (1-arg int function)
+                if arg_regs.len() == 1 {
+                    if let Some(jit_fn) = self.scheduler.jit_int_functions.read().get(&func_idx).copied() {
+                        let arg = get_reg!(arg_regs[0]);
+                        if let GcValue::Int64(n) = arg {
+                            let result = jit_fn(n);
+                            set_reg!(dst, GcValue::Int64(result));
+                            return Ok(ProcessResult::Continue);
+                        }
+                    }
+                }
+
+                // Fall back to interpreted execution
+                let func = self
+                    .scheduler
+                    .function_list
+                    .read()
+                    .get(func_idx as usize)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError::UnknownFunction(format!("index {}", func_idx)))?;
+
+                let arg_values: Vec<GcValue> = arg_regs.iter().map(|&r| get_reg!(r)).collect();
+
+                self.scheduler.with_process_mut(pid, |proc| {
+                    let mut registers = vec![GcValue::Unit; 256];
+                    for (i, arg) in arg_values.into_iter().enumerate() {
+                        if i < 256 {
+                            registers[i] = arg;
+                        }
+                    }
+
+                    let frame = CallFrame {
+                        function: func,
+                        ip: 0,
+                        registers,
+                        captures: Vec::new(),
+                        return_reg: Some(dst),
+                    };
+                    proc.frames.push(frame);
+                    proc.consume_reductions(1);
+                });
+            }
+
+            Instruction::CallSelf(dst, ref arg_regs) => {
+                // Self-recursion: call the same function
+                let func = self
+                    .scheduler
+                    .with_process(pid, |proc| proc.frames.last().map(|f| f.function.clone()))
+                    .flatten()
+                    .ok_or_else(|| RuntimeError::Panic("No frame for CallSelf".to_string()))?;
+
+                let arg_values: Vec<GcValue> = arg_regs.iter().map(|&r| get_reg!(r)).collect();
+
+                self.scheduler.with_process_mut(pid, |proc| {
+                    let mut registers = vec![GcValue::Unit; 256];
+                    for (i, arg) in arg_values.into_iter().enumerate() {
+                        if i < 256 {
+                            registers[i] = arg;
+                        }
+                    }
+
+                    let frame = CallFrame {
+                        function: func,
+                        ip: 0,
+                        registers,
+                        captures: Vec::new(),
+                        return_reg: Some(dst),
+                    };
+                    proc.frames.push(frame);
+                    proc.consume_reductions(1);
+                });
+            }
+
             Instruction::Call(dst, func_reg, ref args) => {
                 let func_val = get_reg!(func_reg);
                 let arg_values: Vec<GcValue> = args.iter().map(|&r| get_reg!(r)).collect();
@@ -1637,6 +1780,26 @@ impl Worker {
 
             // === Debug ===
             Instruction::Nop => {}
+
+            // === Pattern Matching ===
+            Instruction::TestConst(dst, value_reg, const_idx) => {
+                let value = get_reg!(value_reg);
+                let constant = &constants[const_idx as usize];
+                self.scheduler.with_process_mut(pid, |proc| {
+                    let gc_const = proc.heap.value_to_gc(constant);
+                    let result = proc.heap.gc_values_equal(&value, &gc_const);
+                    proc.frames.last_mut().unwrap().registers[dst as usize] = GcValue::Bool(result);
+                });
+            }
+
+            Instruction::Throw(msg_reg) => {
+                let msg = get_reg!(msg_reg);
+                let msg_str = self
+                    .scheduler
+                    .with_process(pid, |proc| proc.heap.display_value(&msg))
+                    .unwrap_or_else(|| "unknown".to_string());
+                return Err(RuntimeError::Panic(format!("Panic: {}", msg_str)));
+            }
 
             Instruction::DebugPrint(r) => {
                 let value = get_reg!(r);
