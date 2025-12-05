@@ -712,17 +712,279 @@ impl ThreadWorker {
     fn execute_slice(&mut self, local_id: u64) -> Result<SliceResult, RuntimeError> {
         let reductions = self.config.reductions_per_slice;
 
-        for _ in 0..reductions {
-            match self.execute_one(local_id)? {
-                StepResult::Continue => continue,
-                StepResult::Yield => return Ok(SliceResult::Continue),
-                StepResult::Waiting => return Ok(SliceResult::Waiting),
-                StepResult::Finished(v) => return Ok(SliceResult::Finished(v)),
+        // FAST PATH: Execute as many instructions as possible with ONE HashMap lookup
+        // Only break out for slow-path instructions or when done
+        loop {
+            match self.execute_fast_loop(local_id, reductions)? {
+                FastLoopResult::Continue => {
+                    // Did all reductions - time to yield
+                    return Ok(SliceResult::Continue);
+                }
+                FastLoopResult::Finished(v) => return Ok(SliceResult::Finished(v)),
+                FastLoopResult::NeedSlowPath(instr) => {
+                    // Fall back to slow path for complex instructions
+                    let constants = {
+                        let proc = self.processes.get(&local_id).unwrap();
+                        proc.frames.last().unwrap().function.code.constants.clone()
+                    };
+                    match self.execute_instruction(local_id, &instr, &constants)? {
+                        StepResult::Continue => continue, // Back to fast loop
+                        StepResult::Yield => return Ok(SliceResult::Continue),
+                        StepResult::Waiting => return Ok(SliceResult::Waiting),
+                        StepResult::Finished(v) => return Ok(SliceResult::Finished(v)),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Execute multiple instructions in a tight loop without HashMap lookups.
+    /// Returns when: we've done `max_iters` instructions, hit a slow-path instruction,
+    /// or the process finishes.
+    fn execute_fast_loop(&mut self, local_id: u64, max_iters: usize) -> Result<FastLoopResult, RuntimeError> {
+        use Instruction::*;
+
+        let proc = self.processes.get_mut(&local_id).unwrap();
+
+        for _ in 0..max_iters {
+            let frame_len = proc.frames.len();
+            if frame_len == 0 {
+                return Ok(FastLoopResult::Finished(GcValue::Unit));
+            }
+            let frame_idx = frame_len - 1;
+
+            // Get frame data using raw pointers like runtime.rs - avoids cloning!
+            // SAFETY: frame_idx is valid (frame_len > 0 checked above)
+            let (ip, code_ptr, code_len) = unsafe {
+                let frame = proc.frames.get_unchecked(frame_idx);
+                (frame.ip, frame.function.code.code.as_ptr(), frame.function.code.code.len())
+            };
+
+            if ip >= code_len {
+                return Ok(FastLoopResult::Finished(GcValue::Unit));
+            }
+
+            // SAFETY: ip < code_len checked above
+            let instr = unsafe { &*code_ptr.add(ip) };
+
+            match instr {
+                AddInt(dst, l, r) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let a = match &proc.frames[frame_idx].registers[*l as usize] {
+                        GcValue::Int64(v) => *v,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    let b = match &proc.frames[frame_idx].registers[*r as usize] {
+                        GcValue::Int64(v) => *v,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(a.wrapping_add(b));
+                }
+                SubInt(dst, l, r) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let a = match &proc.frames[frame_idx].registers[*l as usize] {
+                        GcValue::Int64(v) => *v,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    let b = match &proc.frames[frame_idx].registers[*r as usize] {
+                        GcValue::Int64(v) => *v,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(a.wrapping_sub(b));
+                }
+                MulInt(dst, l, r) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let a = match &proc.frames[frame_idx].registers[*l as usize] {
+                        GcValue::Int64(v) => *v,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    let b = match &proc.frames[frame_idx].registers[*r as usize] {
+                        GcValue::Int64(v) => *v,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(a.wrapping_mul(b));
+                }
+                LtInt(dst, l, r) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let a = match &proc.frames[frame_idx].registers[*l as usize] {
+                        GcValue::Int64(v) => *v,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    let b = match &proc.frames[frame_idx].registers[*r as usize] {
+                        GcValue::Int64(v) => *v,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Bool(a < b);
+                }
+                LeInt(dst, l, r) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let a = match &proc.frames[frame_idx].registers[*l as usize] {
+                        GcValue::Int64(v) => *v,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    let b = match &proc.frames[frame_idx].registers[*r as usize] {
+                        GcValue::Int64(v) => *v,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Bool(a <= b);
+                }
+                GtInt(dst, l, r) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let a = match &proc.frames[frame_idx].registers[*l as usize] {
+                        GcValue::Int64(v) => *v,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    let b = match &proc.frames[frame_idx].registers[*r as usize] {
+                        GcValue::Int64(v) => *v,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Bool(a > b);
+                }
+                GeInt(dst, l, r) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let a = match &proc.frames[frame_idx].registers[*l as usize] {
+                        GcValue::Int64(v) => *v,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    let b = match &proc.frames[frame_idx].registers[*r as usize] {
+                        GcValue::Int64(v) => *v,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Bool(a >= b);
+                }
+                Move(dst, src) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let val = proc.frames[frame_idx].registers[*src as usize].clone();
+                    proc.frames[frame_idx].registers[*dst as usize] = val;
+                }
+                Jump(offset) => {
+                    proc.frames[frame_idx].ip = (ip as isize + 1 + *offset as isize) as usize;
+                }
+                JumpIfFalse(cond, offset) => {
+                    if let GcValue::Bool(false) = &proc.frames[frame_idx].registers[*cond as usize] {
+                        proc.frames[frame_idx].ip = (ip as isize + 1 + *offset as isize) as usize;
+                    } else {
+                        proc.frames[frame_idx].ip += 1;
+                    }
+                }
+                JumpIfTrue(cond, offset) => {
+                    if let GcValue::Bool(true) = &proc.frames[frame_idx].registers[*cond as usize] {
+                        proc.frames[frame_idx].ip = (ip as isize + 1 + *offset as isize) as usize;
+                    } else {
+                        proc.frames[frame_idx].ip += 1;
+                    }
+                }
+                Index(dst, coll, idx) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let idx_val = match &proc.frames[frame_idx].registers[*idx as usize] {
+                        GcValue::Int64(i) => *i as usize,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    let value = match &proc.frames[frame_idx].registers[*coll as usize] {
+                        GcValue::Int64Array(ptr) => {
+                            let array = proc.heap.get_int64_array(*ptr)
+                                .ok_or_else(|| RuntimeError::Panic("Invalid int64 array".to_string()))?;
+                            GcValue::Int64(*array.items.get(idx_val)
+                                .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?)
+                        }
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    proc.frames[frame_idx].registers[*dst as usize] = value;
+                }
+                IndexSet(coll, idx, val) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let idx_val = match &proc.frames[frame_idx].registers[*idx as usize] {
+                        GcValue::Int64(i) => *i as usize,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    let (ptr, new_value) = match &proc.frames[frame_idx].registers[*coll as usize] {
+                        GcValue::Int64Array(ptr) => {
+                            let new_value = match &proc.frames[frame_idx].registers[*val as usize] {
+                                GcValue::Int64(v) => *v,
+                                _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                            };
+                            (*ptr, new_value)
+                        }
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    let array = proc.heap.get_int64_array_mut(ptr)
+                        .ok_or_else(|| RuntimeError::Panic("Invalid int64 array".to_string()))?;
+                    if idx_val >= array.items.len() {
+                        return Err(RuntimeError::Panic(format!("Index {} out of bounds", idx_val)));
+                    }
+                    array.items[idx_val] = new_value;
+                }
+                TailCallSelf(args) => {
+                    let arg_values: Vec<GcValue> = args.iter()
+                        .map(|r| proc.frames[frame_idx].registers[*r as usize].clone())
+                        .collect();
+                    let reg_count = proc.frames[frame_idx].function.code.register_count;
+                    proc.frames[frame_idx].ip = 0;
+                    proc.frames[frame_idx].registers.clear();
+                    proc.frames[frame_idx].registers.resize(reg_count, GcValue::Unit);
+                    for (i, arg) in arg_values.into_iter().enumerate() {
+                        if i < reg_count {
+                            proc.frames[frame_idx].registers[i] = arg;
+                        }
+                    }
+                }
+                Return(src) => {
+                    let ret_val = proc.frames[frame_idx].registers[*src as usize].clone();
+                    let return_reg = proc.frames[frame_idx].return_reg;
+                    proc.frames.pop();
+
+                    if proc.frames.is_empty() {
+                        return Ok(FastLoopResult::Finished(ret_val));
+                    }
+
+                    if let Some(dst) = return_reg {
+                        let parent_frame = proc.frames.last_mut().unwrap();
+                        parent_frame.registers[dst as usize] = ret_val;
+                    }
+                }
+                LoadUnit(dst) => {
+                    proc.frames[frame_idx].ip += 1;
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Unit;
+                }
+                LoadTrue(dst) => {
+                    proc.frames[frame_idx].ip += 1;
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Bool(true);
+                }
+                LoadFalse(dst) => {
+                    proc.frames[frame_idx].ip += 1;
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Bool(false);
+                }
+                Length(dst, src) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let len = match &proc.frames[frame_idx].registers[*src as usize] {
+                        GcValue::Int64Array(ptr) => {
+                            proc.heap.get_int64_array(*ptr)
+                                .map(|a| a.items.len() as i64)
+                                .unwrap_or(0)
+                        }
+                        GcValue::List(ptr) => {
+                            proc.heap.get_list(*ptr)
+                                .map(|l| l.items.len() as i64)
+                                .unwrap_or(0)
+                        }
+                        GcValue::String(ptr) => {
+                            proc.heap.get_string(*ptr)
+                                .map(|s| s.data.chars().count() as i64)
+                                .unwrap_or(0)
+                        }
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(len);
+                }
+                _ => {
+                    // Slow path instruction - need to release proc and call method on self
+                    proc.frames[frame_idx].ip += 1;
+                    return Ok(FastLoopResult::NeedSlowPath(instr.clone()));
+                }
             }
         }
 
-        // Ran out of reductions, yield
-        Ok(SliceResult::Continue)
+        Ok(FastLoopResult::Continue)
     }
 
     /// Execute one instruction.
@@ -2705,4 +2967,11 @@ enum SliceResult {
     Continue,
     Waiting,
     Finished(GcValue),
+}
+
+/// Result from fast loop execution.
+enum FastLoopResult {
+    Continue,
+    Finished(GcValue),
+    NeedSlowPath(Instruction),
 }
