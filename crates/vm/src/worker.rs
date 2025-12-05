@@ -193,7 +193,7 @@ impl WorkerPool {
     }
 
     /// Spawn the initial process with a function.
-    pub fn spawn_initial(&self, func: std::rc::Rc<FunctionValue>) -> Pid {
+    pub fn spawn_initial(&self, func: Arc<FunctionValue>) -> Pid {
         // Use spawn_unqueued to avoid double-queuing
         let pid = self.scheduler.spawn_unqueued();
 
@@ -515,6 +515,66 @@ impl Worker {
                         _ => {
                             return Err(RuntimeError::TypeError {
                                 expected: "Int".to_string(),
+                                found: "other".to_string(),
+                            })
+                        }
+                    };
+                    frame.registers[*dst as usize] = result;
+                }
+
+                Instruction::AddFloat(dst, a, b) => {
+                    let frame = proc.frames.last_mut().unwrap();
+                    let result = match (&frame.registers[*a as usize], &frame.registers[*b as usize]) {
+                        (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x + y),
+                        (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x + y),
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "Float".to_string(),
+                                found: "other".to_string(),
+                            })
+                        }
+                    };
+                    frame.registers[*dst as usize] = result;
+                }
+
+                Instruction::SubFloat(dst, a, b) => {
+                    let frame = proc.frames.last_mut().unwrap();
+                    let result = match (&frame.registers[*a as usize], &frame.registers[*b as usize]) {
+                        (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x - y),
+                        (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x - y),
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "Float".to_string(),
+                                found: "other".to_string(),
+                            })
+                        }
+                    };
+                    frame.registers[*dst as usize] = result;
+                }
+
+                Instruction::MulFloat(dst, a, b) => {
+                    let frame = proc.frames.last_mut().unwrap();
+                    let result = match (&frame.registers[*a as usize], &frame.registers[*b as usize]) {
+                        (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x * y),
+                        (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x * y),
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "Float".to_string(),
+                                found: "other".to_string(),
+                            })
+                        }
+                    };
+                    frame.registers[*dst as usize] = result;
+                }
+
+                Instruction::DivFloat(dst, a, b) => {
+                    let frame = proc.frames.last_mut().unwrap();
+                    let result = match (&frame.registers[*a as usize], &frame.registers[*b as usize]) {
+                        (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x / y),
+                        (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x / y),
+                        _ => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "Float".to_string(),
                                 found: "other".to_string(),
                             })
                         }
@@ -962,6 +1022,66 @@ impl Worker {
                     _ => {
                         return Err(RuntimeError::TypeError {
                             expected: "Int".to_string(),
+                            found: "other".to_string(),
+                        })
+                    }
+                }
+            }
+
+            Instruction::AddFloat(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                match (va, vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => set_reg!(dst, GcValue::Float64(x + y)),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => set_reg!(dst, GcValue::Float32(x + y)),
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Float".to_string(),
+                            found: "other".to_string(),
+                        })
+                    }
+                }
+            }
+
+            Instruction::SubFloat(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                match (va, vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => set_reg!(dst, GcValue::Float64(x - y)),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => set_reg!(dst, GcValue::Float32(x - y)),
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Float".to_string(),
+                            found: "other".to_string(),
+                        })
+                    }
+                }
+            }
+
+            Instruction::MulFloat(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                match (va, vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => set_reg!(dst, GcValue::Float64(x * y)),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => set_reg!(dst, GcValue::Float32(x * y)),
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Float".to_string(),
+                            found: "other".to_string(),
+                        })
+                    }
+                }
+            }
+
+            Instruction::DivFloat(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                match (va, vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => set_reg!(dst, GcValue::Float64(x / y)),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => set_reg!(dst, GcValue::Float32(x / y)),
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Float".to_string(),
                             found: "other".to_string(),
                         })
                     }
@@ -1539,14 +1659,15 @@ impl Worker {
     }
 
     /// Spawn a child process and add it to the work queue.
+    /// Uses lightweight heap for memory-efficient mass spawning.
     fn spawn_child_process(
         &self,
-        func: std::rc::Rc<FunctionValue>,
+        func: Arc<FunctionValue>,
         args: Vec<GcValue>,
         parent_pid: Pid,
     ) -> Pid {
-        // Use spawn_unqueued to avoid double-queuing
-        let child_pid = self.scheduler.spawn_unqueued();
+        // Use spawn_lightweight to avoid double-queuing and minimize memory
+        let child_pid = self.scheduler.spawn_lightweight();
 
         // Copy arguments from parent to child with lock ordering
         let (first_pid, second_pid, parent_is_first) = if parent_pid.0 < child_pid.0 {
@@ -1629,17 +1750,19 @@ mod tests {
     use crate::gc::GcNativeFn;
     use crate::value::{Chunk, Instruction, Value};
     use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU32;
 
     fn make_function_with_consts(
         name: &str,
         code: Vec<Instruction>,
         constants: Vec<Value>,
-    ) -> Rc<FunctionValue> {
-        Rc::new(FunctionValue {
+    ) -> Arc<FunctionValue> {
+        Arc::new(FunctionValue {
             name: name.to_string(),
             arity: 0,
             param_names: Vec::new(),
-            code: Rc::new(Chunk {
+            code: Arc::new(Chunk {
                 code,
                 constants,
                 lines: Vec::new(),
@@ -1649,7 +1772,7 @@ mod tests {
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: std::cell::Cell::new(0),
+            call_count: AtomicU32::new(0),
             debug_symbols: vec![],
         })
     }
@@ -1660,7 +1783,7 @@ mod tests {
         // Register builtins
         scheduler.natives.write().insert(
             "println".to_string(),
-            Rc::new(GcNativeFn {
+            Arc::new(GcNativeFn {
                 name: "println".to_string(),
                 arity: 1,
                 func: Box::new(|args, heap| {
@@ -1718,10 +1841,10 @@ mod tests {
             vec![
                 Value::Int64(0),
                 Value::Int64(1),
-                Value::String(Rc::new("sum".to_string())),
+                Value::String(Arc::new("sum".to_string())),
             ],
         );
-        let sum_func = Rc::new(FunctionValue {
+        let sum_func = Arc::new(FunctionValue {
             arity: 1,
             ..(*sum_func).clone()
         });
@@ -1735,7 +1858,7 @@ mod tests {
             ],
             vec![
                 Value::Int64(10),
-                Value::String(Rc::new("sum".to_string())),
+                Value::String(Arc::new("sum".to_string())),
             ],
         );
 
@@ -1797,7 +1920,7 @@ mod tests {
             ],
             vec![Value::Int64(1)],
         );
-        let child_func = Rc::new(FunctionValue {
+        let child_func = Arc::new(FunctionValue {
             arity: 1,
             ..(*child_func).clone()
         });
@@ -1849,10 +1972,10 @@ mod tests {
             vec![
                 Value::Int64(0),
                 Value::Int64(1),
-                Value::String(Rc::new("countdown".to_string())),
+                Value::String(Arc::new("countdown".to_string())),
             ],
         );
-        let countdown_func = Rc::new(FunctionValue {
+        let countdown_func = Arc::new(FunctionValue {
             arity: 1,
             ..(*countdown_func).clone()
         });
@@ -1867,7 +1990,7 @@ mod tests {
             ],
             vec![
                 Value::Int64(1000),
-                Value::String(Rc::new("countdown".to_string())),
+                Value::String(Arc::new("countdown".to_string())),
             ],
         );
 
@@ -1971,10 +2094,10 @@ mod tests {
                 Value::Int64(2),
                 Value::Int64(1),
                 Value::Int64(2),
-                Value::String(Rc::new("fib".to_string())),
+                Value::String(Arc::new("fib".to_string())),
             ],
         );
-        let fib_func = Rc::new(FunctionValue {
+        let fib_func = Arc::new(FunctionValue {
             arity: 1,
             ..(*fib_func).clone()
         });
@@ -1989,7 +2112,7 @@ mod tests {
             ],
             vec![
                 Value::Int64(15),
-                Value::String(Rc::new("fib".to_string())),
+                Value::String(Arc::new("fib".to_string())),
             ],
         );
 

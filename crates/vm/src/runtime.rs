@@ -9,6 +9,7 @@
 //! without caring whether processes run interpreted or JIT code.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// JIT compilation threshold - compile after this many calls
 pub const JIT_THRESHOLD: u32 = 1000;
@@ -53,11 +54,11 @@ pub struct Runtime {
 
     /// Cached functions map - refreshed at start of run().
     /// Avoids RwLock overhead on every function call.
-    cached_functions: std::collections::HashMap<String, Rc<FunctionValue>>,
+    cached_functions: std::collections::HashMap<String, Arc<FunctionValue>>,
     /// Cached function list for CallDirect - indexed access, no HashMap lookup!
-    cached_function_list: Vec<Rc<FunctionValue>>,
-    cached_natives: std::collections::HashMap<String, Rc<GcNativeFn>>,
-    cached_types: std::collections::HashMap<String, Rc<TypeValue>>,
+    cached_function_list: Vec<Arc<FunctionValue>>,
+    cached_natives: std::collections::HashMap<String, Arc<GcNativeFn>>,
+    cached_types: std::collections::HashMap<String, Arc<TypeValue>>,
     /// JIT-compiled integer functions (func_index → native fn)
     jit_int_functions: std::collections::HashMap<u16, JitIntFn>,
     /// JIT-compiled loop array functions (func_index → native fn)
@@ -103,17 +104,17 @@ impl Runtime {
     }
 
     /// Register a global function.
-    pub fn register_function(&mut self, name: &str, func: Rc<FunctionValue>) {
+    pub fn register_function(&mut self, name: &str, func: Arc<FunctionValue>) {
         self.scheduler.functions.write().insert(name.to_string(), func);
     }
 
     /// Set the function list for direct indexed calls (CallDirect - no HashMap lookup!).
-    pub fn set_function_list(&mut self, functions: Vec<Rc<FunctionValue>>) {
+    pub fn set_function_list(&mut self, functions: Vec<Arc<FunctionValue>>) {
         self.cached_function_list = functions;
     }
 
     /// Register a type definition.
-    pub fn register_type(&mut self, name: &str, type_val: Rc<TypeValue>) {
+    pub fn register_type(&mut self, name: &str, type_val: Arc<TypeValue>) {
         self.scheduler.types.write().insert(name.to_string(), type_val);
     }
 
@@ -122,7 +123,7 @@ impl Runtime {
     where
         F: Fn(&[GcValue], &mut Heap) -> Result<GcValue, RuntimeError> + Send + Sync + 'static,
     {
-        let native = Rc::new(GcNativeFn {
+        let native = Arc::new(GcNativeFn {
             name: name.to_string(),
             arity,
             func: Box::new(func),
@@ -148,7 +149,7 @@ impl Runtime {
     }
 
     /// Spawn the initial process and run a function.
-    pub fn spawn_initial(&mut self, func: Rc<FunctionValue>) -> Pid {
+    pub fn spawn_initial(&mut self, func: Arc<FunctionValue>) -> Pid {
         let pid = self.scheduler.spawn();
         let reg_count = func.code.register_count;
 
@@ -167,14 +168,15 @@ impl Runtime {
     }
 
     /// Spawn a new process running a function with arguments and captures.
+    /// Uses lightweight heap for memory-efficient mass spawning.
     pub fn spawn_process(
         &mut self,
-        func: Rc<FunctionValue>,
+        func: Arc<FunctionValue>,
         args: Vec<GcValue>,
         captures: Vec<GcValue>,
         parent_pid: Pid,
     ) -> Pid {
-        let child_pid = self.scheduler.spawn();
+        let child_pid = self.scheduler.spawn_child();
 
         // Get both process handles - use lock ordering to prevent deadlock
         let (first_pid, second_pid, parent_is_first) = if parent_pid.0 < child_pid.0 {
@@ -228,6 +230,19 @@ impl Runtime {
         }
 
         child_pid
+    }
+
+    /// Display a GcValue result using the main process's heap.
+    /// Call this before the runtime is dropped to get a human-readable result.
+    pub fn display_result(&self, value: &GcValue) -> String {
+        // Try to get the main process's heap for display
+        if let Some(handle) = self.scheduler.get_process_handle(Pid(1)) {
+            let proc = handle.lock();
+            proc.heap.display_value(value)
+        } else {
+            // Fallback to Debug format if process is gone
+            format!("{:?}", value)
+        }
     }
 
     /// Run all processes until completion or deadlock.
@@ -466,10 +481,10 @@ impl Runtime {
         frame_idx: usize,
         instr: &Instruction,
         constants: &[Value],
-        functions: &std::collections::HashMap<String, Rc<FunctionValue>>,
-        function_list: &[Rc<FunctionValue>],
-        natives: &std::collections::HashMap<String, Rc<GcNativeFn>>,
-        types: &std::collections::HashMap<String, Rc<TypeValue>>,
+        functions: &std::collections::HashMap<String, Arc<FunctionValue>>,
+        function_list: &[Arc<FunctionValue>],
+        natives: &std::collections::HashMap<String, Arc<GcNativeFn>>,
+        types: &std::collections::HashMap<String, Arc<TypeValue>>,
         jit_int_functions: &std::collections::HashMap<u16, JitIntFn>,
         jit_loop_array_functions: &std::collections::HashMap<u16, JitLoopArrayFn>,
     ) -> Result<ProcessStepResult, RuntimeError> {
@@ -523,6 +538,9 @@ impl Runtime {
                     (GcValue::UInt32(x), GcValue::UInt32(y)) => GcValue::UInt32(x.wrapping_add(*y)),
                     (GcValue::UInt16(x), GcValue::UInt16(y)) => GcValue::UInt16(x.wrapping_add(*y)),
                     (GcValue::UInt8(x), GcValue::UInt8(y)) => GcValue::UInt8(x.wrapping_add(*y)),
+                    // Handle floats (type may not be known at compile time for pattern bindings)
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x + y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x + y),
                     (GcValue::BigInt(x), GcValue::BigInt(y)) => {
                         let bx = proc.heap.get_bigint(*x).unwrap();
                         let by = proc.heap.get_bigint(*y).unwrap();
@@ -549,6 +567,9 @@ impl Runtime {
                     (GcValue::UInt32(x), GcValue::UInt32(y)) => GcValue::UInt32(x.wrapping_sub(*y)),
                     (GcValue::UInt16(x), GcValue::UInt16(y)) => GcValue::UInt16(x.wrapping_sub(*y)),
                     (GcValue::UInt8(x), GcValue::UInt8(y)) => GcValue::UInt8(x.wrapping_sub(*y)),
+                    // Handle floats (type may not be known at compile time for pattern bindings)
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x - y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x - y),
                     (GcValue::BigInt(x), GcValue::BigInt(y)) => {
                         let bx = proc.heap.get_bigint(*x).unwrap();
                         let by = proc.heap.get_bigint(*y).unwrap();
@@ -575,6 +596,9 @@ impl Runtime {
                     (GcValue::UInt32(x), GcValue::UInt32(y)) => GcValue::UInt32(x.wrapping_mul(*y)),
                     (GcValue::UInt16(x), GcValue::UInt16(y)) => GcValue::UInt16(x.wrapping_mul(*y)),
                     (GcValue::UInt8(x), GcValue::UInt8(y)) => GcValue::UInt8(x.wrapping_mul(*y)),
+                    // Handle floats (type may not be known at compile time for pattern bindings)
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x * y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x * y),
                     (GcValue::BigInt(x), GcValue::BigInt(y)) => {
                         let bx = proc.heap.get_bigint(*x).unwrap();
                         let by = proc.heap.get_bigint(*y).unwrap();
@@ -1340,17 +1364,27 @@ impl Runtime {
                 }
             }
 
-            // === Division (UNCHECKED types - statically typed!) ===
+            // === Division (polymorphic for pattern binding support) ===
             Instruction::DivInt(dst, a, b) => {
-                // SAFETY: Type system guarantees these are Int
-                let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int64(x), GcValue::Int64(y)) => (*x, *y),
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let result = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => {
+                        if *y == 0 { return Err(RuntimeError::DivisionByZero); }
+                        GcValue::Int64(x / y)
+                    }
+                    (GcValue::Float64(x), GcValue::Float64(y)) => {
+                        if *y == 0.0 { return Err(RuntimeError::DivisionByZero); }
+                        GcValue::Float64(x / y)
+                    }
+                    (GcValue::Float32(x), GcValue::Float32(y)) => {
+                        if *y == 0.0 { return Err(RuntimeError::DivisionByZero); }
+                        GcValue::Float32(x / y)
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching numeric types".to_string(),
+                        found: "mismatched types in division".to_string()
+                    })
                 };
-                if y == 0 {
-                    return Err(RuntimeError::Panic("Division by zero".to_string()));
-                }
-                set_reg!(*dst, GcValue::Int64(x / y));
+                set_reg!(*dst, result);
             }
 
             Instruction::ModInt(dst, a, b) => {
@@ -2573,13 +2607,14 @@ impl Default for Runtime {
 mod tests {
     use super::*;
     use crate::value::Chunk;
+    use std::sync::atomic::AtomicU32;
 
-    fn make_function(name: &str, code: Vec<Instruction>) -> Rc<FunctionValue> {
-        Rc::new(FunctionValue {
+    fn make_function(name: &str, code: Vec<Instruction>) -> Arc<FunctionValue> {
+        Arc::new(FunctionValue {
             name: name.to_string(),
             arity: 0,
             param_names: Vec::new(),
-            code: Rc::new(Chunk {
+            code: Arc::new(Chunk {
                 code,
                 constants: Vec::new(),
                 lines: Vec::new(),
@@ -2589,17 +2624,17 @@ mod tests {
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: std::cell::Cell::new(0),
+            call_count: AtomicU32::new(0),
             debug_symbols: vec![],
         })
     }
 
-    fn make_function_with_consts(name: &str, code: Vec<Instruction>, constants: Vec<Value>) -> Rc<FunctionValue> {
-        Rc::new(FunctionValue {
+    fn make_function_with_consts(name: &str, code: Vec<Instruction>, constants: Vec<Value>) -> Arc<FunctionValue> {
+        Arc::new(FunctionValue {
             name: name.to_string(),
             arity: 0,
             param_names: Vec::new(),
-            code: Rc::new(Chunk {
+            code: Arc::new(Chunk {
                 code,
                 constants,
                 lines: Vec::new(),
@@ -2609,7 +2644,7 @@ mod tests {
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: std::cell::Cell::new(0),
+            call_count: AtomicU32::new(0),
             debug_symbols: vec![],
         })
     }
@@ -2720,7 +2755,7 @@ mod tests {
             vec![],
         );
         // Update arity
-        let add_func = Rc::new(FunctionValue {
+        let add_func = Arc::new(FunctionValue {
             arity: 2,
             ..(*add_func).clone()
         });
@@ -2734,7 +2769,7 @@ mod tests {
                 Instruction::CallByName(2, 2, vec![0, 1].into()),  // r2 = add(r0, r1)
                 Instruction::Return(2),
             ],
-            vec![Value::Int64(2), Value::Int64(3), Value::String(Rc::new("add".to_string()))],
+            vec![Value::Int64(2), Value::Int64(3), Value::String(Arc::new("add".to_string()))],
         );
 
         runtime.register_function("add", add_func);
@@ -2776,9 +2811,9 @@ mod tests {
                 Instruction::AddInt(3, 0, 6),        // r3 = n + sum(n-1)
                 Instruction::Return(3),
             ],
-            vec![Value::Int64(0), Value::Int64(1), Value::String(Rc::new("sum".to_string()))],
+            vec![Value::Int64(0), Value::Int64(1), Value::String(Arc::new("sum".to_string()))],
         );
-        let sum_func = Rc::new(FunctionValue {
+        let sum_func = Arc::new(FunctionValue {
             arity: 1,
             ..(*sum_func).clone()
         });
@@ -2791,7 +2826,7 @@ mod tests {
                 Instruction::CallByName(1, 1, vec![0].into()),
                 Instruction::Return(1),
             ],
-            vec![Value::Int64(3), Value::String(Rc::new("sum".to_string()))],
+            vec![Value::Int64(3), Value::String(Arc::new("sum".to_string()))],
         );
 
         runtime.register_function("sum", sum_func);
@@ -2813,7 +2848,7 @@ mod tests {
             ],
             vec![],
         );
-        let id_func = Rc::new(FunctionValue {
+        let id_func = Arc::new(FunctionValue {
             arity: 1,
             ..(*id_func).clone()
         });
@@ -2826,7 +2861,7 @@ mod tests {
                 Instruction::TailCallByName(1, vec![0].into()),  // tail call id(42)
                 Instruction::Return(0),  // This should never execute
             ],
-            vec![Value::Int64(42), Value::String(Rc::new("id".to_string()))],
+            vec![Value::Int64(42), Value::String(Arc::new("id".to_string()))],
         );
 
         runtime.register_function("id", id_func);

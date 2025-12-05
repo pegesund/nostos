@@ -1,0 +1,48 @@
+# Mass Spawn Example - Demonstrates spawning 100,000 lightweight processes
+# This example shows Nostos's Erlang-style concurrency:
+#   - Spawns 100,000 processes (each with ~2KB memory footprint)
+#   - Passes a secret value to each process
+#   - Each process echoes it back
+#   - Main verifies all responses match the original
+# Note: By default, the scheduler runs on a single CPU thread.
+# Use --parallel to enable multi-CPU work-stealing execution.
+# Run with: nostos examples/mass_spawn.nos
+# Or parallel: nostos --parallel examples/mass_spawn.nos
+
+# Worker: receives a value and the parent pid, echoes the value back
+worker(parent, secret) = {
+    parent <- secret
+    ()
+}
+
+main() = {
+    me = self()
+    n = 100000
+    secret = 42
+
+    println("Spawning 100,000 lightweight processes...")
+
+    # Spawn all workers - each receives the secret and sends it back
+    for i = 0 to n {
+        spawn(() => worker(me, secret))
+    }
+
+    println("Collecting and verifying responses...")
+
+    # Collect all responses and count correct ones
+    correct = 0
+    for i = 0 to n {
+        correct = receive
+            value -> if value == secret then correct + 1 else correct
+        end
+    }
+
+    println("Verification complete!")
+    println(correct)
+
+    # Assert all responses were correct
+    assert(correct == n)
+
+    println("All 100,000 processes echoed the correct value!")
+    correct
+}

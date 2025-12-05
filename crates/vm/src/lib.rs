@@ -9,6 +9,7 @@
 //! - Multi-CPU parallel execution
 
 pub mod gc;
+pub mod parallel;
 pub mod process;
 pub mod runtime;
 pub mod scheduler;
@@ -17,6 +18,7 @@ pub mod value;
 pub mod worker;
 
 pub use gc::*;
+pub use parallel::*;
 pub use process::*;
 pub use runtime::*;
 pub use scheduler::*;
