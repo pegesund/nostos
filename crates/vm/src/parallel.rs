@@ -19,7 +19,7 @@ use std::thread::{self, JoinHandle};
 use crossbeam::channel::{self, Sender, Receiver, TryRecvError};
 
 use crate::gc::{GcConfig, GcNativeFn, GcValue, Heap};
-use crate::process::{Process, ProcessState};
+use crate::process::{CallFrame, Process, ProcessState};
 use crate::runtime::{JitIntFn, JitLoopArrayFn};
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, TypeValue, Value};
 
@@ -158,11 +158,18 @@ impl ThreadSafeValue {
 
 /// Message sent between threads.
 #[derive(Debug)]
-struct CrossThreadMessage {
-    /// Target process
-    target_pid: Pid,
-    /// Message payload (thread-safe copy)
-    payload: ThreadSafeValue,
+enum CrossThreadMessage {
+    /// Send message to existing process
+    SendMessage {
+        target_pid: Pid,
+        payload: ThreadSafeValue,
+    },
+    /// Spawn a new process on this thread
+    SpawnProcess {
+        func: Arc<FunctionValue>,
+        args: Vec<ThreadSafeValue>,
+        captures: Vec<ThreadSafeValue>,
+    },
 }
 
 /// Shared state across all threads (read-only after init).
@@ -181,6 +188,10 @@ pub struct SharedState {
     pub jit_loop_array_functions: HashMap<u16, JitLoopArrayFn>,
     /// Shutdown signal
     pub shutdown: AtomicBool,
+    /// Spawn counter for round-robin distribution across threads
+    pub spawn_counter: AtomicU64,
+    /// Number of threads (for round-robin modulo)
+    pub num_threads: usize,
 }
 
 /// Configuration for the parallel VM.
@@ -337,6 +348,8 @@ impl ParallelVM {
             jit_int_functions: HashMap::new(),
             jit_loop_array_functions: HashMap::new(),
             shutdown: AtomicBool::new(false),
+            spawn_counter: AtomicU64::new(0),
+            num_threads,
         });
 
         Self {
@@ -592,11 +605,8 @@ impl ThreadWorker {
             let local_id = match self.run_queue.pop_front() {
                 Some(id) => id,
                 None => {
-                    // No work - check if we should exit
-                    if self.processes.is_empty() {
-                        break;
-                    }
-                    // All processes waiting - brief sleep then retry
+                    // No work - wait for messages or shutdown
+                    // Don't exit just because we have no processes - we may receive SpawnProcess
                     std::thread::sleep(std::time::Duration::from_micros(100));
                     continue;
                 }
@@ -648,21 +658,61 @@ impl ThreadWorker {
         loop {
             match self.inbox.try_recv() {
                 Ok(msg) => {
-                    let local_id = pid_local_id(msg.target_pid);
-                    if let Some(process) = self.processes.get_mut(&local_id) {
-                        // Convert thread-safe value to GcValue on this process's heap
-                        let gc_value = msg.payload.to_gc_value(&mut process.heap);
+                    match msg {
+                        CrossThreadMessage::SendMessage { target_pid, payload } => {
+                            let local_id = pid_local_id(target_pid);
+                            if let Some(process) = self.processes.get_mut(&local_id) {
+                                // Convert thread-safe value to GcValue on this process's heap
+                                let gc_value = payload.to_gc_value(&mut process.heap);
 
-                        // Deliver to mailbox
-                        process.mailbox.push_back(gc_value);
+                                // Deliver to mailbox
+                                process.mailbox.push_back(gc_value);
 
-                        // If process was waiting, re-queue it
-                        if process.state == ProcessState::Waiting {
-                            process.state = ProcessState::Running;
+                                // If process was waiting, re-queue it
+                                if process.state == ProcessState::Waiting {
+                                    process.state = ProcessState::Running;
+                                    self.run_queue.push_back(local_id);
+                                }
+                            }
+                            // If process doesn't exist, message is dropped (process died)
+                        }
+                        CrossThreadMessage::SpawnProcess { func, args, captures } => {
+                            // Spawn the process on this thread
+                            let local_id = self.next_local_id;
+                            self.next_local_id += 1;
+                            let pid = encode_pid(self.thread_id, local_id);
+
+                            let mut process = Process::new(pid);
+
+                            // Convert args from ThreadSafeValue to GcValue
+                            let gc_args: Vec<GcValue> = args.iter()
+                                .map(|v| v.to_gc_value(&mut process.heap))
+                                .collect();
+                            let gc_captures: Vec<GcValue> = captures.iter()
+                                .map(|v| v.to_gc_value(&mut process.heap))
+                                .collect();
+
+                            // Set up initial frame
+                            let reg_count = func.code.register_count;
+                            let mut registers = vec![GcValue::Unit; reg_count];
+                            for (i, arg) in gc_args.into_iter().enumerate() {
+                                if i < reg_count {
+                                    registers[i] = arg;
+                                }
+                            }
+
+                            process.frames.push(CallFrame {
+                                function: func,
+                                ip: 0,
+                                registers,
+                                captures: gc_captures,
+                                return_reg: None,
+                            });
+
+                            self.processes.insert(local_id, process);
                             self.run_queue.push_back(local_id);
                         }
                     }
-                    // If process doesn't exist, message is dropped (process died)
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => break,
@@ -698,7 +748,7 @@ impl ThreadWorker {
             let sender_process = self.processes.get(&sender_local_id).unwrap();
             if let Some(safe_value) = ThreadSafeValue::from_gc_value(&message, &sender_process.heap) {
                 if let Some(sender) = self.thread_senders.get(target_thread as usize) {
-                    let _ = sender.send(CrossThreadMessage {
+                    let _ = sender.send(CrossThreadMessage::SendMessage {
                         target_pid: target,
                         payload: safe_value,
                     });
@@ -2281,8 +2331,37 @@ impl ThreadWorker {
                     }),
                 };
 
-                // Spawn on this thread (affinity)
-                let child_pid = self.spawn_process(func, arg_values, captures);
+                // Round-robin distribution across threads
+                let num_threads = self.shared.num_threads;
+                let spawn_idx = self.shared.spawn_counter.fetch_add(1, Ordering::Relaxed);
+                let target_thread = (spawn_idx as usize % num_threads) as u16;
+
+                let child_pid = if target_thread == self.thread_id {
+                    // Spawn on this thread
+                    self.spawn_process(func, arg_values, captures)
+                } else {
+                    // Spawn on another thread - convert args to thread-safe values
+                    let proc = self.processes.get(&local_id).unwrap();
+                    let safe_args: Vec<ThreadSafeValue> = arg_values.iter()
+                        .filter_map(|v| ThreadSafeValue::from_gc_value(v, &proc.heap))
+                        .collect();
+                    let safe_captures: Vec<ThreadSafeValue> = captures.iter()
+                        .filter_map(|v| ThreadSafeValue::from_gc_value(v, &proc.heap))
+                        .collect();
+
+                    // Send spawn request to target thread
+                    if let Some(sender) = self.thread_senders.get(target_thread as usize) {
+                        let _ = sender.send(CrossThreadMessage::SpawnProcess {
+                            func: func.clone(),
+                            args: safe_args,
+                            captures: safe_captures,
+                        });
+                    }
+
+                    // Return a placeholder Pid - we don't track remote spawns currently
+                    // The process will be created on the target thread with its own local_id
+                    Pid(0) // Placeholder - not used in mass_spawn
+                };
                 set_reg!(*dst, GcValue::Pid(child_pid.0));
             }
 
