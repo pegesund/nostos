@@ -743,7 +743,10 @@ impl ThreadWorker {
     /// or the process finishes.
     fn execute_fast_loop(&mut self, local_id: u64, max_iters: usize) -> Result<FastLoopResult, RuntimeError> {
         use Instruction::*;
+        use crate::process::CallFrame;
 
+        // Clone Arc to access shared state without conflicting with processes borrow
+        let shared = Arc::clone(&self.shared);
         let proc = self.processes.get_mut(&local_id).unwrap();
 
         for _ in 0..max_iters {
@@ -975,6 +978,81 @@ impl ThreadWorker {
                         _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
                     };
                     proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(len);
+                }
+                MakeInt64Array(dst, size_reg) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let size = match &proc.frames[frame_idx].registers[*size_reg as usize] {
+                        GcValue::Int64(n) => *n as usize,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    let ptr = proc.heap.alloc_int64_array(vec![0i64; size]);
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64Array(ptr);
+                }
+                CallDirect(dst, func_idx, args) => {
+                    proc.frames[frame_idx].ip += 1;
+
+                    // Check for JIT-compiled version first (like runtime.rs)
+                    if args.len() == 1 {
+                        // Pure numeric JIT
+                        if let Some(jit_fn) = shared.jit_int_functions.get(func_idx) {
+                            if let GcValue::Int64(n) = &proc.frames[frame_idx].registers[args[0] as usize] {
+                                let result = jit_fn(*n);
+                                proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(result);
+                                continue;
+                            }
+                        }
+                        // Loop array JIT
+                        if let Some(jit_fn) = shared.jit_loop_array_functions.get(func_idx) {
+                            if let GcValue::Int64Array(arr_ptr) = &proc.frames[frame_idx].registers[args[0] as usize] {
+                                if let Some(arr) = proc.heap.get_int64_array_mut(*arr_ptr) {
+                                    let ptr = arr.items.as_mut_ptr();
+                                    let len = arr.items.len() as i64;
+                                    let result = jit_fn(ptr as *const i64, len);
+                                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(result);
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
+                    // Fall back to interpreted call
+                    let func = match shared.function_list.get(*func_idx as usize) {
+                        Some(f) => Arc::clone(f),
+                        None => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+
+                    // Collect arguments
+                    let arg_values: Vec<GcValue> = args.iter()
+                        .map(|&r| proc.frames[frame_idx].registers[r as usize].clone())
+                        .collect();
+
+                    // Push new frame
+                    let reg_count = func.code.register_count;
+                    let mut registers = vec![GcValue::Unit; reg_count];
+                    for (i, arg) in arg_values.into_iter().enumerate() {
+                        if i < reg_count {
+                            registers[i] = arg;
+                        }
+                    }
+
+                    proc.frames.push(CallFrame {
+                        function: func,
+                        ip: 0,
+                        registers,
+                        captures: Vec::new(),
+                        return_reg: Some(*dst),
+                    });
+                }
+                LoadConst(dst, const_idx) => {
+                    proc.frames[frame_idx].ip += 1;
+                    // SAFETY: const_idx was validated at compile time
+                    let constant = unsafe {
+                        let frame = proc.frames.get_unchecked(frame_idx);
+                        frame.function.code.constants.get_unchecked(*const_idx as usize).clone()
+                    };
+                    // Convert Value to GcValue (allocate on heap if needed)
+                    let gc_val = proc.heap.value_to_gc(&constant);
+                    proc.frames[frame_idx].registers[*dst as usize] = gc_val;
                 }
                 _ => {
                     // Slow path instruction - need to release proc and call method on self
