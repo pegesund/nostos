@@ -1061,6 +1061,24 @@ impl Runtime {
             Instruction::TailCallDirect(func_idx, ref arg_regs) => {
                 // Check for JIT-compiled version (tail call with 1 arg)
                 if arg_regs.len() == 1 {
+                    // First check for pure numeric JIT
+                    if let Some(jit_fn) = jit_int_functions.get(func_idx) {
+                        let arg = reg_clone!(arg_regs[0]);
+                        if let GcValue::Int64(n) = arg {
+                            // Call JIT function directly!
+                            let result = jit_fn(n);
+                            // For tail call: pop current frame, set result in parent
+                            let return_reg = proc.frames.last().and_then(|f| f.return_reg);
+                            proc.frames.pop();
+                            if let Some(dst) = return_reg {
+                                if let Some(parent) = proc.frames.last_mut() {
+                                    parent.registers[dst as usize] = GcValue::Int64(result);
+                                }
+                            }
+                            proc.consume_reductions(1);
+                            return Ok(ProcessStepResult::Continue);
+                        }
+                    }
                     // Check for loop array JIT
                     if let Some(jit_fn) = jit_loop_array_functions.get(func_idx) {
                         let arg = reg_clone!(arg_regs[0]);
@@ -2908,7 +2926,7 @@ mod tests {
                 Instruction::SelfPid(0),              // r0 = self()
                 Instruction::LoadConst(1, 0),         // r1 = child_func
                 Instruction::Spawn(2, 1, vec![0].into()),    // r2 = spawn(child_func, [self()])
-                Instruction::Receive,                  // r0 = receive()
+                Instruction::Receive(0),               // r0 = receive()
                 Instruction::Return(0),
             ],
             vec![Value::Function(child_func)],

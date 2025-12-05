@@ -341,16 +341,20 @@ impl JitCompiler {
 
         while let Some(func_index) = self.compile_queue.pop() {
             if let Some(func) = functions.get(func_index as usize) {
+                eprintln!("[JIT] Attempting to compile: {} (index {})", func.name, func_index);
                 // Try numeric JIT first
                 match self.compile_int_function(func_index, func) {
                     Ok(_) => {
+                        eprintln!("[JIT] Compiled {} as numeric", func.name);
                         compiled += 1;
                         continue;
                     }
-                    Err(JitError::NotSuitable(_)) => {
+                    Err(JitError::NotSuitable(reason)) => {
+                        eprintln!("[JIT] {} not suitable: {}", func.name, reason);
                         // Function not suitable for numeric JIT - try loop array JIT
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        eprintln!("[JIT] {} error: {:?}", func.name, e);
                         // Compilation error - try loop array JIT
                     }
                 }
@@ -382,12 +386,22 @@ impl JitCompiler {
         }
 
         let mut detected_type: Option<NumericType> = None;
+        let code = &func.code.code;
 
         // Check all instructions and constants to determine the type
-        for instr in func.code.code.iter() {
+        for (i, instr) in code.iter().enumerate() {
             match instr {
                 // Check constant types
                 Instruction::LoadConst(_, idx) => {
+                    // Skip if this LoadConst is followed by Throw/Panic (error path in multi-clause functions)
+                    let next_instr = code.get(i + 1);
+                    let next_is_error = next_instr.map(|next| {
+                        matches!(next, Instruction::Panic(_) | Instruction::Throw(_))
+                    }).unwrap_or(false);
+                    if next_is_error {
+                        continue; // Skip error path constants
+                    }
+
                     if let Some(val) = func.code.constants.get(*idx as usize) {
                         let new_type = match val {
                             Value::Int64(_) => Some(NumericType::Int64),
@@ -428,6 +442,22 @@ impl JitCompiler {
                 Instruction::Return(_) => {}
                 Instruction::CallSelf(_, _) => {}
                 Instruction::TailCallSelf(_) => {}
+                // Pattern matching - TestConst compares value against integer constant
+                Instruction::TestConst(_, _, idx) => {
+                    // Only allow if the constant is an integer
+                    if let Some(val) = func.code.constants.get(*idx as usize) {
+                        match val {
+                            Value::Int64(_) | Value::Int32(_) | Value::Int16(_) | Value::Int8(_) |
+                            Value::UInt64(_) | Value::UInt32(_) | Value::UInt16(_) | Value::UInt8(_) => {}
+                            _ => return Err(JitError::NotSuitable(
+                                format!("TestConst with non-integer constant: {:?}", val)
+                            )),
+                        }
+                    }
+                }
+                // Error handling - Panic/Throw are allowed but should never be reached in correct execution
+                Instruction::Panic(_) => {}
+                Instruction::Throw(_) => {}
 
                 // Integer arithmetic
                 Instruction::AddInt(_, _, _) |
@@ -580,6 +610,15 @@ impl JitCompiler {
 
                 match instr {
                     Instruction::LoadConst(dst, idx) => {
+                        // Skip if this LoadConst is followed by Throw/Panic (error path)
+                        let next_is_error = func.code.code.get(ip + 1).map(|next| {
+                            matches!(next, Instruction::Panic(_) | Instruction::Throw(_))
+                        }).unwrap_or(false);
+                        if next_is_error {
+                            // Skip - will be followed by trap instruction
+                            ip += 1;
+                            continue;
+                        }
                         let v = Self::load_const(&mut builder, &func.code.constants, *idx, num_type, cl_type)?;
                         builder.def_var(regs[*dst as usize], v);
                     }
@@ -695,6 +734,15 @@ impl JitCompiler {
                         let vb = builder.use_var(regs[*b as usize]);
                         let cc = if num_type.is_unsigned() { IntCC::UnsignedGreaterThanOrEqual } else { IntCC::SignedGreaterThanOrEqual };
                         let cmp = builder.ins().icmp(cc, va, vb);
+                        let result = builder.ins().uextend(cl_type, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    // Pattern matching - TestConst compares value against integer constant
+                    Instruction::TestConst(dst, value, idx) => {
+                        let val = builder.use_var(regs[*value as usize]);
+                        let const_val = Self::load_const(&mut builder, &func.code.constants, *idx, num_type, cl_type)?;
+                        let cmp = builder.ins().icmp(IntCC::Equal, val, const_val);
                         let result = builder.ins().uextend(cl_type, cmp);
                         builder.def_var(regs[*dst as usize], result);
                     }
@@ -819,6 +867,13 @@ impl JitCompiler {
                             .map(|&r| builder.use_var(regs[r as usize]))
                             .collect();
                         builder.ins().return_call(self_func_ref, &args);
+                        block_terminated = true;
+                    }
+
+                    // Error handling - generate trap (should never be reached in correct execution)
+                    Instruction::Panic(_) | Instruction::Throw(_) => {
+                        // Use user trap code 1 (0 is reserved/invalid)
+                        builder.ins().trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
                         block_terminated = true;
                     }
 
