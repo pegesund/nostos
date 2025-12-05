@@ -11,6 +11,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::gc::{GcConfig, GcValue, Heap};
 use crate::value::{FunctionValue, Pid, RefId, Reg};
@@ -160,8 +161,12 @@ pub const REDUCTIONS_PER_SLICE: usize = 2000;
 pub enum ProcessState {
     /// Ready to run or currently running.
     Running,
-    /// Waiting for a message in receive.
+    /// Waiting for a message in receive (no timeout).
     Waiting,
+    /// Waiting for a message with timeout deadline.
+    WaitingTimeout,
+    /// Sleeping until wake_time.
+    Sleeping,
     /// Yielded, ready to be scheduled.
     Suspended,
     /// Process has exited with a value.
@@ -231,6 +236,9 @@ pub struct Process {
     /// Exit value (when state is Exited).
     pub exit_value: Option<GcValue>,
 
+    /// Wake time for sleeping/timed-out processes.
+    pub wake_time: Option<Instant>,
+
     /// Output buffer (for testing/REPL).
     pub output: Vec<String>,
 }
@@ -257,6 +265,7 @@ impl Process {
             handlers: Vec::new(),
             current_exception: None,
             exit_value: None,
+            wake_time: None,
             output: Vec::new(),
         }
     }

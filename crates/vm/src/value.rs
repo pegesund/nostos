@@ -598,6 +598,8 @@ pub enum Instruction {
     Receive,
     /// Set receive timeout
     ReceiveTimeout(Reg),
+    /// Sleep for N milliseconds (value in register)
+    Sleep(Reg),
 
     // === Error handling ===
     /// Push exception handler

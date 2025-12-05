@@ -1,0 +1,47 @@
+# Sleep Test - Demonstrates sleep() in ParallelVM
+# This tests that sleep correctly pauses a process without blocking other processes.
+# Run with: nostos --parallel-affinity 2 examples/sleep_test.nos
+
+# Worker that sleeps and reports when done
+worker(id, duration, parent) = {
+    sleep(duration)
+    parent <- id
+    ()
+}
+
+main() = {
+    me = self()
+
+    println("=== Sleep Test ===")
+    println("Spawning 3 workers with different sleep durations...")
+
+    # Spawn workers with different sleep times
+    # Worker 3 has shortest sleep (100ms), should wake first
+    # Worker 1 has longest sleep (300ms), should wake last
+    spawn(() => worker(1, 300, me))
+    spawn(() => worker(2, 200, me))
+    spawn(() => worker(3, 100, me))
+
+    println("All workers spawned, collecting results...")
+
+    # Collect results - should come in order: 3, 2, 1 (shortest to longest sleep)
+    first = receive id -> id end
+    println("First to wake up:")
+    println(first)
+
+    second = receive id -> id end
+    println("Second to wake up:")
+    println(second)
+
+    third = receive id -> id end
+    println("Third to wake up:")
+    println(third)
+
+    # Verify workers woke in expected order (shortest sleep first)
+    assert(first == 3)   # 100ms should finish first
+    assert(second == 2)  # 200ms should finish second
+    assert(third == 1)   # 300ms should finish last
+
+    println("=== Sleep Test PASSED ===")
+    ()
+}

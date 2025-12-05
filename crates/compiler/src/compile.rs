@@ -1665,6 +1665,13 @@ impl Compiler {
                         self.chunk.emit(Instruction::LoadUnit(dst), 0);
                         return Ok(dst);
                     }
+                    "sleep" if arg_regs.len() == 1 => {
+                        // sleep(ms) - sleep for N milliseconds
+                        self.chunk.emit(Instruction::Sleep(arg_regs[0]), line);
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::LoadUnit(dst), line);
+                        return Ok(dst);
+                    }
                     "assert_eq" if arg_regs.len() == 2 => {
                         self.chunk.emit(Instruction::AssertEq(arg_regs[0], arg_regs[1]), 0);
                         let dst = self.alloc_reg();

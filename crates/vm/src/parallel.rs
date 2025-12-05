@@ -11,10 +11,12 @@
 //! - Local process access: no locks
 //! - Cross-thread messaging: lock-free channels
 
-use std::collections::{HashMap, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use crossbeam::channel::{self, Sender, Receiver, TryRecvError};
 
@@ -313,6 +315,8 @@ struct ThreadWorker {
     processes: HashMap<u64, Process>, // local_id -> Process
     /// Local run queue (ready processes)
     run_queue: VecDeque<u64>, // local_ids
+    /// Timer heap for sleeping/timed-out processes: min-heap of (wake_time, local_id)
+    timer_heap: BinaryHeap<Reverse<(Instant, u64)>>,
     /// Next local ID for this thread
     next_local_id: u64,
     /// Inbox for messages from other threads
@@ -540,6 +544,7 @@ impl ThreadWorker {
             thread_id,
             processes: HashMap::new(),
             run_queue: VecDeque::new(),
+            timer_heap: BinaryHeap::new(),
             next_local_id: 1,
             inbox,
             thread_senders,
@@ -600,6 +605,9 @@ impl ThreadWorker {
 
             // Drain inbox (deliver cross-thread messages)
             self.drain_inbox();
+
+            // Wake up any processes whose timers have expired
+            self.check_timers();
 
             // Get next process to run
             let local_id = match self.run_queue.pop_front() {
@@ -668,9 +676,10 @@ impl ThreadWorker {
                                 // Deliver to mailbox
                                 process.mailbox.push_back(gc_value);
 
-                                // If process was waiting, re-queue it
-                                if process.state == ProcessState::Waiting {
+                                // Wake process if waiting for message (with or without timeout)
+                                if matches!(process.state, ProcessState::Waiting | ProcessState::WaitingTimeout) {
                                     process.state = ProcessState::Running;
+                                    process.wake_time = None; // Cancel any pending timeout
                                     self.run_queue.push_back(local_id);
                                 }
                             }
@@ -720,6 +729,42 @@ impl ThreadWorker {
         }
     }
 
+    /// Check timer heap and wake up any processes whose timers have expired.
+    fn check_timers(&mut self) {
+        let now = Instant::now();
+        while let Some(&Reverse((wake_time, local_id))) = self.timer_heap.peek() {
+            if wake_time <= now {
+                self.timer_heap.pop();
+                if let Some(proc) = self.processes.get_mut(&local_id) {
+                    match proc.state {
+                        ProcessState::Sleeping => {
+                            // Sleep completed - wake the process
+                            proc.state = ProcessState::Running;
+                            proc.wake_time = None;
+                            self.run_queue.push_back(local_id);
+                        }
+                        ProcessState::WaitingTimeout => {
+                            // Receive timeout expired - wake with timeout indicator
+                            proc.state = ProcessState::Running;
+                            proc.wake_time = None;
+                            // Set register 0 to indicate timeout (we use a special atom/value)
+                            // The process will check this when it resumes
+                            if let Some(frame) = proc.frames.last_mut() {
+                                frame.registers[0] = GcValue::Unit; // Unit indicates timeout
+                            }
+                            self.run_queue.push_back(local_id);
+                        }
+                        _ => {
+                            // Process state changed (e.g., got message), ignore timer
+                        }
+                    }
+                }
+            } else {
+                break; // No more ready timers
+            }
+        }
+    }
+
     /// Send a message to a process (local or remote).
     fn send_message(&mut self, target: Pid, message: GcValue, sender_local_id: u64) {
         let target_thread = pid_thread_id(target);
@@ -737,8 +782,10 @@ impl ThreadWorker {
                 let copied_message = safe.to_gc_value(&mut target_process.heap);
                 target_process.mailbox.push_back(copied_message);
 
-                if target_process.state == ProcessState::Waiting {
+                // Wake process if waiting for message (with or without timeout)
+                if matches!(target_process.state, ProcessState::Waiting | ProcessState::WaitingTimeout) {
                     target_process.state = ProcessState::Running;
+                    target_process.wake_time = None; // Cancel any pending timeout
                     self.run_queue.push_back(target_local_id);
                 }
             }
@@ -2394,6 +2441,58 @@ impl ThreadWorker {
                     frame.ip -= 1;
                     return Ok(StepResult::Waiting);
                 }
+            }
+
+            ReceiveTimeout(timeout_reg) => {
+                let proc = self.processes.get_mut(&local_id).unwrap();
+                if let Some(msg) = proc.mailbox.pop_front() {
+                    // Message available - put in register 0
+                    let frame = proc.frames.last_mut().unwrap();
+                    frame.registers[0] = msg;
+                } else {
+                    // No message - check if this is a timeout wake-up or first entry
+                    let frame = proc.frames.last().unwrap();
+                    let timeout_ms = match frame.registers[*timeout_reg as usize] {
+                        GcValue::Int64(n) => n as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int64".to_string(),
+                            found: "non-integer".to_string(),
+                        }),
+                    };
+
+                    if proc.state == ProcessState::Running && proc.wake_time.is_none() {
+                        // First entry - set up timeout and wait
+                        let wake_time = Instant::now() + Duration::from_millis(timeout_ms);
+                        proc.wake_time = Some(wake_time);
+                        proc.state = ProcessState::WaitingTimeout;
+                        self.timer_heap.push(Reverse((wake_time, local_id)));
+                        // Decrement IP so we retry when woken
+                        let frame = proc.frames.last_mut().unwrap();
+                        frame.ip -= 1;
+                        return Ok(StepResult::Waiting);
+                    } else {
+                        // Woken by timeout (not by message) - r0 already set to Unit by check_timers
+                        // Just continue execution
+                    }
+                }
+            }
+
+            Sleep(duration_reg) => {
+                let proc = self.processes.get_mut(&local_id).unwrap();
+                let frame = proc.frames.last().unwrap();
+                let duration_ms = match frame.registers[*duration_reg as usize] {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64".to_string(),
+                        found: "non-integer".to_string(),
+                    }),
+                };
+
+                let wake_time = Instant::now() + Duration::from_millis(duration_ms);
+                proc.wake_time = Some(wake_time);
+                proc.state = ProcessState::Sleeping;
+                self.timer_heap.push(Reverse((wake_time, local_id)));
+                return Ok(StepResult::Waiting);
             }
 
             // === I/O ===

@@ -1261,7 +1261,11 @@ impl Runtime {
             }
 
             Instruction::ReceiveTimeout(_timeout_reg) => {
-                return Err(RuntimeError::Panic("ReceiveTimeout not yet implemented".to_string()));
+                return Err(RuntimeError::Panic("ReceiveTimeout not yet implemented in single-threaded runtime".to_string()));
+            }
+
+            Instruction::Sleep(_duration_reg) => {
+                return Err(RuntimeError::Panic("Sleep not yet implemented in single-threaded runtime".to_string()));
             }
 
             // === Pattern matching (direct access) ===
