@@ -26,6 +26,9 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+use num_bigint::BigInt;
+use rust_decimal::Decimal;
+
 use crate::value::{
     ClosureValue, FunctionValue, MapKey, RecordValue, RuntimeError, TypeValue, Value, VariantValue,
 };
@@ -140,8 +143,18 @@ pub struct GcSet {
 pub enum GcMapKey {
     Unit,
     Bool(bool),
-    Int(i64),
     Char(char),
+    // Signed integers
+    Int8(i8),
+    Int16(i16),
+    Int32(i32),
+    Int64(i64),
+    // Unsigned integers
+    UInt8(u8),
+    UInt16(u16),
+    UInt32(u32),
+    UInt64(u64),
+    // String
     String(GcPtr<GcString>),
 }
 
@@ -160,6 +173,12 @@ pub struct GcVariant {
     pub type_name: String,
     pub constructor: String,
     pub fields: Vec<GcValue>,
+}
+
+/// A GC-managed BigInt.
+#[derive(Clone, Debug)]
+pub struct GcBigInt {
+    pub value: BigInt,
 }
 
 /// A GC-managed closure.
@@ -207,9 +226,26 @@ pub enum GcValue {
     // Immediate values (no GC needed)
     Unit,
     Bool(bool),
-    Int(i64),
-    Float(f64),
     Char(char),
+
+    // Signed integers
+    Int8(i8),
+    Int16(i16),
+    Int32(i32),
+    Int64(i64),
+
+    // Unsigned integers
+    UInt8(u8),
+    UInt16(u16),
+    UInt32(u32),
+    UInt64(u64),
+
+    // Floating point
+    Float32(f32),
+    Float64(f64),
+
+    // Decimal (fixed-point)
+    Decimal(Decimal),
 
     // Heap-allocated values (GC-managed)
     String(GcPtr<GcString>),
@@ -220,6 +256,7 @@ pub enum GcValue {
     Set(GcPtr<GcSet>),
     Record(GcPtr<GcRecord>),
     Variant(GcPtr<GcVariant>),
+    BigInt(GcPtr<GcBigInt>),
     Closure(GcPtr<GcClosure>),
 
     // Callable values (Rc-managed, not GC'd - code doesn't need collection)
@@ -244,9 +281,23 @@ impl PartialEq for GcValue {
         match (self, other) {
             (GcValue::Unit, GcValue::Unit) => true,
             (GcValue::Bool(a), GcValue::Bool(b)) => a == b,
-            (GcValue::Int(a), GcValue::Int(b)) => a == b,
-            (GcValue::Float(a), GcValue::Float(b)) => a == b,
             (GcValue::Char(a), GcValue::Char(b)) => a == b,
+            // Signed integers
+            (GcValue::Int8(a), GcValue::Int8(b)) => a == b,
+            (GcValue::Int16(a), GcValue::Int16(b)) => a == b,
+            (GcValue::Int32(a), GcValue::Int32(b)) => a == b,
+            (GcValue::Int64(a), GcValue::Int64(b)) => a == b,
+            // Unsigned integers
+            (GcValue::UInt8(a), GcValue::UInt8(b)) => a == b,
+            (GcValue::UInt16(a), GcValue::UInt16(b)) => a == b,
+            (GcValue::UInt32(a), GcValue::UInt32(b)) => a == b,
+            (GcValue::UInt64(a), GcValue::UInt64(b)) => a == b,
+            // Floats
+            (GcValue::Float32(a), GcValue::Float32(b)) => a == b,
+            (GcValue::Float64(a), GcValue::Float64(b)) => a == b,
+            // Decimal
+            (GcValue::Decimal(a), GcValue::Decimal(b)) => a == b,
+            // Collections
             (GcValue::String(a), GcValue::String(b)) => a == b,
             (GcValue::List(a), GcValue::List(b)) => a == b,
             (GcValue::Array(a), GcValue::Array(b)) => a == b,
@@ -255,6 +306,7 @@ impl PartialEq for GcValue {
             (GcValue::Set(a), GcValue::Set(b)) => a == b,
             (GcValue::Record(a), GcValue::Record(b)) => a == b,
             (GcValue::Variant(a), GcValue::Variant(b)) => a == b,
+            (GcValue::BigInt(a), GcValue::BigInt(b)) => a == b,
             (GcValue::Closure(a), GcValue::Closure(b)) => a == b,
             (GcValue::Function(a), GcValue::Function(b)) => Rc::ptr_eq(a, b),
             (GcValue::NativeFunction(a), GcValue::NativeFunction(b)) => Rc::ptr_eq(a, b),
@@ -272,9 +324,23 @@ impl fmt::Debug for GcValue {
         match self {
             GcValue::Unit => write!(f, "Unit"),
             GcValue::Bool(b) => write!(f, "Bool({})", b),
-            GcValue::Int(i) => write!(f, "Int({})", i),
-            GcValue::Float(fl) => write!(f, "Float({})", fl),
             GcValue::Char(c) => write!(f, "Char('{}')", c),
+            // Signed integers
+            GcValue::Int8(i) => write!(f, "Int8({})", i),
+            GcValue::Int16(i) => write!(f, "Int16({})", i),
+            GcValue::Int32(i) => write!(f, "Int32({})", i),
+            GcValue::Int64(i) => write!(f, "Int64({})", i),
+            // Unsigned integers
+            GcValue::UInt8(i) => write!(f, "UInt8({})", i),
+            GcValue::UInt16(i) => write!(f, "UInt16({})", i),
+            GcValue::UInt32(i) => write!(f, "UInt32({})", i),
+            GcValue::UInt64(i) => write!(f, "UInt64({})", i),
+            // Floats
+            GcValue::Float32(fl) => write!(f, "Float32({})", fl),
+            GcValue::Float64(fl) => write!(f, "Float64({})", fl),
+            // Decimal
+            GcValue::Decimal(d) => write!(f, "Decimal({})", d),
+            // Collections
             GcValue::String(ptr) => write!(f, "String({:?})", ptr),
             GcValue::List(ptr) => write!(f, "List({:?})", ptr),
             GcValue::Array(ptr) => write!(f, "Array({:?})", ptr),
@@ -283,6 +349,7 @@ impl fmt::Debug for GcValue {
             GcValue::Set(ptr) => write!(f, "Set({:?})", ptr),
             GcValue::Record(ptr) => write!(f, "Record({:?})", ptr),
             GcValue::Variant(ptr) => write!(f, "Variant({:?})", ptr),
+            GcValue::BigInt(ptr) => write!(f, "BigInt({:?})", ptr),
             GcValue::Closure(ptr) => write!(f, "Closure({:?})", ptr),
             GcValue::Function(func) => write!(f, "Function({})", func.name),
             GcValue::NativeFunction(func) => write!(f, "NativeFunction({})", func.name),
@@ -300,9 +367,23 @@ impl GcValue {
         match self {
             GcValue::Unit
             | GcValue::Bool(_)
-            | GcValue::Int(_)
-            | GcValue::Float(_)
             | GcValue::Char(_)
+            // Signed integers
+            | GcValue::Int8(_)
+            | GcValue::Int16(_)
+            | GcValue::Int32(_)
+            | GcValue::Int64(_)
+            // Unsigned integers
+            | GcValue::UInt8(_)
+            | GcValue::UInt16(_)
+            | GcValue::UInt32(_)
+            | GcValue::UInt64(_)
+            // Floats
+            | GcValue::Float32(_)
+            | GcValue::Float64(_)
+            // Decimal
+            | GcValue::Decimal(_)
+            // Special
             | GcValue::Pid(_)
             | GcValue::Ref(_)
             | GcValue::Function(_)
@@ -318,6 +399,7 @@ impl GcValue {
             GcValue::Set(ptr) => vec![ptr.as_raw()],
             GcValue::Record(ptr) => vec![ptr.as_raw()],
             GcValue::Variant(ptr) => vec![ptr.as_raw()],
+            GcValue::BigInt(ptr) => vec![ptr.as_raw()],
             GcValue::Closure(ptr) => vec![ptr.as_raw()],
         }
     }
@@ -328,9 +410,23 @@ impl GcValue {
             self,
             GcValue::Unit
                 | GcValue::Bool(_)
-                | GcValue::Int(_)
-                | GcValue::Float(_)
                 | GcValue::Char(_)
+                // Signed integers
+                | GcValue::Int8(_)
+                | GcValue::Int16(_)
+                | GcValue::Int32(_)
+                | GcValue::Int64(_)
+                // Unsigned integers
+                | GcValue::UInt8(_)
+                | GcValue::UInt16(_)
+                | GcValue::UInt32(_)
+                | GcValue::UInt64(_)
+                // Floats
+                | GcValue::Float32(_)
+                | GcValue::Float64(_)
+                // Decimal
+                | GcValue::Decimal(_)
+                // Special
                 | GcValue::Pid(_)
                 | GcValue::Ref(_)
                 | GcValue::Function(_)
@@ -345,9 +441,23 @@ impl GcValue {
         match self {
             GcValue::Unit => "()",
             GcValue::Bool(_) => "Bool",
-            GcValue::Int(_) => "Int",
-            GcValue::Float(_) => "Float",
             GcValue::Char(_) => "Char",
+            // Signed integers
+            GcValue::Int8(_) => "Int8",
+            GcValue::Int16(_) => "Int16",
+            GcValue::Int32(_) => "Int32",
+            GcValue::Int64(_) => "Int64",
+            // Unsigned integers
+            GcValue::UInt8(_) => "UInt8",
+            GcValue::UInt16(_) => "UInt16",
+            GcValue::UInt32(_) => "UInt32",
+            GcValue::UInt64(_) => "UInt64",
+            // Floats
+            GcValue::Float32(_) => "Float32",
+            GcValue::Float64(_) => "Float64",
+            // Decimal
+            GcValue::Decimal(_) => "Decimal",
+            // Collections
             GcValue::String(_) => "String",
             GcValue::List(_) => "List",
             GcValue::Array(_) => "Array",
@@ -364,6 +474,7 @@ impl GcValue {
                     .map(|v| v.type_name.as_str())
                     .unwrap_or("Variant")
             }
+            GcValue::BigInt(_) => "BigInt",
             GcValue::Closure(_) => "Closure",
             GcValue::Function(_) => "Function",
             GcValue::NativeFunction(_) => "NativeFunction",
@@ -388,7 +499,7 @@ impl GcValue {
         match self {
             GcValue::Unit => Some(MapKey::Unit),
             GcValue::Bool(b) => Some(MapKey::Bool(*b)),
-            GcValue::Int(i) => Some(MapKey::Int(*i)),
+            GcValue::Int64(i) => Some(MapKey::Int64(*i)),
             GcValue::Char(c) => Some(MapKey::Char(*c)),
             GcValue::String(ptr) => {
                 heap.get_string(*ptr)
@@ -403,7 +514,7 @@ impl GcValue {
         match self {
             GcValue::Unit => Some(GcMapKey::Unit),
             GcValue::Bool(b) => Some(GcMapKey::Bool(*b)),
-            GcValue::Int(i) => Some(GcMapKey::Int(*i)),
+            GcValue::Int64(i) => Some(GcMapKey::Int64(*i)),
             GcValue::Char(c) => Some(GcMapKey::Char(*c)),
             GcValue::String(ptr) => Some(GcMapKey::String(*ptr)),
             _ => None,
@@ -422,6 +533,7 @@ pub enum ObjectType {
     Set,
     Record,
     Variant,
+    BigInt,
     Closure,
 }
 
@@ -447,6 +559,7 @@ pub enum HeapData {
     Set(GcSet),
     Record(GcRecord),
     Variant(GcVariant),
+    BigInt(GcBigInt),
     Closure(GcClosure),
 }
 
@@ -462,6 +575,7 @@ impl HeapData {
             HeapData::Set(_) => ObjectType::Set,
             HeapData::Record(_) => ObjectType::Record,
             HeapData::Variant(_) => ObjectType::Variant,
+            HeapData::BigInt(_) => ObjectType::BigInt,
             HeapData::Closure(_) => ObjectType::Closure,
         }
     }
@@ -516,6 +630,7 @@ impl HeapData {
                 .iter()
                 .flat_map(|v| v.gc_pointers())
                 .collect(),
+            HeapData::BigInt(_) => vec![],
             HeapData::Closure(clo) => clo
                 .captures
                 .iter()
@@ -554,6 +669,9 @@ impl HeapData {
                     + v.fields.len() * std::mem::size_of::<GcValue>()
                     + v.type_name.len()
                     + v.constructor.len()
+            }
+            HeapData::BigInt(b) => {
+                std::mem::size_of::<GcBigInt>() + b.value.to_bytes_le().1.len()
             }
             HeapData::Closure(c) => {
                 std::mem::size_of::<GcClosure>()
@@ -903,6 +1021,20 @@ impl Heap {
         }
     }
 
+    /// Get a typed reference to BigInt data.
+    pub fn get_bigint(&self, ptr: GcPtr<GcBigInt>) -> Option<&GcBigInt> {
+        match self.get(ptr.as_raw())?.data {
+            HeapData::BigInt(ref b) => Some(b),
+            _ => None,
+        }
+    }
+
+    /// Allocate a BigInt on the heap.
+    pub fn alloc_bigint(&mut self, value: BigInt) -> GcPtr<GcBigInt> {
+        let ptr = self.alloc(HeapData::BigInt(GcBigInt { value }));
+        GcPtr::from_raw(ptr)
+    }
+
     /// Compare two GcValues for equality by content (not by pointer).
     ///
     /// This is needed because heap-allocated values may have different pointers
@@ -912,10 +1044,35 @@ impl Heap {
             // Immediate values - direct comparison
             (GcValue::Unit, GcValue::Unit) => true,
             (GcValue::Bool(a), GcValue::Bool(b)) => a == b,
-            (GcValue::Int(a), GcValue::Int(b)) => a == b,
-            (GcValue::Float(a), GcValue::Float(b)) => a == b,
             (GcValue::Char(a), GcValue::Char(b)) => a == b,
+            // Signed integers
+            (GcValue::Int8(a), GcValue::Int8(b)) => a == b,
+            (GcValue::Int16(a), GcValue::Int16(b)) => a == b,
+            (GcValue::Int32(a), GcValue::Int32(b)) => a == b,
+            (GcValue::Int64(a), GcValue::Int64(b)) => a == b,
+            // Unsigned integers
+            (GcValue::UInt8(a), GcValue::UInt8(b)) => a == b,
+            (GcValue::UInt16(a), GcValue::UInt16(b)) => a == b,
+            (GcValue::UInt32(a), GcValue::UInt32(b)) => a == b,
+            (GcValue::UInt64(a), GcValue::UInt64(b)) => a == b,
+            // Floats
+            (GcValue::Float32(a), GcValue::Float32(b)) => a == b,
+            (GcValue::Float64(a), GcValue::Float64(b)) => a == b,
+            // Decimal
+            (GcValue::Decimal(a), GcValue::Decimal(b)) => a == b,
+            // Special
             (GcValue::Pid(a), GcValue::Pid(b)) => a == b,
+
+            // BigInt - compare by content
+            (GcValue::BigInt(a), GcValue::BigInt(b)) => {
+                if a == b {
+                    return true;
+                }
+                match (self.get_bigint(*a), self.get_bigint(*b)) {
+                    (Some(ba), Some(bb)) => ba.value == bb.value,
+                    _ => false,
+                }
+            }
 
             // Strings - compare by content
             (GcValue::String(a), GcValue::String(b)) => {
@@ -1059,9 +1216,30 @@ impl Heap {
         match value {
             GcValue::Unit => "()".to_string(),
             GcValue::Bool(b) => format!("{}", b),
-            GcValue::Int(i) => format!("{}", i),
-            GcValue::Float(f) => format!("{}", f),
             GcValue::Char(c) => format!("{}", c),
+            // Signed integers
+            GcValue::Int8(i) => format!("{}", i),
+            GcValue::Int16(i) => format!("{}", i),
+            GcValue::Int32(i) => format!("{}", i),
+            GcValue::Int64(i) => format!("{}", i),
+            // Unsigned integers
+            GcValue::UInt8(i) => format!("{}", i),
+            GcValue::UInt16(i) => format!("{}", i),
+            GcValue::UInt32(i) => format!("{}", i),
+            GcValue::UInt64(i) => format!("{}", i),
+            // Floats
+            GcValue::Float32(f) => format!("{}", f),
+            GcValue::Float64(f) => format!("{}", f),
+            // Decimal
+            GcValue::Decimal(d) => format!("{}", d),
+            // BigInt
+            GcValue::BigInt(ptr) => {
+                if let Some(big) = self.get_bigint(*ptr) {
+                    format!("{}", big.value)
+                } else {
+                    "<invalid bigint>".to_string()
+                }
+            }
             GcValue::String(ptr) => {
                 if let Some(s) = self.get_string(*ptr) {
                     s.data.clone()
@@ -1290,11 +1468,34 @@ impl Heap {
             // Immediate values are copied directly
             GcValue::Unit => GcValue::Unit,
             GcValue::Bool(b) => GcValue::Bool(*b),
-            GcValue::Int(i) => GcValue::Int(*i),
-            GcValue::Float(f) => GcValue::Float(*f),
             GcValue::Char(c) => GcValue::Char(*c),
+            // Signed integers
+            GcValue::Int8(i) => GcValue::Int8(*i),
+            GcValue::Int16(i) => GcValue::Int16(*i),
+            GcValue::Int32(i) => GcValue::Int32(*i),
+            GcValue::Int64(i) => GcValue::Int64(*i),
+            // Unsigned integers
+            GcValue::UInt8(i) => GcValue::UInt8(*i),
+            GcValue::UInt16(i) => GcValue::UInt16(*i),
+            GcValue::UInt32(i) => GcValue::UInt32(*i),
+            GcValue::UInt64(i) => GcValue::UInt64(*i),
+            // Floats
+            GcValue::Float32(f) => GcValue::Float32(*f),
+            GcValue::Float64(f) => GcValue::Float64(*f),
+            // Decimal
+            GcValue::Decimal(d) => GcValue::Decimal(*d),
+            // Special
             GcValue::Pid(p) => GcValue::Pid(*p),
             GcValue::Ref(r) => GcValue::Ref(*r),
+
+            // BigInt - deep copy from source heap
+            GcValue::BigInt(ptr) => {
+                if let Some(b) = source.get_bigint(*ptr) {
+                    GcValue::BigInt(self.alloc_bigint(b.value.clone()))
+                } else {
+                    GcValue::Unit
+                }
+            }
 
             // Heap values need recursive deep copy
             GcValue::String(ptr) => {
@@ -1428,8 +1629,18 @@ impl Heap {
         match key {
             GcMapKey::Unit => GcMapKey::Unit,
             GcMapKey::Bool(b) => GcMapKey::Bool(*b),
-            GcMapKey::Int(i) => GcMapKey::Int(*i),
             GcMapKey::Char(c) => GcMapKey::Char(*c),
+            // Signed integers
+            GcMapKey::Int8(i) => GcMapKey::Int8(*i),
+            GcMapKey::Int16(i) => GcMapKey::Int16(*i),
+            GcMapKey::Int32(i) => GcMapKey::Int32(*i),
+            GcMapKey::Int64(i) => GcMapKey::Int64(*i),
+            // Unsigned integers
+            GcMapKey::UInt8(i) => GcMapKey::UInt8(*i),
+            GcMapKey::UInt16(i) => GcMapKey::UInt16(*i),
+            GcMapKey::UInt32(i) => GcMapKey::UInt32(*i),
+            GcMapKey::UInt64(i) => GcMapKey::UInt64(*i),
+            // String
             GcMapKey::String(ptr) => {
                 if let Some(s) = source.get_string(*ptr) {
                     GcMapKey::String(self.alloc_string(s.data.clone()))
@@ -1449,11 +1660,35 @@ impl Heap {
             // Immediate values are copied directly
             GcValue::Unit => GcValue::Unit,
             GcValue::Bool(b) => GcValue::Bool(*b),
-            GcValue::Int(i) => GcValue::Int(*i),
-            GcValue::Float(f) => GcValue::Float(*f),
             GcValue::Char(c) => GcValue::Char(*c),
+            // Signed integers
+            GcValue::Int8(i) => GcValue::Int8(*i),
+            GcValue::Int16(i) => GcValue::Int16(*i),
+            GcValue::Int32(i) => GcValue::Int32(*i),
+            GcValue::Int64(i) => GcValue::Int64(*i),
+            // Unsigned integers
+            GcValue::UInt8(i) => GcValue::UInt8(*i),
+            GcValue::UInt16(i) => GcValue::UInt16(*i),
+            GcValue::UInt32(i) => GcValue::UInt32(*i),
+            GcValue::UInt64(i) => GcValue::UInt64(*i),
+            // Floats
+            GcValue::Float32(f) => GcValue::Float32(*f),
+            GcValue::Float64(f) => GcValue::Float64(*f),
+            // Decimal
+            GcValue::Decimal(d) => GcValue::Decimal(*d),
+            // Special
             GcValue::Pid(p) => GcValue::Pid(*p),
             GcValue::Ref(r) => GcValue::Ref(*r),
+
+            // BigInt - clone from same heap
+            GcValue::BigInt(ptr) => {
+                let val = self.get_bigint(*ptr).map(|b| b.value.clone());
+                if let Some(val) = val {
+                    GcValue::BigInt(self.alloc_bigint(val))
+                } else {
+                    GcValue::Unit
+                }
+            }
 
             // Heap values need recursive deep copy
             GcValue::String(ptr) => {
@@ -1560,8 +1795,18 @@ impl Heap {
         match key {
             GcMapKey::Unit => GcMapKey::Unit,
             GcMapKey::Bool(b) => GcMapKey::Bool(*b),
-            GcMapKey::Int(i) => GcMapKey::Int(*i),
             GcMapKey::Char(c) => GcMapKey::Char(*c),
+            // Signed integers
+            GcMapKey::Int8(i) => GcMapKey::Int8(*i),
+            GcMapKey::Int16(i) => GcMapKey::Int16(*i),
+            GcMapKey::Int32(i) => GcMapKey::Int32(*i),
+            GcMapKey::Int64(i) => GcMapKey::Int64(*i),
+            // Unsigned integers
+            GcMapKey::UInt8(i) => GcMapKey::UInt8(*i),
+            GcMapKey::UInt16(i) => GcMapKey::UInt16(*i),
+            GcMapKey::UInt32(i) => GcMapKey::UInt32(*i),
+            GcMapKey::UInt64(i) => GcMapKey::UInt64(*i),
+            // String
             GcMapKey::String(ptr) => {
                 let data = self.get_string(*ptr).map(|s| s.data.clone());
                 if let Some(data) = data {
@@ -1606,9 +1851,24 @@ impl Heap {
             // Immediate values - direct conversion
             Value::Unit => GcValue::Unit,
             Value::Bool(b) => GcValue::Bool(*b),
-            Value::Int(i) => GcValue::Int(*i),
-            Value::Float(f) => GcValue::Float(*f),
             Value::Char(c) => GcValue::Char(*c),
+            // Signed integers
+            Value::Int8(i) => GcValue::Int8(*i),
+            Value::Int16(i) => GcValue::Int16(*i),
+            Value::Int32(i) => GcValue::Int32(*i),
+            Value::Int64(i) => GcValue::Int64(*i),
+            // Unsigned integers
+            Value::UInt8(i) => GcValue::UInt8(*i),
+            Value::UInt16(i) => GcValue::UInt16(*i),
+            Value::UInt32(i) => GcValue::UInt32(*i),
+            Value::UInt64(i) => GcValue::UInt64(*i),
+            // Floats
+            Value::Float32(f) => GcValue::Float32(*f),
+            Value::Float64(f) => GcValue::Float64(*f),
+            // Decimal
+            Value::Decimal(d) => GcValue::Decimal(*d),
+            // BigInt
+            Value::BigInt(b) => GcValue::BigInt(self.alloc_bigint((**b).clone())),
 
             // String - allocate on GC heap
             Value::String(s) => {
@@ -1706,8 +1966,18 @@ impl Heap {
         match key {
             MapKey::Unit => GcMapKey::Unit,
             MapKey::Bool(b) => GcMapKey::Bool(*b),
-            MapKey::Int(i) => GcMapKey::Int(*i),
             MapKey::Char(c) => GcMapKey::Char(*c),
+            // Signed integers
+            MapKey::Int8(i) => GcMapKey::Int8(*i),
+            MapKey::Int16(i) => GcMapKey::Int16(*i),
+            MapKey::Int32(i) => GcMapKey::Int32(*i),
+            MapKey::Int64(i) => GcMapKey::Int64(*i),
+            // Unsigned integers
+            MapKey::UInt8(i) => GcMapKey::UInt8(*i),
+            MapKey::UInt16(i) => GcMapKey::UInt16(*i),
+            MapKey::UInt32(i) => GcMapKey::UInt32(*i),
+            MapKey::UInt64(i) => GcMapKey::UInt64(*i),
+            // String
             MapKey::String(s) => {
                 let ptr = self.alloc_string((**s).clone());
                 GcMapKey::String(ptr)
@@ -1727,9 +1997,27 @@ impl Heap {
             // Immediate values - direct conversion
             GcValue::Unit => Value::Unit,
             GcValue::Bool(b) => Value::Bool(*b),
-            GcValue::Int(i) => Value::Int(*i),
-            GcValue::Float(f) => Value::Float(*f),
             GcValue::Char(c) => Value::Char(*c),
+            // Signed integers
+            GcValue::Int8(i) => Value::Int8(*i),
+            GcValue::Int16(i) => Value::Int16(*i),
+            GcValue::Int32(i) => Value::Int32(*i),
+            GcValue::Int64(i) => Value::Int64(*i),
+            // Unsigned integers
+            GcValue::UInt8(i) => Value::UInt8(*i),
+            GcValue::UInt16(i) => Value::UInt16(*i),
+            GcValue::UInt32(i) => Value::UInt32(*i),
+            GcValue::UInt64(i) => Value::UInt64(*i),
+            // Floats
+            GcValue::Float32(f) => Value::Float32(*f),
+            GcValue::Float64(f) => Value::Float64(*f),
+            // Decimal
+            GcValue::Decimal(d) => Value::Decimal(*d),
+            // BigInt
+            GcValue::BigInt(ptr) => {
+                let b = self.get_bigint(*ptr).expect("invalid bigint pointer");
+                Value::BigInt(Rc::new(b.value.clone()))
+            }
 
             // String
             GcValue::String(ptr) => {
@@ -1836,8 +2124,18 @@ impl Heap {
         match key {
             GcMapKey::Unit => MapKey::Unit,
             GcMapKey::Bool(b) => MapKey::Bool(*b),
-            GcMapKey::Int(i) => MapKey::Int(*i),
             GcMapKey::Char(c) => MapKey::Char(*c),
+            // Signed integers
+            GcMapKey::Int8(i) => MapKey::Int8(*i),
+            GcMapKey::Int16(i) => MapKey::Int16(*i),
+            GcMapKey::Int32(i) => MapKey::Int32(*i),
+            GcMapKey::Int64(i) => MapKey::Int64(*i),
+            // Unsigned integers
+            GcMapKey::UInt8(i) => MapKey::UInt8(*i),
+            GcMapKey::UInt16(i) => MapKey::UInt16(*i),
+            GcMapKey::UInt32(i) => MapKey::UInt32(*i),
+            GcMapKey::UInt64(i) => MapKey::UInt64(*i),
+            // String
             GcMapKey::String(ptr) => {
                 let s = self.get_string(*ptr).expect("invalid string pointer in map key");
                 MapKey::String(Rc::new(s.data.clone()))
@@ -1888,14 +2186,14 @@ mod tests {
     #[test]
     fn test_alloc_list() {
         let mut heap = Heap::new();
-        let items = vec![GcValue::Int(1), GcValue::Int(2), GcValue::Int(3)];
+        let items = vec![GcValue::Int64(1), GcValue::Int64(2), GcValue::Int64(3)];
         let ptr = heap.alloc_list(items);
 
         let list = heap.get_list(ptr).unwrap();
         assert_eq!(list.items.len(), 3);
-        assert!(matches!(list.items[0], GcValue::Int(1)));
-        assert!(matches!(list.items[1], GcValue::Int(2)));
-        assert!(matches!(list.items[2], GcValue::Int(3)));
+        assert!(matches!(list.items[0], GcValue::Int64(1)));
+        assert!(matches!(list.items[1], GcValue::Int64(2)));
+        assert!(matches!(list.items[2], GcValue::Int64(3)));
     }
 
     #[test]
@@ -1903,10 +2201,10 @@ mod tests {
         let mut heap = Heap::new();
 
         // Create inner list [1, 2]
-        let inner = heap.alloc_list(vec![GcValue::Int(1), GcValue::Int(2)]);
+        let inner = heap.alloc_list(vec![GcValue::Int64(1), GcValue::Int64(2)]);
 
         // Create outer list [[1, 2], 3]
-        let outer = heap.alloc_list(vec![GcValue::List(inner), GcValue::Int(3)]);
+        let outer = heap.alloc_list(vec![GcValue::List(inner), GcValue::Int64(3)]);
 
         let outer_list = heap.get_list(outer).unwrap();
         assert_eq!(outer_list.items.len(), 2);
@@ -1922,7 +2220,7 @@ mod tests {
     #[test]
     fn test_alloc_array() {
         let mut heap = Heap::new();
-        let items = vec![GcValue::Float(1.5), GcValue::Float(2.5)];
+        let items = vec![GcValue::Float64(1.5), GcValue::Float64(2.5)];
         let ptr = heap.alloc_array(items);
 
         let arr = heap.get_array(ptr).unwrap();
@@ -1933,7 +2231,7 @@ mod tests {
     fn test_alloc_tuple() {
         let mut heap = Heap::new();
         let s = heap.alloc_string("hello".to_string());
-        let items = vec![GcValue::Int(42), GcValue::String(s), GcValue::Bool(true)];
+        let items = vec![GcValue::Int64(42), GcValue::String(s), GcValue::Bool(true)];
         let ptr = heap.alloc_tuple(items);
 
         let tuple = heap.get_tuple(ptr).unwrap();
@@ -1944,27 +2242,27 @@ mod tests {
     fn test_alloc_map() {
         let mut heap = Heap::new();
         let mut entries = HashMap::new();
-        entries.insert(GcMapKey::Int(1), GcValue::Bool(true));
-        entries.insert(GcMapKey::Int(2), GcValue::Bool(false));
+        entries.insert(GcMapKey::Int64(1), GcValue::Bool(true));
+        entries.insert(GcMapKey::Int64(2), GcValue::Bool(false));
         let ptr = heap.alloc_map(entries);
 
         let map = heap.get_map(ptr).unwrap();
         assert_eq!(map.entries.len(), 2);
-        assert_eq!(map.entries.get(&GcMapKey::Int(1)), Some(&GcValue::Bool(true)));
+        assert_eq!(map.entries.get(&GcMapKey::Int64(1)), Some(&GcValue::Bool(true)));
     }
 
     #[test]
     fn test_alloc_set() {
         let mut heap = Heap::new();
         let mut items = std::collections::HashSet::new();
-        items.insert(GcMapKey::Int(1));
-        items.insert(GcMapKey::Int(2));
-        items.insert(GcMapKey::Int(3));
+        items.insert(GcMapKey::Int64(1));
+        items.insert(GcMapKey::Int64(2));
+        items.insert(GcMapKey::Int64(3));
         let ptr = heap.alloc_set(items);
 
         let set = heap.get_set(ptr).unwrap();
         assert_eq!(set.items.len(), 3);
-        assert!(set.items.contains(&GcMapKey::Int(1)));
+        assert!(set.items.contains(&GcMapKey::Int64(1)));
     }
 
     #[test]
@@ -1973,7 +2271,7 @@ mod tests {
         let ptr = heap.alloc_record(
             "Point".to_string(),
             vec!["x".to_string(), "y".to_string()],
-            vec![GcValue::Int(10), GcValue::Int(20)],
+            vec![GcValue::Int64(10), GcValue::Int64(20)],
             vec![false, false],
         );
 
@@ -1989,7 +2287,7 @@ mod tests {
         let ptr = heap.alloc_variant(
             "Option".to_string(),
             "Some".to_string(),
-            vec![GcValue::Int(42)],
+            vec![GcValue::Int64(42)],
         );
 
         let var = heap.get_variant(ptr).unwrap();
@@ -2019,7 +2317,7 @@ mod tests {
 
         let ptr = heap.alloc_closure(
             func,
-            vec![GcValue::Int(10), GcValue::Int(20)],
+            vec![GcValue::Int64(10), GcValue::Int64(20)],
             vec!["x".to_string(), "y".to_string()],
         );
 
@@ -2110,7 +2408,7 @@ mod tests {
 
         // Add garbage at various levels
         let _g1 = heap.alloc_string("garbage1".to_string());
-        let _g2 = heap.alloc_list(vec![GcValue::Int(1)]);
+        let _g2 = heap.alloc_list(vec![GcValue::Int64(1)]);
 
         heap.add_root(l4.as_raw());
 
@@ -2159,7 +2457,7 @@ mod tests {
 
         // Create a structure that references itself indirectly
         // through an array (which is mutable)
-        let _arr = heap.alloc_array(vec![GcValue::Int(1)]);
+        let _arr = heap.alloc_array(vec![GcValue::Int64(1)]);
 
         // The array is not reachable from any root
         assert_eq!(heap.live_objects(), 1);
@@ -2175,7 +2473,7 @@ mod tests {
         let person = heap.alloc_record(
             "Person".to_string(),
             vec!["name".to_string(), "age".to_string()],
-            vec![GcValue::String(name), GcValue::Int(30)],
+            vec![GcValue::String(name), GcValue::Int64(30)],
             vec![false, false],
         );
 
@@ -2250,7 +2548,7 @@ mod tests {
 
         let mut entries = HashMap::new();
         entries.insert(GcMapKey::String(key), GcValue::String(value));
-        entries.insert(GcMapKey::Int(42), GcValue::Bool(true));
+        entries.insert(GcMapKey::Int64(42), GcValue::Bool(true));
 
         let map = heap.alloc_map(entries);
 
@@ -2361,10 +2659,10 @@ mod tests {
         let heap1 = Heap::new();
         let mut heap2 = Heap::new();
 
-        let value = GcValue::Int(42);
+        let value = GcValue::Int64(42);
         let copied = heap2.deep_copy(&value, &heap1);
 
-        assert!(matches!(copied, GcValue::Int(42)));
+        assert!(matches!(copied, GcValue::Int64(42)));
     }
 
     #[test]
@@ -2402,7 +2700,7 @@ mod tests {
         let mut heap2 = Heap::new();
 
         let s = heap1.alloc_string("nested".to_string());
-        let inner = heap1.alloc_list(vec![GcValue::String(s), GcValue::Int(42)]);
+        let inner = heap1.alloc_list(vec![GcValue::String(s), GcValue::Int64(42)]);
         let outer = heap1.alloc_list(vec![GcValue::List(inner), GcValue::Bool(true)]);
 
         let value = GcValue::List(outer);
@@ -2437,7 +2735,7 @@ mod tests {
         let person = heap1.alloc_record(
             "Person".to_string(),
             vec!["name".to_string(), "age".to_string()],
-            vec![GcValue::String(name), GcValue::Int(25)],
+            vec![GcValue::String(name), GcValue::Int64(25)],
             vec![false, false],
         );
 
@@ -2480,7 +2778,7 @@ mod tests {
         let captured = heap1.alloc_string("captured_value".to_string());
         let closure = heap1.alloc_closure(
             func.clone(),
-            vec![GcValue::String(captured), GcValue::Int(10)],
+            vec![GcValue::String(captured), GcValue::Int64(10)],
             vec!["x".to_string(), "y".to_string()],
         );
 
@@ -2618,8 +2916,8 @@ mod tests {
     fn test_gc_value_is_immediate() {
         assert!(GcValue::Unit.is_immediate());
         assert!(GcValue::Bool(true).is_immediate());
-        assert!(GcValue::Int(42).is_immediate());
-        assert!(GcValue::Float(3.14).is_immediate());
+        assert!(GcValue::Int64(42).is_immediate());
+        assert!(GcValue::Float64(3.14).is_immediate());
         assert!(GcValue::Char('x').is_immediate());
         assert!(GcValue::Pid(1).is_immediate());
         assert!(GcValue::Ref(2).is_immediate());
@@ -2630,7 +2928,7 @@ mod tests {
 
     #[test]
     fn test_gc_value_gc_pointers() {
-        assert!(GcValue::Int(42).gc_pointers().is_empty());
+        assert!(GcValue::Int64(42).gc_pointers().is_empty());
 
         let ptr: GcPtr<GcString> = GcPtr::from_raw(5);
         let ptrs = GcValue::String(ptr).gc_pointers();
@@ -2645,7 +2943,7 @@ mod tests {
         assert!(string_data.estimate_size() > 10);
 
         let list_data = HeapData::List(GcList {
-            items: vec![GcValue::Int(1), GcValue::Int(2), GcValue::Int(3)],
+            items: vec![GcValue::Int64(1), GcValue::Int64(2), GcValue::Int64(3)],
         });
         assert!(list_data.estimate_size() > 0);
     }
@@ -2712,7 +3010,7 @@ mod tests {
         let mut heap = Heap::new();
 
         // Create a very deep list: [[[[...]]]]
-        let mut current = heap.alloc_list(vec![GcValue::Int(42)]);
+        let mut current = heap.alloc_list(vec![GcValue::Int64(42)]);
 
         for _ in 0..100 {
             current = heap.alloc_list(vec![GcValue::List(current)]);
@@ -2770,12 +3068,12 @@ mod tests {
         assert!(!heap.gc_values_equal(&GcValue::Bool(true), &GcValue::Bool(false)));
 
         // Int
-        assert!(heap.gc_values_equal(&GcValue::Int(42), &GcValue::Int(42)));
-        assert!(!heap.gc_values_equal(&GcValue::Int(42), &GcValue::Int(43)));
+        assert!(heap.gc_values_equal(&GcValue::Int64(42), &GcValue::Int64(42)));
+        assert!(!heap.gc_values_equal(&GcValue::Int64(42), &GcValue::Int64(43)));
 
         // Float
-        assert!(heap.gc_values_equal(&GcValue::Float(3.14), &GcValue::Float(3.14)));
-        assert!(!heap.gc_values_equal(&GcValue::Float(3.14), &GcValue::Float(2.71)));
+        assert!(heap.gc_values_equal(&GcValue::Float64(3.14), &GcValue::Float64(3.14)));
+        assert!(!heap.gc_values_equal(&GcValue::Float64(3.14), &GcValue::Float64(2.71)));
 
         // Char
         assert!(heap.gc_values_equal(&GcValue::Char('a'), &GcValue::Char('a')));
@@ -2791,9 +3089,9 @@ mod tests {
         let heap = Heap::new();
 
         // Different types should not be equal
-        assert!(!heap.gc_values_equal(&GcValue::Int(42), &GcValue::Bool(true)));
+        assert!(!heap.gc_values_equal(&GcValue::Int64(42), &GcValue::Bool(true)));
         assert!(!heap.gc_values_equal(&GcValue::Unit, &GcValue::Bool(false)));
-        assert!(!heap.gc_values_equal(&GcValue::Float(42.0), &GcValue::Int(42)));
+        assert!(!heap.gc_values_equal(&GcValue::Float64(42.0), &GcValue::Int64(42)));
     }
 
     #[test]
@@ -2845,8 +3143,8 @@ mod tests {
         let mut heap = Heap::new();
 
         // Create two lists with same content but different allocations
-        let list1 = heap.alloc_list(vec![GcValue::Int(1), GcValue::Int(2), GcValue::Int(3)]);
-        let list2 = heap.alloc_list(vec![GcValue::Int(1), GcValue::Int(2), GcValue::Int(3)]);
+        let list1 = heap.alloc_list(vec![GcValue::Int64(1), GcValue::Int64(2), GcValue::Int64(3)]);
+        let list2 = heap.alloc_list(vec![GcValue::Int64(1), GcValue::Int64(2), GcValue::Int64(3)]);
 
         // Different pointers
         assert_ne!(list1, list2);
@@ -2862,8 +3160,8 @@ mod tests {
     fn test_gc_values_equal_list_different_content() {
         let mut heap = Heap::new();
 
-        let list1 = heap.alloc_list(vec![GcValue::Int(1), GcValue::Int(2)]);
-        let list2 = heap.alloc_list(vec![GcValue::Int(1), GcValue::Int(3)]);
+        let list1 = heap.alloc_list(vec![GcValue::Int64(1), GcValue::Int64(2)]);
+        let list2 = heap.alloc_list(vec![GcValue::Int64(1), GcValue::Int64(3)]);
 
         let v1 = GcValue::List(list1);
         let v2 = GcValue::List(list2);
@@ -2875,8 +3173,8 @@ mod tests {
     fn test_gc_values_equal_list_different_length() {
         let mut heap = Heap::new();
 
-        let list1 = heap.alloc_list(vec![GcValue::Int(1), GcValue::Int(2)]);
-        let list2 = heap.alloc_list(vec![GcValue::Int(1), GcValue::Int(2), GcValue::Int(3)]);
+        let list1 = heap.alloc_list(vec![GcValue::Int64(1), GcValue::Int64(2)]);
+        let list2 = heap.alloc_list(vec![GcValue::Int64(1), GcValue::Int64(2), GcValue::Int64(3)]);
 
         let v1 = GcValue::List(list1);
         let v2 = GcValue::List(list2);
@@ -2892,12 +3190,12 @@ mod tests {
         let s1a = heap.alloc_string("hello".to_string());
         let s1b = heap.alloc_string("world".to_string());
         let inner1 = heap.alloc_list(vec![GcValue::String(s1a), GcValue::String(s1b)]);
-        let outer1 = heap.alloc_list(vec![GcValue::List(inner1), GcValue::Int(42)]);
+        let outer1 = heap.alloc_list(vec![GcValue::List(inner1), GcValue::Int64(42)]);
 
         let s2a = heap.alloc_string("hello".to_string());
         let s2b = heap.alloc_string("world".to_string());
         let inner2 = heap.alloc_list(vec![GcValue::String(s2a), GcValue::String(s2b)]);
-        let outer2 = heap.alloc_list(vec![GcValue::List(inner2), GcValue::Int(42)]);
+        let outer2 = heap.alloc_list(vec![GcValue::List(inner2), GcValue::Int64(42)]);
 
         let v1 = GcValue::List(outer1);
         let v2 = GcValue::List(outer2);
@@ -2911,10 +3209,10 @@ mod tests {
         let mut heap = Heap::new();
 
         let s1 = heap.alloc_string("test".to_string());
-        let tuple1 = heap.alloc_tuple(vec![GcValue::Int(1), GcValue::String(s1), GcValue::Bool(true)]);
+        let tuple1 = heap.alloc_tuple(vec![GcValue::Int64(1), GcValue::String(s1), GcValue::Bool(true)]);
 
         let s2 = heap.alloc_string("test".to_string());
-        let tuple2 = heap.alloc_tuple(vec![GcValue::Int(1), GcValue::String(s2), GcValue::Bool(true)]);
+        let tuple2 = heap.alloc_tuple(vec![GcValue::Int64(1), GcValue::String(s2), GcValue::Bool(true)]);
 
         let v1 = GcValue::Tuple(tuple1);
         let v2 = GcValue::Tuple(tuple2);
@@ -2930,7 +3228,7 @@ mod tests {
         let rec1 = heap.alloc_record(
             "Person".to_string(),
             vec!["name".to_string(), "age".to_string()],
-            vec![GcValue::String(name1), GcValue::Int(30)],
+            vec![GcValue::String(name1), GcValue::Int64(30)],
             vec![false, false],
         );
 
@@ -2938,7 +3236,7 @@ mod tests {
         let rec2 = heap.alloc_record(
             "Person".to_string(),
             vec!["name".to_string(), "age".to_string()],
-            vec![GcValue::String(name2), GcValue::Int(30)],
+            vec![GcValue::String(name2), GcValue::Int64(30)],
             vec![false, false],
         );
 
@@ -2955,14 +3253,14 @@ mod tests {
         let rec1 = heap.alloc_record(
             "Person".to_string(),
             vec!["name".to_string()],
-            vec![GcValue::Int(1)],
+            vec![GcValue::Int64(1)],
             vec![false],
         );
 
         let rec2 = heap.alloc_record(
             "User".to_string(),
             vec!["name".to_string()],
-            vec![GcValue::Int(1)],
+            vec![GcValue::Int64(1)],
             vec![false],
         );
 
@@ -2977,8 +3275,8 @@ mod tests {
     fn test_gc_values_equal_variant() {
         let mut heap = Heap::new();
 
-        let var1 = heap.alloc_variant("Option".to_string(), "Some".to_string(), vec![GcValue::Int(42)]);
-        let var2 = heap.alloc_variant("Option".to_string(), "Some".to_string(), vec![GcValue::Int(42)]);
+        let var1 = heap.alloc_variant("Option".to_string(), "Some".to_string(), vec![GcValue::Int64(42)]);
+        let var2 = heap.alloc_variant("Option".to_string(), "Some".to_string(), vec![GcValue::Int64(42)]);
 
         let v1 = GcValue::Variant(var1);
         let v2 = GcValue::Variant(var2);
@@ -2990,7 +3288,7 @@ mod tests {
     fn test_gc_values_equal_variant_different_constructor() {
         let mut heap = Heap::new();
 
-        let var1 = heap.alloc_variant("Option".to_string(), "Some".to_string(), vec![GcValue::Int(42)]);
+        let var1 = heap.alloc_variant("Option".to_string(), "Some".to_string(), vec![GcValue::Int64(42)]);
         let var2 = heap.alloc_variant("Option".to_string(), "None".to_string(), vec![]);
 
         let v1 = GcValue::Variant(var1);
@@ -3003,8 +3301,8 @@ mod tests {
     fn test_gc_values_equal_array() {
         let mut heap = Heap::new();
 
-        let arr1 = heap.alloc_array(vec![GcValue::Float(1.0), GcValue::Float(2.0)]);
-        let arr2 = heap.alloc_array(vec![GcValue::Float(1.0), GcValue::Float(2.0)]);
+        let arr1 = heap.alloc_array(vec![GcValue::Float64(1.0), GcValue::Float64(2.0)]);
+        let arr2 = heap.alloc_array(vec![GcValue::Float64(1.0), GcValue::Float64(2.0)]);
 
         let v1 = GcValue::Array(arr1);
         let v2 = GcValue::Array(arr2);

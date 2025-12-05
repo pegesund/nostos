@@ -258,7 +258,7 @@ impl Compiler {
     /// a binary operation on floats.
     fn is_float_expr(&self, expr: &Expr) -> bool {
         match expr {
-            Expr::Float(_, _) => true,
+            Expr::Float(_, _) | Expr::Float32(_, _) => true,
             Expr::Int(_, _) => false,
             Expr::BinOp(left, op, right, _) => {
                 // Arithmetic operators preserve float type
@@ -280,6 +280,11 @@ impl Compiler {
                     Stmt::Expr(e) => self.is_float_expr(e),
                     _ => false,
                 }).unwrap_or(false)
+            }
+            // For function calls, check if any argument is float-typed
+            // This is a heuristic: if the function is called with float args, assume it returns float
+            Expr::Call(_, args, _) => {
+                args.iter().any(|arg| self.is_float_expr(arg))
             }
             _ => false, // Assume non-float by default for other expressions
         }
@@ -639,13 +644,82 @@ impl Compiler {
             // Literals
             Expr::Int(n, _) => {
                 let dst = self.alloc_reg();
-                let idx = self.chunk.add_constant(Value::Int(*n));
+                let idx = self.chunk.add_constant(Value::Int64(*n));
                 self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
                 Ok(dst)
             }
             Expr::Float(f, _) => {
                 let dst = self.alloc_reg();
-                let idx = self.chunk.add_constant(Value::Float(*f));
+                let idx = self.chunk.add_constant(Value::Float64(*f));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                Ok(dst)
+            }
+            // Typed integer literals
+            Expr::Int8(n, _) => {
+                let dst = self.alloc_reg();
+                let idx = self.chunk.add_constant(Value::Int8(*n));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                Ok(dst)
+            }
+            Expr::Int16(n, _) => {
+                let dst = self.alloc_reg();
+                let idx = self.chunk.add_constant(Value::Int16(*n));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                Ok(dst)
+            }
+            Expr::Int32(n, _) => {
+                let dst = self.alloc_reg();
+                let idx = self.chunk.add_constant(Value::Int32(*n));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                Ok(dst)
+            }
+            // Unsigned integer literals
+            Expr::UInt8(n, _) => {
+                let dst = self.alloc_reg();
+                let idx = self.chunk.add_constant(Value::UInt8(*n));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                Ok(dst)
+            }
+            Expr::UInt16(n, _) => {
+                let dst = self.alloc_reg();
+                let idx = self.chunk.add_constant(Value::UInt16(*n));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                Ok(dst)
+            }
+            Expr::UInt32(n, _) => {
+                let dst = self.alloc_reg();
+                let idx = self.chunk.add_constant(Value::UInt32(*n));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                Ok(dst)
+            }
+            Expr::UInt64(n, _) => {
+                let dst = self.alloc_reg();
+                let idx = self.chunk.add_constant(Value::UInt64(*n));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                Ok(dst)
+            }
+            // Float32 literal
+            Expr::Float32(f, _) => {
+                let dst = self.alloc_reg();
+                let idx = self.chunk.add_constant(Value::Float32(*f));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                Ok(dst)
+            }
+            // BigInt literal
+            Expr::BigInt(s, _) => {
+                let dst = self.alloc_reg();
+                use num_bigint::BigInt;
+                let big = s.parse::<BigInt>().unwrap_or_default();
+                let idx = self.chunk.add_constant(Value::BigInt(Rc::new(big)));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                Ok(dst)
+            }
+            // Decimal literal
+            Expr::Decimal(s, _) => {
+                let dst = self.alloc_reg();
+                use rust_decimal::Decimal;
+                let dec = s.parse::<Decimal>().unwrap_or_default();
+                let idx = self.chunk.add_constant(Value::Decimal(dec));
                 self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
                 Ok(dst)
             }
@@ -1326,14 +1400,59 @@ impl Compiler {
                         self.chunk.emit(Instruction::SqrtFloat(dst, arg_regs[0]), 0);
                         return Ok(dst);
                     }
-                    "toFloat" if arg_regs.len() == 1 => {
+                    "toFloat" | "toFloat64" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::IntToFloat(dst, arg_regs[0]), 0);
                         return Ok(dst);
                     }
-                    "toInt" if arg_regs.len() == 1 => {
+                    "toInt" | "toInt64" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::FloatToInt(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "toInt8" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ToInt8(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "toInt16" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ToInt16(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "toInt32" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ToInt32(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "toUInt8" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ToUInt8(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "toUInt16" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ToUInt16(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "toUInt32" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ToUInt32(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "toUInt64" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ToUInt64(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "toFloat32" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ToFloat32(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "toBigInt" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ToBigInt(dst, arg_regs[0]), 0);
                         return Ok(dst);
                     }
                     // === Dynamic builtins (trait-based, keep CallNative for now) ===
@@ -1801,7 +1920,59 @@ impl Compiler {
                 self.chunk.emit(Instruction::TestUnit(success_reg, scrut_reg), 0);
             }
             Pattern::Int(n, _) => {
-                let const_idx = self.chunk.add_constant(Value::Int(*n));
+                let const_idx = self.chunk.add_constant(Value::Int64(*n));
+                self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
+            }
+            Pattern::Int8(n, _) => {
+                let const_idx = self.chunk.add_constant(Value::Int8(*n));
+                self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
+            }
+            Pattern::Int16(n, _) => {
+                let const_idx = self.chunk.add_constant(Value::Int16(*n));
+                self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
+            }
+            Pattern::Int32(n, _) => {
+                let const_idx = self.chunk.add_constant(Value::Int32(*n));
+                self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
+            }
+            Pattern::UInt8(n, _) => {
+                let const_idx = self.chunk.add_constant(Value::UInt8(*n));
+                self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
+            }
+            Pattern::UInt16(n, _) => {
+                let const_idx = self.chunk.add_constant(Value::UInt16(*n));
+                self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
+            }
+            Pattern::UInt32(n, _) => {
+                let const_idx = self.chunk.add_constant(Value::UInt32(*n));
+                self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
+            }
+            Pattern::UInt64(n, _) => {
+                let const_idx = self.chunk.add_constant(Value::UInt64(*n));
+                self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
+            }
+            Pattern::Float(f, _) => {
+                let const_idx = self.chunk.add_constant(Value::Float64(*f));
+                self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
+            }
+            Pattern::Float32(f, _) => {
+                let const_idx = self.chunk.add_constant(Value::Float32(*f));
+                self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
+            }
+            Pattern::BigInt(s, _) => {
+                use num_bigint::BigInt;
+                let big = s.parse::<BigInt>().unwrap_or_default();
+                let const_idx = self.chunk.add_constant(Value::BigInt(Rc::new(big)));
+                self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
+            }
+            Pattern::Decimal(s, _) => {
+                use rust_decimal::Decimal;
+                let dec = s.parse::<Decimal>().unwrap_or_default();
+                let const_idx = self.chunk.add_constant(Value::Decimal(dec));
+                self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
+            }
+            Pattern::Char(c, _) => {
+                let const_idx = self.chunk.add_constant(Value::Char(*c));
                 self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
             }
             Pattern::Bool(b, _) => {
@@ -1881,7 +2052,7 @@ impl Compiler {
                             let len_reg = self.alloc_reg();
                             self.chunk.emit(Instruction::Length(len_reg, scrut_reg), 0);
                             let n_reg = self.alloc_reg();
-                            let n_idx = self.chunk.add_constant(Value::Int(n as i64));
+                            let n_idx = self.chunk.add_constant(Value::Int64(n as i64));
                             self.chunk.emit(Instruction::LoadConst(n_reg, n_idx), 0);
                             self.chunk.emit(Instruction::GeInt(success_reg, len_reg, n_reg), 0);
                         } else {
@@ -1889,7 +2060,7 @@ impl Compiler {
                             let len_reg = self.alloc_reg();
                             self.chunk.emit(Instruction::Length(len_reg, scrut_reg), 0);
                             let n_reg = self.alloc_reg();
-                            let n_idx = self.chunk.add_constant(Value::Int(n as i64));
+                            let n_idx = self.chunk.add_constant(Value::Int64(n as i64));
                             self.chunk.emit(Instruction::LoadConst(n_reg, n_idx), 0);
                             self.chunk.emit(Instruction::Eq(success_reg, len_reg, n_reg), 0);
                         }
@@ -2773,34 +2944,34 @@ mod tests {
     #[test]
     fn test_compile_simple_function() {
         let result = compile_and_run("main() = 42");
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
     fn test_compile_addition() {
         let result = compile_and_run("main() = 2 + 3");
-        assert_eq!(result, Ok(Value::Int(5)));
+        assert_eq!(result, Ok(Value::Int64(5)));
     }
 
     #[test]
     fn test_compile_nested_arithmetic() {
         let result = compile_and_run("main() = (2 + 3) * 4");
-        assert_eq!(result, Ok(Value::Int(20)));
+        assert_eq!(result, Ok(Value::Int64(20)));
     }
 
     #[test]
     fn test_compile_if_then_else() {
         let result = compile_and_run("main() = if true then 1 else 2");
-        assert_eq!(result, Ok(Value::Int(1)));
+        assert_eq!(result, Ok(Value::Int64(1)));
 
         let result2 = compile_and_run("main() = if false then 1 else 2");
-        assert_eq!(result2, Ok(Value::Int(2)));
+        assert_eq!(result2, Ok(Value::Int64(2)));
     }
 
     #[test]
     fn test_compile_comparison() {
         let result = compile_and_run("main() = if 5 > 3 then 1 else 0");
-        assert_eq!(result, Ok(Value::Int(1)));
+        assert_eq!(result, Ok(Value::Int64(1)));
     }
 
     #[test]
@@ -2810,7 +2981,7 @@ mod tests {
             main() = double(21)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -2820,7 +2991,7 @@ mod tests {
             main() = fact(5)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(120)));
+        assert_eq!(result, Ok(Value::Int64(120)));
     }
 
     #[test]
@@ -2830,7 +3001,7 @@ mod tests {
             main() = sum(100, 0)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(5050)));
+        assert_eq!(result, Ok(Value::Int64(5050)));
     }
 
     #[test]
@@ -2840,7 +3011,7 @@ mod tests {
         match result {
             Ok(Value::List(items)) => {
                 assert_eq!(items.len(), 3);
-                assert_eq!(items[0], Value::Int(1));
+                assert_eq!(items[0], Value::Int64(1));
             }
             other => panic!("Expected list, got {:?}", other),
         }
@@ -2853,7 +3024,7 @@ mod tests {
             main() = apply(x => x * 2, 21)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -2893,7 +3064,7 @@ mod tests {
             main() = fib(20, 0, 1)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(6765)));
+        assert_eq!(result, Ok(Value::Int64(6765)));
     }
 
     #[test]
@@ -2915,7 +3086,7 @@ mod tests {
             main() = twice(addOne, 5)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(7)));
+        assert_eq!(result, Ok(Value::Int64(7)));
     }
 
     #[test]
@@ -2926,7 +3097,7 @@ mod tests {
         ";
         // (10 + 1) * 2 = 22
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(22)));
+        assert_eq!(result, Ok(Value::Int64(22)));
     }
 
     #[test]
@@ -2937,9 +3108,9 @@ mod tests {
         match result {
             Ok(Value::Tuple(items)) => {
                 assert_eq!(items.len(), 3);
-                assert_eq!(items[0], Value::Int(1));
-                assert_eq!(items[1], Value::Int(2));
-                assert_eq!(items[2], Value::Int(3));
+                assert_eq!(items[0], Value::Int64(1));
+                assert_eq!(items[1], Value::Int64(2));
+                assert_eq!(items[2], Value::Int64(3));
             }
             other => panic!("Expected tuple, got {:?}", other),
         }
@@ -2955,7 +3126,7 @@ mod tests {
         ";
         // square(3) = 9, double(9) = 18, addTen(18) = 28
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(28)));
+        assert_eq!(result, Ok(Value::Int64(28)));
     }
 
     #[test]
@@ -2966,7 +3137,7 @@ mod tests {
         ";
         // 1 + (-1) + 0 = 0
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(0)));
+        assert_eq!(result, Ok(Value::Int64(0)));
     }
 
     #[test]
@@ -2976,7 +3147,7 @@ mod tests {
             main() = gcd(48, 18)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(6)));
+        assert_eq!(result, Ok(Value::Int64(6)));
     }
 
     #[test]
@@ -2986,7 +3157,7 @@ mod tests {
             main() = power(2, 10, 1)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(1024)));
+        assert_eq!(result, Ok(Value::Int64(1024)));
     }
 
     #[test]
@@ -3009,7 +3180,7 @@ mod tests {
         ";
         // ack(2, 3) = 9
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(9)));
+        assert_eq!(result, Ok(Value::Int64(9)));
     }
 
     #[test]
@@ -3020,7 +3191,7 @@ mod tests {
         ";
         // collatz(27) takes 111 steps
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(111)));
+        assert_eq!(result, Ok(Value::Int64(111)));
     }
 
     #[test]
@@ -3030,7 +3201,7 @@ mod tests {
             main() = add(10)(32)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -3040,7 +3211,7 @@ mod tests {
             main() = makeAdder(40)(2)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -3051,7 +3222,7 @@ mod tests {
             main() = scale(3.5)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Float(7.0)));
+        assert_eq!(result, Ok(Value::Float64(7.0)));
     }
 
     #[test]
@@ -3075,7 +3246,7 @@ mod tests {
             }
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(30)));
+        assert_eq!(result, Ok(Value::Int64(30)));
     }
 
     #[test]
@@ -3095,7 +3266,7 @@ mod tests {
         ";
         // a = 10, b = 9, a + b = 19
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(19)));
+        assert_eq!(result, Ok(Value::Int64(19)));
     }
 
     #[test]
@@ -3123,7 +3294,7 @@ mod tests {
         ";
         // swapped = (2, 1), result = 2*10 + 1 = 21
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(21)));
+        assert_eq!(result, Ok(Value::Int64(21)));
     }
 
     #[test]
@@ -3151,7 +3322,7 @@ mod tests {
             main() = double(21)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -3162,7 +3333,7 @@ mod tests {
             main() = first((42, 100))
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -3175,7 +3346,7 @@ mod tests {
         ";
         // 1 + 2 + 3 + 4 + 5 = 15
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(15)));
+        assert_eq!(result, Ok(Value::Int64(15)));
     }
 
     #[test]
@@ -3187,7 +3358,7 @@ mod tests {
             main() = head([42, 1, 2])
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -3200,8 +3371,8 @@ mod tests {
             Ok(Value::Record(r)) => {
                 assert_eq!(r.type_name, "Point");
                 assert_eq!(r.fields.len(), 2);
-                assert_eq!(r.fields[0], Value::Int(3));
-                assert_eq!(r.fields[1], Value::Int(4));
+                assert_eq!(r.fields[0], Value::Int64(3));
+                assert_eq!(r.fields[1], Value::Int64(4));
             }
             other => panic!("Expected record, got {:?}", other),
         }
@@ -3215,7 +3386,7 @@ mod tests {
             main() = getX(Point(42, 100))
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -3229,7 +3400,7 @@ mod tests {
             Ok(Value::Record(r)) => {
                 assert_eq!(r.type_name, "Some");
                 assert_eq!(r.fields.len(), 1);
-                assert_eq!(r.fields[0], Value::Int(42));
+                assert_eq!(r.fields[0], Value::Int64(42));
             }
             other => panic!("Expected record, got {:?}", other),
         }
@@ -3244,7 +3415,7 @@ mod tests {
             main() = unwrap(Some(42))
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -3256,7 +3427,7 @@ mod tests {
             main() = unwrap(None)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(0)));
+        assert_eq!(result, Ok(Value::Int64(0)));
     }
 
     // ===== Additional comprehensive tests =====
@@ -3270,7 +3441,7 @@ mod tests {
             main() = len([1, 2, 3, 4, 5])
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(5)));
+        assert_eq!(result, Ok(Value::Int64(5)));
     }
 
     #[test]
@@ -3286,7 +3457,7 @@ mod tests {
         ";
         // [2, 4, 6] => sum = 12
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(12)));
+        assert_eq!(result, Ok(Value::Int64(12)));
     }
 
     #[test]
@@ -3302,7 +3473,7 @@ mod tests {
         ";
         // [3, 4, 5] => sum = 12
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(12)));
+        assert_eq!(result, Ok(Value::Int64(12)));
     }
 
     #[test]
@@ -3318,7 +3489,7 @@ mod tests {
         ";
         // [1, 2, 3, 4, 5] => sum = 15
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(15)));
+        assert_eq!(result, Ok(Value::Int64(15)));
     }
 
     #[test]
@@ -3335,7 +3506,7 @@ mod tests {
         ";
         // reverse [1,2,3,4,5] = [5,4,3,2,1], head = 5
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(5)));
+        assert_eq!(result, Ok(Value::Int64(5)));
     }
 
     #[test]
@@ -3348,7 +3519,7 @@ mod tests {
         ";
         // sum = 15
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(15)));
+        assert_eq!(result, Ok(Value::Int64(15)));
     }
 
     #[test]
@@ -3362,7 +3533,7 @@ mod tests {
             main() = doubleUnwrap(Some(Some(42)))
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -3375,7 +3546,7 @@ mod tests {
         ";
         // -5 + 10 = 5
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(5)));
+        assert_eq!(result, Ok(Value::Int64(5)));
     }
 
     #[test]
@@ -3400,7 +3571,7 @@ mod tests {
             main() = extract(((1, 2), (3, 4)))
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(10)));
+        assert_eq!(result, Ok(Value::Int64(10)));
     }
 
     #[test]
@@ -3411,7 +3582,7 @@ mod tests {
             main() = outer(10)(20)(12)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -3427,7 +3598,7 @@ mod tests {
             }
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(25)));
+        assert_eq!(result, Ok(Value::Int64(25)));
     }
 
     #[test]
@@ -3454,7 +3625,7 @@ mod tests {
         ";
         // take 3 [1,2,3,4,5] = [1,2,3], sum = 6
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(6)));
+        assert_eq!(result, Ok(Value::Int64(6)));
     }
 
     #[test]
@@ -3470,7 +3641,7 @@ mod tests {
         ";
         // drop 2 [1,2,3,4,5] = [3,4,5], sum = 12
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(12)));
+        assert_eq!(result, Ok(Value::Int64(12)));
     }
 
     #[test]
@@ -3483,7 +3654,7 @@ mod tests {
         ";
         // double(5) = 10, addOne(10) = 11, double(11) = 22
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(22)));
+        assert_eq!(result, Ok(Value::Int64(22)));
     }
 
     #[test]
@@ -3498,7 +3669,7 @@ mod tests {
             main() = unwrap(mapOpt(x => x * 2, Some(21)))
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -3515,7 +3686,7 @@ mod tests {
         ";
         // Some(10) -> safeDiv(10, 2) = Some(5) -> unwrap = 5
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(5)));
+        assert_eq!(result, Ok(Value::Int64(5)));
     }
 
     #[test]
@@ -3533,7 +3704,7 @@ mod tests {
         ";
         // zip = [(1,10), (2,20), (3,30)], sumPairs = 1+10+2+20+3+30 = 66
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(66)));
+        assert_eq!(result, Ok(Value::Int64(66)));
     }
 
     #[test]
@@ -3543,7 +3714,7 @@ mod tests {
             main() = 3.0 * 2.5
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Float(7.5)));
+        assert_eq!(result, Ok(Value::Float64(7.5)));
     }
 
     #[test]
@@ -3554,7 +3725,7 @@ mod tests {
         ";
         // -1 + 1 + 0 = 0
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(0)));
+        assert_eq!(result, Ok(Value::Int64(0)));
     }
 
     #[test]
@@ -3566,7 +3737,7 @@ mod tests {
             main() = first([42, 100, 200])
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -3578,7 +3749,7 @@ mod tests {
             main() = sumThree([10, 20, 12])
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -3597,7 +3768,7 @@ mod tests {
         ";
         // z = 20, y = 25, x = 10, result = 35
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(35)));
+        assert_eq!(result, Ok(Value::Int64(35)));
     }
 
     #[test]
@@ -3642,7 +3813,7 @@ mod tests {
         // all are even, so evens = same
         // sum = 2+4+6+8+10+12+14+16+18+20 = 110
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(110)));
+        assert_eq!(result, Ok(Value::Int64(110)));
     }
 
     #[test]
@@ -3658,7 +3829,7 @@ mod tests {
         ";
         // nth 2 = 30
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(30)));
+        assert_eq!(result, Ok(Value::Int64(30)));
     }
 
     #[test]
@@ -3685,7 +3856,7 @@ mod tests {
             main() = sumTree(Node(Node(Leaf(1), Leaf(2)), Node(Leaf(3), Leaf(4))))
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(10)));
+        assert_eq!(result, Ok(Value::Int64(10)));
     }
 
     #[test]
@@ -3699,7 +3870,7 @@ mod tests {
         ";
         // left subtree depth: 3, right: 1, total = 4
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(4)));
+        assert_eq!(result, Ok(Value::Int64(4)));
     }
 
     #[test]
@@ -3712,7 +3883,7 @@ mod tests {
             main() = eval(Add(Mul(Num(3), Num(4)), Num(5)))
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(17)));
+        assert_eq!(result, Ok(Value::Int64(17)));
     }
 
     // =========================================================================
@@ -3787,7 +3958,7 @@ mod tests {
             main() = factorial(5)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(120)));
+        assert_eq!(result, Ok(Value::Int64(120)));
     }
 
     #[test]
@@ -3799,7 +3970,7 @@ mod tests {
             main() = fib(10)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(55)));
+        assert_eq!(result, Ok(Value::Int64(55)));
     }
 
     #[test]
@@ -3810,7 +3981,7 @@ mod tests {
             main() = len([1, 2, 3, 4, 5])
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(5)));
+        assert_eq!(result, Ok(Value::Int64(5)));
     }
 
     #[test]
@@ -3821,7 +3992,7 @@ mod tests {
             main() = sum([1, 2, 3, 4, 5])
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(15)));
+        assert_eq!(result, Ok(Value::Int64(15)));
     }
 
     #[test]
@@ -3835,7 +4006,7 @@ mod tests {
             main() = len(reverse([1, 2, 3, 4, 5]))
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(5)));
+        assert_eq!(result, Ok(Value::Int64(5)));
     }
 
     #[test]
@@ -3846,7 +4017,7 @@ mod tests {
             main() = unwrap(Some(42)) + unwrap(None)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -3857,7 +4028,7 @@ mod tests {
             main() = getValue(Left(10)) + getValue(Right(32))
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -3868,7 +4039,7 @@ mod tests {
             main() = fst((1, 2)) + snd((3, 4))
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(5)));
+        assert_eq!(result, Ok(Value::Int64(5)));
     }
 
     #[test]
@@ -3896,7 +4067,7 @@ mod tests {
         ";
         // 0 + 10 + 500 = 510
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(510)));
+        assert_eq!(result, Ok(Value::Int64(510)));
     }
 
     // =========================================================================
@@ -3911,7 +4082,7 @@ mod tests {
             main() = abs(-5) + abs(3)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(8)));
+        assert_eq!(result, Ok(Value::Int64(8)));
     }
 
     #[test]
@@ -3923,7 +4094,7 @@ mod tests {
             main() = sign(-5) + sign(5) + sign(0)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(0)));
+        assert_eq!(result, Ok(Value::Int64(0)));
     }
 
     #[test]
@@ -3935,7 +4106,7 @@ mod tests {
             main() = first_positive([-3, -2, 5, 10])
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(5)));
+        assert_eq!(result, Ok(Value::Int64(5)));
     }
 
     // ===== String Interpolation Tests =====
@@ -4090,7 +4261,7 @@ mod tests {
             main() = Math.add(10, Math.double(16))
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -4105,7 +4276,7 @@ mod tests {
             main() = Outer.Inner.value() * 2
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -4120,7 +4291,7 @@ mod tests {
             main() = add(20, 22)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -4135,7 +4306,7 @@ mod tests {
             main() = mul(6, 7)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -4150,7 +4321,7 @@ mod tests {
             main() = Utils.triple(Utils.inc(13))
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -4164,7 +4335,7 @@ mod tests {
             main() = Math.factorial(5)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(120)));
+        assert_eq!(result, Ok(Value::Int64(120)));
     }
 
     // ===== Visibility Tests =====
@@ -4194,7 +4365,7 @@ mod tests {
             main() = Public.public_fn()
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -4209,7 +4380,7 @@ mod tests {
             main() = Math.double_plus_one(20)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(41)));
+        assert_eq!(result, Ok(Value::Int64(41)));
     }
 
     #[test]
@@ -4243,7 +4414,7 @@ mod tests {
             }
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(0)));
+        assert_eq!(result, Ok(Value::Int64(0)));
     }
 
     // ===== Trait Tests =====
@@ -4261,7 +4432,7 @@ mod tests {
             main() = 42
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -4274,7 +4445,7 @@ mod tests {
             main() = Point(42, 10).getX()
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -4287,7 +4458,7 @@ mod tests {
             main() = Counter(21).doubled()
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -4300,7 +4471,7 @@ mod tests {
             main() = Num(10).add(5) + Num(10).sub(3)
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(22))); // (10+5) + (10-3) = 15 + 7 = 22
+        assert_eq!(result, Ok(Value::Int64(22))); // (10+5) + (10-3) = 15 + 7 = 22
     }
 
     #[test]
@@ -4313,7 +4484,7 @@ mod tests {
             main() = { r = Rectangle(4, 5), r.area() }
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(20)));
+        assert_eq!(result, Ok(Value::Int64(20)));
     }
 
     #[test]
@@ -4339,7 +4510,7 @@ mod tests {
             main() = 7.triple()
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(21)));
+        assert_eq!(result, Ok(Value::Int64(21)));
     }
 
     #[test]
@@ -4366,7 +4537,7 @@ mod tests {
             main() = { p = Point(0, 0), r = Rectangle(5, 10), p.size() + r.size() }
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(6))); // 2 + 4 = 6
+        assert_eq!(result, Ok(Value::Int64(6))); // 2 + 4 = 6
     }
 
     #[test]
@@ -4379,7 +4550,7 @@ mod tests {
             main() = { b = Box(10), Box.Doubler.doubler(b) }
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(20)));
+        assert_eq!(result, Ok(Value::Int64(20)));
     }
 
     #[test]
@@ -4393,7 +4564,7 @@ mod tests {
             main() = 5.inc() + 6.inc()
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(13))); // 6 + 7 = 13
+        assert_eq!(result, Ok(Value::Int64(13))); // 6 + 7 = 13
     }
 
     #[test]
@@ -4405,7 +4576,7 @@ mod tests {
             main() = if true.toggle() then 0 else 1
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(1))); // true.toggle() = false, so else branch
+        assert_eq!(result, Ok(Value::Int64(1))); // true.toggle() = false, so else branch
     }
 
     #[test]
@@ -4418,7 +4589,7 @@ mod tests {
             main() = { p = Point(3, 4), p2 = p.cloner(), p2.x + p2.y }
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(7)));
+        assert_eq!(result, Ok(Value::Int64(7)));
     }
 
     #[test]
@@ -4431,7 +4602,7 @@ mod tests {
             main() = { b = Base(10), b.adder(20, 30) }
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(60)));
+        assert_eq!(result, Ok(Value::Int64(60)));
     }
 
     // =========================================================================
@@ -4584,7 +4755,7 @@ mod tests {
             main() = try 42 catch _ -> 0 end
         "#;
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 
     #[test]
@@ -4597,7 +4768,7 @@ mod tests {
             end
         "#;
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(1)));
+        assert_eq!(result, Ok(Value::Int64(1)));
     }
 
     #[test]
@@ -4610,7 +4781,7 @@ mod tests {
             end
         "#;
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(2)));
+        assert_eq!(result, Ok(Value::Int64(2)));
     }
 
     #[test]
@@ -4621,7 +4792,7 @@ mod tests {
             main() = try might_fail(false)? + 1 catch _ -> 0 end
         "#;
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(43)));
+        assert_eq!(result, Ok(Value::Int64(43)));
     }
 
     #[test]
@@ -4664,6 +4835,6 @@ mod tests {
             main() = try throw(42) catch e -> e end
         "#;
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::Int(42)));
+        assert_eq!(result, Ok(Value::Int64(42)));
     }
 }

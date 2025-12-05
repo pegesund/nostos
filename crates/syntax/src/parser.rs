@@ -262,16 +262,26 @@ fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
             .then(just(Token::RParen))
             .map_with_span(|_, span| Pattern::Unit(to_span(span)));
 
-        // Integer patterns (including hex and binary)
+        // Integer patterns (including hex and binary and typed)
         let int = filter_map(|span, tok| match tok {
             Token::Int(n) => Ok(Pattern::Int(n, to_span(span))),
             Token::HexInt(n) => Ok(Pattern::Int(n, to_span(span))),
             Token::BinInt(n) => Ok(Pattern::Int(n, to_span(span))),
+            Token::Int8(n) => Ok(Pattern::Int8(n, to_span(span))),
+            Token::Int16(n) => Ok(Pattern::Int16(n, to_span(span))),
+            Token::Int32(n) => Ok(Pattern::Int32(n, to_span(span))),
+            Token::UInt8(n) => Ok(Pattern::UInt8(n, to_span(span))),
+            Token::UInt16(n) => Ok(Pattern::UInt16(n, to_span(span))),
+            Token::UInt32(n) => Ok(Pattern::UInt32(n, to_span(span))),
+            Token::UInt64(n) => Ok(Pattern::UInt64(n, to_span(span))),
+            Token::BigInt(s) => Ok(Pattern::BigInt(s, to_span(span))),
             _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
         });
 
         let float = filter_map(|span, tok| match tok {
             Token::Float(s) => Ok(Pattern::Float(s.parse().unwrap_or(0.0), to_span(span))),
+            Token::Float32(s) => Ok(Pattern::Float32(s.parse().unwrap_or(0.0), to_span(span))),
+            Token::Decimal(s) => Ok(Pattern::Decimal(s, to_span(span))),
             _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
         });
 
@@ -416,16 +426,26 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
     recursive(|expr| {
         // Skip newlines at the start of expression parsing
         let expr = skip_newlines().ignore_then(expr.clone());
-        // Integer literals (including hex and binary)
+        // Integer literals (including hex, binary, and typed variants)
         let int = filter_map(|span, tok| match tok {
             Token::Int(n) => Ok(Expr::Int(n, to_span(span))),
             Token::HexInt(n) => Ok(Expr::Int(n, to_span(span))),
             Token::BinInt(n) => Ok(Expr::Int(n, to_span(span))),
+            Token::Int8(n) => Ok(Expr::Int8(n, to_span(span))),
+            Token::Int16(n) => Ok(Expr::Int16(n, to_span(span))),
+            Token::Int32(n) => Ok(Expr::Int32(n, to_span(span))),
+            Token::UInt8(n) => Ok(Expr::UInt8(n, to_span(span))),
+            Token::UInt16(n) => Ok(Expr::UInt16(n, to_span(span))),
+            Token::UInt32(n) => Ok(Expr::UInt32(n, to_span(span))),
+            Token::UInt64(n) => Ok(Expr::UInt64(n, to_span(span))),
+            Token::BigInt(s) => Ok(Expr::BigInt(s, to_span(span))),
             _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
         });
 
         let float = filter_map(|span, tok| match tok {
             Token::Float(s) => Ok(Expr::Float(s.parse().unwrap_or(0.0), to_span(span))),
+            Token::Float32(s) => Ok(Expr::Float32(s.parse().unwrap_or(0.0), to_span(span))),
+            Token::Decimal(s) => Ok(Expr::Decimal(s, to_span(span))),
             _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
         });
 
@@ -960,7 +980,17 @@ enum PostfixOp {
 fn get_span(expr: &Expr) -> Span {
     match expr {
         Expr::Int(_, s) => *s,
+        Expr::Int8(_, s) => *s,
+        Expr::Int16(_, s) => *s,
+        Expr::Int32(_, s) => *s,
+        Expr::UInt8(_, s) => *s,
+        Expr::UInt16(_, s) => *s,
+        Expr::UInt32(_, s) => *s,
+        Expr::UInt64(_, s) => *s,
+        Expr::BigInt(_, s) => *s,
         Expr::Float(_, s) => *s,
+        Expr::Float32(_, s) => *s,
+        Expr::Decimal(_, s) => *s,
         Expr::String(_, s) => *s,
         Expr::Char(_, s) => *s,
         Expr::Bool(_, s) => *s,

@@ -320,14 +320,14 @@ mod tests {
         let mut receiver = Process::new(Pid(2));
 
         // Allocate a message on sender's heap
-        let msg = GcValue::Int(42);
+        let msg = GcValue::Int64(42);
 
         // Deliver to receiver (deep copy)
         receiver.deliver_message(msg, &sender.heap);
 
         assert!(receiver.has_messages());
         let received = receiver.try_receive().unwrap();
-        assert_eq!(received, GcValue::Int(42));
+        assert_eq!(received, GcValue::Int64(42));
         assert!(!receiver.has_messages());
     }
 
@@ -340,7 +340,7 @@ mod tests {
         assert_eq!(proc.state, ProcessState::Waiting);
 
         // Message delivery wakes up
-        proc.deliver_message(GcValue::Int(1), &Heap::new());
+        proc.deliver_message(GcValue::Int64(1), &Heap::new());
         assert_eq!(proc.state, ProcessState::Running);
     }
 

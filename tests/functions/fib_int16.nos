@@ -1,0 +1,8 @@
+# Fibonacci with Int16
+# expect: 55i16
+
+fib(0i16) = 0i16
+fib(1i16) = 1i16
+fib(n) = fib(n - 1i16) + fib(n - 2i16)
+
+main() = fib(10i16)

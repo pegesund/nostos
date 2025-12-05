@@ -1,0 +1,8 @@
+# Fibonacci with UInt8 (small values to avoid overflow)
+# expect: 21u8
+
+fib(0u8) = 0u8
+fib(1u8) = 1u8
+fib(n) = fib(n - 1u8) + fib(n - 2u8)
+
+main() = fib(8u8)

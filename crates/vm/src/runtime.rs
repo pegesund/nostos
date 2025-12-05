@@ -471,56 +471,156 @@ impl Runtime {
             Instruction::LoadTrue(dst) => set_reg!(*dst, GcValue::Bool(true)),
             Instruction::LoadFalse(dst) => set_reg!(*dst, GcValue::Bool(false)),
 
-            // === Arithmetic (HOT PATH - UNCHECKED since Nostos is statically typed!) ===
+            // === Arithmetic (polymorphic - dispatches based on operand types) ===
             Instruction::AddInt(dst, a, b) => {
-                // SAFETY: Type system guarantees these are Int
-                let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let result = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Int64(x + y),
+                    (GcValue::Int32(x), GcValue::Int32(y)) => GcValue::Int32(x.wrapping_add(*y)),
+                    (GcValue::Int16(x), GcValue::Int16(y)) => GcValue::Int16(x.wrapping_add(*y)),
+                    (GcValue::Int8(x), GcValue::Int8(y)) => GcValue::Int8(x.wrapping_add(*y)),
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => GcValue::UInt64(x.wrapping_add(*y)),
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => GcValue::UInt32(x.wrapping_add(*y)),
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => GcValue::UInt16(x.wrapping_add(*y)),
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => GcValue::UInt8(x.wrapping_add(*y)),
+                    (GcValue::BigInt(x), GcValue::BigInt(y)) => {
+                        let bx = proc.heap.get_bigint(*x).unwrap();
+                        let by = proc.heap.get_bigint(*y).unwrap();
+                        let result = bx.value.clone() + &by.value;
+                        let ptr = proc.heap.alloc_bigint(result);
+                        GcValue::BigInt(ptr)
+                    }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => GcValue::Decimal(*x + *y),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching numeric types".to_string(),
+                        found: "mismatched types in addition".to_string()
+                    })
                 };
-                set_reg!(*dst, GcValue::Int(x + y));
+                set_reg!(*dst, result);
             }
 
             Instruction::SubInt(dst, a, b) => {
-                let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let result = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Int64(x - y),
+                    (GcValue::Int32(x), GcValue::Int32(y)) => GcValue::Int32(x.wrapping_sub(*y)),
+                    (GcValue::Int16(x), GcValue::Int16(y)) => GcValue::Int16(x.wrapping_sub(*y)),
+                    (GcValue::Int8(x), GcValue::Int8(y)) => GcValue::Int8(x.wrapping_sub(*y)),
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => GcValue::UInt64(x.wrapping_sub(*y)),
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => GcValue::UInt32(x.wrapping_sub(*y)),
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => GcValue::UInt16(x.wrapping_sub(*y)),
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => GcValue::UInt8(x.wrapping_sub(*y)),
+                    (GcValue::BigInt(x), GcValue::BigInt(y)) => {
+                        let bx = proc.heap.get_bigint(*x).unwrap();
+                        let by = proc.heap.get_bigint(*y).unwrap();
+                        let result = bx.value.clone() - &by.value;
+                        let ptr = proc.heap.alloc_bigint(result);
+                        GcValue::BigInt(ptr)
+                    }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => GcValue::Decimal(*x - *y),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching numeric types".to_string(),
+                        found: "mismatched types in subtraction".to_string()
+                    })
                 };
-                set_reg!(*dst, GcValue::Int(x - y));
+                set_reg!(*dst, result);
             }
 
             Instruction::MulInt(dst, a, b) => {
-                let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let result = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Int64(x * y),
+                    (GcValue::Int32(x), GcValue::Int32(y)) => GcValue::Int32(x.wrapping_mul(*y)),
+                    (GcValue::Int16(x), GcValue::Int16(y)) => GcValue::Int16(x.wrapping_mul(*y)),
+                    (GcValue::Int8(x), GcValue::Int8(y)) => GcValue::Int8(x.wrapping_mul(*y)),
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => GcValue::UInt64(x.wrapping_mul(*y)),
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => GcValue::UInt32(x.wrapping_mul(*y)),
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => GcValue::UInt16(x.wrapping_mul(*y)),
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => GcValue::UInt8(x.wrapping_mul(*y)),
+                    (GcValue::BigInt(x), GcValue::BigInt(y)) => {
+                        let bx = proc.heap.get_bigint(*x).unwrap();
+                        let by = proc.heap.get_bigint(*y).unwrap();
+                        let result = bx.value.clone() * &by.value;
+                        let ptr = proc.heap.alloc_bigint(result);
+                        GcValue::BigInt(ptr)
+                    }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => GcValue::Decimal(*x * *y),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching numeric types".to_string(),
+                        found: "mismatched types in multiplication".to_string()
+                    })
                 };
-                set_reg!(*dst, GcValue::Int(x * y));
+                set_reg!(*dst, result);
             }
 
-            // === Comparison (HOT PATH - UNCHECKED) ===
+            // === Comparison (polymorphic - dispatches based on operand types) ===
             Instruction::LtInt(dst, a, b) => {
-                let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let result = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => *x < *y,
+                    (GcValue::Int32(x), GcValue::Int32(y)) => *x < *y,
+                    (GcValue::Int16(x), GcValue::Int16(y)) => *x < *y,
+                    (GcValue::Int8(x), GcValue::Int8(y)) => *x < *y,
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => *x < *y,
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => *x < *y,
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => *x < *y,
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => *x < *y,
+                    (GcValue::BigInt(x), GcValue::BigInt(y)) => {
+                        let bx = proc.heap.get_bigint(*x).unwrap();
+                        let by = proc.heap.get_bigint(*y).unwrap();
+                        bx.value < by.value
+                    }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => *x < *y,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching numeric types".to_string(),
+                        found: "mismatched types in comparison".to_string()
+                    })
                 };
-                set_reg!(*dst, GcValue::Bool(x < y));
+                set_reg!(*dst, GcValue::Bool(result));
             }
 
             Instruction::LeInt(dst, a, b) => {
-                let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let result = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => *x <= *y,
+                    (GcValue::Int32(x), GcValue::Int32(y)) => *x <= *y,
+                    (GcValue::Int16(x), GcValue::Int16(y)) => *x <= *y,
+                    (GcValue::Int8(x), GcValue::Int8(y)) => *x <= *y,
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => *x <= *y,
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => *x <= *y,
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => *x <= *y,
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => *x <= *y,
+                    (GcValue::BigInt(x), GcValue::BigInt(y)) => {
+                        let bx = proc.heap.get_bigint(*x).unwrap();
+                        let by = proc.heap.get_bigint(*y).unwrap();
+                        bx.value <= by.value
+                    }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => *x <= *y,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching numeric types".to_string(),
+                        found: "mismatched types in comparison".to_string()
+                    })
                 };
-                set_reg!(*dst, GcValue::Bool(x <= y));
+                set_reg!(*dst, GcValue::Bool(result));
             }
 
             Instruction::GtInt(dst, a, b) => {
-                // SAFETY: Type system guarantees these are Int
-                let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let result = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => *x > *y,
+                    (GcValue::Int32(x), GcValue::Int32(y)) => *x > *y,
+                    (GcValue::Int16(x), GcValue::Int16(y)) => *x > *y,
+                    (GcValue::Int8(x), GcValue::Int8(y)) => *x > *y,
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => *x > *y,
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => *x > *y,
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => *x > *y,
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => *x > *y,
+                    (GcValue::BigInt(x), GcValue::BigInt(y)) => {
+                        let bx = proc.heap.get_bigint(*x).unwrap();
+                        let by = proc.heap.get_bigint(*y).unwrap();
+                        bx.value > by.value
+                    }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => *x > *y,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching numeric types".to_string(),
+                        found: "mismatched types in comparison".to_string()
+                    })
                 };
-                set_reg!(*dst, GcValue::Bool(x > y));
+                set_reg!(*dst, GcValue::Bool(result));
             }
 
             Instruction::Eq(dst, a, b) => {
@@ -827,10 +927,10 @@ impl Runtime {
                     if let Some(jit_fn) = jit_int_functions.get(func_idx) {
                         // Get the argument
                         let arg = reg_clone!(arg_regs[0]);
-                        if let GcValue::Int(n) = arg {
+                        if let GcValue::Int64(n) = arg {
                             // Call JIT function directly!
                             let result = jit_fn(n);
-                            set_reg!(dst, GcValue::Int(result));
+                            set_reg!(dst, GcValue::Int64(result));
                             proc.consume_reductions(1);
                             return Ok(ProcessStepResult::Continue);
                         }
@@ -1160,88 +1260,112 @@ impl Runtime {
             Instruction::DivInt(dst, a, b) => {
                 // SAFETY: Type system guarantees these are Int
                 let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => (*x, *y),
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
                 if y == 0 {
                     return Err(RuntimeError::Panic("Division by zero".to_string()));
                 }
-                set_reg!(*dst, GcValue::Int(x / y));
+                set_reg!(*dst, GcValue::Int64(x / y));
             }
 
             Instruction::ModInt(dst, a, b) => {
                 // SAFETY: Type system guarantees these are Int
                 let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => (*x, *y),
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
                 if y == 0 {
                     return Err(RuntimeError::Panic("Division by zero".to_string()));
                 }
-                set_reg!(*dst, GcValue::Int(x % y));
+                set_reg!(*dst, GcValue::Int64(x % y));
             }
 
             Instruction::NegInt(dst, src) => {
                 let v = match reg!(*src) {
-                    GcValue::Int(x) => *x,
+                    GcValue::Int64(x) => *x,
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
-                set_reg!(*dst, GcValue::Int(-v));
+                set_reg!(*dst, GcValue::Int64(-v));
             }
 
-            // === Float arithmetic ===
+            // === Float arithmetic (polymorphic) ===
             Instruction::AddFloat(dst, a, b) => {
-                let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let result = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x + y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x + y),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching float types".to_string(),
+                        found: "mismatched types in addition".to_string()
+                    })
                 };
-                set_reg!(*dst, GcValue::Float(x + y));
+                set_reg!(*dst, result);
             }
 
             Instruction::SubFloat(dst, a, b) => {
-                let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let result = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x - y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x - y),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching float types".to_string(),
+                        found: "mismatched types in subtraction".to_string()
+                    })
                 };
-                set_reg!(*dst, GcValue::Float(x - y));
+                set_reg!(*dst, result);
             }
 
             Instruction::MulFloat(dst, a, b) => {
-                let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let result = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x * y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x * y),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching float types".to_string(),
+                        found: "mismatched types in multiplication".to_string()
+                    })
                 };
-                set_reg!(*dst, GcValue::Float(x * y));
+                set_reg!(*dst, result);
             }
 
             Instruction::DivFloat(dst, a, b) => {
-                let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let result = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x / y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x / y),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching float types".to_string(),
+                        found: "mismatched types in division".to_string()
+                    })
                 };
-                set_reg!(*dst, GcValue::Float(x / y));
+                set_reg!(*dst, result);
             }
 
             Instruction::NegFloat(dst, src) => {
-                let v = match reg!(*src) {
-                    GcValue::Float(x) => *x,
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let result = match reg!(*src) {
+                    GcValue::Float64(x) => GcValue::Float64(-x),
+                    GcValue::Float32(x) => GcValue::Float32(-x),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "float".to_string(),
+                        found: "non-float".to_string()
+                    })
                 };
-                set_reg!(*dst, GcValue::Float(-v));
+                set_reg!(*dst, result);
             }
 
             Instruction::PowFloat(dst, a, b) => {
-                let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let result = match (reg!(*a), reg!(*b)) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x.powf(*y)),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x.powf(*y)),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching float types".to_string(),
+                        found: "mismatched types in power".to_string()
+                    })
                 };
-                set_reg!(*dst, GcValue::Float(x.powf(y)));
+                set_reg!(*dst, result);
             }
 
             // === More comparisons ===
             Instruction::EqInt(dst, a, b) => {
                 let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => (*x, *y),
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
                 set_reg!(*dst, GcValue::Bool(x == y));
@@ -1249,7 +1373,7 @@ impl Runtime {
 
             Instruction::NeInt(dst, a, b) => {
                 let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => (*x, *y),
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
                 set_reg!(*dst, GcValue::Bool(x != y));
@@ -1257,7 +1381,7 @@ impl Runtime {
 
             Instruction::GeInt(dst, a, b) => {
                 let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Int(x), GcValue::Int(y)) => (*x, *y),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => (*x, *y),
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
                 set_reg!(*dst, GcValue::Bool(x >= y));
@@ -1265,7 +1389,7 @@ impl Runtime {
 
             Instruction::EqFloat(dst, a, b) => {
                 let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
+                    (GcValue::Float64(x), GcValue::Float64(y)) => (*x, *y),
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
                 set_reg!(*dst, GcValue::Bool(x == y));
@@ -1273,7 +1397,7 @@ impl Runtime {
 
             Instruction::LtFloat(dst, a, b) => {
                 let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
+                    (GcValue::Float64(x), GcValue::Float64(y)) => (*x, *y),
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
                 set_reg!(*dst, GcValue::Bool(x < y));
@@ -1281,7 +1405,7 @@ impl Runtime {
 
             Instruction::LeFloat(dst, a, b) => {
                 let (x, y) = match (reg!(*a), reg!(*b)) {
-                    (GcValue::Float(x), GcValue::Float(y)) => (*x, *y),
+                    (GcValue::Float64(x), GcValue::Float64(y)) => (*x, *y),
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
                 set_reg!(*dst, GcValue::Bool(x <= y));
@@ -1388,7 +1512,7 @@ impl Runtime {
 
             Instruction::Index(dst, coll, idx) => {
                 let idx_val = match reg!(*idx) {
-                    GcValue::Int(i) => *i as usize,
+                    GcValue::Int64(i) => *i as usize,
                     _ => return Err(RuntimeError::Panic("Index must be integer".to_string())),
                 };
                 let value = match reg!(*coll) {
@@ -1417,7 +1541,7 @@ impl Runtime {
 
             Instruction::IndexSet(coll, idx, val) => {
                 let idx_val = match reg!(*idx) {
-                    GcValue::Int(i) => *i as usize,
+                    GcValue::Int64(i) => *i as usize,
                     _ => return Err(RuntimeError::Panic("Index must be integer".to_string())),
                 };
                 let new_value = reg_clone!(*val);
@@ -1442,7 +1566,7 @@ impl Runtime {
                     GcValue::String(ptr) => proc.heap.get_string(*ptr).map(|s| s.data.len()).unwrap_or(0),
                     _ => return Err(RuntimeError::Panic("Length expects collection or string".to_string())),
                 };
-                set_reg!(*dst, GcValue::Int(len as i64));
+                set_reg!(*dst, GcValue::Int64(len as i64));
             }
 
             Instruction::MakeMap(dst, pairs) => {
@@ -1621,43 +1745,329 @@ impl Runtime {
             // === Builtin math (compile-time resolved, no runtime dispatch!) ===
             Instruction::AbsInt(dst, src) => {
                 let val = match reg!(*src) {
-                    GcValue::Int(i) => *i,
+                    GcValue::Int64(i) => *i,
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
-                set_reg!(*dst, GcValue::Int(val.abs()));
+                set_reg!(*dst, GcValue::Int64(val.abs()));
             }
 
             Instruction::AbsFloat(dst, src) => {
                 let val = match reg!(*src) {
-                    GcValue::Float(f) => *f,
+                    GcValue::Float64(f) => *f,
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
-                set_reg!(*dst, GcValue::Float(val.abs()));
+                set_reg!(*dst, GcValue::Float64(val.abs()));
             }
 
             Instruction::SqrtFloat(dst, src) => {
                 let val = match reg!(*src) {
-                    GcValue::Float(f) => *f,
+                    GcValue::Float64(f) => *f,
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
-                set_reg!(*dst, GcValue::Float(val.sqrt()));
+                set_reg!(*dst, GcValue::Float64(val.sqrt()));
             }
 
             // === Type conversions (compile-time resolved) ===
             Instruction::IntToFloat(dst, src) => {
-                let val = match reg!(*src) {
-                    GcValue::Int(i) => *i,
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let result = match reg!(*src) {
+                    GcValue::Int8(v) => GcValue::Float64(*v as f64),
+                    GcValue::Int16(v) => GcValue::Float64(*v as f64),
+                    GcValue::Int32(v) => GcValue::Float64(*v as f64),
+                    GcValue::Int64(v) => GcValue::Float64(*v as f64),
+                    GcValue::UInt8(v) => GcValue::Float64(*v as f64),
+                    GcValue::UInt16(v) => GcValue::Float64(*v as f64),
+                    GcValue::UInt32(v) => GcValue::Float64(*v as f64),
+                    GcValue::UInt64(v) => GcValue::Float64(*v as f64),
+                    GcValue::Float32(v) => GcValue::Float64(*v as f64),
+                    GcValue::Float64(v) => GcValue::Float64(*v),
+                    GcValue::BigInt(ptr) => {
+                        let bi = proc.heap.get_bigint(*ptr).unwrap();
+                        use num_traits::ToPrimitive;
+                        GcValue::Float64(bi.value.to_f64().unwrap_or(0.0))
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: "non-numeric".to_string(),
+                    })
                 };
-                set_reg!(*dst, GcValue::Float(val as f64));
+                set_reg!(*dst, result);
             }
 
             Instruction::FloatToInt(dst, src) => {
-                let val = match reg!(*src) {
-                    GcValue::Float(f) => *f,
-                    _ => unsafe { std::hint::unreachable_unchecked() }
+                let result = match reg!(*src) {
+                    GcValue::Int8(v) => GcValue::Int64(*v as i64),
+                    GcValue::Int16(v) => GcValue::Int64(*v as i64),
+                    GcValue::Int32(v) => GcValue::Int64(*v as i64),
+                    GcValue::Int64(v) => GcValue::Int64(*v),
+                    GcValue::UInt8(v) => GcValue::Int64(*v as i64),
+                    GcValue::UInt16(v) => GcValue::Int64(*v as i64),
+                    GcValue::UInt32(v) => GcValue::Int64(*v as i64),
+                    GcValue::UInt64(v) => GcValue::Int64(*v as i64),
+                    GcValue::Float32(v) => GcValue::Int64(*v as i64),
+                    GcValue::Float64(v) => GcValue::Int64(*v as i64),
+                    GcValue::BigInt(ptr) => {
+                        let bi = proc.heap.get_bigint(*ptr).unwrap();
+                        use num_traits::ToPrimitive;
+                        GcValue::Int64(bi.value.to_i64().unwrap_or(0))
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: "non-numeric".to_string(),
+                    })
                 };
-                set_reg!(*dst, GcValue::Int(val as i64));
+                set_reg!(*dst, result);
+            }
+
+            // Conversion to Int8
+            Instruction::ToInt8(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Int8(v) => GcValue::Int8(*v),
+                    GcValue::Int16(v) => GcValue::Int8(*v as i8),
+                    GcValue::Int32(v) => GcValue::Int8(*v as i8),
+                    GcValue::Int64(v) => GcValue::Int8(*v as i8),
+                    GcValue::UInt8(v) => GcValue::Int8(*v as i8),
+                    GcValue::UInt16(v) => GcValue::Int8(*v as i8),
+                    GcValue::UInt32(v) => GcValue::Int8(*v as i8),
+                    GcValue::UInt64(v) => GcValue::Int8(*v as i8),
+                    GcValue::Float32(v) => GcValue::Int8(*v as i8),
+                    GcValue::Float64(v) => GcValue::Int8(*v as i8),
+                    GcValue::BigInt(ptr) => {
+                        let bi = proc.heap.get_bigint(*ptr).unwrap();
+                        use num_traits::ToPrimitive;
+                        GcValue::Int8(bi.value.to_i8().unwrap_or(0))
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: "non-numeric".to_string(),
+                    })
+                };
+                set_reg!(*dst, result);
+            }
+
+            // Conversion to Int16
+            Instruction::ToInt16(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Int8(v) => GcValue::Int16(*v as i16),
+                    GcValue::Int16(v) => GcValue::Int16(*v),
+                    GcValue::Int32(v) => GcValue::Int16(*v as i16),
+                    GcValue::Int64(v) => GcValue::Int16(*v as i16),
+                    GcValue::UInt8(v) => GcValue::Int16(*v as i16),
+                    GcValue::UInt16(v) => GcValue::Int16(*v as i16),
+                    GcValue::UInt32(v) => GcValue::Int16(*v as i16),
+                    GcValue::UInt64(v) => GcValue::Int16(*v as i16),
+                    GcValue::Float32(v) => GcValue::Int16(*v as i16),
+                    GcValue::Float64(v) => GcValue::Int16(*v as i16),
+                    GcValue::BigInt(ptr) => {
+                        let bi = proc.heap.get_bigint(*ptr).unwrap();
+                        use num_traits::ToPrimitive;
+                        GcValue::Int16(bi.value.to_i16().unwrap_or(0))
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: "non-numeric".to_string(),
+                    })
+                };
+                set_reg!(*dst, result);
+            }
+
+            // Conversion to Int32
+            Instruction::ToInt32(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Int8(v) => GcValue::Int32(*v as i32),
+                    GcValue::Int16(v) => GcValue::Int32(*v as i32),
+                    GcValue::Int32(v) => GcValue::Int32(*v),
+                    GcValue::Int64(v) => GcValue::Int32(*v as i32),
+                    GcValue::UInt8(v) => GcValue::Int32(*v as i32),
+                    GcValue::UInt16(v) => GcValue::Int32(*v as i32),
+                    GcValue::UInt32(v) => GcValue::Int32(*v as i32),
+                    GcValue::UInt64(v) => GcValue::Int32(*v as i32),
+                    GcValue::Float32(v) => GcValue::Int32(*v as i32),
+                    GcValue::Float64(v) => GcValue::Int32(*v as i32),
+                    GcValue::BigInt(ptr) => {
+                        let bi = proc.heap.get_bigint(*ptr).unwrap();
+                        use num_traits::ToPrimitive;
+                        GcValue::Int32(bi.value.to_i32().unwrap_or(0))
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: "non-numeric".to_string(),
+                    })
+                };
+                set_reg!(*dst, result);
+            }
+
+            // Conversion to UInt8
+            Instruction::ToUInt8(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Int8(v) => GcValue::UInt8(*v as u8),
+                    GcValue::Int16(v) => GcValue::UInt8(*v as u8),
+                    GcValue::Int32(v) => GcValue::UInt8(*v as u8),
+                    GcValue::Int64(v) => GcValue::UInt8(*v as u8),
+                    GcValue::UInt8(v) => GcValue::UInt8(*v),
+                    GcValue::UInt16(v) => GcValue::UInt8(*v as u8),
+                    GcValue::UInt32(v) => GcValue::UInt8(*v as u8),
+                    GcValue::UInt64(v) => GcValue::UInt8(*v as u8),
+                    GcValue::Float32(v) => GcValue::UInt8(*v as u8),
+                    GcValue::Float64(v) => GcValue::UInt8(*v as u8),
+                    GcValue::BigInt(ptr) => {
+                        let bi = proc.heap.get_bigint(*ptr).unwrap();
+                        use num_traits::ToPrimitive;
+                        GcValue::UInt8(bi.value.to_u8().unwrap_or(0))
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: "non-numeric".to_string(),
+                    })
+                };
+                set_reg!(*dst, result);
+            }
+
+            // Conversion to UInt16
+            Instruction::ToUInt16(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Int8(v) => GcValue::UInt16(*v as u16),
+                    GcValue::Int16(v) => GcValue::UInt16(*v as u16),
+                    GcValue::Int32(v) => GcValue::UInt16(*v as u16),
+                    GcValue::Int64(v) => GcValue::UInt16(*v as u16),
+                    GcValue::UInt8(v) => GcValue::UInt16(*v as u16),
+                    GcValue::UInt16(v) => GcValue::UInt16(*v),
+                    GcValue::UInt32(v) => GcValue::UInt16(*v as u16),
+                    GcValue::UInt64(v) => GcValue::UInt16(*v as u16),
+                    GcValue::Float32(v) => GcValue::UInt16(*v as u16),
+                    GcValue::Float64(v) => GcValue::UInt16(*v as u16),
+                    GcValue::BigInt(ptr) => {
+                        let bi = proc.heap.get_bigint(*ptr).unwrap();
+                        use num_traits::ToPrimitive;
+                        GcValue::UInt16(bi.value.to_u16().unwrap_or(0))
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: "non-numeric".to_string(),
+                    })
+                };
+                set_reg!(*dst, result);
+            }
+
+            // Conversion to UInt32
+            Instruction::ToUInt32(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Int8(v) => GcValue::UInt32(*v as u32),
+                    GcValue::Int16(v) => GcValue::UInt32(*v as u32),
+                    GcValue::Int32(v) => GcValue::UInt32(*v as u32),
+                    GcValue::Int64(v) => GcValue::UInt32(*v as u32),
+                    GcValue::UInt8(v) => GcValue::UInt32(*v as u32),
+                    GcValue::UInt16(v) => GcValue::UInt32(*v as u32),
+                    GcValue::UInt32(v) => GcValue::UInt32(*v),
+                    GcValue::UInt64(v) => GcValue::UInt32(*v as u32),
+                    GcValue::Float32(v) => GcValue::UInt32(*v as u32),
+                    GcValue::Float64(v) => GcValue::UInt32(*v as u32),
+                    GcValue::BigInt(ptr) => {
+                        let bi = proc.heap.get_bigint(*ptr).unwrap();
+                        use num_traits::ToPrimitive;
+                        GcValue::UInt32(bi.value.to_u32().unwrap_or(0))
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: "non-numeric".to_string(),
+                    })
+                };
+                set_reg!(*dst, result);
+            }
+
+            // Conversion to UInt64
+            Instruction::ToUInt64(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Int8(v) => GcValue::UInt64(*v as u64),
+                    GcValue::Int16(v) => GcValue::UInt64(*v as u64),
+                    GcValue::Int32(v) => GcValue::UInt64(*v as u64),
+                    GcValue::Int64(v) => GcValue::UInt64(*v as u64),
+                    GcValue::UInt8(v) => GcValue::UInt64(*v as u64),
+                    GcValue::UInt16(v) => GcValue::UInt64(*v as u64),
+                    GcValue::UInt32(v) => GcValue::UInt64(*v as u64),
+                    GcValue::UInt64(v) => GcValue::UInt64(*v),
+                    GcValue::Float32(v) => GcValue::UInt64(*v as u64),
+                    GcValue::Float64(v) => GcValue::UInt64(*v as u64),
+                    GcValue::BigInt(ptr) => {
+                        let bi = proc.heap.get_bigint(*ptr).unwrap();
+                        use num_traits::ToPrimitive;
+                        GcValue::UInt64(bi.value.to_u64().unwrap_or(0))
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: "non-numeric".to_string(),
+                    })
+                };
+                set_reg!(*dst, result);
+            }
+
+            // Conversion to Float32
+            Instruction::ToFloat32(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Int8(v) => GcValue::Float32(*v as f32),
+                    GcValue::Int16(v) => GcValue::Float32(*v as f32),
+                    GcValue::Int32(v) => GcValue::Float32(*v as f32),
+                    GcValue::Int64(v) => GcValue::Float32(*v as f32),
+                    GcValue::UInt8(v) => GcValue::Float32(*v as f32),
+                    GcValue::UInt16(v) => GcValue::Float32(*v as f32),
+                    GcValue::UInt32(v) => GcValue::Float32(*v as f32),
+                    GcValue::UInt64(v) => GcValue::Float32(*v as f32),
+                    GcValue::Float32(v) => GcValue::Float32(*v),
+                    GcValue::Float64(v) => GcValue::Float32(*v as f32),
+                    GcValue::BigInt(ptr) => {
+                        let bi = proc.heap.get_bigint(*ptr).unwrap();
+                        use num_traits::ToPrimitive;
+                        GcValue::Float32(bi.value.to_f32().unwrap_or(0.0))
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: "non-numeric".to_string(),
+                    })
+                };
+                set_reg!(*dst, result);
+            }
+
+            // Conversion to BigInt
+            Instruction::ToBigInt(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Int8(v) => {
+                        let bi = num_bigint::BigInt::from(*v);
+                        GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                    }
+                    GcValue::Int16(v) => {
+                        let bi = num_bigint::BigInt::from(*v);
+                        GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                    }
+                    GcValue::Int32(v) => {
+                        let bi = num_bigint::BigInt::from(*v);
+                        GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                    }
+                    GcValue::Int64(v) => {
+                        let bi = num_bigint::BigInt::from(*v);
+                        GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                    }
+                    GcValue::UInt8(v) => {
+                        let bi = num_bigint::BigInt::from(*v);
+                        GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                    }
+                    GcValue::UInt16(v) => {
+                        let bi = num_bigint::BigInt::from(*v);
+                        GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                    }
+                    GcValue::UInt32(v) => {
+                        let bi = num_bigint::BigInt::from(*v);
+                        GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                    }
+                    GcValue::UInt64(v) => {
+                        let bi = num_bigint::BigInt::from(*v);
+                        GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                    }
+                    GcValue::BigInt(ptr) => GcValue::BigInt(*ptr),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "integer".to_string(),
+                        found: "non-integer".to_string(),
+                    })
+                };
+                set_reg!(*dst, result);
             }
 
             // === List operations (compile-time resolved) ===
@@ -2067,13 +2477,13 @@ mod tests {
                 Instruction::LoadConst(0, 0),
                 Instruction::Return(0),
             ],
-            vec![Value::Int(42)],
+            vec![Value::Int64(42)],
         );
 
         runtime.spawn_initial(func);
         let result = runtime.run().unwrap();
 
-        assert_eq!(result, Some(GcValue::Int(42)));
+        assert_eq!(result, Some(GcValue::Int64(42)));
     }
 
     #[test]
@@ -2104,7 +2514,7 @@ mod tests {
                 Instruction::LoadConst(0, 0),
                 Instruction::Return(0),
             ],
-            vec![Value::Int(99)],
+            vec![Value::Int64(99)],
         );
 
         // Main function that spawns a child and returns child's pid
@@ -2138,13 +2548,13 @@ mod tests {
                 Instruction::MulInt(2, 0, 1),  // r2 = 5 * 2 = 10
                 Instruction::Return(2),
             ],
-            vec![Value::Int(5), Value::Int(2)],
+            vec![Value::Int64(5), Value::Int64(2)],
         );
 
         runtime.spawn_initial(func);
         let result = runtime.run().unwrap();
 
-        assert_eq!(result, Some(GcValue::Int(10)));
+        assert_eq!(result, Some(GcValue::Int64(10)));
     }
 
     #[test]
@@ -2176,14 +2586,14 @@ mod tests {
                 Instruction::CallByName(2, 2, vec![0, 1].into()),  // r2 = add(r0, r1)
                 Instruction::Return(2),
             ],
-            vec![Value::Int(2), Value::Int(3), Value::String(Rc::new("add".to_string()))],
+            vec![Value::Int64(2), Value::Int64(3), Value::String(Rc::new("add".to_string()))],
         );
 
         runtime.register_function("add", add_func);
         runtime.spawn_initial(main_func);
         let result = runtime.run().unwrap();
 
-        assert_eq!(result, Some(GcValue::Int(5)));
+        assert_eq!(result, Some(GcValue::Int64(5)));
     }
 
     #[test]
@@ -2218,7 +2628,7 @@ mod tests {
                 Instruction::AddInt(3, 0, 6),        // r3 = n + sum(n-1)
                 Instruction::Return(3),
             ],
-            vec![Value::Int(0), Value::Int(1), Value::String(Rc::new("sum".to_string()))],
+            vec![Value::Int64(0), Value::Int64(1), Value::String(Rc::new("sum".to_string()))],
         );
         let sum_func = Rc::new(FunctionValue {
             arity: 1,
@@ -2233,14 +2643,14 @@ mod tests {
                 Instruction::CallByName(1, 1, vec![0].into()),
                 Instruction::Return(1),
             ],
-            vec![Value::Int(3), Value::String(Rc::new("sum".to_string()))],
+            vec![Value::Int64(3), Value::String(Rc::new("sum".to_string()))],
         );
 
         runtime.register_function("sum", sum_func);
         runtime.spawn_initial(main_func);
         let result = runtime.run().unwrap();
 
-        assert_eq!(result, Some(GcValue::Int(6)));
+        assert_eq!(result, Some(GcValue::Int64(6)));
     }
 
     #[test]
@@ -2268,14 +2678,14 @@ mod tests {
                 Instruction::TailCallByName(1, vec![0].into()),  // tail call id(42)
                 Instruction::Return(0),  // This should never execute
             ],
-            vec![Value::Int(42), Value::String(Rc::new("id".to_string()))],
+            vec![Value::Int64(42), Value::String(Rc::new("id".to_string()))],
         );
 
         runtime.register_function("id", id_func);
         runtime.spawn_initial(main_func);
         let result = runtime.run().unwrap();
 
-        assert_eq!(result, Some(GcValue::Int(42)));
+        assert_eq!(result, Some(GcValue::Int64(42)));
     }
 
     #[test]
@@ -2296,7 +2706,7 @@ mod tests {
                 Instruction::LoadUnit(2),
                 Instruction::Return(2),
             ],
-            vec![Value::Int(42)],
+            vec![Value::Int64(42)],
         );
 
         // Parent function:
@@ -2321,6 +2731,6 @@ mod tests {
         let result = runtime.run().unwrap();
 
         // Parent should receive 42 from child
-        assert_eq!(result, Some(GcValue::Int(42)));
+        assert_eq!(result, Some(GcValue::Int64(42)));
     }
 }

@@ -1,0 +1,8 @@
+# Fibonacci with Int32
+# expect: 55i32
+
+fib(0i32) = 0i32
+fib(1i32) = 1i32
+fib(n) = fib(n - 1i32) + fib(n - 2i32)
+
+main() = fib(10i32)

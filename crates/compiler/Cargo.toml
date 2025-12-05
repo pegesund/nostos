@@ -8,5 +8,7 @@ nostos-syntax = { path = "../syntax" }
 nostos-types = { path = "../types" }
 nostos-vm = { path = "../vm" }
 thiserror = "2.0"
+num-bigint = { workspace = true }
+rust_decimal = { workspace = true }
 
 [dev-dependencies]

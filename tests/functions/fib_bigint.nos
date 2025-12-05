@@ -1,0 +1,8 @@
+# Fibonacci with BigInt (can handle arbitrarily large numbers)
+# expect: 55n
+
+fib(0n) = 0n
+fib(1n) = 1n
+fib(n) = fib(n - 1n) + fib(n - 2n)
+
+main() = fib(10n)

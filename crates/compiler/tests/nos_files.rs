@@ -24,8 +24,23 @@ fn parse_expected(source: &str) -> Option<String> {
 /// Convert Value to string for comparison.
 fn value_to_string(value: &Value) -> String {
     match value {
-        Value::Int(n) => n.to_string(),
-        Value::Float(f) => f.to_string(),
+        // Signed integers
+        Value::Int8(n) => format!("{}i8", n),
+        Value::Int16(n) => format!("{}i16", n),
+        Value::Int32(n) => format!("{}i32", n),
+        Value::Int64(n) => n.to_string(),
+        // Unsigned integers
+        Value::UInt8(n) => format!("{}u8", n),
+        Value::UInt16(n) => format!("{}u16", n),
+        Value::UInt32(n) => format!("{}u32", n),
+        Value::UInt64(n) => format!("{}u64", n),
+        // Floats
+        Value::Float32(f) => format!("{}f32", f),
+        Value::Float64(f) => f.to_string(),
+        // BigInt and Decimal
+        Value::BigInt(n) => format!("{}n", n),
+        Value::Decimal(d) => format!("{}d", d),
+        // Other types
         Value::Bool(b) => b.to_string(),
         Value::String(s) => format!("\"{}\"", s),
         Value::Char(c) => format!("'{}'", c),
@@ -58,8 +73,23 @@ fn value_to_string(value: &Value) -> String {
 /// Only handles simple value types - complex heap-allocated types show as placeholders.
 fn gc_value_to_string(value: &GcValue) -> String {
     match value {
-        GcValue::Int(n) => n.to_string(),
-        GcValue::Float(f) => f.to_string(),
+        // Signed integers
+        GcValue::Int8(n) => format!("{}i8", n),
+        GcValue::Int16(n) => format!("{}i16", n),
+        GcValue::Int32(n) => format!("{}i32", n),
+        GcValue::Int64(n) => n.to_string(),
+        // Unsigned integers
+        GcValue::UInt8(n) => format!("{}u8", n),
+        GcValue::UInt16(n) => format!("{}u16", n),
+        GcValue::UInt32(n) => format!("{}u32", n),
+        GcValue::UInt64(n) => format!("{}u64", n),
+        // Floats
+        GcValue::Float32(f) => format!("{}f32", f),
+        GcValue::Float64(f) => f.to_string(),
+        // BigInt and Decimal - show as placeholders since they're heap-allocated
+        GcValue::BigInt(_) => "<bigint>".to_string(),
+        GcValue::Decimal(d) => format!("{}d", d),
+        // Other types
         GcValue::Bool(b) => b.to_string(),
         GcValue::Char(c) => format!("'{}'", c),
         GcValue::Unit => "()".to_string(),

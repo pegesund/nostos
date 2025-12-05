@@ -232,10 +232,24 @@ pub enum Pattern {
     Wildcard(Span),
     /// Variable binding: `x`, `name`
     Var(Ident),
-    /// Integer literal: `0`, `1`, `42`
+    /// Integer literal: `0`, `1`, `42` (default Int64)
     Int(i64, Span),
-    /// Float literal: `3.14`
+    /// Typed integer patterns
+    Int8(i8, Span),
+    Int16(i16, Span),
+    Int32(i32, Span),
+    UInt8(u8, Span),
+    UInt16(u16, Span),
+    UInt32(u32, Span),
+    UInt64(u64, Span),
+    /// BigInt pattern
+    BigInt(String, Span),
+    /// Float literal: `3.14` (default Float64)
     Float(f64, Span),
+    /// Float32 pattern
+    Float32(f32, Span),
+    /// Decimal pattern
+    Decimal(String, Span),
     /// String literal: `"hello"`
     String(String, Span),
     /// Char literal: `'a'`
@@ -265,7 +279,17 @@ impl Pattern {
             Pattern::Wildcard(s) => *s,
             Pattern::Var(ident) => ident.span,
             Pattern::Int(_, s) => *s,
+            Pattern::Int8(_, s) => *s,
+            Pattern::Int16(_, s) => *s,
+            Pattern::Int32(_, s) => *s,
+            Pattern::UInt8(_, s) => *s,
+            Pattern::UInt16(_, s) => *s,
+            Pattern::UInt32(_, s) => *s,
+            Pattern::UInt64(_, s) => *s,
+            Pattern::BigInt(_, s) => *s,
             Pattern::Float(_, s) => *s,
+            Pattern::Float32(_, s) => *s,
+            Pattern::Decimal(_, s) => *s,
             Pattern::String(_, s) => *s,
             Pattern::Char(_, s) => *s,
             Pattern::Bool(_, s) => *s,
@@ -318,10 +342,24 @@ pub enum RecordPatternField {
 /// An expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
-    /// Integer literal
+    /// Integer literal (default Int64)
     Int(i64, Span),
-    /// Float literal
+    /// Typed integer literals
+    Int8(i8, Span),
+    Int16(i16, Span),
+    Int32(i32, Span),
+    UInt8(u8, Span),
+    UInt16(u16, Span),
+    UInt32(u32, Span),
+    UInt64(u64, Span),
+    /// BigInt literal
+    BigInt(String, Span),
+    /// Float literal (default Float64)
     Float(f64, Span),
+    /// Float32 literal
+    Float32(f32, Span),
+    /// Decimal literal
+    Decimal(String, Span),
     /// String literal (possibly with interpolations)
     String(StringLit, Span),
     /// Character literal
@@ -387,7 +425,17 @@ impl Expr {
     pub fn span(&self) -> Span {
         match self {
             Expr::Int(_, s) => *s,
+            Expr::Int8(_, s) => *s,
+            Expr::Int16(_, s) => *s,
+            Expr::Int32(_, s) => *s,
+            Expr::UInt8(_, s) => *s,
+            Expr::UInt16(_, s) => *s,
+            Expr::UInt32(_, s) => *s,
+            Expr::UInt64(_, s) => *s,
+            Expr::BigInt(_, s) => *s,
             Expr::Float(_, s) => *s,
+            Expr::Float32(_, s) => *s,
+            Expr::Decimal(_, s) => *s,
             Expr::String(_, s) => *s,
             Expr::Char(_, s) => *s,
             Expr::Bool(_, s) => *s,

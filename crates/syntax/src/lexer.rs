@@ -106,11 +106,83 @@ pub enum Token {
     })]
     BinInt(i64),
 
+    // === Typed integer literals (must come before generic Int) ===
+    // Int8: 42i8
+    #[regex(r"[0-9][0-9_]*i8", priority = 3, callback = |lex| {
+        let s = lex.slice();
+        s[..s.len()-2].replace('_', "").parse::<i8>().ok()
+    })]
+    Int8(i8),
+
+    // Int16: 42i16
+    #[regex(r"[0-9][0-9_]*i16", priority = 3, callback = |lex| {
+        let s = lex.slice();
+        s[..s.len()-3].replace('_', "").parse::<i16>().ok()
+    })]
+    Int16(i16),
+
+    // Int32: 42i32
+    #[regex(r"[0-9][0-9_]*i32", priority = 3, callback = |lex| {
+        let s = lex.slice();
+        s[..s.len()-3].replace('_', "").parse::<i32>().ok()
+    })]
+    Int32(i32),
+
+    // UInt8: 42u8
+    #[regex(r"[0-9][0-9_]*u8", priority = 3, callback = |lex| {
+        let s = lex.slice();
+        s[..s.len()-2].replace('_', "").parse::<u8>().ok()
+    })]
+    UInt8(u8),
+
+    // UInt16: 42u16
+    #[regex(r"[0-9][0-9_]*u16", priority = 3, callback = |lex| {
+        let s = lex.slice();
+        s[..s.len()-3].replace('_', "").parse::<u16>().ok()
+    })]
+    UInt16(u16),
+
+    // UInt32: 42u32
+    #[regex(r"[0-9][0-9_]*u32", priority = 3, callback = |lex| {
+        let s = lex.slice();
+        s[..s.len()-3].replace('_', "").parse::<u32>().ok()
+    })]
+    UInt32(u32),
+
+    // UInt64: 42u64
+    #[regex(r"[0-9][0-9_]*u64", priority = 3, callback = |lex| {
+        let s = lex.slice();
+        s[..s.len()-3].replace('_', "").parse::<u64>().ok()
+    })]
+    UInt64(u64),
+
+    // BigInt: 42n
+    #[regex(r"[0-9][0-9_]*n", priority = 3, callback = |lex| {
+        let s = lex.slice();
+        Some(s[..s.len()-1].replace('_', ""))
+    })]
+    BigInt(String),
+
     // Decimal integer
     #[regex(r"[0-9][0-9_]*", |lex| lex.slice().replace('_', "").parse::<i64>().ok())]
     Int(i64),
 
-    // Float (including scientific notation)
+    // === Typed float literals (must come before generic Float) ===
+    // Float32: 3.14f32
+    #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9]+)?f32", priority = 3, callback = |lex| {
+        let s = lex.slice();
+        Some(s[..s.len()-3].replace('_', ""))
+    })]
+    Float32(String),
+
+    // Decimal: 3.14d or 42d
+    #[regex(r"[0-9][0-9_]*(\.[0-9][0-9_]*)?d", priority = 3, callback = |lex| {
+        let s = lex.slice();
+        Some(s[..s.len()-1].replace('_', ""))
+    })]
+    Decimal(String),
+
+    // Float (including scientific notation) - default is Float64
     #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9]+)?", |lex| lex.slice().replace('_', ""))]
     Float(String),
 
@@ -281,7 +353,17 @@ impl fmt::Display for Token {
             Token::False => write!(f, "false"),
             Token::HexInt(n) => write!(f, "0x{:x}", n),
             Token::BinInt(n) => write!(f, "0b{:b}", n),
+            Token::Int8(n) => write!(f, "{}i8", n),
+            Token::Int16(n) => write!(f, "{}i16", n),
+            Token::Int32(n) => write!(f, "{}i32", n),
+            Token::UInt8(n) => write!(f, "{}u8", n),
+            Token::UInt16(n) => write!(f, "{}u16", n),
+            Token::UInt32(n) => write!(f, "{}u32", n),
+            Token::UInt64(n) => write!(f, "{}u64", n),
+            Token::BigInt(s) => write!(f, "{}n", s),
             Token::Int(n) => write!(f, "{}", n),
+            Token::Float32(s) => write!(f, "{}f32", s),
+            Token::Decimal(s) => write!(f, "{}d", s),
             Token::Float(s) => write!(f, "{}", s),
             Token::String(s) => write!(f, "\"{}\"", s),
             Token::Char(c) => write!(f, "'{}'", c),
@@ -476,6 +558,40 @@ mod tests {
         assert_eq!(tokens, vec![
             Token::Percent, Token::LBrace, Token::RBrace,
             Token::Hash, Token::LBrace, Token::RBrace,
+        ]);
+    }
+
+    #[test]
+    fn test_typed_integers() {
+        let tokens: Vec<_> = lex("42i8 100i16 1000i32 42u8 100u16 1000u32 1000u64")
+            .map(|(t, _)| t).collect();
+        assert_eq!(tokens, vec![
+            Token::Int8(42),
+            Token::Int16(100),
+            Token::Int32(1000),
+            Token::UInt8(42),
+            Token::UInt16(100),
+            Token::UInt32(1000),
+            Token::UInt64(1000),
+        ]);
+    }
+
+    #[test]
+    fn test_bigint() {
+        let tokens: Vec<_> = lex("42n 1_000_000n").map(|(t, _)| t).collect();
+        assert_eq!(tokens, vec![
+            Token::BigInt("42".to_string()),
+            Token::BigInt("1000000".to_string()),
+        ]);
+    }
+
+    #[test]
+    fn test_typed_floats() {
+        let tokens: Vec<_> = lex("3.14f32 2.5d 42d").map(|(t, _)| t).collect();
+        assert_eq!(tokens, vec![
+            Token::Float32("3.14".to_string()),
+            Token::Decimal("2.5".to_string()),
+            Token::Decimal("42".to_string()),
         ]);
     }
 }

@@ -1,0 +1,8 @@
+# Fibonacci with UInt16
+# expect: 55u16
+
+fib(0u16) = 0u16
+fib(1u16) = 1u16
+fib(n) = fib(n - 1u16) + fib(n - 2u16)
+
+main() = fib(10u16)
