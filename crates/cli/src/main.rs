@@ -417,6 +417,9 @@ fn main() -> ExitCode {
         // Parallel execution with work-stealing WorkerPool
         let scheduler = Scheduler::new();
 
+        // Register default native functions (show, copy, print, println)
+        scheduler.register_default_natives();
+
         // Register functions on scheduler
         for (name, func) in compiler.get_all_functions() {
             scheduler.functions.write().insert(name.clone(), func.clone());
@@ -424,6 +427,11 @@ fn main() -> ExitCode {
         // Also set function_list for index-based lookup (CallDirect/TailCallDirect)
         let function_list = compiler.get_function_list();
         *scheduler.function_list.write() = function_list.clone();
+
+        // Register types on scheduler
+        for (name, type_val) in compiler.get_vm_types() {
+            scheduler.types.write().insert(name.clone(), type_val.clone());
+        }
 
         // JIT compile suitable functions
         if enable_jit {

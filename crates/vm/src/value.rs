@@ -209,7 +209,7 @@ pub struct NativeFn {
 }
 
 /// Process ID for concurrency.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Pid(pub u64);
 
 /// Reference ID for monitors.

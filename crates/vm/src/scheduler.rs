@@ -9,10 +9,12 @@
 //! Thread-safety: Uses parking_lot for fast locking and atomic
 //! counters for Pid/RefId allocation. Ready for multi-CPU execution.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use parking_lot::{Mutex, RwLock};
 
@@ -318,6 +320,10 @@ pub struct Scheduler {
     /// Active (non-exited) process count - atomic for fast access.
     /// Avoids expensive iteration in process_count().
     active_process_count: AtomicUsize,
+
+    /// Timer heap for Sleep/ReceiveTimeout - stores (wake_time, Pid) pairs.
+    /// Uses Reverse for min-heap behavior (earliest wake time first).
+    pub timer_heap: Mutex<BinaryHeap<Reverse<(Instant, Pid)>>>,
 }
 
 impl Scheduler {
@@ -344,6 +350,7 @@ impl Scheduler {
             jit_int_functions: RwLock::new(HashMap::new()),
             jit_loop_array_functions: RwLock::new(HashMap::new()),
             active_process_count: AtomicUsize::new(0),
+            timer_heap: Mutex::new(BinaryHeap::new()),
         }
     }
 
@@ -351,6 +358,52 @@ impl Scheduler {
     #[inline]
     pub fn active_count(&self) -> usize {
         self.active_process_count.load(Ordering::Relaxed)
+    }
+
+    /// Register the default native functions (show, copy, print, println).
+    pub fn register_default_natives(&self) {
+        use crate::gc::GcNativeFn;
+
+        // Show - convert value to string
+        self.natives.write().insert("show".to_string(), Arc::new(GcNativeFn {
+            name: "show".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let s = heap.display_value(&args[0]);
+                Ok(GcValue::String(heap.alloc_string(s)))
+            }),
+        }));
+
+        // Copy - deep copy a value
+        self.natives.write().insert("copy".to_string(), Arc::new(GcNativeFn {
+            name: "copy".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                Ok(heap.clone_value(&args[0]))
+            }),
+        }));
+
+        // Print - print without newline
+        self.natives.write().insert("print".to_string(), Arc::new(GcNativeFn {
+            name: "print".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let s = heap.display_value(&args[0]);
+                print!("{}", s);
+                Ok(GcValue::Unit)
+            }),
+        }));
+
+        // Println - print with newline
+        self.natives.write().insert("println".to_string(), Arc::new(GcNativeFn {
+            name: "println".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let s = heap.display_value(&args[0]);
+                println!("{}", s);
+                Ok(GcValue::Unit)
+            }),
+        }));
     }
 
     /// Spawn a new process.
@@ -541,9 +594,15 @@ impl Scheduler {
                 let copied = target.heap.deep_copy(&message, &source.heap);
                 target.mailbox.push_back(copied);
 
-                // Wake up if waiting
+                // Wake up if waiting (including WaitingTimeout)
+                // Note: For WaitingTimeout, we only set state to Running but keep wake_time.
+                // ReceiveTimeout will clear wake_time when it finds the message.
+                // This avoids confusion about whether this is first entry or message wakeup.
                 if target.state == ProcessState::Waiting {
                     target.state = ProcessState::Running;
+                } else if target.state == ProcessState::WaitingTimeout {
+                    target.state = ProcessState::Running;
+                    // Keep wake_time/timeout_dst - ReceiveTimeout will clear them when it gets the message
                 }
 
                 drop(first_lock);
@@ -724,6 +783,35 @@ impl Scheduler {
         self.processes.write().retain(|_, handle| {
             !handle.lock().is_exited()
         });
+    }
+
+    /// Add a timer for a process to wake at a specific time.
+    pub fn add_timer(&self, wake_time: Instant, pid: Pid) {
+        self.timer_heap.lock().push(Reverse((wake_time, pid)));
+    }
+
+    /// Check for expired timers and wake processes.
+    /// Returns the Pids of processes that should be woken.
+    pub fn check_timers(&self) -> Vec<Pid> {
+        let now = Instant::now();
+        let mut heap = self.timer_heap.lock();
+        let mut woken = Vec::new();
+
+        while let Some(&Reverse((wake_time, pid))) = heap.peek() {
+            if wake_time <= now {
+                heap.pop();
+                woken.push(pid);
+            } else {
+                break;
+            }
+        }
+
+        woken
+    }
+
+    /// Get the next timer deadline (if any) for efficient sleeping.
+    pub fn next_timer_deadline(&self) -> Option<Instant> {
+        self.timer_heap.lock().peek().map(|Reverse((t, _))| *t)
     }
 }
 

@@ -10,15 +10,15 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use crossbeam::deque::{Injector, Stealer, Worker as WorkQueue};
 use parking_lot::Mutex;
 
 use crate::gc::GcValue;
-use crate::process::{ExitReason, ProcessState};
+use crate::process::{CallFrame, ExceptionHandler, ExitReason, ProcessState};
 use crate::scheduler::Scheduler;
 use crate::value::{FunctionValue, Pid, RuntimeError};
-use crate::process::CallFrame;
 
 /// Thread-safe result from main process.
 /// Since GcValue contains Rc (not Send), we transfer simple values only.
@@ -312,8 +312,16 @@ impl Worker {
         self.active_workers.fetch_sub(1, Ordering::SeqCst);
     }
 
-    /// Find work: local queue -> scheduler run queue -> global injector -> steal from others.
+    /// Find work: timers -> local queue -> scheduler run queue -> global injector -> steal from others.
     fn find_work(&self) -> Option<Pid> {
+        // 0. Check for expired timers and add sleeping/waiting processes to queue
+        // Note: We DON'T change their state here - let Sleep/ReceiveTimeout instructions
+        // detect the timeout and handle state transitions themselves.
+        let woken = self.scheduler.check_timers();
+        for pid in woken {
+            self.local.push(pid);
+        }
+
         // 1. Try local queue first (fastest)
         if let Some(pid) = self.local.pop() {
             return Some(pid);
@@ -357,9 +365,14 @@ impl Worker {
     /// Execute a process for one time slice.
     fn execute_process(&self, pid: Pid) {
         // Reset reductions for this time slice
+        // Note: We only set state to Running if it's in Waiting state.
+        // For Sleeping/WaitingTimeout, we let the respective instructions detect
+        // that the timer fired and handle state transitions.
         self.scheduler.with_process_mut(pid, |proc| {
             proc.reset_reductions();
-            proc.state = ProcessState::Running;
+            if proc.state == ProcessState::Waiting {
+                proc.state = ProcessState::Running;
+            }
         });
 
         // Run the process
@@ -1562,20 +1575,51 @@ impl Worker {
                     }
                 };
 
-                let native = self
-                    .scheduler
-                    .natives
-                    .read()
-                    .get(&*name)
-                    .cloned()
-                    .ok_or_else(|| RuntimeError::Panic(format!("Undefined native: {}", name)))?;
+                // Check for trait overrides for "show" and "copy"
+                let trait_method = if !arg_values.is_empty() && (&*name == "show" || &*name == "copy") {
+                    let trait_name = if &*name == "show" { "Show" } else { "Copy" };
+                    let type_name = self.scheduler.with_process(pid, |proc| {
+                        arg_values[0].type_name(&proc.heap).to_string()
+                    }).unwrap_or_else(|| "unknown".to_string());
+                    let qualified_name = format!("{}.{}.{}", type_name, trait_name, &*name);
+                    self.scheduler.functions.read().get(&qualified_name).cloned()
+                } else {
+                    None
+                };
 
-                let result = self
-                    .scheduler
-                    .with_process_mut(pid, |proc| (native.func)(&arg_values, &mut proc.heap))
-                    .ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))??;
+                if let Some(func) = trait_method {
+                    // Call the trait method instead of native
+                    // Set up a new call frame
+                    self.scheduler.with_process_mut(pid, |proc| {
+                        let mut registers = vec![GcValue::Unit; 256];
+                        for (i, arg) in arg_values.iter().enumerate() {
+                            registers[i] = arg.clone();
+                        }
+                        let frame = CallFrame {
+                            function: func.clone(),
+                            ip: 0,
+                            registers,
+                            captures: vec![],
+                            return_reg: Some(dst),
+                        };
+                        proc.frames.push(frame);
+                    });
+                } else {
+                    let native = self
+                        .scheduler
+                        .natives
+                        .read()
+                        .get(&*name)
+                        .cloned()
+                        .ok_or_else(|| RuntimeError::Panic(format!("Undefined native: {}", name)))?;
 
-                set_reg!(dst, result);
+                    let result = self
+                        .scheduler
+                        .with_process_mut(pid, |proc| (native.func)(&arg_values, &mut proc.heap))
+                        .ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))??;
+
+                    set_reg!(dst, result);
+                }
                 self.scheduler.with_process_mut(pid, |proc| {
                     proc.consume_reductions(10);
                 });
@@ -1623,15 +1667,16 @@ impl Worker {
                 let func_val = get_reg!(func_reg);
                 let args: Vec<GcValue> = arg_regs.iter().map(|&r| get_reg!(r)).collect();
 
-                let func = self
+                // Get function and captures (if closure)
+                let (func, captures) = self
                     .scheduler
                     .with_process(pid, |proc| {
                         match &func_val {
-                            GcValue::Function(f) => Ok(f.clone()),
+                            GcValue::Function(f) => Ok((f.clone(), Vec::new())),
                             GcValue::Closure(ptr) => proc
                                 .heap
                                 .get_closure(*ptr)
-                                .map(|c| c.function.clone())
+                                .map(|c| (c.function.clone(), c.captures.clone()))
                                 .ok_or_else(|| RuntimeError::TypeError {
                                     expected: "Function".to_string(),
                                     found: "invalid closure".to_string(),
@@ -1644,7 +1689,7 @@ impl Worker {
                     })
                     .ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))??;
 
-                let child_pid = self.spawn_child_process(func, args, pid);
+                let child_pid = self.spawn_child_process(func, args, captures, pid);
                 set_reg!(dst, GcValue::Pid(child_pid.0));
 
                 self.scheduler.with_process_mut(pid, |proc| {
@@ -1703,17 +1748,29 @@ impl Worker {
                 let func_val = get_reg!(func_reg);
                 let args: Vec<GcValue> = arg_regs.iter().map(|&r| get_reg!(r)).collect();
 
-                let func = match func_val {
-                    GcValue::Function(f) => f,
-                    _ => {
-                        return Err(RuntimeError::TypeError {
-                            expected: "Function".to_string(),
-                            found: "other".to_string(),
-                        })
-                    }
-                };
+                // Get function and captures (if closure)
+                let (func, captures) = self
+                    .scheduler
+                    .with_process(pid, |proc| {
+                        match &func_val {
+                            GcValue::Function(f) => Ok((f.clone(), Vec::new())),
+                            GcValue::Closure(ptr) => proc
+                                .heap
+                                .get_closure(*ptr)
+                                .map(|c| (c.function.clone(), c.captures.clone()))
+                                .ok_or_else(|| RuntimeError::TypeError {
+                                    expected: "Function".to_string(),
+                                    found: "invalid closure".to_string(),
+                                }),
+                            other => Err(RuntimeError::TypeError {
+                                expected: "Function".to_string(),
+                                found: other.type_name(&proc.heap).to_string(),
+                            }),
+                        }
+                    })
+                    .ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))??;
 
-                let child_pid = self.spawn_child_process(func, args, pid);
+                let child_pid = self.spawn_child_process(func, args, captures, pid);
 
                 // Create bidirectional link
                 let (first_pid, second_pid) = if pid.0 < child_pid.0 {
@@ -1745,17 +1802,29 @@ impl Worker {
                 let func_val = get_reg!(func_reg);
                 let args: Vec<GcValue> = arg_regs.iter().map(|&r| get_reg!(r)).collect();
 
-                let func = match func_val {
-                    GcValue::Function(f) => f,
-                    _ => {
-                        return Err(RuntimeError::TypeError {
-                            expected: "Function".to_string(),
-                            found: "other".to_string(),
-                        })
-                    }
-                };
+                // Get function and captures (if closure)
+                let (func, captures) = self
+                    .scheduler
+                    .with_process(pid, |proc| {
+                        match &func_val {
+                            GcValue::Function(f) => Ok((f.clone(), Vec::new())),
+                            GcValue::Closure(ptr) => proc
+                                .heap
+                                .get_closure(*ptr)
+                                .map(|c| (c.function.clone(), c.captures.clone()))
+                                .ok_or_else(|| RuntimeError::TypeError {
+                                    expected: "Function".to_string(),
+                                    found: "invalid closure".to_string(),
+                                }),
+                            other => Err(RuntimeError::TypeError {
+                                expected: "Function".to_string(),
+                                found: other.type_name(&proc.heap).to_string(),
+                            }),
+                        }
+                    })
+                    .ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))??;
 
-                let child_pid = self.spawn_child_process(func, args, pid);
+                let child_pid = self.spawn_child_process(func, args, captures, pid);
                 let ref_id = self.scheduler.make_ref();
 
                 let (first_pid, second_pid) = if pid.0 < child_pid.0 {
@@ -1784,10 +1853,113 @@ impl Worker {
                 set_reg!(ref_dst, GcValue::Ref(ref_id.0));
             }
 
-            Instruction::ReceiveTimeout(_dst, _timeout_reg) => {
-                return Err(RuntimeError::Panic(
-                    "ReceiveTimeout not yet implemented".to_string(),
-                ));
+            Instruction::ReceiveTimeout(dst, timeout_reg) => {
+                let timeout_ms = match get_reg!(timeout_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64".to_string(),
+                        found: "non-integer".to_string(),
+                    }),
+                };
+
+                // Check for message in mailbox
+                let msg = self.scheduler.with_process_mut(pid, |proc| {
+                    proc.mailbox.pop_front()
+                }).flatten();
+
+                if let Some(msg) = msg {
+                    // Message available - put in destination register and clear timeout state
+                    self.scheduler.with_process_mut(pid, |proc| {
+                        proc.wake_time = None;
+                        proc.timeout_dst = None;
+                    });
+                    set_reg!(dst, msg);
+                } else {
+                    // No message - check if this is first entry or timeout wakeup
+                    let (is_first_entry, wake_time_reached) = self.scheduler.with_process(pid, |proc| {
+                        let first = proc.state == ProcessState::Running && proc.wake_time.is_none();
+                        let reached = proc.wake_time.map(|t| Instant::now() >= t).unwrap_or(false);
+                        (first, reached)
+                    }).unwrap_or((false, false));
+
+                    if is_first_entry {
+                        // First entry - set up timeout and wait
+                        let wake_time = Instant::now() + Duration::from_millis(timeout_ms);
+                        self.scheduler.with_process_mut(pid, |proc| {
+                            proc.wake_time = Some(wake_time);
+                            proc.timeout_dst = Some(dst);
+                            proc.state = ProcessState::WaitingTimeout;
+                            // Decrement IP so we retry when woken
+                            if let Some(frame) = proc.frames.last_mut() {
+                                frame.ip -= 1;
+                            }
+                        });
+                        self.scheduler.add_timer(wake_time, pid);
+                        return Ok(ProcessResult::Waiting);
+                    } else if wake_time_reached {
+                        // Woken by timeout - set dst to Unit to indicate timeout
+                        self.scheduler.with_process_mut(pid, |proc| {
+                            proc.wake_time = None;
+                            proc.timeout_dst = None;
+                            proc.state = ProcessState::Running;
+                        });
+                        set_reg!(dst, GcValue::Unit);
+                    } else {
+                        // Still waiting (shouldn't happen normally, but handle it)
+                        self.scheduler.with_process_mut(pid, |proc| {
+                            if let Some(frame) = proc.frames.last_mut() {
+                                frame.ip -= 1;
+                            }
+                        });
+                        return Ok(ProcessResult::Waiting);
+                    }
+                }
+            }
+
+            Instruction::Sleep(duration_reg) => {
+                let duration_ms = match get_reg!(duration_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64".to_string(),
+                        found: "non-integer".to_string(),
+                    }),
+                };
+
+                // Check if we're waking from sleep or just starting
+                let (is_sleeping, wake_time_reached) = self.scheduler.with_process(pid, |proc| {
+                    let sleeping = proc.state == ProcessState::Sleeping;
+                    let reached = proc.wake_time.map(|t| Instant::now() >= t).unwrap_or(false);
+                    (sleeping, reached)
+                }).unwrap_or((false, false));
+
+                if is_sleeping && wake_time_reached {
+                    // Sleep completed - continue execution
+                    self.scheduler.with_process_mut(pid, |proc| {
+                        proc.wake_time = None;
+                        proc.state = ProcessState::Running;
+                    });
+                } else if !is_sleeping {
+                    // Start sleeping
+                    let wake_time = Instant::now() + Duration::from_millis(duration_ms);
+                    self.scheduler.with_process_mut(pid, |proc| {
+                        proc.wake_time = Some(wake_time);
+                        proc.state = ProcessState::Sleeping;
+                        // Decrement IP so we retry when woken
+                        if let Some(frame) = proc.frames.last_mut() {
+                            frame.ip -= 1;
+                        }
+                    });
+                    self.scheduler.add_timer(wake_time, pid);
+                    return Ok(ProcessResult::Waiting);
+                } else {
+                    // Still sleeping (timer not expired yet)
+                    self.scheduler.with_process_mut(pid, |proc| {
+                        if let Some(frame) = proc.frames.last_mut() {
+                            frame.ip -= 1;
+                        }
+                    });
+                    return Ok(ProcessResult::Waiting);
+                }
             }
 
             // === Debug ===
@@ -1805,12 +1977,66 @@ impl Worker {
             }
 
             Instruction::Throw(msg_reg) => {
-                let msg = get_reg!(msg_reg);
-                let msg_str = self
-                    .scheduler
-                    .with_process(pid, |proc| proc.heap.display_value(&msg))
-                    .unwrap_or_else(|| "unknown".to_string());
-                return Err(RuntimeError::Panic(format!("Panic: {}", msg_str)));
+                let exception = get_reg!(msg_reg);
+
+                // Try to find and use a handler
+                let handler_found = self.scheduler.with_process_mut(pid, |proc| {
+                    proc.current_exception = Some(exception.clone());
+
+                    if let Some(handler) = proc.handlers.pop() {
+                        // Unwind to the handler's frame
+                        while proc.frames.len() > handler.frame_index + 1 {
+                            proc.frames.pop();
+                        }
+                        // Jump to the catch block
+                        if let Some(frame) = proc.frames.last_mut() {
+                            frame.ip = handler.catch_ip;
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                }).unwrap_or(false);
+
+                if !handler_found {
+                    let msg_str = self
+                        .scheduler
+                        .with_process(pid, |proc| proc.heap.display_value(&exception))
+                        .unwrap_or_else(|| "unknown".to_string());
+                    return Err(RuntimeError::Panic(format!("Uncaught exception: {}", msg_str)));
+                }
+            }
+
+            // === Exception handling ===
+            Instruction::PushHandler(catch_offset) => {
+                self.scheduler.with_process_mut(pid, |proc| {
+                    let frame_idx = proc.frames.len() - 1;
+                    let catch_ip = (proc.frames[frame_idx].ip as isize + catch_offset as isize) as usize;
+                    let handler = ExceptionHandler {
+                        frame_index: frame_idx,
+                        catch_ip,
+                    };
+                    proc.handlers.push(handler);
+                });
+            }
+
+            Instruction::PopHandler => {
+                self.scheduler.with_process_mut(pid, |proc| {
+                    proc.handlers.pop();
+                });
+            }
+
+            Instruction::GetException(dst) => {
+                let exception = self.scheduler.with_process(pid, |proc| {
+                    proc.current_exception.clone().unwrap_or(GcValue::Unit)
+                }).unwrap_or(GcValue::Unit);
+                set_reg!(dst, exception);
+            }
+
+            Instruction::TestUnit(dst, src) => {
+                let val = get_reg!(src);
+                let is_unit = matches!(val, GcValue::Unit);
+                set_reg!(dst, GcValue::Bool(is_unit));
             }
 
             Instruction::DebugPrint(r) => {
@@ -2433,12 +2659,13 @@ impl Worker {
         &self,
         func: Arc<FunctionValue>,
         args: Vec<GcValue>,
+        parent_captures: Vec<GcValue>,
         parent_pid: Pid,
     ) -> Pid {
         // Use spawn_lightweight to avoid double-queuing and minimize memory
         let child_pid = self.scheduler.spawn_lightweight();
 
-        // Copy arguments from parent to child with lock ordering
+        // Copy arguments and captures from parent to child with lock ordering
         let (first_pid, second_pid, parent_is_first) = if parent_pid.0 < child_pid.0 {
             (parent_pid, child_pid, true)
         } else {
@@ -2458,9 +2685,16 @@ impl Worker {
                 (&*second_lock, &mut *first_lock)
             };
 
+            // Copy arguments from parent heap to child heap
             let copied_args: Vec<GcValue> = args
                 .iter()
                 .map(|arg| child.heap.deep_copy(arg, &parent.heap))
+                .collect();
+
+            // Copy captures from parent heap to child heap
+            let copied_captures: Vec<GcValue> = parent_captures
+                .iter()
+                .map(|cap| child.heap.deep_copy(cap, &parent.heap))
                 .collect();
 
             let mut registers = vec![GcValue::Unit; 256];
@@ -2474,7 +2708,7 @@ impl Worker {
                 function: func,
                 ip: 0,
                 registers,
-                captures: Vec::new(),
+                captures: copied_captures,
                 return_reg: None,
             };
             child.frames.push(frame);
