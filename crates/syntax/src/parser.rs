@@ -760,6 +760,39 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                 Expr::Receive(arms, timeout, to_span(span))
             });
 
+        // While loop: while cond { body }
+        let while_expr = just(Token::While)
+            .ignore_then(skip_newlines().ignore_then(expr.clone()))
+            .then(skip_newlines().ignore_then(expr.clone()))
+            .map_with_span(|(cond, body), span| {
+                Expr::While(Box::new(cond), Box::new(body), to_span(span))
+            });
+
+        // For loop: for var = start to end { body }
+        let for_expr = just(Token::For)
+            .ignore_then(skip_newlines().ignore_then(ident()))
+            .then_ignore(skip_newlines())
+            .then_ignore(just(Token::Eq))
+            .then(skip_newlines().ignore_then(expr.clone()))
+            .then_ignore(skip_newlines())
+            .then_ignore(just(Token::To))
+            .then(skip_newlines().ignore_then(expr.clone()))
+            .then(skip_newlines().ignore_then(expr.clone()))
+            .map_with_span(|(((var, start), end), body), span| {
+                Expr::For(var, Box::new(start), Box::new(end), Box::new(body), to_span(span))
+            });
+
+        // Break: break or break expr
+        let break_expr = just(Token::Break)
+            .ignore_then(expr.clone().or_not())
+            .map_with_span(|val, span| {
+                Expr::Break(val.map(Box::new), to_span(span))
+            });
+
+        // Continue
+        let continue_expr = just(Token::Continue)
+            .map_with_span(|_, span| Expr::Continue(to_span(span)));
+
         // Spawn expressions
         let spawn_kind = choice((
             just(Token::SpawnMonitor).to(SpawnKind::Monitored),
@@ -780,7 +813,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
 
         // Primary expressions - split into groups to reduce type complexity
         // Skip newlines at the start of any primary expression
-        let control_flow = skip_newlines().ignore_then(choice((if_expr, match_expr, try_expr, do_block, receive_expr))).boxed();
+        let control_flow = skip_newlines().ignore_then(choice((if_expr, match_expr, try_expr, do_block, receive_expr, while_expr, for_expr, break_expr, continue_expr))).boxed();
         let special = skip_newlines().ignore_then(choice((spawn_expr, quote_expr, lambda))).boxed();
         let lit = skip_newlines().ignore_then(choice((bool_expr, int, float, string, char_expr))).boxed();
         let collections = skip_newlines().ignore_then(choice((map, set, record, unit_variant, tuple, unit, list, block))).boxed();
@@ -1038,6 +1071,10 @@ fn get_span(expr: &Expr) -> Span {
         Expr::Try_(_, s) => *s,
         Expr::Quote(_, s) => *s,
         Expr::Splice(_, s) => *s,
+        Expr::While(_, _, s) => *s,
+        Expr::For(_, _, _, _, s) => *s,
+        Expr::Break(_, s) => *s,
+        Expr::Continue(s) => *s,
     }
 }
 

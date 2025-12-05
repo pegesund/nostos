@@ -540,6 +540,22 @@ fn extract_dependencies_from_expr(expr: &Expr, deps: &mut HashSet<String>) {
                 }
             }
         }
+        // Loop expressions
+        Expr::While(cond, body, _) => {
+            extract_dependencies_from_expr(cond, deps);
+            extract_dependencies_from_expr(body, deps);
+        }
+        Expr::For(_, start, end, body, _) => {
+            extract_dependencies_from_expr(start, deps);
+            extract_dependencies_from_expr(end, deps);
+            extract_dependencies_from_expr(body, deps);
+        }
+        Expr::Break(value, _) => {
+            if let Some(val) = value {
+                extract_dependencies_from_expr(val, deps);
+            }
+        }
+        Expr::Continue(_) => {}
         // Literals don't have dependencies
         Expr::Int(_, _)
         | Expr::Int8(_, _)

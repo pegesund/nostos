@@ -372,6 +372,7 @@ impl JitCompiler {
                 // Allowed for any type
                 Instruction::Move(_, _) => {}
                 Instruction::LoadTrue(_) | Instruction::LoadFalse(_) => {}
+                Instruction::LoadUnit(_) => {} // Loops emit this for their result
                 Instruction::Jump(_) => {}
                 Instruction::JumpIfTrue(_, _) => {}
                 Instruction::JumpIfFalse(_, _) => {}
@@ -550,6 +551,16 @@ impl JitCompiler {
                     }
 
                     Instruction::LoadFalse(dst) => {
+                        let v = if num_type.is_float() {
+                            builder.ins().f64const(0.0)
+                        } else {
+                            builder.ins().iconst(cl_type, 0)
+                        };
+                        builder.def_var(regs[*dst as usize], v);
+                    }
+
+                    // LoadUnit - used by loops, treat as 0
+                    Instruction::LoadUnit(dst) => {
                         let v = if num_type.is_float() {
                             builder.ins().f64const(0.0)
                         } else {
@@ -1633,5 +1644,175 @@ mod tests {
 
         assert_eq!(result, expected);
         eprintln!("[JIT] sum(1..1000) = {} in {:?}", result, elapsed);
+    }
+
+    /// Create a countdown function using a while loop:
+    /// countdown(n) = { count = n; while count > 0 { count = count - 1 }; count }
+    fn make_countdown_loop_function() -> FunctionValue {
+        let mut chunk = Chunk::new();
+
+        // Constants
+        chunk.constants.push(Value::Int64(0)); // idx 0: constant 0
+        chunk.constants.push(Value::Int64(1)); // idx 1: constant 1
+
+        // Registers:
+        // r0 = n (argument)
+        // r1 = count
+        // r2 = loop result (unit)
+        // r3 = 0 constant
+        // r4 = 1 constant
+        // r5 = comparison result
+        // r6 = temp for subtraction
+
+        // IP=0: count = n
+        chunk.code.push(Instruction::Move(1, 0));
+        // IP=1: LoadUnit for loop result
+        chunk.code.push(Instruction::LoadUnit(2));
+        // IP=2: r3 = 0
+        chunk.code.push(Instruction::LoadConst(3, 0));
+        // IP=3: r4 = 1
+        chunk.code.push(Instruction::LoadConst(4, 1));
+        // IP=4: r5 = count > 0 (loop condition)
+        chunk.code.push(Instruction::GtInt(5, 1, 3));
+        // IP=5: if !(count > 0), jump to IP=9 (offset = 9-5-1 = 3)
+        chunk.code.push(Instruction::JumpIfFalse(5, 3));
+        // IP=6: r6 = count - 1
+        chunk.code.push(Instruction::SubInt(6, 1, 4));
+        // IP=7: count = r6
+        chunk.code.push(Instruction::Move(1, 6));
+        // IP=8: jump back to IP=4 (offset = 4-8-1 = -5)
+        chunk.code.push(Instruction::Jump(-5));
+        // IP=9: return count
+        chunk.code.push(Instruction::Return(1));
+
+        chunk.register_count = 7;
+
+        FunctionValue {
+            name: "countdown".to_string(),
+            arity: 1,
+            param_names: vec!["n".to_string()],
+            code: Rc::new(chunk),
+            module: None,
+            source_span: None,
+            jit_code: None,
+            call_count: Cell::new(0),
+        }
+    }
+
+    #[test]
+    fn test_jit_loop_countdown() {
+        let config = JitConfig::default();
+        let mut jit = JitCompiler::new(config).unwrap();
+
+        let func = make_countdown_loop_function();
+        jit.compile_int_function(0, &func).expect("JIT compilation with loop failed");
+
+        let native_fn = jit.get_int_function(0).expect("Loop function not compiled");
+
+        // Test countdown
+        assert_eq!(native_fn(0), 0);   // Already at 0
+        assert_eq!(native_fn(1), 0);   // 1 -> 0
+        assert_eq!(native_fn(5), 0);   // 5 -> 4 -> 3 -> 2 -> 1 -> 0
+        assert_eq!(native_fn(100), 0); // Should loop 100 times
+
+        eprintln!("[JIT] Loop countdown test passed!");
+    }
+
+    /// Create a sum function using a for-loop pattern:
+    /// sumTo(n) = { total = 0; i = 1; while i <= n { total = total + i; i = i + 1 }; total }
+    fn make_sum_loop_function() -> FunctionValue {
+        let mut chunk = Chunk::new();
+
+        // Constants
+        chunk.constants.push(Value::Int64(0)); // idx 0: constant 0
+        chunk.constants.push(Value::Int64(1)); // idx 1: constant 1
+
+        // Registers:
+        // r0 = n (argument)
+        // r1 = total
+        // r2 = i
+        // r3 = loop result (unit)
+        // r4 = 0 constant
+        // r5 = 1 constant
+        // r6 = comparison result (i <= n)
+        // r7 = temp for addition (total + i)
+        // r8 = temp for increment (i + 1)
+
+        // IP=0: total = 0
+        chunk.code.push(Instruction::LoadConst(1, 0));
+        // IP=1: i = 1
+        chunk.code.push(Instruction::LoadConst(2, 1));
+        // IP=2: LoadUnit for loop result
+        chunk.code.push(Instruction::LoadUnit(3));
+        // IP=3: r5 = 1 (for increment)
+        chunk.code.push(Instruction::LoadConst(5, 1));
+        // IP=4: r6 = i <= n
+        chunk.code.push(Instruction::LeInt(6, 2, 0));
+        // IP=5: if !(i <= n), jump to IP=11 (offset = 11-5-1 = 5)
+        chunk.code.push(Instruction::JumpIfFalse(6, 5));
+        // IP=6: r7 = total + i
+        chunk.code.push(Instruction::AddInt(7, 1, 2));
+        // IP=7: total = r7
+        chunk.code.push(Instruction::Move(1, 7));
+        // IP=8: r8 = i + 1
+        chunk.code.push(Instruction::AddInt(8, 2, 5));
+        // IP=9: i = r8
+        chunk.code.push(Instruction::Move(2, 8));
+        // IP=10: jump back to IP=4 (offset = 4-10-1 = -7)
+        chunk.code.push(Instruction::Jump(-7));
+        // IP=11: return total
+        chunk.code.push(Instruction::Return(1));
+
+        chunk.register_count = 9;
+
+        FunctionValue {
+            name: "sumTo".to_string(),
+            arity: 1,
+            param_names: vec!["n".to_string()],
+            code: Rc::new(chunk),
+            module: None,
+            source_span: None,
+            jit_code: None,
+            call_count: Cell::new(0),
+        }
+    }
+
+    #[test]
+    fn test_jit_loop_sum() {
+        let config = JitConfig::default();
+        let mut jit = JitCompiler::new(config).unwrap();
+
+        let func = make_sum_loop_function();
+        jit.compile_int_function(0, &func).expect("JIT compilation with loop failed");
+
+        let native_fn = jit.get_int_function(0).expect("Loop function not compiled");
+
+        // Test sum from 1 to n
+        assert_eq!(native_fn(0), 0);    // sum of nothing
+        assert_eq!(native_fn(1), 1);    // 1
+        assert_eq!(native_fn(5), 15);   // 1+2+3+4+5 = 15
+        assert_eq!(native_fn(10), 55);  // 1+2+...+10 = 55
+        assert_eq!(native_fn(100), 5050); // 1+2+...+100 = 5050
+
+        eprintln!("[JIT] Loop sum test passed!");
+    }
+
+    #[test]
+    fn test_jit_loop_performance() {
+        let config = JitConfig::default();
+        let mut jit = JitCompiler::new(config).unwrap();
+
+        let func = make_sum_loop_function();
+        jit.compile_int_function(0, &func).expect("JIT compilation with loop failed");
+
+        let native_fn = jit.get_int_function(0).expect("Loop function not compiled");
+
+        // Time sumTo(10000)
+        let start = std::time::Instant::now();
+        let result = native_fn(10000);
+        let elapsed = start.elapsed();
+
+        assert_eq!(result, 50005000); // n*(n+1)/2 = 10000*10001/2
+        eprintln!("[JIT] sumTo(10000) = {} in {:?}", result, elapsed);
     }
 }

@@ -158,6 +158,21 @@ pub struct Compiler {
     local_types: HashMap<String, String>,
     /// Current function name being compiled (for self-recursion optimization)
     current_function_name: Option<String>,
+    /// Loop context stack for break/continue
+    loop_stack: Vec<LoopContext>,
+}
+
+/// Context for a loop being compiled (for break/continue).
+#[derive(Clone)]
+struct LoopContext {
+    /// Address of loop start (for back-jump at end of loop)
+    start_addr: usize,
+    /// Address where continue should jump to (may differ from start_addr for for loops)
+    continue_addr: usize,
+    /// Addresses of continue jumps to patch
+    continue_jumps: Vec<usize>,
+    /// Addresses of break jumps to patch at loop end
+    break_jumps: Vec<usize>,
 }
 
 /// Type information for code generation.
@@ -217,6 +232,7 @@ impl Compiler {
             type_traits: HashMap::new(),
             local_types: HashMap::new(),
             current_function_name: None,
+            loop_stack: Vec::new(),
         }
     }
 
@@ -1118,11 +1134,200 @@ impl Compiler {
                 Ok(dst)
             }
 
+            // While loop
+            Expr::While(cond, body, _) => {
+                self.compile_while(cond, body)
+            }
+
+            // For loop
+            Expr::For(var, start, end, body, _) => {
+                self.compile_for(var, start, end, body)
+            }
+
+            // Break
+            Expr::Break(value, span) => {
+                self.compile_break(value.as_ref().map(|v| v.as_ref()), *span)
+            }
+
+            // Continue
+            Expr::Continue(span) => {
+                self.compile_continue(*span)
+            }
+
             _ => Err(CompileError::NotImplemented {
                 feature: format!("expr: {:?}", expr),
                 span: expr.span(),
             }),
         }
+    }
+
+    /// Compile a while loop.
+    fn compile_while(&mut self, cond: &Expr, body: &Expr) -> Result<Reg, CompileError> {
+        let dst = self.alloc_reg();
+        self.chunk.emit(Instruction::LoadUnit(dst), 0);
+
+        // Record loop start - for while loops, continue jumps back to condition
+        let loop_start = self.chunk.code.len();
+
+        // Push loop context (continue_addr same as start_addr for while loops)
+        self.loop_stack.push(LoopContext {
+            start_addr: loop_start,
+            continue_addr: loop_start,
+            continue_jumps: Vec::new(),
+            break_jumps: Vec::new(),
+        });
+
+        // Compile condition
+        let cond_reg = self.compile_expr_tail(cond, false)?;
+
+        // Jump to end if false
+        let exit_jump = self.chunk.emit(Instruction::JumpIfFalse(cond_reg, 0), 0);
+
+        // Compile body
+        let _ = self.compile_expr_tail(body, false)?;
+
+        // Jump back to loop start
+        // Formula: offset = target - current_position - 1 (because IP is incremented before execution)
+        let jump_offset = loop_start as i16 - self.chunk.code.len() as i16 - 1;
+        self.chunk.emit(Instruction::Jump(jump_offset), 0);
+
+        // Patch exit jump
+        self.chunk.patch_jump(exit_jump, self.chunk.code.len());
+
+        // Pop loop context and patch break/continue jumps
+        let loop_ctx = self.loop_stack.pop().unwrap();
+        for break_jump in loop_ctx.break_jumps {
+            self.chunk.patch_jump(break_jump, self.chunk.code.len());
+        }
+        // Continue jumps should go to loop_start (already handled at emit time for while loops)
+        for continue_jump in loop_ctx.continue_jumps {
+            self.chunk.patch_jump(continue_jump, loop_start);
+        }
+
+        Ok(dst)
+    }
+
+    /// Compile a for loop.
+    fn compile_for(&mut self, var: &Ident, start: &Expr, end: &Expr, body: &Expr) -> Result<Reg, CompileError> {
+        let dst = self.alloc_reg();
+        self.chunk.emit(Instruction::LoadUnit(dst), 0);
+
+        // Compile start and end values
+        let counter_reg = self.compile_expr_tail(start, false)?;
+        let end_reg = self.compile_expr_tail(end, false)?;
+
+        // Bind loop variable to counter register
+        let saved_var = self.locals.get(&var.node).copied();
+        self.locals.insert(var.node.clone(), counter_reg);
+
+        // Record loop start
+        let loop_start = self.chunk.code.len();
+
+        // Push loop context - continue_addr will be set later to point to increment
+        // For now use 0 as placeholder
+        self.loop_stack.push(LoopContext {
+            start_addr: loop_start,
+            continue_addr: 0, // Will be set after body compilation
+            continue_jumps: Vec::new(),
+            break_jumps: Vec::new(),
+        });
+
+        // Check if counter < end
+        let cond_reg = self.alloc_reg();
+        self.chunk.emit(Instruction::LtInt(cond_reg, counter_reg, end_reg), 0);
+
+        // Jump to end if counter >= end
+        let exit_jump = self.chunk.emit(Instruction::JumpIfFalse(cond_reg, 0), 0);
+
+        // Compile body
+        let _ = self.compile_expr_tail(body, false)?;
+
+        // Record where increment starts (for continue jumps)
+        let increment_addr = self.chunk.code.len();
+
+        // Increment counter: counter = counter + 1
+        let one_reg = self.alloc_reg();
+        let one_idx = self.chunk.add_constant(Value::Int64(1));
+        self.chunk.emit(Instruction::LoadConst(one_reg, one_idx), 0);
+        self.chunk.emit(Instruction::AddInt(counter_reg, counter_reg, one_reg), 0);
+
+        // Jump back to loop start
+        // Formula: offset = target - current_position - 1 (because IP is incremented before execution)
+        let jump_offset = loop_start as i16 - self.chunk.code.len() as i16 - 1;
+        self.chunk.emit(Instruction::Jump(jump_offset), 0);
+
+        // Patch exit jump
+        self.chunk.patch_jump(exit_jump, self.chunk.code.len());
+
+        // Pop loop context and patch break/continue jumps
+        let loop_ctx = self.loop_stack.pop().unwrap();
+        for break_jump in loop_ctx.break_jumps {
+            self.chunk.patch_jump(break_jump, self.chunk.code.len());
+        }
+        // Continue jumps should go to the increment section
+        for continue_jump in loop_ctx.continue_jumps {
+            self.chunk.patch_jump(continue_jump, increment_addr);
+        }
+
+        // Restore previous variable binding if any
+        if let Some(prev_reg) = saved_var {
+            self.locals.insert(var.node.clone(), prev_reg);
+        } else {
+            self.locals.remove(&var.node);
+        }
+
+        Ok(dst)
+    }
+
+    /// Compile a break statement.
+    fn compile_break(&mut self, value: Option<&Expr>, span: Span) -> Result<Reg, CompileError> {
+        if self.loop_stack.is_empty() {
+            return Err(CompileError::NotImplemented {
+                feature: "break outside of loop".to_string(),
+                span,
+            });
+        }
+
+        // If there's a value, compile it (for future: return value from loop)
+        let dst = if let Some(val) = value {
+            self.compile_expr_tail(val, false)?
+        } else {
+            let r = self.alloc_reg();
+            self.chunk.emit(Instruction::LoadUnit(r), 0);
+            r
+        };
+
+        // Emit jump to be patched later
+        let jump_idx = self.chunk.emit(Instruction::Jump(0), 0);
+
+        // Add to current loop's break jumps
+        if let Some(loop_ctx) = self.loop_stack.last_mut() {
+            loop_ctx.break_jumps.push(jump_idx);
+        }
+
+        Ok(dst)
+    }
+
+    /// Compile a continue statement.
+    fn compile_continue(&mut self, span: Span) -> Result<Reg, CompileError> {
+        if self.loop_stack.is_empty() {
+            return Err(CompileError::NotImplemented {
+                feature: "continue outside of loop".to_string(),
+                span,
+            });
+        }
+
+        // Emit jump with placeholder offset - will be patched at end of loop
+        let jump_idx = self.chunk.emit(Instruction::Jump(0), 0);
+
+        // Add to current loop's continue jumps
+        if let Some(loop_ctx) = self.loop_stack.last_mut() {
+            loop_ctx.continue_jumps.push(jump_idx);
+        }
+
+        let dst = self.alloc_reg();
+        self.chunk.emit(Instruction::LoadUnit(dst), 0);
+        Ok(dst)
     }
 
     /// Compile a binary operation.
@@ -2153,6 +2358,15 @@ impl Compiler {
 
         // For simple variable binding
         if let Pattern::Var(ident) = &binding.pattern {
+            // If the variable already exists, this is a reassignment, not a new binding.
+            // Move the value to the existing register to preserve mutation semantics.
+            if let Some(&existing_reg) = self.locals.get(&ident.node) {
+                if existing_reg != value_reg {
+                    self.chunk.emit(Instruction::Move(existing_reg, value_reg), 0);
+                }
+                return Ok(existing_reg);
+            }
+            // New binding
             self.locals.insert(ident.node.clone(), value_reg);
             // Record the type if we know it
             if let Some(ty) = value_type {

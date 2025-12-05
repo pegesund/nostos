@@ -803,6 +803,39 @@ impl<'a> InferCtx<'a> {
                 // Result depends on context
                 Ok(self.fresh())
             }
+
+            // While loop: condition must be Bool, returns Unit
+            Expr::While(cond, body, _) => {
+                let cond_ty = self.infer_expr(cond)?;
+                self.unify(cond_ty, Type::Bool);
+                let _ = self.infer_expr(body)?;
+                Ok(Type::Unit)
+            }
+
+            // For loop: iterates from start to end (both Int), returns Unit
+            Expr::For(var, start, end, body, _) => {
+                let start_ty = self.infer_expr(start)?;
+                let end_ty = self.infer_expr(end)?;
+                self.unify(start_ty, Type::Int);
+                self.unify(end_ty, Type::Int);
+                // Add loop variable to scope
+                let saved_bindings = self.env.bindings.clone();
+                self.env.bind(var.node.clone(), Type::Int, false);
+                let _ = self.infer_expr(body)?;
+                self.env.bindings = saved_bindings;
+                Ok(Type::Unit)
+            }
+
+            // Break: optional value, returns Never (doesn't produce a value normally)
+            Expr::Break(value, _) => {
+                if let Some(val) = value {
+                    let _ = self.infer_expr(val)?;
+                }
+                Ok(Type::Unit) // Break doesn't continue execution normally
+            }
+
+            // Continue: returns Never (doesn't produce a value normally)
+            Expr::Continue(_) => Ok(Type::Unit),
         }
     }
 

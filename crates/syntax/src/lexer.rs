@@ -55,6 +55,18 @@ pub enum Token {
     #[token("do")]
     Do,
 
+    // === Loops ===
+    #[token("while")]
+    While,
+    #[token("for")]
+    For,
+    #[token("to")]
+    To,
+    #[token("break")]
+    Break,
+    #[token("continue")]
+    Continue,
+
     // === Concurrency keywords ===
     #[token("spawn")]
     Spawn,
@@ -339,6 +351,11 @@ impl fmt::Display for Token {
             Token::Catch => write!(f, "catch"),
             Token::Finally => write!(f, "finally"),
             Token::Do => write!(f, "do"),
+            Token::While => write!(f, "while"),
+            Token::For => write!(f, "for"),
+            Token::To => write!(f, "to"),
+            Token::Break => write!(f, "break"),
+            Token::Continue => write!(f, "continue"),
             Token::Spawn => write!(f, "spawn"),
             Token::SpawnLink => write!(f, "spawn_link"),
             Token::SpawnMonitor => write!(f, "spawn_monitor"),

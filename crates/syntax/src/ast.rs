@@ -406,6 +406,14 @@ pub enum Expr {
     Try(Box<Expr>, Vec<MatchArm>, Option<Box<Expr>>, Span),
     /// Do block (IO): `do ... end`
     Do(Vec<DoStmt>, Span),
+    /// While loop: `while cond { body }`
+    While(Box<Expr>, Box<Expr>, Span),
+    /// For loop: `for var = start to end { body }`
+    For(Ident, Box<Expr>, Box<Expr>, Box<Expr>, Span),
+    /// Break from loop with optional value
+    Break(Option<Box<Expr>>, Span),
+    /// Continue to next iteration
+    Continue(Span),
     /// Receive expression
     Receive(Vec<MatchArm>, Option<(Box<Expr>, Box<Expr>)>, Span),
     /// Spawn expression
@@ -459,6 +467,10 @@ impl Expr {
             Expr::Block(_, s) => *s,
             Expr::Try(_, _, _, s) => *s,
             Expr::Do(_, s) => *s,
+            Expr::While(_, _, s) => *s,
+            Expr::For(_, _, _, _, s) => *s,
+            Expr::Break(_, s) => *s,
+            Expr::Continue(s) => *s,
             Expr::Receive(_, _, s) => *s,
             Expr::Spawn(_, _, _, s) => *s,
             Expr::Send(_, _, s) => *s,
