@@ -164,6 +164,17 @@ pub struct CompiledArrayFunction {
     pub element_type: ArrayElementType,
 }
 
+/// A compiled native function for loop-based array processing
+/// Signature: fn(arr_ptr: *const T, arr_len: i64) -> T
+pub struct CompiledLoopArrayFunction {
+    /// Pointer to the native code
+    pub code_ptr: *const u8,
+    /// Function ID in the module
+    pub func_id: FuncId,
+    /// The array element type
+    pub element_type: ArrayElementType,
+}
+
 /// The JIT compiler
 pub struct JitCompiler {
     /// Cranelift JIT module
@@ -176,6 +187,8 @@ pub struct JitCompiler {
     cache: HashMap<(u16, NumericType), CompiledFunction>,
     /// Cache of compiled array functions: (function_index, element_type) → compiled function
     array_cache: HashMap<(u16, ArrayElementType), CompiledArrayFunction>,
+    /// Cache of compiled loop-based array functions
+    loop_array_cache: HashMap<(u16, ArrayElementType), CompiledLoopArrayFunction>,
     /// Configuration
     #[allow(dead_code)]
     config: JitConfig,
@@ -219,6 +232,7 @@ impl JitCompiler {
             builder_ctx: FunctionBuilderContext::new(),
             cache: HashMap::new(),
             array_cache: HashMap::new(),
+            loop_array_cache: HashMap::new(),
             config,
             compile_queue: Vec::new(),
             declared_funcs: HashMap::new(),
@@ -294,6 +308,26 @@ impl JitCompiler {
         self.array_cache.get(&(func_index, elem_type))
     }
 
+    /// Check if a function is compiled as a loop-based array function
+    pub fn is_loop_array_compiled(&self, func_index: u16, elem_type: ArrayElementType) -> bool {
+        self.loop_array_cache.contains_key(&(func_index, elem_type))
+    }
+
+    /// Get compiled loop-based Int64Array function: fn(arr_ptr, len) -> i64
+    /// For loop-based array functions with signature (arr)
+    pub fn get_loop_int64_array_function(&self, func_index: u16) -> Option<fn(*const i64, i64) -> i64> {
+        self.loop_array_cache.get(&(func_index, ArrayElementType::Int64)).map(|f| {
+            unsafe { std::mem::transmute::<*const u8, fn(*const i64, i64) -> i64>(f.code_ptr) }
+        })
+    }
+
+    /// Get compiled loop-based Float64Array function: fn(arr_ptr, len) -> f64
+    pub fn get_loop_float64_array_function(&self, func_index: u16) -> Option<fn(*const f64, i64) -> f64> {
+        self.loop_array_cache.get(&(func_index, ArrayElementType::Float64)).map(|f| {
+            unsafe { std::mem::transmute::<*const u8, fn(*const f64, i64) -> f64>(f.code_ptr) }
+        })
+    }
+
     /// Queue a function for compilation
     pub fn queue_compilation(&mut self, func_index: u16) {
         if !self.is_compiled(func_index) && !self.compile_queue.contains(&func_index) {
@@ -307,12 +341,27 @@ impl JitCompiler {
 
         while let Some(func_index) = self.compile_queue.pop() {
             if let Some(func) = functions.get(func_index as usize) {
+                // Try numeric JIT first
                 match self.compile_int_function(func_index, func) {
+                    Ok(_) => {
+                        compiled += 1;
+                        continue;
+                    }
+                    Err(JitError::NotSuitable(_)) => {
+                        // Function not suitable for numeric JIT - try loop array JIT
+                    }
+                    Err(_) => {
+                        // Compilation error - try loop array JIT
+                    }
+                }
+
+                // Try loop-based array JIT
+                match self.compile_loop_array_function(func_index, func) {
                     Ok(_) => {
                         compiled += 1;
                     }
                     Err(JitError::NotSuitable(_)) => {
-                        // Function not suitable for integer JIT - this is fine, silently skip
+                        // Function not suitable for loop array JIT - silently skip
                     }
                     Err(_) => {
                         // Compilation error - silently skip for now
@@ -1341,11 +1390,456 @@ impl JitCompiler {
         }
     }
 
+    /// Detect if a function is a loop-based array function.
+    /// These functions have arity == 1, take an array, use loops (Jump with negative offset),
+    /// and use Index/Length operations.
+    fn detect_loop_array_function(&self, func: &FunctionValue) -> Result<ArrayElementType, JitError> {
+        // Must have exactly 1 argument (the array)
+        if func.arity != 1 {
+            return Err(JitError::NotSuitable(format!(
+                "loop array function must have 1 arg, got {}", func.arity
+            )));
+        }
+
+        let mut has_index = false;
+        let mut has_length = false;
+        let mut has_loop = false;
+        let mut array_type: Option<ArrayElementType> = None;
+
+        for (ip, instr) in func.code.code.iter().enumerate() {
+            match instr {
+                // Index instruction: dst = arr[idx]
+                // First arg (reg 0) should be the array
+                Instruction::Index(_, arr_reg, _) if *arr_reg == 0 => {
+                    has_index = true;
+                }
+                // Length instruction: dst = length(arr)
+                Instruction::Length(_, arr_reg) if *arr_reg == 0 => {
+                    has_length = true;
+                }
+                // Check for backward jumps (loops)
+                Instruction::Jump(offset) if *offset < 0 => {
+                    has_loop = true;
+                }
+                // Check constants for type hints
+                Instruction::LoadConst(_, idx) => {
+                    if let Some(val) = func.code.constants.get(*idx as usize) {
+                        match val {
+                            Value::Int64(_) => {
+                                if array_type.is_none() {
+                                    array_type = Some(ArrayElementType::Int64);
+                                }
+                            }
+                            Value::Float64(_) => {
+                                if array_type.is_none() {
+                                    array_type = Some(ArrayElementType::Float64);
+                                }
+                            }
+                            Value::Bool(_) => {} // OK
+                            _ => return Err(JitError::NotSuitable(
+                                format!("non-numeric constant in loop array function: {:?}", val)
+                            )),
+                        }
+                    }
+                }
+                // Allow these instructions
+                Instruction::Move(_, _) |
+                Instruction::LoadTrue(_) | Instruction::LoadFalse(_) |
+                Instruction::LoadUnit(_) |
+                Instruction::Jump(_) |
+                Instruction::JumpIfTrue(_, _) | Instruction::JumpIfFalse(_, _) |
+                Instruction::Return(_) |
+                Instruction::AddInt(_, _, _) | Instruction::SubInt(_, _, _) |
+                Instruction::MulInt(_, _, _) | Instruction::NegInt(_, _) |
+                Instruction::EqInt(_, _, _) | Instruction::NeInt(_, _, _) |
+                Instruction::LtInt(_, _, _) | Instruction::LeInt(_, _, _) |
+                Instruction::GtInt(_, _, _) | Instruction::GeInt(_, _, _) |
+                Instruction::AddFloat(_, _, _) | Instruction::SubFloat(_, _, _) |
+                Instruction::MulFloat(_, _, _) | Instruction::DivFloat(_, _, _) |
+                Instruction::NegFloat(_, _) |
+                Instruction::LtFloat(_, _, _) | Instruction::LeFloat(_, _, _) |
+                Instruction::EqFloat(_, _, _) |
+                Instruction::Index(_, _, _) | Instruction::Length(_, _) => {}
+
+                other => return Err(JitError::NotSuitable(
+                    format!("unsupported instruction in loop array function: {:?}", other)
+                )),
+            }
+        }
+
+        if !has_index {
+            return Err(JitError::NotSuitable("no array indexing found".to_string()));
+        }
+        if !has_length {
+            return Err(JitError::NotSuitable("no length check found".to_string()));
+        }
+        if !has_loop {
+            return Err(JitError::NotSuitable("no loop found".to_string()));
+        }
+
+        // Default to Int64 if no type hints
+        Ok(array_type.unwrap_or(ArrayElementType::Int64))
+    }
+
+    /// Compile a loop-based array processing function.
+    /// Takes (arr) in bytecode → native fn(arr_ptr, arr_len) -> result
+    pub fn compile_loop_array_function(
+        &mut self,
+        func_index: u16,
+        func: &FunctionValue,
+    ) -> Result<(), JitError> {
+        let elem_type = self.detect_loop_array_function(func)?;
+
+        if self.is_loop_array_compiled(func_index, elem_type) {
+            return Ok(());
+        }
+
+        let elem_cl_type = elem_type.cranelift_type();
+
+        // Signature: fn(arr_ptr: i64, arr_len: i64) -> T
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(I64)); // arr_ptr
+        sig.params.push(AbiParam::new(I64)); // arr_len
+        sig.returns.push(AbiParam::new(elem_cl_type)); // return type
+
+        let func_name = format!("nos_loop_arr_{}_{}",
+            if elem_type.is_float() { "f64" } else { "i64" },
+            func_index);
+        let func_id = self.module
+            .declare_function(&func_name, Linkage::Local, &sig)
+            .map_err(|e| JitError::Module(e.to_string()))?;
+
+        self.ctx.func.signature = sig.clone();
+        self.ctx.func.name = UserFuncName::user(2, func_index as u32);
+
+        {
+            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
+
+            let entry_block = builder.create_block();
+            builder.append_block_params_for_function_params(entry_block);
+            builder.switch_to_block(entry_block);
+
+            // Get function parameters
+            let params = builder.block_params(entry_block).to_vec();
+            let arr_ptr_val = params[0]; // i64 pointer
+            let arr_len_val = params[1]; // i64 length
+
+            // Map bytecode registers to Cranelift variables
+            // reg 0 = arr (will hold arr_ptr)
+            // Other registers are local variables (all i64 for Int64Array)
+            let reg_count = func.code.register_count;
+            let mut regs: Vec<Variable> = Vec::with_capacity(reg_count);
+
+            for i in 0..reg_count {
+                let var = Variable::from_u32(i as u32);
+                // Use I64 for all registers (array ptr, indices, values)
+                let var_type = if elem_type == ArrayElementType::Int64 {
+                    I64
+                } else if i == 0 {
+                    I64  // arr_ptr is always i64
+                } else {
+                    elem_cl_type
+                };
+                builder.declare_var(var, var_type);
+                regs.push(var);
+            }
+
+            // Initialize reg 0 with arr_ptr
+            builder.def_var(regs[0], arr_ptr_val);
+
+            // Special variable for arr_len (used by Length instruction)
+            let arr_len_var = Variable::from_u32(reg_count as u32);
+            builder.declare_var(arr_len_var, I64);
+            builder.def_var(arr_len_var, arr_len_val);
+
+            // Create blocks for jump targets
+            let mut jump_targets: HashMap<usize, Block> = HashMap::new();
+            for (ip, instr) in func.code.code.iter().enumerate() {
+                match instr {
+                    Instruction::Jump(offset) => {
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        jump_targets.entry(target).or_insert_with(|| builder.create_block());
+                    }
+                    Instruction::JumpIfTrue(_, offset) | Instruction::JumpIfFalse(_, offset) => {
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        jump_targets.entry(target).or_insert_with(|| builder.create_block());
+                        jump_targets.entry(ip + 1).or_insert_with(|| builder.create_block());
+                    }
+                    _ => {}
+                }
+            }
+
+            let mut ip = 0;
+            let mut block_terminated = false;
+
+            while ip < func.code.code.len() {
+                if let Some(&block) = jump_targets.get(&ip) {
+                    if !block_terminated {
+                        builder.ins().jump(block, &[]);
+                    }
+                    builder.switch_to_block(block);
+                    block_terminated = false;
+                }
+
+                let instr = &func.code.code[ip];
+
+                match instr {
+                    Instruction::LoadConst(dst, idx) => {
+                        let v = Self::load_array_const(&mut builder, &func.code.constants, *idx, elem_type, I64)?;
+                        builder.def_var(regs[*dst as usize], v);
+                    }
+
+                    Instruction::Move(dst, src) => {
+                        let v = builder.use_var(regs[*src as usize]);
+                        builder.def_var(regs[*dst as usize], v);
+                    }
+
+                    Instruction::LoadTrue(dst) => {
+                        let v = builder.ins().iconst(I64, 1);
+                        builder.def_var(regs[*dst as usize], v);
+                    }
+
+                    Instruction::LoadFalse(dst) => {
+                        let v = builder.ins().iconst(I64, 0);
+                        builder.def_var(regs[*dst as usize], v);
+                    }
+
+                    Instruction::LoadUnit(dst) => {
+                        let v = builder.ins().iconst(I64, 0);
+                        builder.def_var(regs[*dst as usize], v);
+                    }
+
+                    // Length(dst, arr_reg) - return the stored length
+                    Instruction::Length(dst, _arr_reg) => {
+                        let len = builder.use_var(arr_len_var);
+                        builder.def_var(regs[*dst as usize], len);
+                    }
+
+                    // Index(dst, arr_reg, idx_reg) - load from memory
+                    Instruction::Index(dst, _arr_reg, idx_reg) => {
+                        let ptr = builder.use_var(regs[0]); // arr_ptr is in reg 0
+                        let idx = builder.use_var(regs[*idx_reg as usize]);
+
+                        // Calculate offset: ptr + idx * sizeof(element)
+                        let elem_size = if elem_type.is_float() { 8i64 } else { 8i64 };
+                        let size_val = builder.ins().iconst(I64, elem_size);
+                        let offset = builder.ins().imul(idx, size_val);
+                        let addr = builder.ins().iadd(ptr, offset);
+
+                        // Load from memory
+                        let mut flags = cranelift_codegen::ir::MemFlags::new();
+                        flags.set_notrap();
+                        flags.set_aligned();
+                        let loaded = builder.ins().load(elem_cl_type, flags, addr, 0);
+                        builder.def_var(regs[*dst as usize], loaded);
+                    }
+
+                    // Integer arithmetic
+                    Instruction::AddInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().iadd(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::SubInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().isub(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::MulInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().imul(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::NegInt(dst, src) => {
+                        let v = builder.use_var(regs[*src as usize]);
+                        let result = builder.ins().ineg(v);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    // Integer comparisons
+                    Instruction::EqInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::Equal, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::NeInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::NotEqual, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::LtInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::SignedLessThan, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::LeInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::SignedLessThanOrEqual, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::GtInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::SignedGreaterThan, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::GeInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    // Float arithmetic
+                    Instruction::AddFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().fadd(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::SubFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().fsub(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::MulFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().fmul(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::DivFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().fdiv(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::NegFloat(dst, src) => {
+                        let v = builder.use_var(regs[*src as usize]);
+                        let result = builder.ins().fneg(v);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::LtFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().fcmp(FloatCC::LessThan, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::LeFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().fcmp(FloatCC::LessThanOrEqual, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::EqFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().fcmp(FloatCC::Equal, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    // Control flow
+                    Instruction::Jump(offset) => {
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        let target_block = jump_targets[&target];
+                        builder.ins().jump(target_block, &[]);
+                        block_terminated = true;
+                    }
+
+                    Instruction::JumpIfTrue(cond, offset) => {
+                        let cond_val = builder.use_var(regs[*cond as usize]);
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        let target_block = jump_targets[&target];
+                        let next_block = jump_targets[&(ip + 1)];
+                        builder.ins().brif(cond_val, target_block, &[], next_block, &[]);
+                        block_terminated = true;
+                    }
+
+                    Instruction::JumpIfFalse(cond, offset) => {
+                        let cond_val = builder.use_var(regs[*cond as usize]);
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        let target_block = jump_targets[&target];
+                        let next_block = jump_targets[&(ip + 1)];
+                        builder.ins().brif(cond_val, next_block, &[], target_block, &[]);
+                        block_terminated = true;
+                    }
+
+                    Instruction::Return(src) => {
+                        let v = builder.use_var(regs[*src as usize]);
+                        builder.ins().return_(&[v]);
+                        block_terminated = true;
+                    }
+
+                    other => {
+                        return Err(JitError::UnsupportedInstruction(format!("{:?}", other)));
+                    }
+                }
+
+                ip += 1;
+            }
+
+            builder.seal_all_blocks();
+            builder.finalize();
+        }
+
+        self.module
+            .define_function(func_id, &mut self.ctx)
+            .map_err(|e| JitError::Module(format!("define_function error: {}", e)))?;
+
+        self.module.finalize_definitions()
+            .map_err(|e| JitError::Module(e.to_string()))?;
+
+        let code_ptr = self.module.get_finalized_function(func_id);
+
+        self.loop_array_cache.insert((func_index, elem_type), CompiledLoopArrayFunction {
+            code_ptr,
+            func_id,
+            element_type: elem_type,
+        });
+
+        self.module.clear_context(&mut self.ctx);
+
+        Ok(())
+    }
+
     /// Get JIT statistics
     pub fn stats(&self) -> JitStats {
         JitStats {
             compiled_functions: self.cache.len(),
             array_functions: self.array_cache.len(),
+            loop_array_functions: self.loop_array_cache.len(),
             queued_functions: self.compile_queue.len(),
         }
     }
@@ -1356,6 +1850,7 @@ impl JitCompiler {
 pub struct JitStats {
     pub compiled_functions: usize,
     pub array_functions: usize,
+    pub loop_array_functions: usize,
     pub queued_functions: usize,
 }
 
@@ -1814,5 +2309,118 @@ mod tests {
 
         assert_eq!(result, 50005000); // n*(n+1)/2 = 10000*10001/2
         eprintln!("[JIT] sumTo(10000) = {} in {:?}", result, elapsed);
+    }
+
+    /// Create a loop-based array sum function:
+    /// sumArray(arr) = { total = 0; i = 0; n = length(arr); while i < n { total = total + arr[i]; i = i + 1 }; total }
+    fn make_loop_sum_array_function() -> FunctionValue {
+        let mut chunk = Chunk::new();
+
+        // Constants
+        chunk.constants.push(Value::Int64(0)); // idx 0: constant 0
+        chunk.constants.push(Value::Int64(1)); // idx 1: constant 1
+
+        // Registers:
+        // r0 = arr (argument)
+        // r1 = total
+        // r2 = i
+        // r3 = n (length)
+        // r4 = loop result (unit)
+        // r5 = 0 constant
+        // r6 = 1 constant
+        // r7 = comparison result (i < n)
+        // r8 = arr[i] value
+        // r9 = temp for addition (total + arr[i])
+        // r10 = temp for increment (i + 1)
+
+        // IP=0: total = 0
+        chunk.code.push(Instruction::LoadConst(1, 0));
+        // IP=1: i = 0
+        chunk.code.push(Instruction::LoadConst(2, 0));
+        // IP=2: n = length(arr)
+        chunk.code.push(Instruction::Length(3, 0));
+        // IP=3: LoadUnit for loop result
+        chunk.code.push(Instruction::LoadUnit(4));
+        // IP=4: r6 = 1 (for increment)
+        chunk.code.push(Instruction::LoadConst(6, 1));
+        // IP=5: r7 = i < n
+        chunk.code.push(Instruction::LtInt(7, 2, 3));
+        // IP=6: if !(i < n), jump to IP=13 (offset = 13-6-1 = 6)
+        chunk.code.push(Instruction::JumpIfFalse(7, 6));
+        // IP=7: r8 = arr[i]
+        chunk.code.push(Instruction::Index(8, 0, 2));
+        // IP=8: r9 = total + arr[i]
+        chunk.code.push(Instruction::AddInt(9, 1, 8));
+        // IP=9: total = r9
+        chunk.code.push(Instruction::Move(1, 9));
+        // IP=10: r10 = i + 1
+        chunk.code.push(Instruction::AddInt(10, 2, 6));
+        // IP=11: i = r10
+        chunk.code.push(Instruction::Move(2, 10));
+        // IP=12: jump back to IP=5 (offset = 5-12-1 = -8)
+        chunk.code.push(Instruction::Jump(-8));
+        // IP=13: return total
+        chunk.code.push(Instruction::Return(1));
+
+        chunk.register_count = 11;
+
+        FunctionValue {
+            name: "sumArray".to_string(),
+            arity: 1,
+            param_names: vec!["arr".to_string()],
+            code: Rc::new(chunk),
+            module: None,
+            source_span: None,
+            jit_code: None,
+            call_count: Cell::new(0),
+        }
+    }
+
+    #[test]
+    fn test_jit_loop_array_sum() {
+        let config = JitConfig::default();
+        let mut jit = JitCompiler::new(config).unwrap();
+
+        let func = make_loop_sum_array_function();
+        jit.compile_loop_array_function(0, &func).expect("Loop array JIT compilation failed");
+
+        let native_fn = jit.get_loop_int64_array_function(0).expect("Loop array function not compiled");
+
+        // Test with various arrays
+        let arr1: Vec<i64> = vec![1, 2, 3, 4, 5];
+        assert_eq!(native_fn(arr1.as_ptr(), arr1.len() as i64), 15);
+
+        let arr2: Vec<i64> = vec![10, 20, 30];
+        assert_eq!(native_fn(arr2.as_ptr(), arr2.len() as i64), 60);
+
+        let arr3: Vec<i64> = vec![];
+        assert_eq!(native_fn(arr3.as_ptr(), arr3.len() as i64), 0);
+
+        let arr4: Vec<i64> = (1..=100).collect();
+        assert_eq!(native_fn(arr4.as_ptr(), arr4.len() as i64), 5050);
+
+        eprintln!("[JIT] Loop array sum test passed!");
+    }
+
+    #[test]
+    fn test_jit_loop_array_performance() {
+        let config = JitConfig::default();
+        let mut jit = JitCompiler::new(config).unwrap();
+
+        let func = make_loop_sum_array_function();
+        jit.compile_loop_array_function(0, &func).expect("Loop array JIT compilation failed");
+
+        let native_fn = jit.get_loop_int64_array_function(0).expect("Loop array function not compiled");
+
+        // Create a large array
+        let arr: Vec<i64> = (1..=10000).collect();
+        let expected: i64 = (1..=10000).sum();
+
+        let start = std::time::Instant::now();
+        let result = native_fn(arr.as_ptr(), arr.len() as i64);
+        let elapsed = start.elapsed();
+
+        assert_eq!(result, expected);
+        eprintln!("[JIT] Loop array sum(1..10000) = {} in {:?}", result, elapsed);
     }
 }

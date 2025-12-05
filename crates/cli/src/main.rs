@@ -113,8 +113,13 @@ fn main() -> ExitCode {
             if compiled > 0 {
                 // Register JIT functions with the runtime
                 for (idx, _func) in function_list.iter().enumerate() {
+                    // Register pure numeric JIT functions
                     if let Some(jit_fn) = jit.get_int_function(idx as u16) {
                         runtime.register_jit_int_function(idx as u16, jit_fn);
+                    }
+                    // Register loop-based array JIT functions
+                    if let Some(jit_fn) = jit.get_loop_int64_array_function(idx as u16) {
+                        runtime.register_jit_loop_array_function(idx as u16, jit_fn);
                     }
                 }
             }

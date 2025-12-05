@@ -16,6 +16,9 @@ pub const JIT_THRESHOLD: u32 = 1000;
 /// JIT-compiled integer function: fn(i64) -> i64
 pub type JitIntFn = fn(i64) -> i64;
 
+/// JIT-compiled loop array function: fn(arr_ptr, arr_len) -> i64
+pub type JitLoopArrayFn = fn(*const i64, i64) -> i64;
+
 use crate::gc::{GcNativeFn, GcValue, Heap};
 use crate::process::ExitReason;
 use crate::scheduler::Scheduler;
@@ -57,6 +60,8 @@ pub struct Runtime {
     cached_types: std::collections::HashMap<String, Rc<TypeValue>>,
     /// JIT-compiled integer functions (func_index → native fn)
     jit_int_functions: std::collections::HashMap<u16, JitIntFn>,
+    /// JIT-compiled loop array functions (func_index → native fn)
+    jit_loop_array_functions: std::collections::HashMap<u16, JitLoopArrayFn>,
 }
 
 impl Runtime {
@@ -70,12 +75,23 @@ impl Runtime {
             cached_natives: std::collections::HashMap::new(),
             cached_types: std::collections::HashMap::new(),
             jit_int_functions: std::collections::HashMap::new(),
+            jit_loop_array_functions: std::collections::HashMap::new(),
         }
     }
 
     /// Register a JIT-compiled integer function.
     pub fn register_jit_int_function(&mut self, func_index: u16, jit_fn: JitIntFn) {
         self.jit_int_functions.insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT-compiled loop array function.
+    pub fn register_jit_loop_array_function(&mut self, func_index: u16, jit_fn: JitLoopArrayFn) {
+        self.jit_loop_array_functions.insert(func_index, jit_fn);
+    }
+
+    /// Get a JIT-compiled loop array function if available.
+    pub fn get_jit_loop_array_function(&self, func_index: u16) -> Option<JitLoopArrayFn> {
+        self.jit_loop_array_functions.get(&func_index).copied()
     }
 
     /// Register a global function.
@@ -328,6 +344,7 @@ impl Runtime {
         let natives = self.cached_natives.clone();
         let types = self.cached_types.clone();
         let jit_int_functions = self.jit_int_functions.clone(); // JIT function cache
+        let jit_loop_array_functions = self.jit_loop_array_functions.clone(); // Loop array JIT cache
 
         // SINGLE LOCK for entire time slice - Erlang style!
         let mut proc = process_handle.lock();
@@ -408,7 +425,7 @@ impl Runtime {
             // SAFETY: ip < code_len was checked above, constants are immutable
             let constants = unsafe { std::slice::from_raw_parts(constants_ptr, constants_len) };
 
-            match self.execute_local_instruction_inline(&mut proc, frame_idx, instr, constants, &functions, &function_list, &natives, &types, &jit_int_functions)? {
+            match self.execute_local_instruction_inline(&mut proc, frame_idx, instr, constants, &functions, &function_list, &natives, &types, &jit_int_functions, &jit_loop_array_functions)? {
                 ProcessStepResult::Continue => continue,
                 other => return Ok(other),
             }
@@ -431,6 +448,7 @@ impl Runtime {
         natives: &std::collections::HashMap<String, Rc<GcNativeFn>>,
         types: &std::collections::HashMap<String, Rc<TypeValue>>,
         jit_int_functions: &std::collections::HashMap<u16, JitIntFn>,
+        jit_loop_array_functions: &std::collections::HashMap<u16, JitLoopArrayFn>,
     ) -> Result<ProcessStepResult, RuntimeError> {
         // Direct register access - no locking, frame_idx already computed!
         macro_rules! reg {
@@ -924,6 +942,7 @@ impl Runtime {
 
                 // Check if we have a JIT-compiled version (arity=1, int argument)
                 if arg_count == 1 {
+                    // First check for pure numeric JIT
                     if let Some(jit_fn) = jit_int_functions.get(func_idx) {
                         // Get the argument
                         let arg = reg_clone!(arg_regs[0]);
@@ -933,6 +952,22 @@ impl Runtime {
                             set_reg!(dst, GcValue::Int64(result));
                             proc.consume_reductions(1);
                             return Ok(ProcessStepResult::Continue);
+                        }
+                    }
+                    // Check for loop array JIT
+                    if let Some(jit_fn) = jit_loop_array_functions.get(func_idx) {
+                        let arg = reg_clone!(arg_regs[0]);
+                        if let GcValue::Int64Array(arr_ptr) = arg {
+                            // Get array data from heap
+                            if let Some(arr) = proc.heap.get_int64_array(arr_ptr) {
+                                let ptr = arr.items.as_ptr();
+                                let len = arr.items.len() as i64;
+                                // Call JIT function with raw ptr and len!
+                                let result = jit_fn(ptr, len);
+                                set_reg!(dst, GcValue::Int64(result));
+                                proc.consume_reductions(1);
+                                return Ok(ProcessStepResult::Continue);
+                            }
                         }
                     }
                 }

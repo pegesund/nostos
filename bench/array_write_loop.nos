@@ -1,0 +1,47 @@
+# Array write benchmark using loops - heavy writing to typed array
+# Fills an array with computed values and sums them
+
+fillArray(arr) = {
+    i = 0
+    n = length(arr)
+    while i < n {
+        arr[i] = i * i + i * 3 + 7
+        i = i + 1
+    }
+}
+
+sumArray(arr) = {
+    total = 0
+    i = 0
+    n = length(arr)
+    while i < n {
+        total = total + arr[i]
+        i = i + 1
+    }
+    total
+}
+
+runIteration(size) = {
+    arr = newInt64Array(size)
+    fillArray(arr)
+    sumArray(arr)
+}
+
+# Run multiple iterations
+benchmark(iterations, size) = {
+    total = 0
+    i = 0
+    while i < iterations {
+        total = total + runIteration(size)
+        i = i + 1
+    }
+    total
+}
+
+main() = {
+    size = 10000
+    iterations = 100
+    result = benchmark(iterations, size)
+    println(result)
+    result
+}
