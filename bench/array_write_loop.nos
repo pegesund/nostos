@@ -39,7 +39,7 @@ benchmark(iterations, size) = {
 }
 
 main() = {
-    size = 10000
+    size = 100000
     iterations = 100
     result = benchmark(iterations, size)
     println(result)

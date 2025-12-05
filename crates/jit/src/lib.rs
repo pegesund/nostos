@@ -1625,10 +1625,10 @@ impl JitCompiler {
                         let ptr = builder.use_var(regs[0]); // arr_ptr is in reg 0
                         let idx = builder.use_var(regs[*idx_reg as usize]);
 
-                        // Calculate offset: ptr + idx * sizeof(element)
-                        let elem_size = if elem_type.is_float() { 8i64 } else { 8i64 };
-                        let size_val = builder.ins().iconst(I64, elem_size);
-                        let offset = builder.ins().imul(idx, size_val);
+                        // Calculate offset: ptr + idx * 8 (using shift for efficiency)
+                        // ishl by 3 = multiply by 8
+                        let shift_amt = builder.ins().iconst(I64, 3);
+                        let offset = builder.ins().ishl(idx, shift_amt);
                         let addr = builder.ins().iadd(ptr, offset);
 
                         // Load from memory
@@ -1645,10 +1645,9 @@ impl JitCompiler {
                         let idx = builder.use_var(regs[*idx_reg as usize]);
                         let val = builder.use_var(regs[*val_reg as usize]);
 
-                        // Calculate offset: ptr + idx * sizeof(element)
-                        let elem_size = if elem_type.is_float() { 8i64 } else { 8i64 };
-                        let size_val = builder.ins().iconst(I64, elem_size);
-                        let offset = builder.ins().imul(idx, size_val);
+                        // Calculate offset: ptr + idx * 8 (using shift for efficiency)
+                        let shift_amt = builder.ins().iconst(I64, 3);
+                        let offset = builder.ins().ishl(idx, shift_amt);
                         let addr = builder.ins().iadd(ptr, offset);
 
                         // Store to memory

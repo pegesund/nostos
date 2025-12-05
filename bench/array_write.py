@@ -23,7 +23,7 @@ def benchmark(iterations, size):
         total += run_iteration(size)
     return total
 
-size = 10000
+size = 100000
 iterations = 100
 result = benchmark(iterations, size)
 print(result)
