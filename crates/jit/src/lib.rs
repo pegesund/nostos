@@ -1401,17 +1401,21 @@ impl JitCompiler {
             )));
         }
 
-        let mut has_index = false;
+        let mut has_array_access = false; // Index or IndexSet
         let mut has_length = false;
         let mut has_loop = false;
         let mut array_type: Option<ArrayElementType> = None;
 
-        for (ip, instr) in func.code.code.iter().enumerate() {
+        for (_ip, instr) in func.code.code.iter().enumerate() {
             match instr {
                 // Index instruction: dst = arr[idx]
                 // First arg (reg 0) should be the array
                 Instruction::Index(_, arr_reg, _) if *arr_reg == 0 => {
-                    has_index = true;
+                    has_array_access = true;
+                }
+                // IndexSet instruction: arr[idx] = val
+                Instruction::IndexSet(arr_reg, _, _) if *arr_reg == 0 => {
+                    has_array_access = true;
                 }
                 // Length instruction: dst = length(arr)
                 Instruction::Length(_, arr_reg) if *arr_reg == 0 => {
@@ -1459,7 +1463,8 @@ impl JitCompiler {
                 Instruction::NegFloat(_, _) |
                 Instruction::LtFloat(_, _, _) | Instruction::LeFloat(_, _, _) |
                 Instruction::EqFloat(_, _, _) |
-                Instruction::Index(_, _, _) | Instruction::Length(_, _) => {}
+                Instruction::Index(_, _, _) | Instruction::IndexSet(_, _, _) |
+                Instruction::Length(_, _) => {}
 
                 other => return Err(JitError::NotSuitable(
                     format!("unsupported instruction in loop array function: {:?}", other)
@@ -1467,8 +1472,8 @@ impl JitCompiler {
             }
         }
 
-        if !has_index {
-            return Err(JitError::NotSuitable("no array indexing found".to_string()));
+        if !has_array_access {
+            return Err(JitError::NotSuitable("no array access found".to_string()));
         }
         if !has_length {
             return Err(JitError::NotSuitable("no length check found".to_string()));
@@ -1632,6 +1637,25 @@ impl JitCompiler {
                         flags.set_aligned();
                         let loaded = builder.ins().load(elem_cl_type, flags, addr, 0);
                         builder.def_var(regs[*dst as usize], loaded);
+                    }
+
+                    // IndexSet(arr_reg, idx_reg, val_reg) - store to memory
+                    Instruction::IndexSet(_arr_reg, idx_reg, val_reg) => {
+                        let ptr = builder.use_var(regs[0]); // arr_ptr is in reg 0
+                        let idx = builder.use_var(regs[*idx_reg as usize]);
+                        let val = builder.use_var(regs[*val_reg as usize]);
+
+                        // Calculate offset: ptr + idx * sizeof(element)
+                        let elem_size = if elem_type.is_float() { 8i64 } else { 8i64 };
+                        let size_val = builder.ins().iconst(I64, elem_size);
+                        let offset = builder.ins().imul(idx, size_val);
+                        let addr = builder.ins().iadd(ptr, offset);
+
+                        // Store to memory
+                        let mut flags = cranelift_codegen::ir::MemFlags::new();
+                        flags.set_notrap();
+                        flags.set_aligned();
+                        builder.ins().store(flags, val, addr, 0);
                     }
 
                     // Integer arithmetic

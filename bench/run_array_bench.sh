@@ -63,8 +63,11 @@ echo -e "${GREEN}Running benchmarks...${NC}"
 echo "  Running 3 iterations each, showing best time..."
 echo ""
 
-run_benchmark "Nostos" "$NOSTOS_BIN ${SCRIPT_DIR}/array_write.nos"
+run_benchmark "Nostos(rec)" "$NOSTOS_BIN ${SCRIPT_DIR}/array_write.nos"
 nostos_time=$(cat /tmp/bench_time_$$)
+
+run_benchmark "Nostos(loop)" "$NOSTOS_BIN ${SCRIPT_DIR}/array_write_loop.nos"
+nostos_loop_time=$(cat /tmp/bench_time_$$)
 
 run_benchmark "Python" "python3 ${SCRIPT_DIR}/array_write.py"
 python_time=$(cat /tmp/bench_time_$$)
@@ -75,33 +78,43 @@ ruby_time=$(cat /tmp/bench_time_$$)
 rm -f /tmp/bench_time_$$
 
 echo ""
-echo -e "${YELLOW}Comparison:${NC}"
+echo -e "${YELLOW}Comparison (loop JIT version):${NC}"
 echo "----------------------------------------"
 
-python_cmp=$(echo "$nostos_time < $python_time" | bc)
-ruby_cmp=$(echo "$nostos_time < $ruby_time" | bc)
+python_cmp=$(echo "$nostos_loop_time < $python_time" | bc)
+ruby_cmp=$(echo "$nostos_loop_time < $ruby_time" | bc)
+rec_cmp=$(echo "$nostos_loop_time < $nostos_time" | bc)
 
 if [ "$python_cmp" -eq 1 ]; then
-    inv_ratio=$(echo "scale=1; $python_time / $nostos_time" | bc)
-    printf "  Nostos is ${GREEN}%sx faster${NC} than Python\n" "$inv_ratio"
+    inv_ratio=$(echo "scale=1; $python_time / $nostos_loop_time" | bc)
+    printf "  Nostos(loop) is ${GREEN}%sx faster${NC} than Python\n" "$inv_ratio"
 else
-    ratio=$(echo "scale=1; $nostos_time / $python_time" | bc)
-    printf "  Nostos is ${RED}%sx slower${NC} than Python\n" "$ratio"
+    ratio=$(echo "scale=1; $nostos_loop_time / $python_time" | bc)
+    printf "  Nostos(loop) is ${RED}%sx slower${NC} than Python\n" "$ratio"
 fi
 
 if [ "$ruby_cmp" -eq 1 ]; then
-    inv_ratio=$(echo "scale=1; $ruby_time / $nostos_time" | bc)
-    printf "  Nostos is ${GREEN}%sx faster${NC} than Ruby\n" "$inv_ratio"
+    inv_ratio=$(echo "scale=1; $ruby_time / $nostos_loop_time" | bc)
+    printf "  Nostos(loop) is ${GREEN}%sx faster${NC} than Ruby\n" "$inv_ratio"
 else
-    ratio=$(echo "scale=1; $nostos_time / $ruby_time" | bc)
-    printf "  Nostos is ${RED}%sx slower${NC} than Ruby\n" "$ratio"
+    ratio=$(echo "scale=1; $nostos_loop_time / $ruby_time" | bc)
+    printf "  Nostos(loop) is ${RED}%sx slower${NC} than Ruby\n" "$ratio"
+fi
+
+if [ "$rec_cmp" -eq 1 ]; then
+    inv_ratio=$(echo "scale=1; $nostos_time / $nostos_loop_time" | bc)
+    printf "  Nostos(loop) is ${GREEN}%sx faster${NC} than Nostos(rec)\n" "$inv_ratio"
+else
+    ratio=$(echo "scale=1; $nostos_loop_time / $nostos_time" | bc)
+    printf "  Nostos(loop) is ${RED}%sx slower${NC} than Nostos(rec)\n" "$ratio"
 fi
 
 echo ""
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}    Summary${NC}"
 echo -e "${BLUE}========================================${NC}"
-printf "  %-12s %8.3fs  (tail-recursive)\n" "Nostos:" "$nostos_time"
-printf "  %-12s %8.3fs  (for-loops)\n" "Python:" "$python_time"
-printf "  %-12s %8.3fs  (for-loops)\n" "Ruby:" "$ruby_time"
+printf "  %-14s %8.3fs  (tail-recursive)\n" "Nostos(rec):" "$nostos_time"
+printf "  %-14s %8.3fs  (loop + JIT)\n" "Nostos(loop):" "$nostos_loop_time"
+printf "  %-14s %8.3fs  (for-loops)\n" "Python:" "$python_time"
+printf "  %-14s %8.3fs  (for-loops)\n" "Ruby:" "$ruby_time"
 echo ""

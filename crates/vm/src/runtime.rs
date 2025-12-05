@@ -958,12 +958,13 @@ impl Runtime {
                     if let Some(jit_fn) = jit_loop_array_functions.get(func_idx) {
                         let arg = reg_clone!(arg_regs[0]);
                         if let GcValue::Int64Array(arr_ptr) = arg {
-                            // Get array data from heap
-                            if let Some(arr) = proc.heap.get_int64_array(arr_ptr) {
-                                let ptr = arr.items.as_ptr();
+                            // Get array data from heap (mutable for IndexSet support)
+                            if let Some(arr) = proc.heap.get_int64_array_mut(arr_ptr) {
+                                let ptr = arr.items.as_mut_ptr();
                                 let len = arr.items.len() as i64;
                                 // Call JIT function with raw ptr and len!
-                                let result = jit_fn(ptr, len);
+                                // Safe: we have exclusive access through the mutable borrow
+                                let result = jit_fn(ptr as *const i64, len);
                                 set_reg!(dst, GcValue::Int64(result));
                                 proc.consume_reductions(1);
                                 return Ok(ProcessStepResult::Continue);
