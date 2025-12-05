@@ -1,0 +1,52 @@
+# Typed Arrays example
+# Demonstrates Int64Array and Float64Array for efficient numeric computation
+
+# Fill array with values [1, 2, 3, ..., n]
+fillRange(arr, i) =
+    if i >= length(arr) then ()
+    else {
+        arr[i] = i + 1
+        fillRange(arr, i + 1)
+    }
+
+# Sum all elements in an Int64Array
+sumInt64(arr, i, acc) =
+    if i >= length(arr) then acc
+    else sumInt64(arr, i + 1, acc + arr[i])
+
+# Fill array with squares: arr[i] = i * i
+fillSquares(arr, i) =
+    if i >= length(arr) then ()
+    else {
+        arr[i] = i * i
+        fillSquares(arr, i + 1)
+    }
+
+main() = {
+    # Int64Array: contiguous array of 64-bit integers
+    intArr = newInt64Array(10)
+    fillRange(intArr, 0)
+    intSum = sumInt64(intArr, 0, 0)
+    # Sum of 1..10 = 55
+    print("Sum of 1..10: " ++ show(intSum))
+
+    # Array of squares
+    squares = newInt64Array(10)
+    fillSquares(squares, 0)
+    print("9^2 = " ++ show(squares[9]))  # 81
+
+    # Float64Array: contiguous array of 64-bit floats
+    floats = newFloat64Array(5)
+    floats[0] = 1.5
+    floats[1] = 2.5
+    floats[2] = 3.5
+    floats[3] = 4.5
+    floats[4] = 5.5
+    print("floats[2] = " ++ show(floats[2]))
+
+    # Verify length
+    print("Float array length: " ++ show(length(floats)))
+
+    # Return sum for verification
+    intSum
+}

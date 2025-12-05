@@ -136,6 +136,45 @@ first((a, _)) = a
 second((_, b)) = b
 ```
 
+### Typed Arrays
+Typed arrays are contiguous arrays of a single numeric type. They are optimized for efficient numeric computation and JIT compilation.
+
+```nos
+# Int64Array - array of 64-bit integers
+arr = newInt64Array(10)       # Create array of 10 zeros
+arr[0] = 42                   # Set element by index
+x = arr[0]                    # Get element by index
+len = length(arr)             # Get array length
+
+# Float64Array - array of 64-bit floats
+floats = newFloat64Array(5)   # Create array of 5 zeros
+floats[0] = 3.14
+floats[1] = 2.71
+y = floats[0]
+```
+
+Example: Sum an array
+```nos
+sumArray(arr, i, acc) =
+    if i >= length(arr) then acc
+    else sumArray(arr, i + 1, acc + arr[i])
+
+main() = {
+    arr = newInt64Array(10)
+    fillRange(arr, 0)           # Fill with 1, 2, 3, ..., 10
+    sumArray(arr, 0, 0)         # Returns 55
+}
+
+fillRange(arr, i) =
+    if i >= length(arr) then ()
+    else {
+        arr[i] = i + 1
+        fillRange(arr, i + 1)
+    }
+```
+
+**Note**: Typed arrays store raw numeric values without boxing, making them efficient for numeric algorithms. Unlike regular lists, they support O(1) indexed access and mutation.
+
 ## Pattern Matching
 
 ### Match Expression

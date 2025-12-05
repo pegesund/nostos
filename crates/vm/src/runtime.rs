@@ -1534,6 +1534,20 @@ impl Runtime {
                         array.items.get(idx_val).cloned()
                             .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?
                     }
+                    GcValue::Int64Array(ptr) => {
+                        let array = proc.heap.get_int64_array(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid int64 array reference".to_string()))?;
+                        let val = *array.items.get(idx_val)
+                            .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?;
+                        GcValue::Int64(val)
+                    }
+                    GcValue::Float64Array(ptr) => {
+                        let array = proc.heap.get_float64_array(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid float64 array reference".to_string()))?;
+                        let val = *array.items.get(idx_val)
+                            .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?;
+                        GcValue::Float64(val)
+                    }
                     _ => return Err(RuntimeError::Panic("Index expects list, tuple, or array".to_string())),
                 };
                 set_reg!(*dst, value);
@@ -1544,11 +1558,35 @@ impl Runtime {
                     GcValue::Int64(i) => *i as usize,
                     _ => return Err(RuntimeError::Panic("Index must be integer".to_string())),
                 };
-                let new_value = reg_clone!(*val);
                 match reg!(*coll).clone() {
                     GcValue::Array(ptr) => {
+                        let new_value = reg_clone!(*val);
                         let array = proc.heap.get_array_mut(ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid array reference".to_string()))?;
+                        if idx_val >= array.items.len() {
+                            return Err(RuntimeError::Panic(format!("Index {} out of bounds", idx_val)));
+                        }
+                        array.items[idx_val] = new_value;
+                    }
+                    GcValue::Int64Array(ptr) => {
+                        let new_value = match reg!(*val) {
+                            GcValue::Int64(v) => *v,
+                            _ => return Err(RuntimeError::Panic("Int64Array expects Int64 value".to_string())),
+                        };
+                        let array = proc.heap.get_int64_array_mut(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid int64 array reference".to_string()))?;
+                        if idx_val >= array.items.len() {
+                            return Err(RuntimeError::Panic(format!("Index {} out of bounds", idx_val)));
+                        }
+                        array.items[idx_val] = new_value;
+                    }
+                    GcValue::Float64Array(ptr) => {
+                        let new_value = match reg!(*val) {
+                            GcValue::Float64(v) => *v,
+                            _ => return Err(RuntimeError::Panic("Float64Array expects Float64 value".to_string())),
+                        };
+                        let array = proc.heap.get_float64_array_mut(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid float64 array reference".to_string()))?;
                         if idx_val >= array.items.len() {
                             return Err(RuntimeError::Panic(format!("Index {} out of bounds", idx_val)));
                         }
@@ -1563,10 +1601,33 @@ impl Runtime {
                     GcValue::List(ptr) => proc.heap.get_list(*ptr).map(|l| l.items.len()).unwrap_or(0),
                     GcValue::Tuple(ptr) => proc.heap.get_tuple(*ptr).map(|t| t.items.len()).unwrap_or(0),
                     GcValue::Array(ptr) => proc.heap.get_array(*ptr).map(|a| a.items.len()).unwrap_or(0),
+                    GcValue::Int64Array(ptr) => proc.heap.get_int64_array(*ptr).map(|a| a.items.len()).unwrap_or(0),
+                    GcValue::Float64Array(ptr) => proc.heap.get_float64_array(*ptr).map(|a| a.items.len()).unwrap_or(0),
                     GcValue::String(ptr) => proc.heap.get_string(*ptr).map(|s| s.data.len()).unwrap_or(0),
                     _ => return Err(RuntimeError::Panic("Length expects collection or string".to_string())),
                 };
                 set_reg!(*dst, GcValue::Int64(len as i64));
+            }
+
+            // === Typed Arrays ===
+            Instruction::MakeInt64Array(dst, size_reg) => {
+                let size = match reg!(*size_reg) {
+                    GcValue::Int64(n) => *n as usize,
+                    _ => return Err(RuntimeError::Panic("Array size must be Int64".to_string())),
+                };
+                let items = vec![0i64; size];
+                let ptr = proc.heap.alloc_int64_array(items);
+                set_reg!(*dst, GcValue::Int64Array(ptr));
+            }
+
+            Instruction::MakeFloat64Array(dst, size_reg) => {
+                let size = match reg!(*size_reg) {
+                    GcValue::Int64(n) => *n as usize,
+                    _ => return Err(RuntimeError::Panic("Array size must be Int64".to_string())),
+                };
+                let items = vec![0.0f64; size];
+                let ptr = proc.heap.alloc_float64_array(items);
+                set_reg!(*dst, GcValue::Float64Array(ptr));
             }
 
             Instruction::MakeMap(dst, pairs) => {
@@ -2123,6 +2184,7 @@ impl Runtime {
             // === IO/Debug builtins ===
             Instruction::Print(dst, src) => {
                 let s = proc.heap.display_value(reg!(*src));
+                println!("{}", s);
                 let str_ptr = proc.heap.alloc_string(s.clone());
                 proc.output.push(s);
                 set_reg!(*dst, GcValue::String(str_ptr));

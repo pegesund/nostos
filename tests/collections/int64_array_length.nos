@@ -1,0 +1,12 @@
+# expect: ()
+# Test Int64Array length function
+
+main() = {
+    arr1 = newInt64Array(100)
+    arr2 = newInt64Array(1)
+    arr3 = newInt64Array(0)
+
+    assert(length(arr1) == 100)
+    assert(length(arr2) == 1)
+    assert(length(arr3) == 0)
+}

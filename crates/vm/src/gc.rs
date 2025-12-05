@@ -114,10 +114,22 @@ pub struct GcList {
     pub items: Vec<GcValue>,
 }
 
-/// A GC-managed array (mutable).
+/// A GC-managed array (mutable, heterogeneous).
 #[derive(Clone, Debug)]
 pub struct GcArray {
     pub items: Vec<GcValue>,
+}
+
+/// A GC-managed typed array of i64 (mutable, homogeneous, JIT-optimized).
+#[derive(Clone, Debug)]
+pub struct GcInt64Array {
+    pub items: Vec<i64>,
+}
+
+/// A GC-managed typed array of f64 (mutable, homogeneous, JIT-optimized).
+#[derive(Clone, Debug)]
+pub struct GcFloat64Array {
+    pub items: Vec<f64>,
 }
 
 /// A GC-managed tuple.
@@ -251,6 +263,9 @@ pub enum GcValue {
     String(GcPtr<GcString>),
     List(GcPtr<GcList>),
     Array(GcPtr<GcArray>),
+    // Typed arrays for JIT optimization (contiguous memory, no tag checking)
+    Int64Array(GcPtr<GcInt64Array>),
+    Float64Array(GcPtr<GcFloat64Array>),
     Tuple(GcPtr<GcTuple>),
     Map(GcPtr<GcMap>),
     Set(GcPtr<GcSet>),
@@ -344,6 +359,8 @@ impl fmt::Debug for GcValue {
             GcValue::String(ptr) => write!(f, "String({:?})", ptr),
             GcValue::List(ptr) => write!(f, "List({:?})", ptr),
             GcValue::Array(ptr) => write!(f, "Array({:?})", ptr),
+            GcValue::Int64Array(ptr) => write!(f, "Int64Array({:?})", ptr),
+            GcValue::Float64Array(ptr) => write!(f, "Float64Array({:?})", ptr),
             GcValue::Tuple(ptr) => write!(f, "Tuple({:?})", ptr),
             GcValue::Map(ptr) => write!(f, "Map({:?})", ptr),
             GcValue::Set(ptr) => write!(f, "Set({:?})", ptr),
@@ -390,6 +407,10 @@ impl GcValue {
             | GcValue::NativeFunction(_)
             | GcValue::Type(_)
             | GcValue::Pointer(_) => vec![],
+
+            // Typed arrays have no GC pointers (contain raw values, not GcValue)
+            GcValue::Int64Array(ptr) => vec![ptr.as_raw()],
+            GcValue::Float64Array(ptr) => vec![ptr.as_raw()],
 
             GcValue::String(ptr) => vec![ptr.as_raw()],
             GcValue::List(ptr) => vec![ptr.as_raw()],
@@ -461,6 +482,8 @@ impl GcValue {
             GcValue::String(_) => "String",
             GcValue::List(_) => "List",
             GcValue::Array(_) => "Array",
+            GcValue::Int64Array(_) => "Int64Array",
+            GcValue::Float64Array(_) => "Float64Array",
             GcValue::Tuple(_) => "Tuple",
             GcValue::Map(_) => "Map",
             GcValue::Set(_) => "Set",
@@ -528,6 +551,8 @@ pub enum ObjectType {
     String,
     List,
     Array,
+    Int64Array,
+    Float64Array,
     Tuple,
     Map,
     Set,
@@ -554,6 +579,8 @@ pub enum HeapData {
     String(GcString),
     List(GcList),
     Array(GcArray),
+    Int64Array(GcInt64Array),
+    Float64Array(GcFloat64Array),
     Tuple(GcTuple),
     Map(GcMap),
     Set(GcSet),
@@ -570,6 +597,8 @@ impl HeapData {
             HeapData::String(_) => ObjectType::String,
             HeapData::List(_) => ObjectType::List,
             HeapData::Array(_) => ObjectType::Array,
+            HeapData::Int64Array(_) => ObjectType::Int64Array,
+            HeapData::Float64Array(_) => ObjectType::Float64Array,
             HeapData::Tuple(_) => ObjectType::Tuple,
             HeapData::Map(_) => ObjectType::Map,
             HeapData::Set(_) => ObjectType::Set,
@@ -594,6 +623,9 @@ impl HeapData {
                 .iter()
                 .flat_map(|v| v.gc_pointers())
                 .collect(),
+            // Typed arrays contain no GC pointers (raw values)
+            HeapData::Int64Array(_) => vec![],
+            HeapData::Float64Array(_) => vec![],
             HeapData::Tuple(tuple) => tuple
                 .items
                 .iter()
@@ -648,6 +680,12 @@ impl HeapData {
             }
             HeapData::Array(a) => {
                 std::mem::size_of::<GcArray>() + a.items.len() * std::mem::size_of::<GcValue>()
+            }
+            HeapData::Int64Array(a) => {
+                std::mem::size_of::<GcInt64Array>() + a.items.len() * std::mem::size_of::<i64>()
+            }
+            HeapData::Float64Array(a) => {
+                std::mem::size_of::<GcFloat64Array>() + a.items.len() * std::mem::size_of::<f64>()
             }
             HeapData::Tuple(t) => {
                 std::mem::size_of::<GcTuple>() + t.items.len() * std::mem::size_of::<GcValue>()
@@ -842,6 +880,18 @@ impl Heap {
         GcPtr::from_raw(self.alloc(data))
     }
 
+    /// Allocate a typed i64 array (JIT-optimized).
+    pub fn alloc_int64_array(&mut self, items: Vec<i64>) -> GcPtr<GcInt64Array> {
+        let data = HeapData::Int64Array(GcInt64Array { items });
+        GcPtr::from_raw(self.alloc(data))
+    }
+
+    /// Allocate a typed f64 array (JIT-optimized).
+    pub fn alloc_float64_array(&mut self, items: Vec<f64>) -> GcPtr<GcFloat64Array> {
+        let data = HeapData::Float64Array(GcFloat64Array { items });
+        GcPtr::from_raw(self.alloc(data))
+    }
+
     /// Allocate a tuple.
     pub fn alloc_tuple(&mut self, items: Vec<GcValue>) -> GcPtr<GcTuple> {
         let data = HeapData::Tuple(GcTuple { items });
@@ -953,6 +1003,38 @@ impl Heap {
     pub fn get_array_mut(&mut self, ptr: GcPtr<GcArray>) -> Option<&mut GcArray> {
         match self.get_mut(ptr.as_raw())?.data {
             HeapData::Array(ref mut a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Get a typed reference to i64 array data.
+    pub fn get_int64_array(&self, ptr: GcPtr<GcInt64Array>) -> Option<&GcInt64Array> {
+        match self.get(ptr.as_raw())?.data {
+            HeapData::Int64Array(ref a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Get a mutable reference to i64 array data.
+    pub fn get_int64_array_mut(&mut self, ptr: GcPtr<GcInt64Array>) -> Option<&mut GcInt64Array> {
+        match self.get_mut(ptr.as_raw())?.data {
+            HeapData::Int64Array(ref mut a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Get a typed reference to f64 array data.
+    pub fn get_float64_array(&self, ptr: GcPtr<GcFloat64Array>) -> Option<&GcFloat64Array> {
+        match self.get(ptr.as_raw())?.data {
+            HeapData::Float64Array(ref a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Get a mutable reference to f64 array data.
+    pub fn get_float64_array_mut(&mut self, ptr: GcPtr<GcFloat64Array>) -> Option<&mut GcFloat64Array> {
+        match self.get_mut(ptr.as_raw())?.data {
+            HeapData::Float64Array(ref mut a) => Some(a),
             _ => None,
         }
     }
@@ -1269,6 +1351,20 @@ impl Heap {
                     "<invalid array>".to_string()
                 }
             }
+            GcValue::Int64Array(ptr) => {
+                if let Some(arr) = self.get_int64_array(*ptr) {
+                    format!("Int64Array[{}]", arr.items.len())
+                } else {
+                    "<invalid int64 array>".to_string()
+                }
+            }
+            GcValue::Float64Array(ptr) => {
+                if let Some(arr) = self.get_float64_array(*ptr) {
+                    format!("Float64Array[{}]", arr.items.len())
+                } else {
+                    "<invalid float64 array>".to_string()
+                }
+            }
             GcValue::Tuple(ptr) => {
                 if let Some(tuple) = self.get_tuple(*ptr) {
                     let mut result = "(".to_string();
@@ -1529,6 +1625,20 @@ impl Heap {
                     GcValue::Unit
                 }
             }
+            GcValue::Int64Array(ptr) => {
+                if let Some(arr) = source.get_int64_array(*ptr) {
+                    GcValue::Int64Array(self.alloc_int64_array(arr.items.clone()))
+                } else {
+                    GcValue::Unit
+                }
+            }
+            GcValue::Float64Array(ptr) => {
+                if let Some(arr) = source.get_float64_array(*ptr) {
+                    GcValue::Float64Array(self.alloc_float64_array(arr.items.clone()))
+                } else {
+                    GcValue::Unit
+                }
+            }
             GcValue::Tuple(ptr) => {
                 if let Some(tuple) = source.get_tuple(*ptr) {
                     let items: Vec<GcValue> = tuple
@@ -1717,6 +1827,22 @@ impl Heap {
                     GcValue::Unit
                 }
             }
+            GcValue::Int64Array(ptr) => {
+                let items = self.get_int64_array(*ptr).map(|a| a.items.clone());
+                if let Some(items) = items {
+                    GcValue::Int64Array(self.alloc_int64_array(items))
+                } else {
+                    GcValue::Unit
+                }
+            }
+            GcValue::Float64Array(ptr) => {
+                let items = self.get_float64_array(*ptr).map(|a| a.items.clone());
+                if let Some(items) = items {
+                    GcValue::Float64Array(self.alloc_float64_array(items))
+                } else {
+                    GcValue::Unit
+                }
+            }
             GcValue::Tuple(ptr) => {
                 let items = self.get_tuple(*ptr).map(|t| t.items.clone());
                 if let Some(items) = items {
@@ -1891,6 +2017,16 @@ impl Heap {
                 GcValue::Array(ptr)
             }
 
+            // Typed arrays - copy the raw values
+            Value::Int64Array(arr) => {
+                let items = arr.borrow().clone();
+                GcValue::Int64Array(self.alloc_int64_array(items))
+            }
+            Value::Float64Array(arr) => {
+                let items = arr.borrow().clone();
+                GcValue::Float64Array(self.alloc_float64_array(items))
+            }
+
             // Tuple - recursively convert elements
             Value::Tuple(items) => {
                 let gc_items: Vec<GcValue> = items.iter().map(|v| self.value_to_gc(v)).collect();
@@ -2037,6 +2173,16 @@ impl Heap {
                 let arr = self.get_array(*ptr).expect("invalid array pointer");
                 let items: Vec<Value> = arr.items.iter().map(|v| self.gc_to_value(v)).collect();
                 Value::Array(Rc::new(RefCell::new(items)))
+            }
+
+            // Typed arrays
+            GcValue::Int64Array(ptr) => {
+                let arr = self.get_int64_array(*ptr).expect("invalid int64 array pointer");
+                Value::Int64Array(Rc::new(RefCell::new(arr.items.clone())))
+            }
+            GcValue::Float64Array(ptr) => {
+                let arr = self.get_float64_array(*ptr).expect("invalid float64 array pointer");
+                Value::Float64Array(Rc::new(RefCell::new(arr.items.clone())))
             }
 
             // Tuple
@@ -2325,6 +2471,110 @@ mod tests {
         assert_eq!(clo.function.name, "test_closure");
         assert_eq!(clo.function.arity, 2);
         assert_eq!(clo.captures.len(), 2);
+    }
+
+    // ============================================================
+    // Typed Array Tests
+    // ============================================================
+
+    #[test]
+    fn test_alloc_int64_array() {
+        let mut heap = Heap::new();
+        let items = vec![1i64, 2, 3, 4, 5];
+        let ptr = heap.alloc_int64_array(items);
+
+        let arr = heap.get_int64_array(ptr).unwrap();
+        assert_eq!(arr.items.len(), 5);
+        assert_eq!(arr.items[0], 1);
+        assert_eq!(arr.items[4], 5);
+    }
+
+    #[test]
+    fn test_alloc_float64_array() {
+        let mut heap = Heap::new();
+        let items = vec![1.5f64, 2.5, 3.5];
+        let ptr = heap.alloc_float64_array(items);
+
+        let arr = heap.get_float64_array(ptr).unwrap();
+        assert_eq!(arr.items.len(), 3);
+        assert!((arr.items[0] - 1.5).abs() < f64::EPSILON);
+        assert!((arr.items[2] - 3.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_int64_array_mutation() {
+        let mut heap = Heap::new();
+        let items = vec![0i64; 10];
+        let ptr = heap.alloc_int64_array(items);
+
+        // Mutate the array
+        {
+            let arr = heap.get_int64_array_mut(ptr).unwrap();
+            for i in 0..10 {
+                arr.items[i] = (i * i) as i64;
+            }
+        }
+
+        // Verify mutations
+        let arr = heap.get_int64_array(ptr).unwrap();
+        assert_eq!(arr.items[0], 0);
+        assert_eq!(arr.items[1], 1);
+        assert_eq!(arr.items[2], 4);
+        assert_eq!(arr.items[3], 9);
+        assert_eq!(arr.items[9], 81);
+    }
+
+    #[test]
+    fn test_float64_array_mutation() {
+        let mut heap = Heap::new();
+        let items = vec![0.0f64; 5];
+        let ptr = heap.alloc_float64_array(items);
+
+        // Mutate the array
+        {
+            let arr = heap.get_float64_array_mut(ptr).unwrap();
+            arr.items[0] = 3.14;
+            arr.items[1] = 2.71;
+            arr.items[2] = 1.41;
+        }
+
+        // Verify mutations
+        let arr = heap.get_float64_array(ptr).unwrap();
+        assert!((arr.items[0] - 3.14).abs() < f64::EPSILON);
+        assert!((arr.items[1] - 2.71).abs() < f64::EPSILON);
+        assert!((arr.items[2] - 1.41).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_empty_typed_arrays() {
+        let mut heap = Heap::new();
+
+        let int_ptr = heap.alloc_int64_array(vec![]);
+        let float_ptr = heap.alloc_float64_array(vec![]);
+
+        assert_eq!(heap.get_int64_array(int_ptr).unwrap().items.len(), 0);
+        assert_eq!(heap.get_float64_array(float_ptr).unwrap().items.len(), 0);
+    }
+
+    #[test]
+    fn test_typed_array_gc_survives_when_rooted() {
+        let mut heap = Heap::new();
+
+        let int_arr = heap.alloc_int64_array(vec![1, 2, 3]);
+        let float_arr = heap.alloc_float64_array(vec![1.0, 2.0]);
+        let _garbage = heap.alloc_string("garbage".to_string());
+
+        // Root the typed arrays
+        heap.add_root(int_arr.as_raw());
+        heap.add_root(float_arr.as_raw());
+
+        assert_eq!(heap.live_objects(), 3);
+        heap.collect();
+        assert_eq!(heap.live_objects(), 2);
+
+        // Verify data is intact
+        assert_eq!(heap.get_int64_array(int_arr).unwrap().items, vec![1, 2, 3]);
+        assert_eq!(heap.get_float64_array(float_arr).unwrap().items, vec![1.0, 2.0]);
     }
 
     // ============================================================

@@ -585,24 +585,42 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
 
         // For statements without `var`, we parse as expression first
         // Then if followed by `=`, try to convert to pattern for let binding
+        // or to an assignment target (for arr[i] = x, record.field = x)
         let expr_or_binding = expr.clone()
             .then(just(Token::Eq).ignore_then(expr.clone()).or_not())
-            .map(|(lhs, maybe_rhs)| {
+            .map_with_span(|(lhs, maybe_rhs), span| {
                 match maybe_rhs {
                     Some(rhs) => {
-                        // Have `=`, try to convert lhs to pattern
-                        match expr_to_pattern(lhs.clone()) {
-                            Some(pat) => Stmt::Let(Binding {
+                        // Have `=`, first try to convert lhs to pattern (for let binding)
+                        if let Some(pat) = expr_to_pattern(lhs.clone()) {
+                            Stmt::Let(Binding {
                                 mutable: false,
                                 pattern: pat,
                                 ty: None,
                                 value: rhs,
                                 span: Span::default(),
-                            }),
-                            None => {
-                                // LHS can't be a pattern - this is likely a syntax error
-                                // For now, just treat as expression (will fail later)
-                                Stmt::Expr(lhs)
+                            })
+                        } else {
+                            // Can't be a pattern - try to convert to AssignTarget
+                            let target = match &lhs {
+                                Expr::Index(coll, idx, _) => {
+                                    Some(AssignTarget::Index(coll.clone(), idx.clone()))
+                                }
+                                Expr::FieldAccess(obj, field, _) => {
+                                    Some(AssignTarget::Field(obj.clone(), field.clone()))
+                                }
+                                Expr::Var(name) => {
+                                    Some(AssignTarget::Var(name.clone()))
+                                }
+                                _ => None,
+                            };
+                            match target {
+                                Some(t) => Stmt::Assign(t, rhs, to_span(span)),
+                                None => {
+                                    // LHS can't be a pattern or assignment target - syntax error
+                                    // For now, just treat as expression (will fail later)
+                                    Stmt::Expr(lhs)
+                                }
                             }
                         }
                     }

@@ -1455,6 +1455,17 @@ impl Compiler {
                         self.chunk.emit(Instruction::ToBigInt(dst, arg_regs[0]), 0);
                         return Ok(dst);
                     }
+                    // === Typed Array builtins ===
+                    "newInt64Array" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::MakeInt64Array(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "newFloat64Array" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::MakeFloat64Array(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
                     // === Dynamic builtins (trait-based, keep CallNative for now) ===
                     "show" | "copy" => {
                         let dst = self.alloc_reg();

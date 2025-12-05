@@ -1,0 +1,24 @@
+# expect: ()
+# Test Int64Array operations - creation, indexing, mutation
+
+main() = {
+    arr = newInt64Array(10)
+
+    # Fill with squares
+    fillSquares(arr, 0)
+
+    # Verify values
+    assert(arr[0] == 0)
+    assert(arr[1] == 1)
+    assert(arr[2] == 4)
+    assert(arr[3] == 9)
+    assert(arr[9] == 81)
+    assert(length(arr) == 10)
+}
+
+fillSquares(arr, i) =
+    if i >= length(arr) then ()
+    else {
+        arr[i] = i * i
+        fillSquares(arr, i + 1)
+    }

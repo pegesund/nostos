@@ -1,0 +1,28 @@
+# expect: ()
+# Test Int64Array - compute sum of array elements
+
+main() = {
+    arr = newInt64Array(10)
+
+    # Set arr[i] = i + 1
+    setValues(arr, 0)
+
+    # Sum: 1 + 2 + 3 + ... + 10 = 55
+    sum = sumArray(arr, 0, 0)
+    assert(sum == 55)
+
+    # Verify individual values
+    assert(arr[0] == 1)
+    assert(arr[9] == 10)
+}
+
+setValues(arr, i) =
+    if i >= length(arr) then ()
+    else {
+        arr[i] = i + 1
+        setValues(arr, i + 1)
+    }
+
+sumArray(arr, i, acc) =
+    if i >= length(arr) then acc
+    else sumArray(arr, i + 1, acc + arr[i])

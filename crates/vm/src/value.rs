@@ -54,7 +54,10 @@ pub enum Value {
     // === Heap-allocated values ===
     String(Rc<String>),
     List(Rc<Vec<Value>>),
-    Array(Rc<RefCell<Vec<Value>>>), // mutable
+    Array(Rc<RefCell<Vec<Value>>>), // mutable, general
+    // Typed arrays for JIT optimization (contiguous memory, no tag checking)
+    Int64Array(Rc<RefCell<Vec<i64>>>),
+    Float64Array(Rc<RefCell<Vec<f64>>>),
     Tuple(Rc<Vec<Value>>),
     Map(Rc<HashMap<MapKey, Value>>),
     Set(Rc<std::collections::HashSet<MapKey>>),
@@ -456,6 +459,12 @@ pub enum Instruction {
     /// List length: dst = len(list)
     Length(Reg, Reg),
 
+    // === Typed Arrays ===
+    /// Create Int64 array: dst = Int64Array of given size, filled with 0
+    MakeInt64Array(Reg, Reg),
+    /// Create Float64 array: dst = Float64Array of given size, filled with 0.0
+    MakeFloat64Array(Reg, Reg),
+
     // === Tuples ===
     /// Get tuple element: dst = tuple[idx]
     GetTupleField(Reg, Reg, u8),
@@ -682,6 +691,8 @@ impl Value {
             Value::String(_) => "String",
             Value::List(_) => "List",
             Value::Array(_) => "Array",
+            Value::Int64Array(_) => "Int64Array",
+            Value::Float64Array(_) => "Float64Array",
             Value::Tuple(_) => "Tuple",
             Value::Map(_) => "Map",
             Value::Set(_) => "Set",
@@ -797,6 +808,8 @@ impl fmt::Debug for Value {
             Value::Map(m) => write!(f, "%{{...{} entries}}", m.len()),
             Value::Set(s) => write!(f, "#{{...{} items}}", s.len()),
             Value::Array(a) => write!(f, "Array[{}]", a.borrow().len()),
+            Value::Int64Array(a) => write!(f, "Int64Array[{}]", a.borrow().len()),
+            Value::Float64Array(a) => write!(f, "Float64Array[{}]", a.borrow().len()),
             Value::Type(t) => write!(f, "<type {}>", t.name),
             Value::Pointer(p) => write!(f, "<ptr 0x{:x}>", p),
         }

@@ -1,0 +1,12 @@
+# expect: ()
+# Test Float64Array length
+
+main() = {
+    arr1 = newFloat64Array(50)
+    arr2 = newFloat64Array(1)
+    arr3 = newFloat64Array(0)
+
+    assert(length(arr1) == 50)
+    assert(length(arr2) == 1)
+    assert(length(arr3) == 0)
+}
