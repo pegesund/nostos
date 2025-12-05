@@ -24,6 +24,26 @@ use cranelift_module::{FuncId, Linkage, Module};
 
 use nostos_vm::value::{ConstIdx, FunctionValue, Instruction, Value};
 
+/// Array element types supported by JIT
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArrayElementType {
+    Int64,
+    Float64,
+}
+
+impl ArrayElementType {
+    fn cranelift_type(&self) -> CraneliftType {
+        match self {
+            ArrayElementType::Int64 => I64,
+            ArrayElementType::Float64 => F64,
+        }
+    }
+
+    fn is_float(&self) -> bool {
+        matches!(self, ArrayElementType::Float64)
+    }
+}
+
 /// Numeric types supported by the JIT
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NumericType {
@@ -131,6 +151,19 @@ pub struct CompiledFunction {
     pub numeric_type: NumericType,
 }
 
+/// A compiled native function for array processing
+/// Signature: fn(arr_ptr: *const T, arr_len: i64, ...args) -> T
+pub struct CompiledArrayFunction {
+    /// Pointer to the native code
+    pub code_ptr: *const u8,
+    /// Function ID in the module
+    pub func_id: FuncId,
+    /// Number of additional arguments (beyond arr_ptr and arr_len)
+    pub extra_args: usize,
+    /// The array element type
+    pub element_type: ArrayElementType,
+}
+
 /// The JIT compiler
 pub struct JitCompiler {
     /// Cranelift JIT module
@@ -141,6 +174,8 @@ pub struct JitCompiler {
     builder_ctx: FunctionBuilderContext,
     /// Cache of compiled functions: (function_index, numeric_type) → compiled function
     cache: HashMap<(u16, NumericType), CompiledFunction>,
+    /// Cache of compiled array functions: (function_index, element_type) → compiled function
+    array_cache: HashMap<(u16, ArrayElementType), CompiledArrayFunction>,
     /// Configuration
     #[allow(dead_code)]
     config: JitConfig,
@@ -148,6 +183,8 @@ pub struct JitCompiler {
     compile_queue: Vec<u16>,
     /// Declared function IDs for self-recursion: (func_index, type) → FuncId
     declared_funcs: HashMap<(u16, NumericType), FuncId>,
+    /// Declared function IDs for array function self-recursion
+    declared_array_funcs: HashMap<(u16, ArrayElementType), FuncId>,
 }
 
 impl JitCompiler {
@@ -160,6 +197,10 @@ impl JitCompiler {
             1 => "speed",
             _ => "speed_and_size",
         }).map_err(|e| JitError::Cranelift(e.to_string()))?;
+
+        // Enable frame pointers (required for tail calls)
+        flag_builder.set("preserve_frame_pointers", "true")
+            .map_err(|e| JitError::Cranelift(e.to_string()))?;
 
         let isa_builder = cranelift_native::builder()
             .map_err(|e| JitError::Cranelift(e.to_string()))?;
@@ -177,9 +218,11 @@ impl JitCompiler {
             ctx: Context::new(),
             builder_ctx: FunctionBuilderContext::new(),
             cache: HashMap::new(),
+            array_cache: HashMap::new(),
             config,
             compile_queue: Vec::new(),
             declared_funcs: HashMap::new(),
+            declared_array_funcs: HashMap::new(),
         })
     }
 
@@ -224,6 +267,31 @@ impl JitCompiler {
     /// Get the compiled function info for a specific type
     pub fn get_compiled(&self, func_index: u16, num_type: NumericType) -> Option<&CompiledFunction> {
         self.cache.get(&(func_index, num_type))
+    }
+
+    /// Check if a function is compiled for array operations
+    pub fn is_array_compiled(&self, func_index: u16, elem_type: ArrayElementType) -> bool {
+        self.array_cache.contains_key(&(func_index, elem_type))
+    }
+
+    /// Get compiled Int64Array function: fn(arr_ptr, len, idx, acc) -> i64
+    /// For sumArray-style functions with signature (arr, i, acc)
+    pub fn get_int64_array_function(&self, func_index: u16) -> Option<fn(*const i64, i64, i64, i64) -> i64> {
+        self.array_cache.get(&(func_index, ArrayElementType::Int64)).map(|f| {
+            unsafe { std::mem::transmute::<*const u8, fn(*const i64, i64, i64, i64) -> i64>(f.code_ptr) }
+        })
+    }
+
+    /// Get compiled Float64Array function: fn(arr_ptr, len, idx, acc) -> f64
+    pub fn get_float64_array_function(&self, func_index: u16) -> Option<fn(*const f64, i64, i64, f64) -> f64> {
+        self.array_cache.get(&(func_index, ArrayElementType::Float64)).map(|f| {
+            unsafe { std::mem::transmute::<*const u8, fn(*const f64, i64, i64, f64) -> f64>(f.code_ptr) }
+        })
+    }
+
+    /// Get compiled array function info
+    pub fn get_array_compiled(&self, func_index: u16, elem_type: ArrayElementType) -> Option<&CompiledArrayFunction> {
+        self.array_cache.get(&(func_index, elem_type))
     }
 
     /// Queue a function for compilation
@@ -776,10 +844,497 @@ impl JitCompiler {
         }
     }
 
+    /// Detect if a function is an array processing function.
+    /// Array functions have the pattern: (arr, index, acc) where arr is used with Index/Length.
+    /// Returns the array element type if suitable.
+    fn detect_array_function(&self, func: &FunctionValue) -> Result<ArrayElementType, JitError> {
+        // Must have 3 arguments: (arr, index, accumulator)
+        if func.arity != 3 {
+            return Err(JitError::NotSuitable(format!(
+                "array function must have 3 args (arr, idx, acc), got {}", func.arity
+            )));
+        }
+
+        let mut has_index = false;
+        let mut has_length = false;
+        let mut array_type: Option<ArrayElementType> = None;
+
+        for instr in func.code.code.iter() {
+            match instr {
+                // Index instruction: dst = arr[idx]
+                // First arg (reg 0) should be the array
+                Instruction::Index(_, arr_reg, _) if *arr_reg == 0 => {
+                    has_index = true;
+                }
+                // Length instruction: dst = length(arr)
+                Instruction::Length(_, arr_reg) if *arr_reg == 0 => {
+                    has_length = true;
+                }
+                // Check constants for type hints
+                Instruction::LoadConst(_, idx) => {
+                    if let Some(val) = func.code.constants.get(*idx as usize) {
+                        match val {
+                            Value::Int64(_) => {
+                                if array_type.is_none() {
+                                    array_type = Some(ArrayElementType::Int64);
+                                }
+                            }
+                            Value::Float64(_) => {
+                                if array_type.is_none() {
+                                    array_type = Some(ArrayElementType::Float64);
+                                }
+                            }
+                            Value::Bool(_) => {} // OK
+                            _ => return Err(JitError::NotSuitable(
+                                format!("non-numeric constant in array function: {:?}", val)
+                            )),
+                        }
+                    }
+                }
+                // Allow these instructions
+                Instruction::Move(_, _) |
+                Instruction::LoadTrue(_) | Instruction::LoadFalse(_) |
+                Instruction::Jump(_) |
+                Instruction::JumpIfTrue(_, _) | Instruction::JumpIfFalse(_, _) |
+                Instruction::Return(_) |
+                Instruction::CallSelf(_, _) | Instruction::TailCallSelf(_) |
+                Instruction::AddInt(_, _, _) | Instruction::SubInt(_, _, _) |
+                Instruction::MulInt(_, _, _) | Instruction::NegInt(_, _) |
+                Instruction::EqInt(_, _, _) | Instruction::NeInt(_, _, _) |
+                Instruction::LtInt(_, _, _) | Instruction::LeInt(_, _, _) |
+                Instruction::GtInt(_, _, _) | Instruction::GeInt(_, _, _) |
+                Instruction::AddFloat(_, _, _) | Instruction::SubFloat(_, _, _) |
+                Instruction::MulFloat(_, _, _) | Instruction::DivFloat(_, _, _) |
+                Instruction::NegFloat(_, _) |
+                Instruction::LtFloat(_, _, _) | Instruction::LeFloat(_, _, _) |
+                Instruction::EqFloat(_, _, _) |
+                Instruction::Index(_, _, _) | Instruction::Length(_, _) => {}
+
+                other => return Err(JitError::NotSuitable(
+                    format!("unsupported instruction in array function: {:?}", other)
+                )),
+            }
+        }
+
+        if !has_index {
+            return Err(JitError::NotSuitable("no array indexing found".to_string()));
+        }
+        if !has_length {
+            return Err(JitError::NotSuitable("no length check found".to_string()));
+        }
+
+        // Default to Int64 if no type hints
+        Ok(array_type.unwrap_or(ArrayElementType::Int64))
+    }
+
+    /// Compile an array processing function.
+    /// Transforms (arr, idx, acc) → native fn(arr_ptr, arr_len, idx, acc)
+    pub fn compile_array_function(
+        &mut self,
+        func_index: u16,
+        func: &FunctionValue,
+    ) -> Result<(), JitError> {
+        let elem_type = self.detect_array_function(func)?;
+
+        if self.is_array_compiled(func_index, elem_type) {
+            return Ok(());
+        }
+
+        let elem_cl_type = elem_type.cranelift_type();
+
+        // Signature: fn(arr_ptr: i64, arr_len: i64, idx: i64, acc: T) -> T
+        // arr_ptr is passed as i64 (pointer), arr_len and idx are i64
+        // Use tail calling convention to support tail recursion
+        let mut sig = self.module.make_signature();
+        sig.call_conv = cranelift_codegen::isa::CallConv::Tail;
+        sig.params.push(AbiParam::new(I64)); // arr_ptr
+        sig.params.push(AbiParam::new(I64)); // arr_len
+        sig.params.push(AbiParam::new(I64)); // idx
+        sig.params.push(AbiParam::new(elem_cl_type)); // acc
+        sig.returns.push(AbiParam::new(elem_cl_type)); // return type
+
+        let func_name = format!("nos_arr_{}_{}",
+            if elem_type.is_float() { "f64" } else { "i64" },
+            func_index);
+        let func_id = self.module
+            .declare_function(&func_name, Linkage::Local, &sig)
+            .map_err(|e| JitError::Module(e.to_string()))?;
+
+        self.declared_array_funcs.insert((func_index, elem_type), func_id);
+
+        self.ctx.func.signature = sig.clone();
+        self.ctx.func.name = UserFuncName::user(1, func_index as u32);
+
+        {
+            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
+
+            let entry_block = builder.create_block();
+            builder.append_block_params_for_function_params(entry_block);
+            builder.switch_to_block(entry_block);
+
+            // Get function parameters
+            let params = builder.block_params(entry_block).to_vec();
+            let arr_ptr_val = params[0]; // i64 pointer
+            let arr_len_val = params[1]; // i64 length
+            // params[2] is idx, params[3] is acc
+
+            // Map bytecode registers to Cranelift variables
+            // For Int64Array: ALL registers are I64 (ptr, idx, values, temps)
+            // This simplifies everything since all array elements are i64
+            let reg_count = func.code.register_count;
+            let mut regs: Vec<Variable> = Vec::with_capacity(reg_count);
+
+            for i in 0..reg_count {
+                let var = Variable::from_u32(i as u32);
+                // For Int64Array, use I64 for all registers
+                // For Float64Array, use I64 for ptr/idx (0, 1) and F64 for rest
+                let var_type = if elem_type == ArrayElementType::Int64 {
+                    I64
+                } else if i <= 1 {
+                    I64  // ptr and idx are always i64
+                } else {
+                    F64
+                };
+                builder.declare_var(var, var_type);
+                regs.push(var);
+            }
+
+            // Initialize registers from parameters
+            builder.def_var(regs[0], arr_ptr_val);  // arr -> arr_ptr
+            builder.def_var(regs[1], params[2]);    // idx
+            builder.def_var(regs[2], params[3]);    // acc
+
+            // Special variable for arr_len (used by Length instruction)
+            let arr_len_var = Variable::from_u32(reg_count as u32);
+            builder.declare_var(arr_len_var, I64);
+            builder.def_var(arr_len_var, arr_len_val);
+
+            // Create blocks for jump targets
+            let mut jump_targets: HashMap<usize, Block> = HashMap::new();
+            for (ip, instr) in func.code.code.iter().enumerate() {
+                match instr {
+                    Instruction::Jump(offset) => {
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        jump_targets.entry(target).or_insert_with(|| builder.create_block());
+                    }
+                    Instruction::JumpIfTrue(_, offset) | Instruction::JumpIfFalse(_, offset) => {
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        jump_targets.entry(target).or_insert_with(|| builder.create_block());
+                        jump_targets.entry(ip + 1).or_insert_with(|| builder.create_block());
+                    }
+                    _ => {}
+                }
+            }
+
+            let self_func_ref = self.module.declare_func_in_func(func_id, builder.func);
+
+            let mut ip = 0;
+            let mut block_terminated = false;
+
+            while ip < func.code.code.len() {
+                if let Some(&block) = jump_targets.get(&ip) {
+                    if !block_terminated {
+                        builder.ins().jump(block, &[]);
+                    }
+                    builder.switch_to_block(block);
+                    block_terminated = false;
+                }
+
+                let instr = &func.code.code[ip];
+
+                match instr {
+                    Instruction::LoadConst(dst, idx) => {
+                        let v = Self::load_array_const(&mut builder, &func.code.constants, *idx, elem_type, elem_cl_type)?;
+                        builder.def_var(regs[*dst as usize], v);
+                    }
+
+                    Instruction::Move(dst, src) => {
+                        let v = builder.use_var(regs[*src as usize]);
+                        builder.def_var(regs[*dst as usize], v);
+                    }
+
+                    Instruction::LoadTrue(dst) => {
+                        let v = builder.ins().iconst(elem_cl_type, 1);
+                        builder.def_var(regs[*dst as usize], v);
+                    }
+
+                    Instruction::LoadFalse(dst) => {
+                        let v = builder.ins().iconst(elem_cl_type, 0);
+                        builder.def_var(regs[*dst as usize], v);
+                    }
+
+                    // Length(dst, arr_reg) - return the stored length
+                    Instruction::Length(dst, _arr_reg) => {
+                        let len = builder.use_var(arr_len_var);
+                        builder.def_var(regs[*dst as usize], len);
+                    }
+
+                    // Index(dst, arr_reg, idx_reg) - load from memory
+                    Instruction::Index(dst, _arr_reg, idx_reg) => {
+                        let ptr = builder.use_var(regs[0]); // arr_ptr is in reg 0
+                        let idx = builder.use_var(regs[*idx_reg as usize]);
+
+                        // Calculate offset: ptr + idx * sizeof(element)
+                        let elem_size = if elem_type.is_float() { 8i64 } else { 8i64 };
+                        let size_val = builder.ins().iconst(I64, elem_size);
+                        let offset = builder.ins().imul(idx, size_val);
+                        let addr = builder.ins().iadd(ptr, offset);
+
+                        // Load from memory (trusted heap access)
+                        let mut flags = cranelift_codegen::ir::MemFlags::new();
+                        flags.set_notrap();
+                        flags.set_aligned();
+                        let loaded = builder.ins().load(elem_cl_type, flags, addr, 0);
+                        builder.def_var(regs[*dst as usize], loaded);
+                    }
+
+                    // Integer arithmetic
+                    Instruction::AddInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().iadd(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::SubInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().isub(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::MulInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().imul(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::NegInt(dst, src) => {
+                        let v = builder.use_var(regs[*src as usize]);
+                        let result = builder.ins().ineg(v);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    // Integer comparisons
+                    Instruction::EqInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::Equal, va, vb);
+                        let result = builder.ins().uextend(elem_cl_type, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::NeInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::NotEqual, va, vb);
+                        let result = builder.ins().uextend(elem_cl_type, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::LtInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::SignedLessThan, va, vb);
+                        let result = builder.ins().uextend(elem_cl_type, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::LeInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::SignedLessThanOrEqual, va, vb);
+                        let result = builder.ins().uextend(elem_cl_type, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::GtInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::SignedGreaterThan, va, vb);
+                        let result = builder.ins().uextend(elem_cl_type, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::GeInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, va, vb);
+                        let result = builder.ins().uextend(elem_cl_type, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    // Float arithmetic
+                    Instruction::AddFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().fadd(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::SubFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().fsub(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::MulFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().fmul(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::DivFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().fdiv(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::NegFloat(dst, src) => {
+                        let v = builder.use_var(regs[*src as usize]);
+                        let result = builder.ins().fneg(v);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::LtFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().fcmp(FloatCC::LessThan, va, vb);
+                        let result = builder.ins().uextend(elem_cl_type, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::LeFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().fcmp(FloatCC::LessThanOrEqual, va, vb);
+                        let result = builder.ins().uextend(elem_cl_type, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::EqFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().fcmp(FloatCC::Equal, va, vb);
+                        let result = builder.ins().uextend(elem_cl_type, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    // Control flow
+                    Instruction::Jump(offset) => {
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        let target_block = jump_targets[&target];
+                        builder.ins().jump(target_block, &[]);
+                        block_terminated = true;
+                    }
+
+                    Instruction::JumpIfTrue(cond, offset) => {
+                        let cond_val = builder.use_var(regs[*cond as usize]);
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        let target_block = jump_targets[&target];
+                        let next_block = jump_targets[&(ip + 1)];
+                        builder.ins().brif(cond_val, target_block, &[], next_block, &[]);
+                        block_terminated = true;
+                    }
+
+                    Instruction::JumpIfFalse(cond, offset) => {
+                        let cond_val = builder.use_var(regs[*cond as usize]);
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        let target_block = jump_targets[&target];
+                        let next_block = jump_targets[&(ip + 1)];
+                        builder.ins().brif(cond_val, next_block, &[], target_block, &[]);
+                        block_terminated = true;
+                    }
+
+                    Instruction::Return(src) => {
+                        let v = builder.use_var(regs[*src as usize]);
+                        builder.ins().return_(&[v]);
+                        block_terminated = true;
+                    }
+
+                    // Self-recursion: pass (arr_ptr, arr_len, new_idx, new_acc)
+                    Instruction::CallSelf(dst, arg_regs) => {
+                        // arg_regs contains [arr, idx, acc] in bytecode
+                        // We need to pass [arr_ptr, arr_len, idx, acc] to native
+                        let arr_ptr = builder.use_var(regs[0]); // arr_ptr is in reg 0
+                        let arr_len = builder.use_var(arr_len_var);
+                        let idx = builder.use_var(regs[arg_regs[1] as usize]);
+                        let acc = builder.use_var(regs[arg_regs[2] as usize]);
+
+                        let call = builder.ins().call(self_func_ref, &[arr_ptr, arr_len, idx, acc]);
+                        let result = builder.inst_results(call)[0];
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::TailCallSelf(arg_regs) => {
+                        let arr_ptr = builder.use_var(regs[0]);
+                        let arr_len = builder.use_var(arr_len_var);
+                        let idx = builder.use_var(regs[arg_regs[1] as usize]);
+                        let acc = builder.use_var(regs[arg_regs[2] as usize]);
+
+                        builder.ins().return_call(self_func_ref, &[arr_ptr, arr_len, idx, acc]);
+                        block_terminated = true;
+                    }
+
+                    other => {
+                        return Err(JitError::UnsupportedInstruction(format!("{:?}", other)));
+                    }
+                }
+
+                ip += 1;
+            }
+
+            builder.seal_all_blocks();
+            builder.finalize();
+        }
+
+        self.module
+            .define_function(func_id, &mut self.ctx)
+            .map_err(|e| JitError::Module(format!("define_function error: {}", e)))?;
+
+        self.module.finalize_definitions()
+            .map_err(|e| JitError::Module(e.to_string()))?;
+
+        let code_ptr = self.module.get_finalized_function(func_id);
+
+        self.array_cache.insert((func_index, elem_type), CompiledArrayFunction {
+            code_ptr,
+            func_id,
+            extra_args: 2, // idx and acc
+            element_type: elem_type,
+        });
+
+        self.module.clear_context(&mut self.ctx);
+
+        Ok(())
+    }
+
+    /// Load a constant for array functions
+    fn load_array_const(
+        builder: &mut FunctionBuilder,
+        constants: &[Value],
+        idx: ConstIdx,
+        _elem_type: ArrayElementType,
+        cl_type: CraneliftType,
+    ) -> Result<CraneliftValue, JitError> {
+        match constants.get(idx as usize) {
+            Some(Value::Int64(i)) => Ok(builder.ins().iconst(cl_type, *i)),
+            Some(Value::Float64(f)) => Ok(builder.ins().f64const(*f)),
+            Some(Value::Bool(b)) => Ok(builder.ins().iconst(cl_type, if *b { 1 } else { 0 })),
+            Some(other) => Err(JitError::NotSuitable(format!("non-numeric constant: {:?}", other))),
+            None => Err(JitError::NotSuitable(format!("constant {} not found", idx))),
+        }
+    }
+
     /// Get JIT statistics
     pub fn stats(&self) -> JitStats {
         JitStats {
             compiled_functions: self.cache.len(),
+            array_functions: self.array_cache.len(),
             queued_functions: self.compile_queue.len(),
         }
     }
@@ -789,6 +1344,7 @@ impl JitCompiler {
 #[derive(Debug, Clone)]
 pub struct JitStats {
     pub compiled_functions: usize,
+    pub array_functions: usize,
     pub queued_functions: usize,
 }
 
@@ -971,5 +1527,111 @@ mod tests {
 
         assert_eq!(result, 9227465);
         eprintln!("[JIT] fib(35) = {} in {:?}", result, elapsed);
+    }
+
+    /// Create a sumArray function: sumArray(arr, i, acc) =
+    ///     if i >= length(arr) then acc
+    ///     else sumArray(arr, i + 1, acc + arr[i])
+    fn make_sum_array_function() -> FunctionValue {
+        let mut chunk = Chunk::new();
+
+        // Constants
+        chunk.constants.push(Value::Int64(1)); // idx 0: constant 1
+
+        // Registers:
+        // r0 = arr (array)
+        // r1 = i (index)
+        // r2 = acc (accumulator)
+        // r3 = length(arr)
+        // r4 = i >= length(arr) (condition)
+        // r5 = arr[i]
+        // r6 = acc + arr[i]
+        // r7 = i + 1
+        // r8 = 1 (constant)
+
+        // IP=0: r3 = length(arr)
+        chunk.code.push(Instruction::Length(3, 0));
+        // IP=1: r4 = i >= length(arr)
+        chunk.code.push(Instruction::GeInt(4, 1, 3));
+        // IP=2: if r4 jump to return acc (target IP=8, offset = 8-2-1 = 5)
+        chunk.code.push(Instruction::JumpIfTrue(4, 5));
+        // IP=3: r5 = arr[i]
+        chunk.code.push(Instruction::Index(5, 0, 1));
+        // IP=4: r6 = acc + arr[i]
+        chunk.code.push(Instruction::AddInt(6, 2, 5));
+        // IP=5: r8 = 1
+        chunk.code.push(Instruction::LoadConst(8, 0));
+        // IP=6: r7 = i + 1
+        chunk.code.push(Instruction::AddInt(7, 1, 8));
+        // IP=7: tail call: sumArray(arr, i+1, acc+arr[i])
+        chunk.code.push(Instruction::TailCallSelf(Rc::new([0, 7, 6])));
+        // IP=8: return acc (base case)
+        chunk.code.push(Instruction::Return(2));
+
+        chunk.register_count = 9;
+
+        FunctionValue {
+            name: "sumArray".to_string(),
+            arity: 3,
+            param_names: vec!["arr".to_string(), "i".to_string(), "acc".to_string()],
+            code: Rc::new(chunk),
+            module: None,
+            source_span: None,
+            jit_code: None,
+            call_count: Cell::new(0),
+        }
+    }
+
+    #[test]
+    fn test_jit_array_sum() {
+        let config = JitConfig::default();
+        let mut jit = JitCompiler::new(config).unwrap();
+
+        let func = make_sum_array_function();
+        jit.compile_array_function(0, &func).expect("Array JIT compilation failed");
+
+        // Get the compiled function
+        let native_fn = jit.get_int64_array_function(0).expect("Array function not compiled");
+
+        // Create a test array [1, 2, 3, 4, 5]
+        let arr: Vec<i64> = vec![1, 2, 3, 4, 5];
+        let arr_ptr = arr.as_ptr();
+        let arr_len = arr.len() as i64;
+
+        // Call: sumArray(arr, 0, 0) should return 15
+        let result = native_fn(arr_ptr, arr_len, 0, 0);
+        assert_eq!(result, 15);
+
+        // Test with different arrays
+        let arr2: Vec<i64> = vec![10, 20, 30];
+        let result2 = native_fn(arr2.as_ptr(), arr2.len() as i64, 0, 0);
+        assert_eq!(result2, 60);
+
+        // Test with empty array
+        let arr3: Vec<i64> = vec![];
+        let result3 = native_fn(arr3.as_ptr(), arr3.len() as i64, 0, 0);
+        assert_eq!(result3, 0);
+    }
+
+    #[test]
+    fn test_jit_array_sum_performance() {
+        let config = JitConfig::default();
+        let mut jit = JitCompiler::new(config).unwrap();
+
+        let func = make_sum_array_function();
+        jit.compile_array_function(0, &func).expect("Array JIT compilation failed");
+
+        let native_fn = jit.get_int64_array_function(0).expect("Array function not compiled");
+
+        // Create a large array
+        let arr: Vec<i64> = (1..=1000).collect();
+        let expected: i64 = (1..=1000).sum();
+
+        let start = std::time::Instant::now();
+        let result = native_fn(arr.as_ptr(), arr.len() as i64, 0, 0);
+        let elapsed = start.elapsed();
+
+        assert_eq!(result, expected);
+        eprintln!("[JIT] sum(1..1000) = {} in {:?}", result, elapsed);
     }
 }
