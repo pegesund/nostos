@@ -317,9 +317,23 @@ impl Worker {
         // 0. Check for expired timers and add sleeping/waiting processes to queue
         // Note: We DON'T change their state here - let Sleep/ReceiveTimeout instructions
         // detect the timeout and handle state transitions themselves.
+        // IMPORTANT: Only add if:
+        // 1. Process is still in Sleeping/WaitingTimeout state (not already woken by message)
+        // 2. Process's wake_time matches the timer entry (not a stale timer from previous wait)
         let woken = self.scheduler.check_timers();
-        for pid in woken {
-            self.local.push(pid);
+        for (timer_wake_time, pid) in woken {
+            // Skip if already claimed by another worker
+            if self.scheduler.is_claimed(pid) {
+                continue;
+            }
+            let should_add = self.scheduler.with_process(pid, |proc| {
+                let in_waiting_state = proc.state == ProcessState::Sleeping || proc.state == ProcessState::WaitingTimeout;
+                let wake_time_matches = proc.wake_time == Some(timer_wake_time);
+                in_waiting_state && wake_time_matches
+            }).unwrap_or(false);
+            if should_add {
+                self.local.push(pid);
+            }
         }
 
         // 1. Try local queue first (fastest)
@@ -364,19 +378,46 @@ impl Worker {
 
     /// Execute a process for one time slice.
     fn execute_process(&self, pid: Pid) {
-        // Reset reductions for this time slice
-        // Note: We only set state to Running if it's in Waiting state.
-        // For Sleeping/WaitingTimeout, we let the respective instructions detect
-        // that the timer fired and handle state transitions.
-        self.scheduler.with_process_mut(pid, |proc| {
-            proc.reset_reductions();
-            if proc.state == ProcessState::Waiting {
-                proc.state = ProcessState::Running;
+        // Try to claim the process. If another worker already claimed it, skip.
+        // This prevents race conditions where a process is in multiple queues.
+        if !self.scheduler.claim_process(pid) {
+            return;
+        }
+
+        // Check if process is runnable and prepare for execution
+        // NOTE: We do NOT change state here - let the instruction handlers manage state.
+        // This is important for Sleep/ReceiveTimeout which check their own state.
+        let can_run = self.scheduler.with_process_mut(pid, |proc| {
+            match proc.state {
+                ProcessState::Exited(_) => {
+                    // Already exited, nothing to do
+                    false
+                }
+                ProcessState::Running | ProcessState::Waiting
+                | ProcessState::WaitingTimeout | ProcessState::Sleeping
+                | ProcessState::Suspended => {
+                    // Process is runnable
+                    proc.reset_reductions();
+                    // State is NOT changed here - Sleep/ReceiveTimeout handlers need to
+                    // see the correct state (Sleeping/WaitingTimeout) to know they're waking up
+                    true
+                }
             }
-        });
+        }).unwrap_or(false);
+
+        if !can_run {
+            self.scheduler.unclaim_process(pid);
+            return;
+        }
 
         // Run the process
-        match self.run_process_slice(pid) {
+        let result = self.run_process_slice(pid);
+
+        // Unclaim the process before handling result
+        // (so it can be re-queued or another worker can wake it)
+        self.scheduler.unclaim_process(pid);
+
+        match result {
             Ok(ProcessResult::Continue) => {
                 // Process yielded, re-queue it
                 self.local.push(pid);
@@ -447,7 +488,8 @@ impl Worker {
         let mut proc = handle.lock();
 
         // Execute up to BATCH_SIZE instructions
-        const BATCH_SIZE: usize = 32;
+        // Large batch size reduces lock overhead for compute-intensive code
+        const BATCH_SIZE: usize = 1000;
 
         for _ in 0..BATCH_SIZE {
             // Check yield conditions
@@ -504,15 +546,26 @@ impl Worker {
                     proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::Bool(false);
                 }
 
-                // === Arithmetic ===
+                // === Arithmetic (polymorphic - dispatches based on operand types) ===
                 Instruction::AddInt(dst, a, b) => {
                     let frame = proc.frames.last_mut().unwrap();
                     let result = match (&frame.registers[*a as usize], &frame.registers[*b as usize]) {
                         (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Int64(x + y),
+                        (GcValue::Int32(x), GcValue::Int32(y)) => GcValue::Int32(x.wrapping_add(*y)),
+                        (GcValue::Int16(x), GcValue::Int16(y)) => GcValue::Int16(x.wrapping_add(*y)),
+                        (GcValue::Int8(x), GcValue::Int8(y)) => GcValue::Int8(x.wrapping_add(*y)),
+                        (GcValue::UInt64(x), GcValue::UInt64(y)) => GcValue::UInt64(x.wrapping_add(*y)),
+                        (GcValue::UInt32(x), GcValue::UInt32(y)) => GcValue::UInt32(x.wrapping_add(*y)),
+                        (GcValue::UInt16(x), GcValue::UInt16(y)) => GcValue::UInt16(x.wrapping_add(*y)),
+                        (GcValue::UInt8(x), GcValue::UInt8(y)) => GcValue::UInt8(x.wrapping_add(*y)),
+                        // Handle floats (type may not be known at compile time for pattern bindings)
+                        (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x + y),
+                        (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x + y),
+                        (GcValue::Decimal(x), GcValue::Decimal(y)) => GcValue::Decimal(*x + *y),
                         _ => {
                             return Err(RuntimeError::TypeError {
-                                expected: "Int".to_string(),
-                                found: "other".to_string(),
+                                expected: "matching numeric types".to_string(),
+                                found: "mismatched types in addition".to_string(),
                             })
                         }
                     };
@@ -523,10 +576,21 @@ impl Worker {
                     let frame = proc.frames.last_mut().unwrap();
                     let result = match (&frame.registers[*a as usize], &frame.registers[*b as usize]) {
                         (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Int64(x - y),
+                        (GcValue::Int32(x), GcValue::Int32(y)) => GcValue::Int32(x.wrapping_sub(*y)),
+                        (GcValue::Int16(x), GcValue::Int16(y)) => GcValue::Int16(x.wrapping_sub(*y)),
+                        (GcValue::Int8(x), GcValue::Int8(y)) => GcValue::Int8(x.wrapping_sub(*y)),
+                        (GcValue::UInt64(x), GcValue::UInt64(y)) => GcValue::UInt64(x.wrapping_sub(*y)),
+                        (GcValue::UInt32(x), GcValue::UInt32(y)) => GcValue::UInt32(x.wrapping_sub(*y)),
+                        (GcValue::UInt16(x), GcValue::UInt16(y)) => GcValue::UInt16(x.wrapping_sub(*y)),
+                        (GcValue::UInt8(x), GcValue::UInt8(y)) => GcValue::UInt8(x.wrapping_sub(*y)),
+                        // Handle floats (type may not be known at compile time for pattern bindings)
+                        (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x - y),
+                        (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x - y),
+                        (GcValue::Decimal(x), GcValue::Decimal(y)) => GcValue::Decimal(*x - *y),
                         _ => {
                             return Err(RuntimeError::TypeError {
-                                expected: "Int".to_string(),
-                                found: "other".to_string(),
+                                expected: "matching numeric types".to_string(),
+                                found: "mismatched types in subtraction".to_string(),
                             })
                         }
                     };
@@ -537,10 +601,21 @@ impl Worker {
                     let frame = proc.frames.last_mut().unwrap();
                     let result = match (&frame.registers[*a as usize], &frame.registers[*b as usize]) {
                         (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Int64(x * y),
+                        (GcValue::Int32(x), GcValue::Int32(y)) => GcValue::Int32(x.wrapping_mul(*y)),
+                        (GcValue::Int16(x), GcValue::Int16(y)) => GcValue::Int16(x.wrapping_mul(*y)),
+                        (GcValue::Int8(x), GcValue::Int8(y)) => GcValue::Int8(x.wrapping_mul(*y)),
+                        (GcValue::UInt64(x), GcValue::UInt64(y)) => GcValue::UInt64(x.wrapping_mul(*y)),
+                        (GcValue::UInt32(x), GcValue::UInt32(y)) => GcValue::UInt32(x.wrapping_mul(*y)),
+                        (GcValue::UInt16(x), GcValue::UInt16(y)) => GcValue::UInt16(x.wrapping_mul(*y)),
+                        (GcValue::UInt8(x), GcValue::UInt8(y)) => GcValue::UInt8(x.wrapping_mul(*y)),
+                        // Handle floats (type may not be known at compile time for pattern bindings)
+                        (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x * y),
+                        (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x * y),
+                        (GcValue::Decimal(x), GcValue::Decimal(y)) => GcValue::Decimal(*x * *y),
                         _ => {
                             return Err(RuntimeError::TypeError {
-                                expected: "Int".to_string(),
-                                found: "other".to_string(),
+                                expected: "matching numeric types".to_string(),
+                                found: "mismatched types in multiplication".to_string(),
                             })
                         }
                     };
@@ -847,6 +922,99 @@ impl Worker {
                     };
                     let ptr = proc.heap.alloc_tuple(items);
                     proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::Tuple(ptr);
+                }
+
+                // === Typed Arrays (fast path) ===
+                Instruction::MakeInt64Array(dst, size_reg) => {
+                    let frame = proc.frames.last().unwrap();
+                    let size = match &frame.registers[*size_reg as usize] {
+                        GcValue::Int64(n) => *n as usize,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int64".to_string(),
+                            found: "other".to_string(),
+                        }),
+                    };
+                    let ptr = proc.heap.alloc_int64_array(vec![0i64; size]);
+                    proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::Int64Array(ptr);
+                }
+
+                Instruction::Length(dst, src) => {
+                    let frame = proc.frames.last().unwrap();
+                    let val = &frame.registers[*src as usize];
+                    let len = match val {
+                        GcValue::Int64Array(ptr) => proc.heap.get_int64_array(*ptr).map(|a| a.items.len()),
+                        GcValue::Float64Array(ptr) => proc.heap.get_float64_array(*ptr).map(|a| a.items.len()),
+                        GcValue::List(ptr) => proc.heap.get_list(*ptr).map(|l| l.items.len()),
+                        GcValue::Array(ptr) => proc.heap.get_array(*ptr).map(|a| a.items.len()),
+                        _ => None,
+                    }.unwrap_or(0);
+                    proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::Int64(len as i64);
+                }
+
+                Instruction::Index(dst, arr, idx) => {
+                    let frame = proc.frames.last().unwrap();
+                    let arr_val = frame.registers[*arr as usize].clone();
+                    let idx_num = match &frame.registers[*idx as usize] {
+                        GcValue::Int64(i) => *i as usize,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int64".to_string(),
+                            found: "other".to_string(),
+                        }),
+                    };
+                    let result = match &arr_val {
+                        GcValue::Int64Array(ptr) => {
+                            proc.heap.get_int64_array(*ptr)
+                                .and_then(|arr| arr.items.get(idx_num).map(|v| GcValue::Int64(*v)))
+                        }
+                        GcValue::Float64Array(ptr) => {
+                            proc.heap.get_float64_array(*ptr)
+                                .and_then(|arr| arr.items.get(idx_num).map(|v| GcValue::Float64(*v)))
+                        }
+                        GcValue::List(ptr) => {
+                            proc.heap.get_list(*ptr)
+                                .and_then(|list| list.items.get(idx_num).cloned())
+                        }
+                        _ => None,
+                    }.ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_num)))?;
+                    proc.frames.last_mut().unwrap().registers[*dst as usize] = result;
+                }
+
+                Instruction::IndexSet(coll, idx, val) => {
+                    let frame = proc.frames.last().unwrap();
+                    let coll_val = frame.registers[*coll as usize].clone();
+                    let new_val = frame.registers[*val as usize].clone();
+                    let idx_num = match &frame.registers[*idx as usize] {
+                        GcValue::Int64(i) => *i as usize,
+                        _ => return Err(RuntimeError::Panic("Index must be integer".to_string())),
+                    };
+                    match coll_val {
+                        GcValue::Int64Array(ptr) => {
+                            if let GcValue::Int64(v) = new_val {
+                                if let Some(array) = proc.heap.get_int64_array_mut(ptr) {
+                                    if idx_num < array.items.len() {
+                                        array.items[idx_num] = v;
+                                    }
+                                }
+                            }
+                        }
+                        GcValue::Float64Array(ptr) => {
+                            if let GcValue::Float64(v) = new_val {
+                                if let Some(array) = proc.heap.get_float64_array_mut(ptr) {
+                                    if idx_num < array.items.len() {
+                                        array.items[idx_num] = v;
+                                    }
+                                }
+                            }
+                        }
+                        GcValue::Array(ptr) => {
+                            if let Some(array) = proc.heap.get_array_mut(ptr) {
+                                if idx_num < array.items.len() {
+                                    array.items[idx_num] = new_val;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                 }
 
                 // === Instructions that need scheduler access ===
@@ -1872,6 +2040,7 @@ impl Worker {
                     self.scheduler.with_process_mut(pid, |proc| {
                         proc.wake_time = None;
                         proc.timeout_dst = None;
+                        proc.state = ProcessState::Running; // Reset state since we're no longer waiting
                     });
                     set_reg!(dst, msg);
                 } else {

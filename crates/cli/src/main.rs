@@ -5,8 +5,6 @@ use nostos_jit::{JitCompiler, JitConfig};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::gc::GcValue;
 use nostos_vm::runtime::Runtime;
-use nostos_vm::scheduler::Scheduler;
-use nostos_vm::worker::{WorkerPool, WorkerPoolConfig};
 use nostos_vm::parallel::{ParallelVM, ParallelConfig};
 use nostos_vm::value::RuntimeError;
 use std::env;
@@ -180,7 +178,6 @@ fn main() -> ExitCode {
     let mut enable_jit = true;
     let mut json_errors = false;
     let mut debug_mode = false;
-    let mut parallel_workers: Option<usize> = None;
     let mut parallel_affinity: Option<usize> = None;
 
     let mut i = 1;
@@ -198,8 +195,7 @@ fn main() -> ExitCode {
                 println!("  --no-jit         Disable JIT compilation (for debugging)");
                 println!("  --debug          Show local variable values in stack traces");
                 println!("  --json-errors    Output errors as JSON (for debugger integration)");
-                println!("  --parallel [N]   Enable parallel execution with N workers (default: all CPUs)");
-                println!("  --parallel-affinity [N]  Parallel with CPU affinity (processes stay on spawning thread)");
+                println!("  --parallel [N]   Enable parallel execution with N threads (default: all CPUs)");
                 return ExitCode::SUCCESS;
             }
             if arg == "--version" || arg == "-v" {
@@ -221,21 +217,8 @@ fn main() -> ExitCode {
                 i += 1;
                 continue;
             }
-            if arg == "--parallel" {
-                // Check if next arg is a number
-                if i + 1 < args.len() {
-                    if let Ok(n) = args[i + 1].parse::<usize>() {
-                        parallel_workers = Some(n);
-                        i += 2;
-                        continue;
-                    }
-                }
-                // No number specified, use 0 (auto-detect)
-                parallel_workers = Some(0);
-                i += 1;
-                continue;
-            }
-            if arg == "--parallel-affinity" {
+            if arg == "--parallel" || arg == "--parallel-affinity" {
+                // Both flags now use ParallelVM (the fast lock-free implementation)
                 // Check if next arg is a number
                 if i + 1 < args.len() {
                     if let Ok(n) = args[i + 1].parse::<usize>() {
@@ -413,63 +396,9 @@ fn main() -> ExitCode {
         }
     }
 
-    let result = if let Some(num_workers) = parallel_workers {
-        // Parallel execution with work-stealing WorkerPool
-        let scheduler = Scheduler::new();
-
-        // Register default native functions (show, copy, print, println)
-        scheduler.register_default_natives();
-
-        // Register functions on scheduler
-        for (name, func) in compiler.get_all_functions() {
-            scheduler.functions.write().insert(name.clone(), func.clone());
-        }
-        // Also set function_list for index-based lookup (CallDirect/TailCallDirect)
-        let function_list = compiler.get_function_list();
-        *scheduler.function_list.write() = function_list.clone();
-
-        // Register types on scheduler
-        for (name, type_val) in compiler.get_vm_types() {
-            scheduler.types.write().insert(name.clone(), type_val.clone());
-        }
-
-        // JIT compile suitable functions
-        if enable_jit {
-            if let Ok(mut jit) = JitCompiler::new(JitConfig::default()) {
-                for idx in 0..function_list.len() {
-                    jit.queue_compilation(idx as u16);
-                }
-                if let Ok(compiled) = jit.process_queue(&function_list) {
-                    if compiled > 0 {
-                        for (idx, _func) in function_list.iter().enumerate() {
-                            if let Some(jit_fn) = jit.get_int_function(idx as u16) {
-                                scheduler.jit_int_functions.write().insert(idx as u16, jit_fn);
-                            }
-                            if let Some(jit_fn) = jit.get_loop_int64_array_function(idx as u16) {
-                                scheduler.jit_loop_array_functions.write().insert(idx as u16, jit_fn);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        let config = WorkerPoolConfig {
-            num_workers,
-            enable_jit,
-            ..Default::default()
-        };
-
-        let pool = WorkerPool::new(scheduler, config);
-        pool.spawn_initial(main_func);
-        let result = pool.run();
-        pool.shutdown();
-        result
-    } else {
-        // Single-threaded execution
-        runtime.spawn_initial(main_func);
-        runtime.run()
-    };
+    // Single-threaded execution
+    runtime.spawn_initial(main_func);
+    let result = runtime.run();
 
     match result {
         Ok(result) => {

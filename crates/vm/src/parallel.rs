@@ -2523,6 +2523,9 @@ impl ThreadWorker {
                     // Message available - put in destination register
                     let frame = proc.frames.last_mut().unwrap();
                     frame.registers[*dst as usize] = msg;
+                    // Clear timeout state since message arrived before timeout
+                    proc.wake_time = None;
+                    proc.timeout_dst = None;
                 } else {
                     // No message - check if this is a timeout wake-up or first entry
                     let frame = proc.frames.last().unwrap();

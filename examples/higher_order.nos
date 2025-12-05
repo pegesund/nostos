@@ -46,7 +46,7 @@ main() = {
     result2 = apply_n(4, double, 3)
 
     # Use flip
-    sub(a, b) = a - b
+    sub = (a, b) => a - b
     flipped_sub = flip(sub)
     result3 = flipped_sub(3, 10)  # 10 - 3 = 7
 

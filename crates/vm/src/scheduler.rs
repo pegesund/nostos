@@ -324,6 +324,10 @@ pub struct Scheduler {
     /// Timer heap for Sleep/ReceiveTimeout - stores (wake_time, Pid) pairs.
     /// Uses Reverse for min-heap behavior (earliest wake time first).
     pub timer_heap: Mutex<BinaryHeap<Reverse<(Instant, Pid)>>>,
+
+    /// Claimed processes (being executed by a worker).
+    /// Prevents race conditions where a process is added to a queue while already executing.
+    claimed: Mutex<HashSet<u64>>,
 }
 
 impl Scheduler {
@@ -351,6 +355,7 @@ impl Scheduler {
             jit_loop_array_functions: RwLock::new(HashMap::new()),
             active_process_count: AtomicUsize::new(0),
             timer_heap: Mutex::new(BinaryHeap::new()),
+            claimed: Mutex::new(HashSet::new()),
         }
     }
 
@@ -550,6 +555,19 @@ impl Scheduler {
         processes.get(&pid).map(|handle| f(&mut handle.lock()))
     }
 
+    /// Try to get exclusive mutable access to a process without blocking.
+    /// Returns None if the process doesn't exist or if another thread holds the lock.
+    /// This is used by the parallel VM to claim processes for execution.
+    pub fn try_with_process_mut<F, R>(&self, pid: Pid, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut Process) -> R,
+    {
+        let processes = self.processes.read();
+        processes.get(&pid).and_then(|handle| {
+            handle.try_lock().map(|mut guard| f(&mut guard))
+        })
+    }
+
     /// Get current process Pid.
     pub fn current_pid(&self) -> Option<Pid> {
         *self.current.lock()
@@ -594,16 +612,10 @@ impl Scheduler {
                 let copied = target.heap.deep_copy(&message, &source.heap);
                 target.mailbox.push_back(copied);
 
-                // Wake up if waiting (including WaitingTimeout)
-                // Note: For WaitingTimeout, we only set state to Running but keep wake_time.
-                // ReceiveTimeout will clear wake_time when it finds the message.
-                // This avoids confusion about whether this is first entry or message wakeup.
-                if target.state == ProcessState::Waiting {
-                    target.state = ProcessState::Running;
-                } else if target.state == ProcessState::WaitingTimeout {
-                    target.state = ProcessState::Running;
-                    // Keep wake_time/timeout_dst - ReceiveTimeout will clear them when it gets the message
-                }
+                // NOTE: We do NOT set state to Running here. That's done atomically
+                // by execute_process when a worker claims this process.
+                // This prevents race conditions where multiple workers try to execute
+                // the same process (e.g., when both timer and message wake it).
 
                 drop(first_lock);
                 drop(second_lock);
@@ -790,9 +802,10 @@ impl Scheduler {
         self.timer_heap.lock().push(Reverse((wake_time, pid)));
     }
 
-    /// Check for expired timers and wake processes.
-    /// Returns the Pids of processes that should be woken.
-    pub fn check_timers(&self) -> Vec<Pid> {
+    /// Check for expired timers and return (wake_time, pid) pairs.
+    /// The wake_time is included so callers can verify it matches the process's current wake_time
+    /// (to detect stale timer entries from processes that were woken by messages).
+    pub fn check_timers(&self) -> Vec<(Instant, Pid)> {
         let now = Instant::now();
         let mut heap = self.timer_heap.lock();
         let mut woken = Vec::new();
@@ -800,7 +813,7 @@ impl Scheduler {
         while let Some(&Reverse((wake_time, pid))) = heap.peek() {
             if wake_time <= now {
                 heap.pop();
-                woken.push(pid);
+                woken.push((wake_time, pid));
             } else {
                 break;
             }
@@ -812,6 +825,28 @@ impl Scheduler {
     /// Get the next timer deadline (if any) for efficient sleeping.
     pub fn next_timer_deadline(&self) -> Option<Instant> {
         self.timer_heap.lock().peek().map(|Reverse((t, _))| *t)
+    }
+
+    /// Try to claim a process for execution.
+    /// Returns true if successfully claimed, false if already claimed by another worker.
+    pub fn claim_process(&self, pid: Pid) -> bool {
+        let mut claimed = self.claimed.lock();
+        if claimed.contains(&pid.0) {
+            false
+        } else {
+            claimed.insert(pid.0);
+            true
+        }
+    }
+
+    /// Unclaim a process after execution.
+    pub fn unclaim_process(&self, pid: Pid) {
+        self.claimed.lock().remove(&pid.0);
+    }
+
+    /// Check if a process is claimed.
+    pub fn is_claimed(&self, pid: Pid) -> bool {
+        self.claimed.lock().contains(&pid.0)
     }
 }
 

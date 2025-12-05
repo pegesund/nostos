@@ -1,20 +1,11 @@
-# Example demonstrating I/O capabilities
+# Example demonstrating I/O capabilities (planned feature)
+# Note: File I/O functions are not yet implemented
 
 main() = {
-    # Write to a file
-    writeFile("/tmp/nostos_test.txt", "Hello from Nostos!")
-
-    # Read the file back
-    content = readFile("/tmp/nostos_test.txt")
-    println(content)
-
-    # Append to file
-    appendFile("/tmp/nostos_test.txt", " - Second part")
-
-    # Read again
-    content2 = readFile("/tmp/nostos_test.txt")
-    println(content2)
-
-    # Check if file exists
-    fileExists("/tmp/nostos_test.txt")
+    println("File I/O functions are planned but not yet implemented:")
+    println("  - writeFile(path, content)")
+    println("  - readFile(path)")
+    println("  - appendFile(path, content)")
+    println("  - fileExists(path)")
+    ()
 }

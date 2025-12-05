@@ -24,8 +24,8 @@ end
 
 main() = {
     me = self()
-    pong_pid = spawn(pong)
-    spawn(ping, pong_pid, 5, me)
+    pong_pid = spawn(() => pong())
+    spawn(() => ping(pong_pid, 5, me))
 
     receive
         Done(n) -> {
