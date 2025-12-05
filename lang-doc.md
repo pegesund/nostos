@@ -425,9 +425,29 @@ nostos --version            # Show version
 
 ### Options
 ```bash
-nostos --no-jit <file.nos>       # Disable JIT compilation (for debugging)
+nostos --no-jit <file.nos>       # Disable JIT compilation
+nostos --debug <file.nos>        # Show local variables in stack traces
 nostos --json-errors <file.nos>  # Output errors as JSON (for debugger integration)
 ```
+
+### Debug Mode
+When `--debug` is enabled, stack traces include local variable values:
+```
+Runtime error in /tmp/test.nos:
+Panic: Index 10 out of bounds
+
+Stack trace:
+  1. crash (line 5)
+       sum = 142
+       arr = <List>
+       x = 42
+       y = 100
+  2. main (line 11)
+       a = 42
+       b = 100
+```
+
+Heap-allocated values show type placeholders (`<List>`, `<Record>`, `<Closure>`, etc.) for safety.
 
 ### JSON Error Format
 When `--json-errors` is enabled, runtime errors are output as JSON:
