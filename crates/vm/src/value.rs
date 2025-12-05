@@ -128,6 +128,15 @@ pub struct VariantValue {
     pub named_fields: Option<HashMap<String, Value>>,
 }
 
+/// Debug symbol information for a local variable.
+#[derive(Debug, Clone)]
+pub struct LocalVarSymbol {
+    /// Variable name
+    pub name: String,
+    /// Register where the variable is stored
+    pub register: Reg,
+}
+
 /// A compiled function.
 #[derive(Clone)]
 pub struct FunctionValue {
@@ -147,6 +156,8 @@ pub struct FunctionValue {
     pub jit_code: Option<JitFunction>,
     /// Call counter for JIT hot detection (interior mutability for Rc<FunctionValue>)
     pub call_count: Cell<u32>,
+    /// Debug symbols: local variable names and their registers
+    pub debug_symbols: Vec<LocalVarSymbol>,
 }
 
 impl std::fmt::Debug for FunctionValue {

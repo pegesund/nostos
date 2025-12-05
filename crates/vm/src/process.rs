@@ -70,6 +70,81 @@ pub fn format_stack_trace(frames: &[CallFrame]) -> String {
     result
 }
 
+/// Format a stack trace with local variable values (debug mode).
+/// Returns a detailed string showing the call stack with variable values.
+pub fn format_stack_trace_debug(frames: &[CallFrame]) -> String {
+    if frames.is_empty() {
+        return String::from("  <no stack frames>");
+    }
+
+    let mut result = String::new();
+    // Print frames from innermost (most recent) to outermost
+    for (i, frame) in frames.iter().rev().enumerate() {
+        let line = frame.current_line();
+        let func_name = &frame.function.name;
+
+        if line > 0 {
+            result.push_str(&format!("  {}. {} (line {})\n", i + 1, func_name, line));
+        } else {
+            result.push_str(&format!("  {}. {}\n", i + 1, func_name));
+        }
+
+        // Show local variables from debug symbols
+        if !frame.function.debug_symbols.is_empty() {
+            for symbol in &frame.function.debug_symbols {
+                let reg_idx = symbol.register as usize;
+                if reg_idx < frame.registers.len() {
+                    let value = &frame.registers[reg_idx];
+                    let value_str = format_value_short(value);
+                    result.push_str(&format!("       {} = {}\n", symbol.name, value_str));
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Format a GcValue as a short string (for debug output).
+/// Note: Heap-allocated values show type info only (no heap access needed).
+fn format_value_short(value: &GcValue) -> String {
+    use crate::gc::GcValue;
+
+    match value {
+        GcValue::Unit => "()".to_string(),
+        GcValue::Bool(b) => b.to_string(),
+        GcValue::Char(c) => format!("'{}'", c),
+        GcValue::Int8(i) => i.to_string(),
+        GcValue::Int16(i) => i.to_string(),
+        GcValue::Int32(i) => i.to_string(),
+        GcValue::Int64(i) => i.to_string(),
+        GcValue::UInt8(i) => i.to_string(),
+        GcValue::UInt16(i) => i.to_string(),
+        GcValue::UInt32(i) => i.to_string(),
+        GcValue::UInt64(i) => i.to_string(),
+        GcValue::Float32(f) => format!("{:.4}", f),
+        GcValue::Float64(f) => format!("{:.4}", f),
+        GcValue::Decimal(d) => format!("<Decimal {:?}>", d),
+        GcValue::String(_) => "<String>".to_string(),
+        GcValue::List(_) => "<List>".to_string(),
+        GcValue::Array(_) => "<Array>".to_string(),
+        GcValue::Tuple(_) => "<Tuple>".to_string(),
+        GcValue::Function(f) => format!("<fn {}>", f.name),
+        GcValue::NativeFunction(f) => format!("<native {}>", f.name),
+        GcValue::Closure(_) => "<Closure>".to_string(),
+        GcValue::Record(_) => "<Record>".to_string(),
+        GcValue::Variant(_) => "<Variant>".to_string(),
+        GcValue::Int64Array(_) => "<Int64Array>".to_string(),
+        GcValue::Float64Array(_) => "<Float64Array>".to_string(),
+        GcValue::Pid(p) => format!("<Pid {}>", p),
+        GcValue::Ref(r) => format!("<Ref {}>", r),
+        GcValue::Map(_) => "<Map>".to_string(),
+        GcValue::Set(_) => "<Set>".to_string(),
+        GcValue::BigInt(_) => "<BigInt>".to_string(),
+        GcValue::Type(t) => format!("<Type {}>", t.name),
+        GcValue::Pointer(p) => format!("<Pointer 0x{:x}>", p),
+    }
+}
+
 /// Exception handler info.
 #[derive(Clone)]
 pub struct ExceptionHandler {

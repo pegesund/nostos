@@ -636,6 +636,16 @@ impl Compiler {
 
         self.chunk.register_count = self.next_reg as usize;
 
+        // Collect debug symbols from local variables
+        let debug_symbols: Vec<LocalVarSymbol> = self
+            .locals
+            .iter()
+            .map(|(name, &reg)| LocalVarSymbol {
+                name: name.clone(),
+                register: reg,
+            })
+            .collect();
+
         let func = FunctionValue {
             name: name.clone(),
             arity,
@@ -645,6 +655,7 @@ impl Compiler {
             source_span: None,
             jit_code: None,
             call_count: Cell::new(0),
+            debug_symbols,
         };
 
         // Assign function index if not already indexed (for trait methods and late-compiled functions)
@@ -2573,6 +2584,16 @@ impl Compiler {
 
         let lambda_chunk = std::mem::take(&mut self.chunk);
 
+        // Collect debug symbols before restoring state
+        let debug_symbols: Vec<LocalVarSymbol> = self
+            .locals
+            .iter()
+            .map(|(name, &reg)| LocalVarSymbol {
+                name: name.clone(),
+                register: reg,
+            })
+            .collect();
+
         // Step 5: Restore state
         self.chunk = saved_chunk;
         self.locals = saved_locals;
@@ -2590,6 +2611,7 @@ impl Compiler {
             source_span: None,
             jit_code: None,
             call_count: Cell::new(0),
+            debug_symbols,
         };
 
         let dst = self.alloc_reg();
@@ -3078,6 +3100,7 @@ impl Compiler {
                 source_span: None,
                 jit_code: None,
                 call_count: Cell::new(0),
+                debug_symbols: vec![],
             };
             self.functions.insert(name.clone(), Rc::new(placeholder));
 

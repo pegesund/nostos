@@ -1906,6 +1906,7 @@ mod tests {
             source_span: None,
             jit_code: None,
             call_count: Cell::new(0),
+            debug_symbols: vec![],
         }
     }
 
@@ -1930,6 +1931,7 @@ mod tests {
             source_span: None,
             jit_code: None,
             call_count: Cell::new(0),
+            debug_symbols: vec![],
         }
     }
 
@@ -2014,6 +2016,7 @@ mod tests {
             source_span: None,
             jit_code: None,
             call_count: Cell::new(0),
+            debug_symbols: vec![],
         }
     }
 
@@ -2108,6 +2111,7 @@ mod tests {
             source_span: None,
             jit_code: None,
             call_count: Cell::new(0),
+            debug_symbols: vec![],
         }
     }
 
@@ -2214,6 +2218,7 @@ mod tests {
             source_span: None,
             jit_code: None,
             call_count: Cell::new(0),
+            debug_symbols: vec![],
         }
     }
 
@@ -2292,6 +2297,7 @@ mod tests {
             source_span: None,
             jit_code: None,
             call_count: Cell::new(0),
+            debug_symbols: vec![],
         }
     }
 
@@ -2396,6 +2402,7 @@ mod tests {
             source_span: None,
             jit_code: None,
             call_count: Cell::new(0),
+            debug_symbols: vec![],
         }
     }
 

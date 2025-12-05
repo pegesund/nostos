@@ -176,6 +176,7 @@ fn main() -> ExitCode {
     let mut file_idx = 1;
     let mut enable_jit = true;
     let mut json_errors = false;
+    let mut debug_mode = false;
 
     for (i, arg) in args.iter().enumerate().skip(1) {
         if arg.starts_with("--") || arg.starts_with("-") {
@@ -188,6 +189,7 @@ fn main() -> ExitCode {
                 println!("  --help         Show this help message");
                 println!("  --version      Show version information");
                 println!("  --no-jit       Disable JIT compilation (for debugging)");
+                println!("  --debug        Show local variable values in stack traces");
                 println!("  --json-errors  Output errors as JSON (for debugger integration)");
                 return ExitCode::SUCCESS;
             }
@@ -197,6 +199,10 @@ fn main() -> ExitCode {
             }
             if arg == "--no-jit" {
                 enable_jit = false;
+                continue;
+            }
+            if arg == "--debug" {
+                debug_mode = true;
                 continue;
             }
             if arg == "--json-errors" {
@@ -253,6 +259,7 @@ fn main() -> ExitCode {
 
     // Create runtime and load functions/types
     let mut runtime = Runtime::new();
+    runtime.set_debug_mode(debug_mode);
 
     for (name, func) in compiler.get_all_functions() {
         runtime.register_function(&name, func.clone());

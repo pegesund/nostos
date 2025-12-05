@@ -24,7 +24,7 @@ use crate::process::ExitReason;
 use crate::scheduler::Scheduler;
 use crate::value::TypeValue;
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, Value};
-use crate::process::{CallFrame, format_stack_trace};
+use crate::process::{CallFrame, format_stack_trace, format_stack_trace_debug};
 
 /// Result of running a single process step.
 pub enum ProcessStepResult {
@@ -62,6 +62,8 @@ pub struct Runtime {
     jit_int_functions: std::collections::HashMap<u16, JitIntFn>,
     /// JIT-compiled loop array functions (func_index → native fn)
     jit_loop_array_functions: std::collections::HashMap<u16, JitLoopArrayFn>,
+    /// Debug mode: show local variable values in stack traces
+    debug_mode: bool,
 }
 
 impl Runtime {
@@ -76,7 +78,13 @@ impl Runtime {
             cached_types: std::collections::HashMap::new(),
             jit_int_functions: std::collections::HashMap::new(),
             jit_loop_array_functions: std::collections::HashMap::new(),
+            debug_mode: false,
         }
+    }
+
+    /// Enable or disable debug mode (shows local variables in stack traces).
+    pub fn set_debug_mode(&mut self, enabled: bool) {
+        self.debug_mode = enabled;
     }
 
     /// Register a JIT-compiled integer function.
@@ -409,7 +417,11 @@ impl Runtime {
                 proc.frames[frame_idx].ip += 1;
 
                 // Capture stack trace before dropping the lock (in case of error)
-                let stack_trace = format_stack_trace(&proc.frames);
+                let stack_trace = if self.debug_mode {
+                    format_stack_trace_debug(&proc.frames)
+                } else {
+                    format_stack_trace(&proc.frames)
+                };
                 drop(proc);
                 match self.execute_ipc_instruction(pid, instr_clone, &constants_values) {
                     Ok(ProcessStepResult::Continue) => {
@@ -432,7 +444,11 @@ impl Runtime {
                 Ok(other) => return Ok(other),
                 Err(err) => {
                     // Capture stack trace before returning error
-                    let stack_trace = format_stack_trace(&proc.frames);
+                    let stack_trace = if self.debug_mode {
+                        format_stack_trace_debug(&proc.frames)
+                    } else {
+                        format_stack_trace(&proc.frames)
+                    };
                     return Err(err.with_stack_trace(stack_trace));
                 }
             }
@@ -2574,6 +2590,7 @@ mod tests {
             source_span: None,
             jit_code: None,
             call_count: std::cell::Cell::new(0),
+            debug_symbols: vec![],
         })
     }
 
@@ -2593,6 +2610,7 @@ mod tests {
             source_span: None,
             jit_code: None,
             call_count: std::cell::Cell::new(0),
+            debug_symbols: vec![],
         })
     }
 
