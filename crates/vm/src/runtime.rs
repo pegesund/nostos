@@ -1012,7 +1012,32 @@ impl Runtime {
             }
 
             Instruction::TailCallDirect(func_idx, ref arg_regs) => {
-                // Direct tail call by index - no HashMap lookup!
+                // Check for JIT-compiled version (tail call with 1 arg)
+                if arg_regs.len() == 1 {
+                    // Check for loop array JIT
+                    if let Some(jit_fn) = jit_loop_array_functions.get(func_idx) {
+                        let arg = reg_clone!(arg_regs[0]);
+                        if let GcValue::Int64Array(arr_ptr) = arg {
+                            if let Some(arr) = proc.heap.get_int64_array_mut(arr_ptr) {
+                                let ptr = arr.items.as_mut_ptr();
+                                let len = arr.items.len() as i64;
+                                let result = jit_fn(ptr as *const i64, len);
+                                // For tail call: pop current frame, set result in parent
+                                let return_reg = proc.frames.last().and_then(|f| f.return_reg);
+                                proc.frames.pop();
+                                if let Some(dst) = return_reg {
+                                    if let Some(parent) = proc.frames.last_mut() {
+                                        parent.registers[dst as usize] = GcValue::Int64(result);
+                                    }
+                                }
+                                proc.consume_reductions(1);
+                                return Ok(ProcessStepResult::Continue);
+                            }
+                        }
+                    }
+                }
+
+                // Fall back to interpreted tail call
                 let func = function_list.get(*func_idx as usize).cloned()
                     .ok_or_else(|| RuntimeError::UnknownFunction(format!("function index {}", func_idx)))?;
 
