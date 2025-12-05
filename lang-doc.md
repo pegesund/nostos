@@ -386,12 +386,32 @@ receive
     n -> n * 2
 end
 
+# Receive with timeout (returns timeout_value if no message within N ms)
+receive
+    msg -> handle(msg)
+after 1000 ->
+    timeout_value
+end
+
 # Multiple receives
 receive
     a -> receive
         b -> a + b
     end
 end
+```
+
+### Sleep Function
+```nos
+# Sleep for N milliseconds
+sleep(1000)   # Sleeps for 1 second
+
+# Sleep allows other processes to run while waiting
+worker(id, delay, parent) = {
+    sleep(delay)
+    parent <- id
+    ()
+}
 ```
 
 ### Complete Example

@@ -1145,16 +1145,30 @@ impl Compiler {
                 Ok(dst)
             }
 
-            // Receive: receive pattern -> body ... end
-            Expr::Receive(arms, _after, _) => {
-                // Emit receive instruction - this blocks until a message arrives
-                // and places it in register 0
-                self.chunk.emit(Instruction::Receive, line);
+            // Receive: receive pattern -> body ... after timeout -> timeout_body end
+            Expr::Receive(arms, after_clause, _) => {
+                // Allocate a register for the received message
+                let msg_reg = self.alloc_reg();
 
-                // The message is in register 0 after Receive completes
+                // Handle timeout if present
+                let timeout_jump = if let Some((timeout_expr, _)) = after_clause {
+                    // Compile timeout expression
+                    let timeout_reg = self.compile_expr_tail(timeout_expr, false)?;
+                    // Emit receive with timeout - places message in msg_reg or Unit if timeout
+                    self.chunk.emit(Instruction::ReceiveTimeout(msg_reg, timeout_reg), line);
+                    // Check if msg_reg is Unit (timeout indicator)
+                    let is_unit_reg = self.alloc_reg();
+                    self.chunk.emit(Instruction::TestUnit(is_unit_reg, msg_reg), line);
+                    // Jump to timeout handling if Unit
+                    Some(self.chunk.emit(Instruction::JumpIfTrue(is_unit_reg, 0), line))
+                } else {
+                    // No timeout - regular receive
+                    self.chunk.emit(Instruction::Receive(msg_reg), line);
+                    None
+                };
+
+                // The message is in msg_reg after Receive completes
                 // We need to match it against the arms
-                // Reserve register 0 for the message (ensure it's not overwritten)
-                let msg_reg = 0 as Reg;
 
                 let dst = self.alloc_reg();
                 let mut end_jumps = Vec::new();
@@ -1186,10 +1200,7 @@ impl Compiler {
                             self.chunk.emit(Instruction::Move(dst, body_reg), line);
                             end_jumps.push(self.chunk.emit(Instruction::Jump(0), line));
                             // Patch guard fail jump
-                            let here = self.chunk.code.len() as i16;
-                            if let Instruction::JumpIfFalse(_, ref mut offset) = self.chunk.code[guard_fail] {
-                                *offset = here;
-                            }
+                            self.chunk.patch_jump(guard_fail, self.chunk.code.len());
                         } else {
                             // Last arm - no jump needed for guard failure
                             let body_reg = self.compile_expr_tail(&arm.body, is_tail)?;
@@ -1206,19 +1217,30 @@ impl Compiler {
 
                     // Patch next arm jump
                     if let Some(jump_idx) = next_arm_jump {
-                        let here = self.chunk.code.len() as i16;
-                        if let Instruction::JumpIfFalse(_, ref mut offset) = self.chunk.code[jump_idx] {
-                            *offset = here;
-                        }
+                        self.chunk.patch_jump(jump_idx, self.chunk.code.len());
                     }
                 }
 
-                // Patch end jumps
-                let end = self.chunk.code.len() as i16;
-                for jump_idx in end_jumps {
-                    if let Instruction::Jump(ref mut offset) = self.chunk.code[jump_idx] {
-                        *offset = end;
+                // Handle timeout body if present
+                if let Some((_, timeout_body)) = after_clause {
+                    // Jump past timeout body (for normal message case)
+                    let skip_timeout = self.chunk.emit(Instruction::Jump(0), line);
+                    end_jumps.push(skip_timeout);
+
+                    // Patch timeout jump to point here
+                    if let Some(jump_idx) = timeout_jump {
+                        self.chunk.patch_jump(jump_idx, self.chunk.code.len());
                     }
+
+                    // Compile timeout body
+                    let timeout_result = self.compile_expr_tail(timeout_body, is_tail)?;
+                    self.chunk.emit(Instruction::Move(dst, timeout_result), line);
+                }
+
+                // Patch end jumps
+                let end_target = self.chunk.code.len();
+                for jump_idx in end_jumps {
+                    self.chunk.patch_jump(jump_idx, end_target);
                 }
 
                 Ok(dst)

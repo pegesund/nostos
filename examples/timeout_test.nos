@@ -1,0 +1,137 @@
+# Timeout Test - Demonstrates receive timeout in ParallelVM
+# This tests that receive with `after` clause correctly times out when no message arrives.
+# Run with: nostos --parallel-affinity 2 examples/timeout_test.nos
+
+# Helper: sends a message after a delay
+delayed_sender(target, delay, msg) = {
+    sleep(delay)
+    target <- msg
+    ()
+}
+
+# Test 1: Basic timeout - no message sent, should timeout
+test_basic_timeout() = {
+    println("Test 1: Basic timeout (expect timeout after 100ms)")
+    result = receive
+        msg -> "got_message"
+    after 100 ->
+        "timeout"
+    end
+    println(result)
+    assert(result == "timeout")
+    println("Test 1 PASSED")
+    ()
+}
+
+# Test 2: Message arrives before timeout
+test_message_before_timeout() = {
+    println("Test 2: Message before timeout")
+    me = self()
+
+    # Spawn worker that sends message quickly (50ms)
+    spawn(() => delayed_sender(me, 50, "hello"))
+
+    # Wait with 200ms timeout - should get message
+    result = receive
+        msg -> msg
+    after 200 ->
+        "timeout"
+    end
+    println(result)
+    assert(result == "hello")
+    println("Test 2 PASSED")
+    ()
+}
+
+# Test 3: Timeout when message arrives too late
+test_timeout_before_message() = {
+    println("Test 3: Timeout before message (100ms timeout, 300ms delay)")
+    me = self()
+
+    # Spawn worker that sends message late (300ms)
+    spawn(() => delayed_sender(me, 300, "late_message"))
+
+    # Wait with 100ms timeout - should timeout
+    result = receive
+        msg -> "got_" ++ msg
+    after 100 ->
+        "timeout"
+    end
+    println(result)
+    assert(result == "timeout")
+    println("Test 3 PASSED")
+
+    # Drain the late message to avoid leaking
+    sleep(250)
+    drain1 = receive msg -> msg end
+    ()
+}
+
+# Test 4: Receive message that's already in mailbox
+test_message_in_mailbox() = {
+    println("Test 4: Receive message already in mailbox")
+    me = self()
+
+    # Send to self immediately (no spawn needed)
+    me <- 42
+
+    # Should receive immediately with timeout
+    r1 = receive n -> n after 100 -> 0 end
+    println("Received:")
+    println(r1)
+    assert(r1 == 42)
+
+    # Now mailbox is empty - should timeout
+    r2 = receive n -> n after 100 -> 999 end
+    println("Timed out, got:")
+    println(r2)
+    assert(r2 == 999)
+
+    println("Test 4 PASSED")
+    ()
+}
+
+# Test 5: Zero timeout (immediate check)
+test_zero_timeout() = {
+    println("Test 5: Zero timeout (immediate check)")
+    me = self()
+
+    # No messages in queue - should immediately timeout
+    r1 = receive msg -> msg after 0 -> "empty" end
+    println(r1)
+    assert(r1 == "empty")
+
+    # Send a message to ourselves
+    me <- "direct"
+
+    # Now zero timeout should find the message
+    r2 = receive msg -> msg after 0 -> "empty" end
+    println(r2)
+    assert(r2 == "direct")
+
+    println("Test 5 PASSED")
+    ()
+}
+
+main() = {
+    println("=== Timeout Test Suite ===")
+    println("")
+
+    test_basic_timeout()
+    println("")
+
+    test_message_before_timeout()
+    println("")
+
+    test_timeout_before_message()
+    println("")
+
+    test_message_in_mailbox()
+    println("")
+
+    test_zero_timeout()
+    println("")
+
+    println("=== All Timeout Tests PASSED ===")
+    ()
+}

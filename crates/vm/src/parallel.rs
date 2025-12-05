@@ -68,6 +68,14 @@ pub enum ThreadSafeValue {
         fields: Vec<ThreadSafeValue>,
         mutable_fields: Vec<bool>,
     },
+    /// A closure with its function and captured values
+    Closure {
+        function: Arc<FunctionValue>,
+        captures: Vec<ThreadSafeValue>,
+        capture_names: Vec<String>,
+    },
+    /// A function (already thread-safe via Arc)
+    Function(Arc<FunctionValue>),
 }
 
 impl ThreadSafeValue {
@@ -110,7 +118,21 @@ impl ThreadSafeValue {
                     mutable_fields: rec.mutable_fields.clone(),
                 }
             }
-            // Functions and closures cannot be sent between threads
+            GcValue::Closure(ptr) => {
+                let closure = heap.get_closure(*ptr)?;
+                // Recursively convert captures to thread-safe values
+                let captures: Option<Vec<_>> = closure.captures.iter()
+                    .map(|v| ThreadSafeValue::from_gc_value(v, heap))
+                    .collect();
+                ThreadSafeValue::Closure {
+                    function: closure.function.clone(),
+                    captures: captures?,
+                    capture_names: closure.capture_names.clone(),
+                }
+            }
+            // Functions are already thread-safe (Arc<FunctionValue>)
+            GcValue::Function(func) => ThreadSafeValue::Function(func.clone()),
+            // Native functions, variants, etc cannot be sent between threads
             _ => return None,
         })
     }
@@ -154,6 +176,19 @@ impl ThreadSafeValue {
                 );
                 GcValue::Record(ptr)
             }
+            ThreadSafeValue::Closure { function, captures, capture_names } => {
+                // Recursively convert captures to GcValue
+                let gc_captures: Vec<GcValue> = captures.iter()
+                    .map(|v| v.to_gc_value(heap))
+                    .collect();
+                let ptr = heap.alloc_closure(
+                    function.clone(),
+                    gc_captures,
+                    capture_names.clone(),
+                );
+                GcValue::Closure(ptr)
+            }
+            ThreadSafeValue::Function(func) => GcValue::Function(func.clone()),
         }
     }
 }
@@ -171,6 +206,8 @@ enum CrossThreadMessage {
         func: Arc<FunctionValue>,
         args: Vec<ThreadSafeValue>,
         captures: Vec<ThreadSafeValue>,
+        /// Pre-allocated local_id for the new process
+        pre_allocated_local_id: u64,
     },
 }
 
@@ -192,6 +229,8 @@ pub struct SharedState {
     pub shutdown: AtomicBool,
     /// Spawn counter for round-robin distribution across threads
     pub spawn_counter: AtomicU64,
+    /// Per-thread local_id counters for pre-allocating PIDs in cross-thread spawns
+    pub thread_local_ids: Vec<AtomicU64>,
     /// Number of threads (for round-robin modulo)
     pub num_threads: usize,
 }
@@ -344,6 +383,11 @@ impl ParallelVM {
             config.num_threads
         };
 
+        // Create per-thread local_id counters (starting at 1, 0 is initial process)
+        let thread_local_ids: Vec<AtomicU64> = (0..num_threads)
+            .map(|_| AtomicU64::new(1))
+            .collect();
+
         let shared = Arc::new(SharedState {
             functions: HashMap::new(),
             function_list: Vec::new(),
@@ -353,6 +397,7 @@ impl ParallelVM {
             jit_loop_array_functions: HashMap::new(),
             shutdown: AtomicBool::new(false),
             spawn_counter: AtomicU64::new(0),
+            thread_local_ids,
             num_threads,
         });
 
@@ -680,15 +725,20 @@ impl ThreadWorker {
                                 if matches!(process.state, ProcessState::Waiting | ProcessState::WaitingTimeout) {
                                     process.state = ProcessState::Running;
                                     process.wake_time = None; // Cancel any pending timeout
+                                    process.timeout_dst = None; // Clear timeout destination
                                     self.run_queue.push_back(local_id);
                                 }
                             }
                             // If process doesn't exist, message is dropped (process died)
                         }
-                        CrossThreadMessage::SpawnProcess { func, args, captures } => {
-                            // Spawn the process on this thread
-                            let local_id = self.next_local_id;
-                            self.next_local_id += 1;
+                        CrossThreadMessage::SpawnProcess { func, args, captures, pre_allocated_local_id } => {
+                            // Spawn the process on this thread using the pre-allocated local_id
+                            let local_id = pre_allocated_local_id;
+                            // Ensure next_local_id is at least pre_allocated_local_id + 1
+                            // to avoid conflicts with future local spawns
+                            if self.next_local_id <= local_id {
+                                self.next_local_id = local_id + 1;
+                            }
                             let pid = encode_pid(self.thread_id, local_id);
 
                             let mut process = Process::new(pid);
@@ -752,11 +802,15 @@ impl ThreadWorker {
                             // Receive timeout expired - wake with timeout indicator
                             proc.state = ProcessState::Running;
                             proc.wake_time = None;
-                            // Set register 0 to indicate timeout (we use a special atom/value)
-                            // The process will check this when it resumes
+                            // Set destination register to Unit to indicate timeout
                             if let Some(frame) = proc.frames.last_mut() {
-                                frame.registers[0] = GcValue::Unit; // Unit indicates timeout
+                                let dst = proc.timeout_dst.unwrap_or(0) as usize;
+                                frame.registers[dst] = GcValue::Unit; // Unit indicates timeout
+                                // Increment IP to skip re-executing ReceiveTimeout
+                                // (IP was decremented when entering wait state)
+                                frame.ip += 1;
                             }
+                            proc.timeout_dst = None; // Clear it after use
                             self.run_queue.push_back(local_id);
                         }
                         _ => {
@@ -791,6 +845,7 @@ impl ThreadWorker {
                 if matches!(target_process.state, ProcessState::Waiting | ProcessState::WaitingTimeout) {
                     target_process.state = ProcessState::Running;
                     target_process.wake_time = None; // Cancel any pending timeout
+                    target_process.timeout_dst = None; // Clear timeout destination
                     self.run_queue.push_back(target_local_id);
                 }
             }
@@ -2401,18 +2456,23 @@ impl ThreadWorker {
                         .filter_map(|v| ThreadSafeValue::from_gc_value(v, &proc.heap))
                         .collect();
 
+                    // Pre-allocate local_id for the target thread
+                    let pre_allocated_local_id = self.shared.thread_local_ids[target_thread as usize]
+                        .fetch_add(1, Ordering::Relaxed);
+                    let child_pid = encode_pid(target_thread, pre_allocated_local_id);
+
                     // Send spawn request to target thread
                     if let Some(sender) = self.thread_senders.get(target_thread as usize) {
                         let _ = sender.send(CrossThreadMessage::SpawnProcess {
                             func: func.clone(),
                             args: safe_args,
                             captures: safe_captures,
+                            pre_allocated_local_id,
                         });
                     }
 
-                    // Return a placeholder Pid - we don't track remote spawns currently
-                    // The process will be created on the target thread with its own local_id
-                    Pid(0) // Placeholder - not used in mass_spawn
+                    // Return the pre-computed PID
+                    child_pid
                 };
                 set_reg!(*dst, GcValue::Pid(child_pid.0));
             }
@@ -2432,12 +2492,12 @@ impl ThreadWorker {
                 self.send_message(target_pid, message, local_id);
             }
 
-            Receive => {
+            Receive(dst) => {
                 let proc = self.processes.get_mut(&local_id).unwrap();
                 if let Some(msg) = proc.mailbox.pop_front() {
-                    // Result goes in register 0
+                    // Result goes in destination register
                     let frame = proc.frames.last_mut().unwrap();
-                    frame.registers[0] = msg;
+                    frame.registers[*dst as usize] = msg;
                 } else {
                     // No message - block
                     proc.state = ProcessState::Waiting;
@@ -2448,12 +2508,12 @@ impl ThreadWorker {
                 }
             }
 
-            ReceiveTimeout(timeout_reg) => {
+            ReceiveTimeout(dst, timeout_reg) => {
                 let proc = self.processes.get_mut(&local_id).unwrap();
                 if let Some(msg) = proc.mailbox.pop_front() {
-                    // Message available - put in register 0
+                    // Message available - put in destination register
                     let frame = proc.frames.last_mut().unwrap();
-                    frame.registers[0] = msg;
+                    frame.registers[*dst as usize] = msg;
                 } else {
                     // No message - check if this is a timeout wake-up or first entry
                     let frame = proc.frames.last().unwrap();
@@ -2469,6 +2529,7 @@ impl ThreadWorker {
                         // First entry - set up timeout and wait
                         let wake_time = Instant::now() + Duration::from_millis(timeout_ms);
                         proc.wake_time = Some(wake_time);
+                        proc.timeout_dst = Some(*dst); // Store destination register for check_timers
                         proc.state = ProcessState::WaitingTimeout;
                         self.timer_heap.push(Reverse((wake_time, local_id)));
                         // Decrement IP so we retry when woken
@@ -2476,8 +2537,9 @@ impl ThreadWorker {
                         frame.ip -= 1;
                         return Ok(StepResult::Waiting);
                     } else {
-                        // Woken by timeout (not by message) - r0 already set to Unit by check_timers
-                        // Just continue execution
+                        // Woken by timeout (not by message) - dst already set to Unit by check_timers
+                        // Clear timeout_dst since we're done
+                        proc.timeout_dst = None;
                     }
                 }
             }
@@ -2556,6 +2618,12 @@ impl ThreadWorker {
                     }
                     _ => false,
                 };
+                set_reg!(*dst, GcValue::Bool(result));
+            }
+
+            TestUnit(dst, value) => {
+                let val = reg!(*value).clone();
+                let result = matches!(val, GcValue::Unit);
                 set_reg!(*dst, GcValue::Bool(result));
             }
 

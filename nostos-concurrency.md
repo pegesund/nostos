@@ -525,8 +525,8 @@ type Priority = Low | Normal | High
 # Yield explicitly (usually not needed)
 Process.yield()
 
-# Sleep
-Process.sleep(1000)            # milliseconds
+# Sleep (pauses process for N milliseconds)
+sleep(1000)                    # milliseconds
 
 # Set process priority
 Process.setPriority(High)

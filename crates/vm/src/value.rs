@@ -594,10 +594,10 @@ pub enum Instruction {
     Send(Reg, Reg),
     /// Get self PID: dst = self()
     SelfPid(Reg),
-    /// Receive (handled specially by VM - switches to receive mode)
-    Receive,
-    /// Set receive timeout
-    ReceiveTimeout(Reg),
+    /// Receive message into dst register (handled specially by VM - switches to receive mode)
+    Receive(Reg),
+    /// Receive with timeout: dst = receive or Unit if timeout (timeout_ms in timeout_reg)
+    ReceiveTimeout(Reg, Reg),
     /// Sleep for N milliseconds (value in register)
     Sleep(Reg),
 

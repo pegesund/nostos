@@ -239,6 +239,9 @@ pub struct Process {
     /// Wake time for sleeping/timed-out processes.
     pub wake_time: Option<Instant>,
 
+    /// Destination register for receive timeout (so check_timers knows where to put Unit).
+    pub timeout_dst: Option<u8>,
+
     /// Output buffer (for testing/REPL).
     pub output: Vec<String>,
 }
@@ -266,6 +269,7 @@ impl Process {
             current_exception: None,
             exit_value: None,
             wake_time: None,
+            timeout_dst: None,
             output: Vec::new(),
         }
     }
