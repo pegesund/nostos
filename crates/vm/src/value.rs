@@ -282,9 +282,22 @@ pub enum RuntimeError {
 
     #[error("I/O error: {0}")]
     IOError(String),
+
+    #[error("{error}\n\nStack trace:\n{stack_trace}")]
+    WithStackTrace {
+        error: Box<RuntimeError>,
+        stack_trace: String,
+    },
 }
 
 impl RuntimeError {
+    /// Wrap this error with a stack trace.
+    pub fn with_stack_trace(self, stack_trace: String) -> RuntimeError {
+        RuntimeError::WithStackTrace {
+            error: Box::new(self),
+            stack_trace,
+        }
+    }
     /// Convert this runtime error to an exception Value that can be caught by try/catch.
     /// Returns a record with `type` and `message` fields.
     pub fn to_exception_value(&self) -> Value {
@@ -338,6 +351,13 @@ impl RuntimeError {
             }
             RuntimeError::IOError(msg) => {
                 ("IOError", msg.clone())
+            }
+            RuntimeError::WithStackTrace { error, stack_trace } => {
+                // Delegate to the inner error, but append stack trace to message
+                let inner = error.to_exception_value();
+                // For now, just return the inner error's value
+                // Stack traces are primarily for CLI display, not try/catch
+                return inner;
             }
         };
 
