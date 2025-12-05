@@ -287,13 +287,25 @@ impl Worker {
     fn run(self) {
         self.active_workers.fetch_add(1, Ordering::SeqCst);
 
+        let mut idle_count = 0u32;
         while !self.shutdown.load(Ordering::Relaxed) {
             // Try to get work
             if let Some(pid) = self.find_work() {
+                idle_count = 0; // Reset on successful work
                 self.execute_process(pid);
             } else {
-                // No work available, brief sleep before retrying
-                thread::yield_now();
+                // No work available - use exponential backoff to reduce CPU usage
+                idle_count = idle_count.saturating_add(1);
+                if idle_count <= 3 {
+                    // First few attempts: just yield
+                    thread::yield_now();
+                } else if idle_count <= 10 {
+                    // Brief sleep (10-100μs)
+                    thread::sleep(std::time::Duration::from_micros(10 * idle_count as u64));
+                } else {
+                    // Longer sleep (1ms) if idle for extended time
+                    thread::sleep(std::time::Duration::from_millis(1));
+                }
             }
         }
 
