@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-# List sum benchmark - comparable to list_sum.nos
-# Uses functional style to match Nostos
-
-def fold(f, acc, lst):
-    for x in lst:
-        acc = f(acc, x)
-    return acc
+# List sum benchmark - iterative style (matching Nostos)
 
 def list_sum(lst):
-    return fold(lambda a, b: a + b, 0, lst)
+    acc = 0
+    idx = 0
+    while idx < len(lst):
+        acc = acc + lst[idx]
+        idx = idx + 1
+    return acc
 
 def main():
-    # Create list of 10000 integers and sum 10 times (same total work)
     lst = list(range(1, 10001))  # [1..10000]
     total = 0
-    for _ in range(100):
-        total += list_sum(lst)
+    i = 0
+    while i < 100:
+        total = total + list_sum(lst)
+        i = i + 1
     print(total)
 
 if __name__ == "__main__":
