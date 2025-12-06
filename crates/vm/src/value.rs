@@ -668,9 +668,38 @@ pub enum Instruction {
     /// Suspends process until IO completes
     FileWriteAll(Reg, Reg, Reg),
     /// HTTP GET request: dst = Http.get(url)
-    /// Returns {"ok", %{status: n, headers: [...], body: "..."}} or {"error", msg}
+    /// Returns ("ok", HttpResponse{status, headers, body}) or ("error", msg)
     /// Suspends process until request completes
     HttpGet(Reg, Reg),
+    /// HTTP POST request: dst = Http.post(url, body)
+    HttpPost(Reg, Reg, Reg),
+    /// HTTP PUT request: dst = Http.put(url, body)
+    HttpPut(Reg, Reg, Reg),
+    /// HTTP DELETE request: dst = Http.delete(url)
+    HttpDelete(Reg, Reg),
+    /// HTTP PATCH request: dst = Http.patch(url, body)
+    HttpPatch(Reg, Reg, Reg),
+    /// HTTP HEAD request: dst = Http.head(url)
+    HttpHead(Reg, Reg),
+    /// Generic HTTP request: dst = Http.request(method, url, headers, body)
+    /// method: "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"
+    /// headers: list of (name, value) tuples
+    /// body: string or () for no body
+    HttpRequest(Reg, Reg, Reg, Reg, Reg),
+
+    // === String Encoding ===
+    /// Base64 encode: dst = Base64.encode(string)
+    Base64Encode(Reg, Reg),
+    /// Base64 decode: dst = Base64.decode(string)
+    Base64Decode(Reg, Reg),
+    /// URL encode: dst = Url.encode(string)
+    UrlEncode(Reg, Reg),
+    /// URL decode: dst = Url.decode(string)
+    UrlDecode(Reg, Reg),
+    /// UTF-8 encode string to bytes: dst = Encoding.toBytes(string)
+    Utf8Encode(Reg, Reg),
+    /// UTF-8 decode bytes to string: dst = Encoding.fromBytes(bytes)
+    Utf8Decode(Reg, Reg),
 
     // === IO/Debug builtins ===
     /// Print value, return string representation: dst = print(value)

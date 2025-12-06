@@ -1022,6 +1022,85 @@ impl Compiler {
                             self.chunk.emit(Instruction::HttpGet(dst, url_reg), line);
                             return Ok(dst);
                         }
+                        "Http.post" if args.len() == 2 => {
+                            let url_reg = self.compile_expr_tail(&args[0], false)?;
+                            let body_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::HttpPost(dst, url_reg, body_reg), line);
+                            return Ok(dst);
+                        }
+                        "Http.put" if args.len() == 2 => {
+                            let url_reg = self.compile_expr_tail(&args[0], false)?;
+                            let body_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::HttpPut(dst, url_reg, body_reg), line);
+                            return Ok(dst);
+                        }
+                        "Http.delete" if args.len() == 1 => {
+                            let url_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::HttpDelete(dst, url_reg), line);
+                            return Ok(dst);
+                        }
+                        "Http.patch" if args.len() == 2 => {
+                            let url_reg = self.compile_expr_tail(&args[0], false)?;
+                            let body_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::HttpPatch(dst, url_reg, body_reg), line);
+                            return Ok(dst);
+                        }
+                        "Http.head" if args.len() == 1 => {
+                            let url_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::HttpHead(dst, url_reg), line);
+                            return Ok(dst);
+                        }
+                        "Http.request" if args.len() == 4 => {
+                            let method_reg = self.compile_expr_tail(&args[0], false)?;
+                            let url_reg = self.compile_expr_tail(&args[1], false)?;
+                            let headers_reg = self.compile_expr_tail(&args[2], false)?;
+                            let body_reg = self.compile_expr_tail(&args[3], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::HttpRequest(dst, method_reg, url_reg, headers_reg, body_reg), line);
+                            return Ok(dst);
+                        }
+                        // String encoding functions
+                        "Base64.encode" if args.len() == 1 => {
+                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::Base64Encode(dst, str_reg), line);
+                            return Ok(dst);
+                        }
+                        "Base64.decode" if args.len() == 1 => {
+                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::Base64Decode(dst, str_reg), line);
+                            return Ok(dst);
+                        }
+                        "Url.encode" if args.len() == 1 => {
+                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::UrlEncode(dst, str_reg), line);
+                            return Ok(dst);
+                        }
+                        "Url.decode" if args.len() == 1 => {
+                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::UrlDecode(dst, str_reg), line);
+                            return Ok(dst);
+                        }
+                        "Encoding.toBytes" if args.len() == 1 => {
+                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::Utf8Encode(dst, str_reg), line);
+                            return Ok(dst);
+                        }
+                        "Encoding.fromBytes" if args.len() == 1 => {
+                            let bytes_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::Utf8Decode(dst, bytes_reg), line);
+                            return Ok(dst);
+                        }
                         _ => {} // Fall through to user-defined functions
                     }
 

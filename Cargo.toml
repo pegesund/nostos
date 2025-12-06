@@ -31,7 +31,12 @@ target-lexicon = "0.12"
 
 # Async IO
 tokio = { version = "1", features = ["rt-multi-thread", "fs", "io-util", "sync", "time"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "cookies"] }
+
+# String encoding
+encoding_rs = "0.8"
+base64 = "0.22"
+percent-encoding = "2.3"
 
 # Internal crates
 nostos-syntax = { path = "crates/syntax" }

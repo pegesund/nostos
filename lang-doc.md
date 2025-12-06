@@ -457,15 +457,38 @@ main() = {
 
 ### HTTP Client
 
+The HTTP client supports all standard HTTP verbs and returns a response record with `status`, `headers`, and `body` fields.
+
 ```nos
 # HTTP GET request
-(status, response) = Http.get("https://api.example.com/data")
+(status, resp) = Http.get("https://api.example.com/data")
 
-# Response is a record with fields:
-#   - status: HTTP status code (Int)
-#   - headers: List of (name, value) tuples
-#   - body: Response body as String
+# HTTP POST with body
+(status, resp) = Http.post("https://api.example.com/data", "{\"key\": \"value\"}")
 
+# HTTP PUT
+(status, resp) = Http.put("https://api.example.com/resource", "{\"update\": \"data\"}")
+
+# HTTP DELETE
+(status, resp) = Http.delete("https://api.example.com/resource/123")
+
+# HTTP PATCH
+(status, resp) = Http.patch("https://api.example.com/resource", "{\"partial\": \"update\"}")
+
+# HTTP HEAD (returns headers only, no body)
+(status, resp) = Http.head("https://api.example.com/data")
+
+# Generic HTTP request with custom headers
+headers = [("Content-Type", "application/json"), ("Authorization", "Bearer token")]
+(status, resp) = Http.request("POST", "https://api.example.com/data", headers, "{\"data\": 1}")
+```
+
+Response record fields:
+- `status`: HTTP status code (Int, e.g., 200)
+- `headers`: List of (name, value) tuples
+- `body`: Response body as String
+
+```nos
 main() = {
     (status, resp) = Http.get("https://httpbin.org/ip")
     println("Status: " ++ show(resp.status))
@@ -509,6 +532,46 @@ main() = {
     result = File.readAll("/nonexistent/file.txt")
     # result will be an error if file doesn't exist
 }
+```
+
+## String Encoding
+
+Nostos provides utilities for encoding and decoding strings.
+
+### Base64
+
+```nos
+# Encode string to Base64
+encoded = Base64.encode("Hello, World!")
+# encoded = "SGVsbG8sIFdvcmxkIQ=="
+
+# Decode Base64 back to string (returns result tuple)
+(status, decoded) = Base64.decode(encoded)
+# status = "ok", decoded = "Hello, World!"
+```
+
+### URL Encoding
+
+```nos
+# Encode string for use in URLs
+encoded = Url.encode("Hello World! How are you?")
+# encoded = "Hello%20World%21%20How%20are%20you%3F"
+
+# Decode URL-encoded string (returns result tuple)
+(status, decoded) = Url.decode(encoded)
+# status = "ok", decoded = "Hello World! How are you?"
+```
+
+### UTF-8 Byte Operations
+
+```nos
+# Convert string to list of UTF-8 bytes
+bytes = Encoding.toBytes("Hi")
+# bytes = [72, 105]
+
+# Convert bytes back to string (returns result tuple)
+(status, str) = Encoding.fromBytes([72, 105])
+# status = "ok", str = "Hi"
 ```
 
 ## Command-Line Interface

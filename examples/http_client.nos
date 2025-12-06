@@ -1,0 +1,88 @@
+# HTTP Client Example
+# 
+# Demonstrates all HTTP verbs and the HTTP client API.
+# Uses httpbin.org as a test server.
+
+# Simple GET request
+simpleGet() = {
+    println("=== Simple GET Request ===")
+    (status, resp) = Http.get("https://httpbin.org/get")
+    println("Status: " ++ show(resp.status))
+    println("Body length: " ++ show(length(resp.body)))
+    println("")
+}
+
+# POST with JSON body
+postJson() = {
+    println("=== POST with JSON ===")
+    body = "{\"name\": \"Nostos\", \"type\": \"language\"}"
+    (status, resp) = Http.post("https://httpbin.org/post", body)
+    println("Status: " ++ show(resp.status))
+    println("")
+}
+
+# PUT request
+putRequest() = {
+    println("=== PUT Request ===")
+    body = "{\"updated\": true}"
+    (status, resp) = Http.put("https://httpbin.org/put", body)
+    println("Status: " ++ show(resp.status))
+    println("")
+}
+
+# DELETE request
+deleteRequest() = {
+    println("=== DELETE Request ===")
+    (status, resp) = Http.delete("https://httpbin.org/delete")
+    println("Status: " ++ show(resp.status))
+    println("")
+}
+
+# PATCH request
+patchRequest() = {
+    println("=== PATCH Request ===")
+    body = "{\"partial\": \"update\"}"
+    (status, resp) = Http.patch("https://httpbin.org/patch", body)
+    println("Status: " ++ show(resp.status))
+    println("")
+}
+
+# HEAD request (headers only, no body)
+headRequest() = {
+    println("=== HEAD Request ===")
+    (status, resp) = Http.head("https://httpbin.org/get")
+    println("Status: " ++ show(resp.status))
+    println("Body length: " ++ show(length(resp.body)))
+    println("(HEAD returns empty body)")
+    println("")
+}
+
+# Generic request with custom headers
+customRequest() = {
+    println("=== Custom Request with Headers ===")
+    headers = [
+        ("Content-Type", "application/json"),
+        ("X-Custom-Header", "nostos-test"),
+        ("Accept", "application/json")
+    ]
+    body = "{\"via\": \"Http.request\"}"
+    (status, resp) = Http.request("POST", "https://httpbin.org/post", headers, body)
+    println("Status: " ++ show(resp.status))
+    println("")
+}
+
+main() = {
+    println("HTTP Client Examples")
+    println("====================")
+    println("")
+
+    simpleGet()
+    postJson()
+    putRequest()
+    deleteRequest()
+    patchRequest()
+    headRequest()
+    customRequest()
+
+    println("All HTTP examples completed!")
+}
