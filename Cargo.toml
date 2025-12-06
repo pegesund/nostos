@@ -30,13 +30,19 @@ cranelift-native = "0.116"
 target-lexicon = "0.12"
 
 # Async IO
-tokio = { version = "1", features = ["rt-multi-thread", "fs", "io-util", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "fs", "io-util", "sync", "time", "net", "macros"] }
 reqwest = { version = "0.12", features = ["json", "cookies"] }
 
 # String encoding
 encoding_rs = "0.8"
 base64 = "0.22"
 percent-encoding = "2.3"
+
+# HTTP Server
+axum = "0.8"
+tower = "0.5"
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["server", "tokio"] }
 
 # Internal crates
 nostos-syntax = { path = "crates/syntax" }

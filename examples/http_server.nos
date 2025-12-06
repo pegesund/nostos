@@ -1,0 +1,44 @@
+handleRequest(server, req) = {
+  method = req.method
+  path = req.path
+
+  print(method)
+  print(" ")
+  println(path)
+
+  (body, status) = if path == "/" then
+    ("Hello from Nostos HTTP Server!", 200)
+  else if path == "/health" then
+    ("OK", 200)
+  else if path == "/echo" then
+    (req.body, 200)
+  else
+    ("Not Found", 404)
+
+  headers = [("Content-Type", "text/plain")]
+  Server.respond(req.id, status, headers, body)
+
+  acceptLoop(server)
+}
+
+acceptLoop(server) = {
+  (status, req) = Server.accept(server)
+  handleRequest(server, req)
+}
+
+main() = {
+  println("=== Nostos HTTP Server ===")
+  println("")
+  println("Starting server on http://localhost:8080")
+  println("Endpoints:")
+  println("  GET  /        - Hello message")
+  println("  GET  /health  - Health check")
+  println("  POST /echo    - Echo back request body")
+  println("")
+
+  (status, server) = Server.bind(8080)
+  println("Server started! Press Ctrl+C to stop.")
+  println("")
+
+  acceptLoop(server)
+}

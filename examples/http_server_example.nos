@@ -1,0 +1,104 @@
+# HTTP Server Example - demonstrates server + client in same VM
+# Server API:
+#   Server.bind(port)           -> (status, serverHandle)
+#   Server.accept(serverHandle) -> (status, request)
+#   Server.respond(reqId, statusCode, headers, body) -> (status, ())
+#   Server.close(serverHandle)  -> (status, ())
+# Request fields: req.id, req.method, req.path, req.headers, req.body
+
+# Route handler - determines response based on path
+handleRoute(method, path, body) = {
+  if path == "/" then
+    (200, "Welcome to Nostos HTTP Server!")
+  else if path == "/hello" then
+    (200, "Hello, World!")
+  else if path == "/echo" then
+    (200, body)
+  else if path == "/json" then
+    (200, "{\"status\": \"ok\", \"message\": \"Hello from Nostos\"}")
+  else
+    (404, "Not Found: " ++ path)
+}
+
+# Server loop - accepts requests and dispatches to handler
+serverLoop(server) = {
+  (status, req) = Server.accept(server)
+  (statusCode, responseBody) = handleRoute(req.method, req.path, req.body)
+  headers = [("Content-Type", "text/plain")]
+  Server.respond(req.id, statusCode, headers, responseBody)
+  serverLoop(server)
+}
+
+# Client that makes a request to the server
+clientRequest(parent, path) = {
+  url = "http://localhost:8888" ++ path
+  (status, response) = Http.get(url)
+  parent <- ("response", path, response.status)
+}
+
+# Collect responses from client workers
+collectResponses(count, expected) = {
+  if count == expected then
+    count
+  else
+    receive
+      ("response", path, status) -> {
+        print("  ")
+        print(path)
+        print(" -> ")
+        println(status)
+        collectResponses(count + 1, expected)
+      }
+    after 5000 ->
+      count
+    end
+}
+
+# Main - demonstrates server + client in same VM
+main() = {
+  println("=== HTTP Server Example ===")
+  println("")
+  println("Server API:")
+  println("  Server.bind(port) -> (status, handle)")
+  println("  Server.accept(handle) -> (status, request)")
+  println("  Server.respond(reqId, status, headers, body)")
+  println("  Server.close(handle)")
+  println("")
+
+  # Step 1: Bind to port
+  (status, server) = Server.bind(8888)
+  println("Server started on http://localhost:8888")
+  println("")
+
+  # Step 2: Spawn server loop in background process
+  spawn(() => serverLoop(server))
+
+  # Give server time to start accepting
+  sleep(50)
+
+  # Step 3: Make concurrent client requests from same VM
+  println("Making client requests...")
+  me = self()
+
+  spawn(() => clientRequest(me, "/"))
+  spawn(() => clientRequest(me, "/hello"))
+  spawn(() => clientRequest(me, "/echo"))
+  spawn(() => clientRequest(me, "/json"))
+  spawn(() => clientRequest(me, "/notfound"))
+
+  # Collect all responses
+  completed = collectResponses(0, 5)
+
+  println("")
+  print("Completed ")
+  print(completed)
+  println(" requests")
+
+  if completed == 5 then
+    println("SUCCESS! Server and clients work in same VM!")
+  else
+    println("Some requests failed")
+
+  # Clean up
+  Server.close(server)
+}

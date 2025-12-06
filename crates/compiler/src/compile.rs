@@ -1064,6 +1064,34 @@ impl Compiler {
                             self.chunk.emit(Instruction::HttpRequest(dst, method_reg, url_reg, headers_reg, body_reg), line);
                             return Ok(dst);
                         }
+                        // HTTP Server functions
+                        "Server.bind" if args.len() == 1 => {
+                            let port_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ServerBind(dst, port_reg), line);
+                            return Ok(dst);
+                        }
+                        "Server.accept" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ServerAccept(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
+                        "Server.respond" if args.len() == 4 => {
+                            let req_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let status_reg = self.compile_expr_tail(&args[1], false)?;
+                            let headers_reg = self.compile_expr_tail(&args[2], false)?;
+                            let body_reg = self.compile_expr_tail(&args[3], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ServerRespond(dst, req_id_reg, status_reg, headers_reg, body_reg), line);
+                            return Ok(dst);
+                        }
+                        "Server.close" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ServerClose(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
                         // String encoding functions
                         "Base64.encode" if args.len() == 1 => {
                             let str_reg = self.compile_expr_tail(&args[0], false)?;

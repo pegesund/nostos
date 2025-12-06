@@ -1,0 +1,31 @@
+serverLoop(server, count) = {
+  println("Waiting for request...")
+  (status, req) = Server.accept(server)
+
+  print("Request #")
+  print(count)
+  print(": ")
+  print(req.method)
+  print(" ")
+  println(req.path)
+
+  body = if req.path == "/hello" then "hello world" else "not found"
+  statusCode = if req.path == "/hello" then 200 else 404
+
+  Server.respond(req.id, statusCode, [("Content-Type", "text/plain")], body)
+  serverLoop(server, count + 1)
+}
+
+main() = {
+  println("=== HTTP Server Test ===")
+  println("")
+  println("Starting server on http://localhost:8080")
+  println("Test with: curl http://localhost:8080/hello")
+  println("")
+
+  (status, server) = Server.bind(8080)
+  println("Server ready!")
+  println("")
+
+  serverLoop(server, 1)
+}

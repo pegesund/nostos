@@ -47,6 +47,16 @@ pub enum IoResponseValue {
     },
     /// Optional string (e.g., readline returning None at EOF)
     OptionString(Option<String>),
+    /// HTTP server handle
+    ServerHandle(u64),
+    /// Incoming HTTP request (from Server.accept)
+    ServerRequest {
+        request_id: u64,
+        method: String,
+        path: String,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    },
 }
 
 /// A call frame on the stack.

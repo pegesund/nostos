@@ -28,6 +28,10 @@ pub struct FileHandle(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HttpClientHandle(pub u64);
 
+/// Unique handle for an HTTP server
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ServerHandle(pub u64);
+
 /// File open mode
 #[derive(Debug, Clone, Copy)]
 pub enum FileMode {
@@ -223,6 +227,27 @@ pub enum IoRequest {
         response: IoResponse,
     },
 
+    // HTTP Server operations
+    ServerBind {
+        port: u16,
+        response: IoResponse,
+    },
+    ServerAccept {
+        handle: u64,
+        response: IoResponse,
+    },
+    ServerRespond {
+        request_id: u64,
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+        response: IoResponse,
+    },
+    ServerClose {
+        handle: u64,
+        response: IoResponse,
+    },
+
     // Shutdown
     Shutdown,
 }
@@ -290,11 +315,25 @@ impl IoRuntime {
         http_client: reqwest::Client,
     ) {
         use std::io::SeekFrom;
+        use std::sync::Arc;
         use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, AsyncBufReadExt};
+        use tokio::sync::Mutex;
 
         // Track open file handles - use BufReader for line-by-line reading support
         let mut open_files: HashMap<u64, BufReader<tokio::fs::File>> = HashMap::new();
         let mut next_handle: u64 = 1;
+
+        // HTTP Server state
+        // Maps server handle -> channel for incoming requests
+        // Wrapped in Arc<Mutex<>> so spawned tasks can access the receiver
+        type ServerRequestTx = mpsc::UnboundedSender<(u64, String, String, Vec<(String, String)>, Vec<u8>)>;
+        type ServerRequestRx = mpsc::UnboundedReceiver<(u64, String, String, Vec<(String, String)>, Vec<u8>)>;
+        let server_request_receivers: Arc<Mutex<HashMap<u64, ServerRequestRx>>> = Arc::new(Mutex::new(HashMap::new()));
+        // Maps request_id -> oneshot sender for the response
+        type ResponseSender = oneshot::Sender<(u16, Vec<(String, String)>, Vec<u8>)>;
+        let pending_responses: Arc<Mutex<HashMap<u64, ResponseSender>>> = Arc::new(Mutex::new(HashMap::new()));
+        let mut next_server_handle: u64 = 1;
+        let mut next_request_id: Arc<std::sync::atomic::AtomicU64> = Arc::new(std::sync::atomic::AtomicU64::new(1));
 
         while let Some(request) = request_rx.recv().await {
             match request {
@@ -549,23 +588,184 @@ impl IoRuntime {
                     let _ = response.send(result);
                 }
 
-                // HTTP operations
+                // HTTP operations - spawned as tasks to avoid blocking the IO loop
                 IoRequest::HttpGet { url, response } => {
-                    let result = Self::handle_http_get(&http_client, &url).await;
-                    let _ = response.send(result.map(|resp| IoResponseValue::HttpResponse {
-                        status: resp.status,
-                        headers: resp.headers,
-                        body: resp.body,
-                    }));
+                    let client = http_client.clone();
+                    tokio::spawn(async move {
+                        let result = Self::handle_http_get(&client, &url).await;
+                        let _ = response.send(result.map(|resp| IoResponseValue::HttpResponse {
+                            status: resp.status,
+                            headers: resp.headers,
+                            body: resp.body,
+                        }));
+                    });
                 }
 
                 IoRequest::HttpRequest { request, response } => {
-                    let result = Self::handle_http_request(&http_client, request).await;
-                    let _ = response.send(result.map(|resp| IoResponseValue::HttpResponse {
-                        status: resp.status,
-                        headers: resp.headers,
-                        body: resp.body,
+                    let client = http_client.clone();
+                    tokio::spawn(async move {
+                        let result = Self::handle_http_request(&client, request).await;
+                        let _ = response.send(result.map(|resp| IoResponseValue::HttpResponse {
+                            status: resp.status,
+                            headers: resp.headers,
+                            body: resp.body,
+                        }));
+                    });
+                }
+
+                // HTTP Server operations
+                IoRequest::ServerBind { port, response } => {
+                    use axum::{
+                        body::Bytes,
+                        extract::Request,
+                        response::IntoResponse,
+                        routing::any,
+                        Router,
+                    };
+
+                    let handle = next_server_handle;
+                    next_server_handle += 1;
+
+                    // Create channel for incoming requests
+                    let (req_tx, req_rx) = mpsc::unbounded_channel();
+                    server_request_receivers.lock().await.insert(handle, req_rx);
+
+                    // Clone shared state for the axum handler
+                    let pending = pending_responses.clone();
+                    let req_id_gen = next_request_id.clone();
+
+                    // Create the router
+                    let app = Router::new().fallback(any(move |request: Request| {
+                        let req_tx = req_tx.clone();
+                        let pending = pending.clone();
+                        let req_id_gen = req_id_gen.clone();
+                        async move {
+                            // Extract request parts
+                            let method = request.method().to_string();
+                            let path = request.uri().path().to_string();
+                            let headers: Vec<(String, String)> = request
+                                .headers()
+                                .iter()
+                                .map(|(k, v)| {
+                                    (k.to_string(), v.to_str().unwrap_or("").to_string())
+                                })
+                                .collect();
+
+                            // Read body
+                            let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+                                Ok(bytes) => bytes.to_vec(),
+                                Err(_) => vec![],
+                            };
+
+                            // Generate request ID and create response channel
+                            let request_id = req_id_gen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let (resp_tx, resp_rx) = oneshot::channel();
+
+                            // Store the response channel
+                            pending.lock().await.insert(request_id, resp_tx);
+
+                            // Send request to the Nostos process
+                            let _ = req_tx.send((request_id, method, path, headers, body));
+
+                            // Wait for response from Nostos
+                            match resp_rx.await {
+                                Ok((status, headers, body)) => {
+                                    let mut response = axum::response::Response::builder()
+                                        .status(status);
+                                    for (key, value) in headers {
+                                        response = response.header(key, value);
+                                    }
+                                    response.body(axum::body::Body::from(body)).unwrap()
+                                }
+                                Err(_) => {
+                                    // Request was abandoned
+                                    axum::response::Response::builder()
+                                        .status(500)
+                                        .body(axum::body::Body::from("Internal Server Error"))
+                                        .unwrap()
+                                }
+                            }
+                        }
                     }));
+
+                    // Spawn the server
+                    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+                    let listener_result = tokio::net::TcpListener::bind(addr).await;
+
+                    match listener_result {
+                        Ok(listener) => {
+                            tokio::spawn(async move {
+                                axum::serve(listener, app).await.ok();
+                            });
+                            let _ = response.send(Ok(IoResponseValue::ServerHandle(handle)));
+                        }
+                        Err(e) => {
+                            server_request_receivers.lock().await.remove(&handle);
+                            let _ = response.send(Err(IoError::IoError(format!("Failed to bind: {}", e))));
+                        }
+                    }
+                }
+
+                IoRequest::ServerAccept { handle, response } => {
+                    // CRITICAL: Spawn as a separate task to avoid blocking the IO runtime loop!
+                    // This allows other IO operations (like HttpGet) to proceed while we wait
+                    // for an incoming HTTP request.
+                    let receivers = server_request_receivers.clone();
+                    tokio::spawn(async move {
+                        // Take the receiver from the map temporarily
+                        let mut map = receivers.lock().await;
+                        let rx_opt = map.remove(&handle);
+                        drop(map); // Release the lock before waiting
+
+                        match rx_opt {
+                            Some(mut rx) => {
+                                // Wait for the next request (non-blocking to main loop)
+                                let result = rx.recv().await;
+
+                                // Put the receiver back in the map
+                                receivers.lock().await.insert(handle, rx);
+
+                                match result {
+                                    Some((request_id, method, path, headers, body)) => {
+                                        let _ = response.send(Ok(IoResponseValue::ServerRequest {
+                                            request_id,
+                                            method,
+                                            path,
+                                            headers,
+                                            body,
+                                        }));
+                                    }
+                                    None => {
+                                        // Server was closed
+                                        let _ = response.send(Err(IoError::Other("Server closed".to_string())));
+                                    }
+                                }
+                            }
+                            None => {
+                                let _ = response.send(Err(IoError::InvalidHandle));
+                            }
+                        }
+                    });
+                }
+
+                IoRequest::ServerRespond { request_id, status, headers, body, response } => {
+                    let mut pending = pending_responses.lock().await;
+                    match pending.remove(&request_id) {
+                        Some(resp_tx) => {
+                            let _ = resp_tx.send((status, headers, body));
+                            let _ = response.send(Ok(IoResponseValue::Unit));
+                        }
+                        None => {
+                            let _ = response.send(Err(IoError::Other("Request not found or already responded".to_string())));
+                        }
+                    }
+                }
+
+                IoRequest::ServerClose { handle, response } => {
+                    // Remove the receiver - this will cause the server to stop accepting
+                    // Note: The actual TCP listener continues but new requests will have nowhere to go
+                    server_request_receivers.lock().await.remove(&handle);
+                    let _ = response.send(Ok(IoResponseValue::Unit));
                 }
             }
         }

@@ -752,6 +752,20 @@ pub enum Instruction {
     /// UTF-8 decode bytes to string: dst = Encoding.fromBytes(bytes)
     Utf8Decode(Reg, Reg),
 
+    // === HTTP Server Operations ===
+    /// Bind and start HTTP server: dst = Server.bind(port)
+    /// Returns (status, server_handle)
+    ServerBind(Reg, Reg),
+    /// Accept next HTTP request: dst = Server.accept(server_handle)
+    /// Returns (status, HttpRequest{id, method, path, headers, body})
+    /// Suspends process until request arrives
+    ServerAccept(Reg, Reg),
+    /// Respond to HTTP request: dst = Server.respond(request_id, status, headers, body)
+    /// Returns (status, ())
+    ServerRespond(Reg, Reg, Reg, Reg, Reg),
+    /// Close HTTP server: dst = Server.close(server_handle)
+    ServerClose(Reg, Reg),
+
     // === IO/Debug builtins ===
     /// Print value, return string representation: dst = print(value)
     Print(Reg, Reg),

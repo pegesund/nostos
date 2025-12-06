@@ -1056,6 +1056,49 @@ impl ThreadWorker {
                     .collect();
                 GcValue::List(GcList { data: Arc::new(values), start: 0 })
             }
+            ServerHandle(handle_id) => {
+                // Return server handle as an integer
+                GcValue::Int64(handle_id as i64)
+            }
+            ServerRequest { request_id, method, path, headers, body } => {
+                // Build headers list of {key, value} tuples
+                let header_tuples: Vec<GcValue> = headers
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let key = GcValue::String(proc.heap.alloc_string(k));
+                        let val = GcValue::String(proc.heap.alloc_string(v));
+                        GcValue::Tuple(proc.heap.alloc_tuple(vec![key, val]))
+                    })
+                    .collect();
+                let headers_list = GcValue::List(GcList { data: Arc::new(header_tuples), start: 0 });
+
+                // Build body as string (try UTF-8, fallback to bytes list)
+                let body_value = match std::string::String::from_utf8(body.clone()) {
+                    Ok(s) => GcValue::String(proc.heap.alloc_string(s)),
+                    Err(_) => {
+                        let bytes: Vec<GcValue> = body.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
+                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                    }
+                };
+
+                // Pre-allocate strings to avoid borrow issues
+                let method_str = GcValue::String(proc.heap.alloc_string(method));
+                let path_str = GcValue::String(proc.heap.alloc_string(path));
+
+                // Build request as a record with named fields
+                GcValue::Record(proc.heap.alloc_record(
+                    "HttpRequest".to_string(),
+                    vec!["id".to_string(), "method".to_string(), "path".to_string(), "headers".to_string(), "body".to_string()],
+                    vec![
+                        GcValue::Int64(request_id as i64),
+                        method_str,
+                        path_str,
+                        headers_list,
+                        body_value
+                    ],
+                    vec![false, false, false, false, false], // all immutable
+                ))
+            }
         }
     }
 
@@ -3688,6 +3731,171 @@ impl ThreadWorker {
                             body,
                             timeout_ms: None,
                         },
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            // === HTTP Server Operations ===
+            ServerBind(dst, port_reg) => {
+                let port = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*port_reg) {
+                        GcValue::Int64(p) => *p as u16,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    }
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::ServerBind {
+                        port,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ServerAccept(dst, handle_reg) => {
+                let handle = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*handle_reg) {
+                        GcValue::Int64(h) => *h as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (server handle)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    }
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::ServerAccept {
+                        handle,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ServerRespond(dst, req_id_reg, status_reg, headers_reg, body_reg) => {
+                let (request_id, status, headers, body) = {
+                    let proc = self.get_process(local_id).unwrap();
+
+                    let request_id = match reg!(*req_id_reg) {
+                        GcValue::Int64(id) => *id as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (request id)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    };
+
+                    let status = match reg!(*status_reg) {
+                        GcValue::Int64(s) => *s as u16,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (status code)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    };
+
+                    // Extract headers from list of tuples
+                    let headers = match reg!(*headers_reg) {
+                        GcValue::List(list) => {
+                            let mut hdrs = Vec::new();
+                            for item in list.items() {
+                                if let GcValue::Tuple(tuple_ptr) = item {
+                                    if let Some(tuple) = proc.heap.get_tuple(*tuple_ptr) {
+                                        if tuple.items.len() == 2 {
+                                            if let (GcValue::String(k_ptr), GcValue::String(v_ptr)) = (&tuple.items[0], &tuple.items[1]) {
+                                                let key = proc.heap.get_string(*k_ptr).map(|s| s.data.clone()).unwrap_or_default();
+                                                let val = proc.heap.get_string(*v_ptr).map(|s| s.data.clone()).unwrap_or_default();
+                                                hdrs.push((key, val));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            hdrs
+                        }
+                        _ => Vec::new(),
+                    };
+
+                    // Extract body as string -> bytes
+                    let body = match reg!(*body_reg) {
+                        GcValue::String(ptr) => {
+                            proc.heap.get_string(*ptr).map(|s| s.data.as_bytes().to_vec()).unwrap_or_default()
+                        }
+                        _ => Vec::new(),
+                    };
+
+                    (request_id, status, headers, body)
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::ServerRespond {
+                        request_id,
+                        status,
+                        headers,
+                        body,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ServerClose(dst, handle_reg) => {
+                let handle = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*handle_reg) {
+                        GcValue::Int64(h) => *h as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (server handle)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    }
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::ServerClose {
+                        handle,
                         response: tx,
                     };
                     if sender.send(request).is_err() {
