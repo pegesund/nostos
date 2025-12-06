@@ -944,7 +944,7 @@ impl Worker {
                     let len = match val {
                         GcValue::Int64Array(ptr) => proc.heap.get_int64_array(*ptr).map(|a| a.items.len()),
                         GcValue::Float64Array(ptr) => proc.heap.get_float64_array(*ptr).map(|a| a.items.len()),
-                        GcValue::List(ptr) => proc.heap.get_list(*ptr).map(|l| l.items.len()),
+                        GcValue::List(ptr) => proc.heap.get_list(*ptr).map(|l| l.len()),
                         GcValue::Array(ptr) => proc.heap.get_array(*ptr).map(|a| a.items.len()),
                         _ => None,
                     }.unwrap_or(0);
@@ -972,7 +972,7 @@ impl Worker {
                         }
                         GcValue::List(ptr) => {
                             proc.heap.get_list(*ptr)
-                                .and_then(|list| list.items.get(idx_num).cloned())
+                                .and_then(|list| list.items().get(idx_num).cloned())
                         }
                         _ => None,
                     }.ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_num)))?;
@@ -2419,7 +2419,7 @@ impl Worker {
                 };
                 let result = self.scheduler.with_process_mut(pid, |proc| {
                     let tail_items = proc.heap.get_list(tail_ptr)
-                        .map(|l| l.items.clone())
+                        .map(|l| l.items().to_vec())
                         .unwrap_or_default();
                     let mut new_items = vec![head_val];
                     new_items.extend(tail_items);
@@ -2436,10 +2436,10 @@ impl Worker {
                         self.scheduler.with_process(pid, |proc| {
                             proc.heap.get_list(ptr)
                                 .and_then(|list| {
-                                    if list.items.is_empty() {
+                                    if list.is_empty() {
                                         None
                                     } else {
-                                        Some(list.items[0].clone())
+                                        Some(list.items()[0].clone())
                                     }
                                 })
                         }).flatten()
@@ -2455,7 +2455,7 @@ impl Worker {
                     GcValue::List(ptr) => {
                         self.scheduler.with_process(pid, |proc| {
                             proc.heap.get_list(ptr)
-                                .map(|list| list.items.is_empty())
+                                .map(|list| list.is_empty())
                                 .unwrap_or(false)
                         }).unwrap_or(false)
                     }
@@ -2636,7 +2636,7 @@ impl Worker {
                 let val = get_reg!(src);
                 let len = self.scheduler.with_process(pid, |proc| {
                     match &val {
-                        GcValue::List(ptr) => proc.heap.get_list(*ptr).map(|l| l.items.len()),
+                        GcValue::List(ptr) => proc.heap.get_list(*ptr).map(|l| l.len()),
                         GcValue::Tuple(ptr) => proc.heap.get_tuple(*ptr).map(|t| t.items.len()),
                         GcValue::Array(ptr) => proc.heap.get_array(*ptr).map(|a| a.items.len()),
                         GcValue::Int64Array(ptr) => proc.heap.get_int64_array(*ptr).map(|a| a.items.len()),
@@ -2733,7 +2733,7 @@ impl Worker {
                 };
                 let (head, tail_ptr) = self.scheduler.with_process_mut(pid, |proc| {
                     let items = proc.heap.get_list(list_ptr)
-                        .map(|l| l.items.clone())
+                        .map(|l| l.items().to_vec())
                         .unwrap_or_default();
                     if items.is_empty() {
                         None

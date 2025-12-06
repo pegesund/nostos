@@ -1337,7 +1337,7 @@ impl Runtime {
                 let result = match reg!(*list) {
                     GcValue::List(ptr) => {
                         proc.heap.get_list(*ptr)
-                            .map(|l| l.items.is_empty())
+                            .map(|l| l.is_empty())
                             .unwrap_or(false)
                     }
                     _ => false,
@@ -1645,7 +1645,7 @@ impl Runtime {
                     _ => return Err(RuntimeError::Panic("Cons expects list tail".to_string())),
                 };
                 let tail_items = proc.heap.get_list(tail_ptr)
-                    .map(|l| l.items.clone())
+                    .map(|l| l.items().to_vec())
                     .unwrap_or_default();
                 let mut new_items = vec![head_val];
                 new_items.extend(tail_items);
@@ -1659,7 +1659,7 @@ impl Runtime {
                     _ => return Err(RuntimeError::Panic("Decons expects list".to_string())),
                 };
                 let items = proc.heap.get_list(list_ptr)
-                    .map(|l| l.items.clone())
+                    .map(|l| l.items().to_vec())
                     .unwrap_or_default();
                 if items.is_empty() {
                     return Err(RuntimeError::Panic("Cannot decons empty list".to_string()));
@@ -1680,8 +1680,8 @@ impl Runtime {
                     GcValue::List(ptr) => *ptr,
                     _ => return Err(RuntimeError::Panic("ListConcat expects list".to_string())),
                 };
-                let a_items = proc.heap.get_list(a_ptr).map(|l| l.items.clone()).unwrap_or_default();
-                let b_items = proc.heap.get_list(b_ptr).map(|l| l.items.clone()).unwrap_or_default();
+                let a_items = proc.heap.get_list(a_ptr).map(|l| l.items().to_vec()).unwrap_or_default();
+                let b_items = proc.heap.get_list(b_ptr).map(|l| l.items().to_vec()).unwrap_or_default();
                 let mut new_items = a_items;
                 new_items.extend(b_items);
                 let list_ptr = proc.heap.alloc_list(new_items);
@@ -1697,7 +1697,7 @@ impl Runtime {
                     GcValue::List(ptr) => {
                         let list = proc.heap.get_list(*ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid list reference".to_string()))?;
-                        list.items.get(idx_val).cloned()
+                        list.items().get(idx_val).cloned()
                             .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?
                     }
                     GcValue::Tuple(ptr) => {
@@ -1776,7 +1776,7 @@ impl Runtime {
 
             Instruction::Length(dst, src) => {
                 let len = match reg!(*src) {
-                    GcValue::List(ptr) => proc.heap.get_list(*ptr).map(|l| l.items.len()).unwrap_or(0),
+                    GcValue::List(ptr) => proc.heap.get_list(*ptr).map(|l| l.len()).unwrap_or(0),
                     GcValue::Tuple(ptr) => proc.heap.get_tuple(*ptr).map(|t| t.items.len()).unwrap_or(0),
                     GcValue::Array(ptr) => proc.heap.get_array(*ptr).map(|a| a.items.len()).unwrap_or(0),
                     GcValue::Int64Array(ptr) => proc.heap.get_int64_array(*ptr).map(|a| a.items.len()).unwrap_or(0),
@@ -2314,10 +2314,10 @@ impl Runtime {
                 let result = match reg!(*src) {
                     GcValue::List(ptr) => {
                         if let Some(list) = proc.heap.get_list(*ptr) {
-                            if list.items.is_empty() {
+                            if list.is_empty() {
                                 return Err(RuntimeError::Panic("head: empty list".to_string()));
                             }
-                            list.items[0].clone()
+                            list.items()[0].clone()
                         } else {
                             return Err(RuntimeError::Panic("Invalid list pointer".to_string()));
                         }
@@ -2331,11 +2331,11 @@ impl Runtime {
                 let result = match reg!(*src) {
                     GcValue::List(ptr) => {
                         if let Some(list) = proc.heap.get_list(*ptr) {
-                            if list.items.is_empty() {
+                            if list.is_empty() {
                                 return Err(RuntimeError::Panic("tail: empty list".to_string()));
                             }
-                            let tail: Vec<GcValue> = list.items[1..].to_vec();
-                            GcValue::List(proc.heap.alloc_list(tail))
+                            let tail_list = list.tail();
+                            GcValue::List(proc.heap.alloc_list_tail(tail_list))
                         } else {
                             return Err(RuntimeError::Panic("Invalid list pointer".to_string()));
                         }
@@ -2349,7 +2349,7 @@ impl Runtime {
                 let result = match reg!(*src) {
                     GcValue::List(ptr) => {
                         if let Some(list) = proc.heap.get_list(*ptr) {
-                            list.items.is_empty()
+                            list.is_empty()
                         } else {
                             true // Invalid pointer treated as empty
                         }
@@ -2357,6 +2357,27 @@ impl Runtime {
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
                 set_reg!(*dst, GcValue::Bool(result));
+            }
+
+            Instruction::ListSum(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::List(ptr) => {
+                        if let Some(list) = proc.heap.get_list(*ptr) {
+                            let mut total: i64 = 0;
+                            for item in list.items() {
+                                match item {
+                                    GcValue::Int64(n) => total += n,
+                                    _ => panic!("listSum requires list of Int64"),
+                                }
+                            }
+                            total
+                        } else {
+                            0
+                        }
+                    }
+                    _ => unsafe { std::hint::unreachable_unchecked() }
+                };
+                set_reg!(*dst, GcValue::Int64(result));
             }
 
             // === IO/Debug builtins ===

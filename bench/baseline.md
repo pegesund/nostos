@@ -13,6 +13,7 @@ Recorded: 2025-12-06
 | Fibonacci (fib 35) | 0.07s | 10.12s | 0.77s | **145x** | **11x faster** |
 | Array Sum (1M × 100) | 0.09s | 5.12s | 1.79s | **57x** | **20x faster** |
 | Array Write (100k × 100) | 0.05s | 1.36s | 0.99s | **27x** | **20x faster** |
+| List Sum (1k × 10) | 0.05s | - | 0.01s | - | 5x slower |
 
 ## Detailed Results
 
@@ -43,10 +44,23 @@ Tests while-loop JIT for array element writes.
 | Nostos (parallel, no-JIT) | 1.36s | Interpreted loop |
 | Python 3 | 0.99s | - |
 
+### List Sum (1k elements × 10 iterations)
+Tests recursive fold over linked list with O(1) tail optimization.
+
+| Runtime | Time | Notes |
+|---------|------|-------|
+| Nostos (parallel) | 0.05s | O(1) tail via Arc sharing |
+| Python 3 | 0.01s | Native list iteration |
+
+The list uses Arc-based tail sharing for O(1) tail operations (vs O(n) copying).
+This improved from 0.12s to 0.05s (2.4x faster). Python is still faster because
+lists are contiguous arrays, while Nostos uses functional linked lists.
+
 ## Notes
 
 - JIT provides **27-145x speedup** over interpreted execution
-- Nostos with JIT is **11-20x faster than Python**
+- Nostos with JIT is **11-20x faster than Python** for arrays
 - Single-clause functions with `if-then-else` compile to numeric JIT
 - While loops over Int64Array compile to loop array JIT
 - Multi-clause pattern matching (e.g., `fib(0)=0; fib(1)=1; fib(n)=...`) does not JIT compile
+- Lists use O(1) tail via Arc sharing, but are still slower than Python's contiguous arrays

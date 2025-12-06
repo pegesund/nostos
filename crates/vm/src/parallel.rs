@@ -94,7 +94,7 @@ impl ThreadSafeValue {
             }
             GcValue::List(ptr) => {
                 let list = heap.get_list(*ptr)?;
-                let items: Option<Vec<_>> = list.items.iter()
+                let items: Option<Vec<_>> = list.items().iter()
                     .map(|v| ThreadSafeValue::from_gc_value(v, heap))
                     .collect();
                 ThreadSafeValue::List(items?)
@@ -1168,7 +1168,7 @@ impl ThreadWorker {
                         }
                         GcValue::List(ptr) => {
                             proc.heap.get_list(*ptr)
-                                .map(|l| l.items.len() as i64)
+                                .map(|l| l.len() as i64)
                                 .unwrap_or(0)
                         }
                         GcValue::String(ptr) => {
@@ -1312,6 +1312,106 @@ impl ThreadWorker {
                     // Convert Value to GcValue (allocate on heap if needed)
                     let gc_val = proc.heap.value_to_gc(&constant);
                     proc.frames[frame_idx].registers[*dst as usize] = gc_val;
+                }
+                // Fast path for list operations
+                TestNil(dst, list_reg) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let is_nil = match &proc.frames[frame_idx].registers[*list_reg as usize] {
+                        GcValue::List(ptr) => proc.heap.get_list(*ptr)
+                            .map(|l| l.is_empty())
+                            .unwrap_or(true),
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Bool(is_nil);
+                }
+                ListIsEmpty(dst, list_reg) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let is_empty = match &proc.frames[frame_idx].registers[*list_reg as usize] {
+                        GcValue::List(ptr) => proc.heap.get_list(*ptr)
+                            .map(|l| l.is_empty())
+                            .unwrap_or(true),
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Bool(is_empty);
+                }
+                ListSum(dst, list_reg) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let sum = match &proc.frames[frame_idx].registers[*list_reg as usize] {
+                        GcValue::List(ptr) => {
+                            if let Some(list) = proc.heap.get_list(*ptr) {
+                                let mut total: i64 = 0;
+                                for item in list.items() {
+                                    match item {
+                                        GcValue::Int64(n) => total += n,
+                                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                                    }
+                                }
+                                total
+                            } else {
+                                return Ok(FastLoopResult::NeedSlowPath(instr.clone()));
+                            }
+                        }
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(sum);
+                }
+                ListHead(dst, list_reg) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let head = match &proc.frames[frame_idx].registers[*list_reg as usize] {
+                        GcValue::List(ptr) => {
+                            if let Some(list) = proc.heap.get_list(*ptr) {
+                                if !list.is_empty() {
+                                    list.items()[0].clone()
+                                } else {
+                                    return Ok(FastLoopResult::NeedSlowPath(instr.clone()));
+                                }
+                            } else {
+                                return Ok(FastLoopResult::NeedSlowPath(instr.clone()));
+                            }
+                        }
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    proc.frames[frame_idx].registers[*dst as usize] = head;
+                }
+                ListTail(dst, list_reg) => {
+                    proc.frames[frame_idx].ip += 1;
+                    match &proc.frames[frame_idx].registers[*list_reg as usize] {
+                        GcValue::List(ptr) => {
+                            if let Some(list) = proc.heap.get_list(*ptr) {
+                                if !list.is_empty() {
+                                    let tail_list = list.tail();
+                                    let new_ptr = proc.heap.alloc_list_tail(tail_list);
+                                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::List(new_ptr);
+                                } else {
+                                    return Ok(FastLoopResult::NeedSlowPath(instr.clone()));
+                                }
+                            } else {
+                                return Ok(FastLoopResult::NeedSlowPath(instr.clone()));
+                            }
+                        }
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    }
+                }
+                Decons(head_dst, tail_dst, list_reg) => {
+                    proc.frames[frame_idx].ip += 1;
+                    match &proc.frames[frame_idx].registers[*list_reg as usize] {
+                        GcValue::List(ptr) => {
+                            if let Some(list) = proc.heap.get_list(*ptr) {
+                                if !list.is_empty() {
+                                    let head = list.items()[0].clone();
+                                    let tail_list = list.tail();
+                                    let tail_ptr = proc.heap.alloc_list_tail(tail_list);
+                                    proc.frames[frame_idx].registers[*head_dst as usize] = head;
+                                    proc.frames[frame_idx].registers[*tail_dst as usize] = GcValue::List(tail_ptr);
+                                } else {
+                                    return Ok(FastLoopResult::NeedSlowPath(instr.clone()));
+                                }
+                            } else {
+                                return Ok(FastLoopResult::NeedSlowPath(instr.clone()));
+                            }
+                        }
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    }
                 }
                 _ => {
                     // Slow path instruction - need to release proc and call method on self
@@ -1744,7 +1844,7 @@ impl ThreadWorker {
                         GcValue::List(ptr) => {
                             let list = proc.heap.get_list(*ptr)
                                 .ok_or_else(|| RuntimeError::Panic("Invalid list reference".to_string()))?;
-                            list.items.get(idx_val).cloned()
+                            list.items().get(idx_val).cloned()
                                 .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?
                         }
                         GcValue::Tuple(ptr) => {
@@ -2740,7 +2840,7 @@ impl ThreadWorker {
                 let result = match list_val {
                     GcValue::List(ptr) => {
                         let proc = self.processes.get(&local_id).unwrap();
-                        proc.heap.get_list(ptr).map(|l| l.items.is_empty()).unwrap_or(false)
+                        proc.heap.get_list(ptr).map(|l| l.is_empty()).unwrap_or(false)
                     }
                     _ => false,
                 };
@@ -2871,7 +2971,7 @@ impl ThreadWorker {
                 let val = reg!(*src).clone();
                 let proc = self.processes.get(&local_id).unwrap();
                 let len = match val {
-                    GcValue::List(ptr) => proc.heap.get_list(ptr).map(|l| l.items.len()).unwrap_or(0),
+                    GcValue::List(ptr) => proc.heap.get_list(ptr).map(|l| l.len()).unwrap_or(0),
                     GcValue::Tuple(ptr) => proc.heap.get_tuple(ptr).map(|t| t.items.len()).unwrap_or(0),
                     GcValue::Array(ptr) => proc.heap.get_array(ptr).map(|a| a.items.len()).unwrap_or(0),
                     GcValue::Int64Array(ptr) => proc.heap.get_int64_array(ptr).map(|a| a.items.len()).unwrap_or(0),
@@ -2948,7 +3048,7 @@ impl ThreadWorker {
                     GcValue::List(ptr) => {
                         let tail_list = proc.heap.get_list(ptr).unwrap();
                         let mut items = vec![head_val];
-                        items.extend(tail_list.items.iter().cloned());
+                        items.extend(tail_list.items().iter().cloned());
                         let new_ptr = proc.heap.alloc_list(items);
                         set_reg!(*dst, GcValue::List(new_ptr));
                     }
@@ -2967,11 +3067,37 @@ impl ThreadWorker {
                 let is_empty = match list_val {
                     GcValue::List(ptr) => {
                         let list = proc.heap.get_list(ptr).unwrap();
-                        list.items.is_empty()
+                        list.is_empty()
                     }
                     _ => false,
                 };
                 set_reg!(*dst, GcValue::Bool(is_empty));
+            }
+
+            ListSum(dst, list_reg) => {
+                let list_val = reg!(*list_reg).clone();
+                let proc = self.processes.get(&local_id).unwrap();
+                let sum = match &list_val {
+                    GcValue::List(ptr) => {
+                        let list = proc.heap.get_list(*ptr).unwrap();
+                        let mut total: i64 = 0;
+                        for item in list.items() {
+                            match item {
+                                GcValue::Int64(n) => total += n,
+                                _ => return Err(RuntimeError::TypeError {
+                                    expected: "Int64".to_string(),
+                                    found: item.type_name(&proc.heap).to_string(),
+                                }),
+                            }
+                        }
+                        total
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "List".to_string(),
+                        found: list_val.type_name(&proc.heap).to_string(),
+                    }),
+                };
+                set_reg!(*dst, GcValue::Int64(sum));
             }
 
             ListHead(dst, list_reg) => {
@@ -2981,7 +3107,7 @@ impl ThreadWorker {
                     match &list_val {
                         GcValue::List(ptr) => {
                             let list = proc.heap.get_list(*ptr).unwrap();
-                            if let Some(head) = list.items.first() {
+                            if let Some(head) = list.items().first() {
                                 Ok(head.clone())
                             } else {
                                 Err(RuntimeError::IndexOutOfBounds { index: 0, length: 0 })
@@ -3002,11 +3128,11 @@ impl ThreadWorker {
                 match list_val {
                     GcValue::List(ptr) => {
                         let list = proc.heap.get_list(ptr).unwrap();
-                        if list.items.is_empty() {
+                        if list.is_empty() {
                             return Err(RuntimeError::IndexOutOfBounds { index: 0, length: 0 });
                         }
-                        let tail_items: Vec<GcValue> = list.items.iter().skip(1).cloned().collect();
-                        let new_ptr = proc.heap.alloc_list(tail_items);
+                        let tail_list = list.tail();
+                        let new_ptr = proc.heap.alloc_list_tail(tail_list);
                         set_reg!(*dst, GcValue::List(new_ptr));
                     }
                     _ => return Err(RuntimeError::TypeError {
@@ -3050,7 +3176,7 @@ impl ThreadWorker {
                     GcValue::List(ptr) => {
                         let list = proc.heap.get_list(ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid list reference".to_string()))?;
-                        list.items.get(idx_val).cloned()
+                        list.items().get(idx_val).cloned()
                             .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?
                     }
                     GcValue::Tuple(ptr) => {
@@ -3139,7 +3265,7 @@ impl ThreadWorker {
                 };
                 let proc = self.processes.get_mut(&local_id).unwrap();
                 let items = proc.heap.get_list(list_ptr)
-                    .map(|l| l.items.clone())
+                    .map(|l| l.items().to_vec())
                     .unwrap_or_default();
                 if items.is_empty() {
                     return Err(RuntimeError::Panic("Cannot decons empty list".to_string()));
