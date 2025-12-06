@@ -387,6 +387,8 @@ struct ThreadWorker {
     main_result: Option<Result<SendableValue, String>>,
     /// List of local_ids waiting for async IO (for efficient polling)
     io_waiting: Vec<u64>,
+    /// Idle backoff counter (doubles sleep time up to max when idle)
+    idle_backoff: u32,
 }
 
 impl ParallelVM {
@@ -657,6 +659,7 @@ impl ThreadWorker {
             main_pid: None,
             main_result: None,
             io_waiting: Vec::new(),
+            idle_backoff: 0,
         }
     }
 
@@ -749,11 +752,24 @@ impl ThreadWorker {
 
             // Get next process to run
             let local_id = match self.run_queue.pop_front() {
-                Some(id) => id,
+                Some(id) => {
+                    // Found work - reset backoff
+                    self.idle_backoff = 0;
+                    id
+                }
                 None => {
-                    // No work - wait for messages or shutdown
-                    // Don't exit just because we have no processes - we may receive SpawnProcess
-                    std::thread::sleep(std::time::Duration::from_micros(100));
+                    // No runnable work - use exponential backoff
+                    // Start at 50µs, double each iteration, cap at 10ms
+                    let base_us = 50u64;
+                    let max_us = 10_000u64; // 10ms max
+                    let sleep_us = (base_us << self.idle_backoff.min(8)).min(max_us);
+
+                    // Increment backoff (will reset when we find work)
+                    if self.idle_backoff < 8 {
+                        self.idle_backoff += 1;
+                    }
+
+                    std::thread::sleep(std::time::Duration::from_micros(sleep_us));
                     continue;
                 }
             };

@@ -324,11 +324,15 @@ impl IoRuntime {
         let mut next_handle: u64 = 1;
 
         // HTTP Server state
-        // Maps server handle -> channel for incoming requests
-        // Wrapped in Arc<Mutex<>> so spawned tasks can access the receiver
-        type ServerRequestTx = mpsc::UnboundedSender<(u64, String, String, Vec<(String, String)>, Vec<u8>)>;
-        type ServerRequestRx = mpsc::UnboundedReceiver<(u64, String, String, Vec<(String, String)>, Vec<u8>)>;
-        let server_request_receivers: Arc<Mutex<HashMap<u64, ServerRequestRx>>> = Arc::new(Mutex::new(HashMap::new()));
+        // Request type: (request_id, method, path, headers, body)
+        type ServerRequest = (u64, String, String, Vec<(String, String)>, Vec<u8>);
+        type ServerRequestTx = mpsc::UnboundedSender<ServerRequest>;
+        type ServerRequestRx = mpsc::UnboundedReceiver<ServerRequest>;
+
+        // Maps server handle -> shared receiver for incoming requests
+        // Multiple ServerAccept calls can wait on the same receiver concurrently
+        let server_request_receivers: Arc<Mutex<HashMap<u64, Arc<Mutex<ServerRequestRx>>>>> = Arc::new(Mutex::new(HashMap::new()));
+
         // Maps request_id -> oneshot sender for the response
         type ResponseSender = oneshot::Sender<(u16, Vec<(String, String)>, Vec<u8>)>;
         let pending_responses: Arc<Mutex<HashMap<u64, ResponseSender>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -616,9 +620,7 @@ impl IoRuntime {
                 // HTTP Server operations
                 IoRequest::ServerBind { port, response } => {
                     use axum::{
-                        body::Bytes,
                         extract::Request,
-                        response::IntoResponse,
                         routing::any,
                         Router,
                     };
@@ -626,9 +628,10 @@ impl IoRuntime {
                     let handle = next_server_handle;
                     next_server_handle += 1;
 
-                    // Create channel for incoming requests
+                    // Create channel for incoming requests - wrap receiver in Arc<Mutex<>> for sharing
                     let (req_tx, req_rx) = mpsc::unbounded_channel();
-                    server_request_receivers.lock().await.insert(handle, req_rx);
+                    let shared_rx = Arc::new(Mutex::new(req_rx));
+                    server_request_receivers.lock().await.insert(handle, shared_rx);
 
                     // Clone shared state for the axum handler
                     let pending = pending_responses.clone();
@@ -707,24 +710,20 @@ impl IoRuntime {
                 }
 
                 IoRequest::ServerAccept { handle, response } => {
-                    // CRITICAL: Spawn as a separate task to avoid blocking the IO runtime loop!
-                    // This allows other IO operations (like HttpGet) to proceed while we wait
-                    // for an incoming HTTP request.
+                    // Get the shared receiver for this server handle
                     let receivers = server_request_receivers.clone();
                     tokio::spawn(async move {
-                        // Take the receiver from the map temporarily
-                        let mut map = receivers.lock().await;
-                        let rx_opt = map.remove(&handle);
-                        drop(map); // Release the lock before waiting
+                        // Get the shared receiver (briefly lock the map)
+                        let shared_rx = {
+                            let map = receivers.lock().await;
+                            map.get(&handle).cloned()
+                        };
 
-                        match rx_opt {
-                            Some(mut rx) => {
-                                // Wait for the next request (non-blocking to main loop)
-                                let result = rx.recv().await;
-
-                                // Put the receiver back in the map
-                                receivers.lock().await.insert(handle, rx);
-
+                        match shared_rx {
+                            Some(rx) => {
+                                // Lock the receiver and wait for next request
+                                // Only one waiter at a time can hold this lock
+                                let result = rx.lock().await.recv().await;
                                 match result {
                                     Some((request_id, method, path, headers, body)) => {
                                         let _ = response.send(Ok(IoResponseValue::ServerRequest {
@@ -736,7 +735,6 @@ impl IoRuntime {
                                         }));
                                     }
                                     None => {
-                                        // Server was closed
                                         let _ = response.send(Err(IoError::Other("Server closed".to_string())));
                                     }
                                 }
