@@ -710,11 +710,22 @@ impl HeapData {
     }
 
     /// Estimate the size of this object in bytes.
+    #[inline]
     pub fn estimate_size(&self) -> usize {
         match self {
             HeapData::String(s) => std::mem::size_of::<GcString>() + s.data.len(),
             HeapData::List(l) => {
-                std::mem::size_of::<GcList>() + l.len() * std::mem::size_of::<GcValue>()
+                // Only count the GcList struct size, not the shared Arc data.
+                // The underlying Vec is shared via Arc, so only the wrapper adds memory.
+                // For original list allocation, the Vec memory is handled by Rust's allocator.
+                // For tail views, we just add a new GcList wrapper (Arc clone + start offset).
+                if l.start == 0 {
+                    // Original list - count full data
+                    std::mem::size_of::<GcList>() + l.data.len() * std::mem::size_of::<GcValue>()
+                } else {
+                    // Tail view - only count the wrapper struct
+                    std::mem::size_of::<GcList>()
+                }
             }
             HeapData::Array(a) => {
                 std::mem::size_of::<GcArray>() + a.items.len() * std::mem::size_of::<GcValue>()
@@ -835,6 +846,8 @@ pub struct Heap {
     roots: Vec<RawGcPtr>,
     /// Bytes allocated since last collection
     bytes_since_gc: usize,
+    /// Current count of live objects (tracked incrementally for O(1) access)
+    live_count: usize,
     /// Configuration
     config: GcConfig,
     /// Statistics
@@ -854,6 +867,7 @@ impl Heap {
             free_list: Vec::new(),
             roots: Vec::new(),
             bytes_since_gc: 0,
+            live_count: 0,
             config,
             stats: GcStats::default(),
         }
@@ -869,9 +883,9 @@ impl Heap {
         &self.stats
     }
 
-    /// Get the number of live objects.
+    /// Get the number of live objects (O(1) - tracked incrementally).
     pub fn live_objects(&self) -> usize {
-        self.objects.iter().filter(|o| o.is_some()).count()
+        self.live_count
     }
 
     /// Get the total heap capacity.
@@ -880,6 +894,7 @@ impl Heap {
     }
 
     /// Allocate a new object on the heap.
+    #[inline]
     fn alloc(&mut self, data: HeapData) -> RawGcPtr {
         let size = data.estimate_size();
         let obj = GcObject {
@@ -892,6 +907,7 @@ impl Heap {
         self.stats.total_allocated += 1;
         self.stats.total_bytes_allocated += size as u64;
         self.bytes_since_gc += size;
+        self.live_count += 1;
 
         // Try to reuse a free slot
         let index = if let Some(free_idx) = self.free_list.pop() {
@@ -904,10 +920,9 @@ impl Heap {
             idx
         };
 
-        // Update peak stats
-        let live = self.live_objects();
-        if live > self.stats.peak_objects {
-            self.stats.peak_objects = live;
+        // Update peak stats (now O(1) since live_count is tracked)
+        if self.live_count > self.stats.peak_objects {
+            self.stats.peak_objects = self.live_count;
         }
 
         index
@@ -929,6 +944,7 @@ impl Heap {
     }
 
     /// Allocate a list with a pre-existing Arc (for O(1) tail)
+    #[inline]
     pub fn alloc_list_tail(&mut self, list: GcList) -> GcPtr<GcList> {
         let data = HeapData::List(list);
         GcPtr::from_raw(self.alloc(data))
@@ -1605,6 +1621,7 @@ impl Heap {
 
         self.stats.total_freed += freed;
         self.stats.total_bytes_freed += bytes_freed as u64;
+        self.live_count -= freed as usize;
 
         freed as usize
     }
