@@ -1,0 +1,31 @@
+# Array sum using while loop - uses loop array JIT
+# Sums an Int64Array of 1M elements, called 10 times
+sum_arr(arr) = {
+    i = 0
+    total = 0
+    n = length(arr)
+    while i < n {
+        total = total + arr[i]
+        i = i + 1
+    }
+    total
+}
+
+main() = {
+    n = 1000000
+    arr = newInt64Array(n)
+    i = 0
+    while i < n {
+        arr[i] = i + 1
+        i = i + 1
+    }
+
+    # Call sum_arr 10 times to measure JIT benefit
+    total = 0
+    j = 0
+    while j < 10 {
+        total = total + sum_arr(arr)
+        j = j + 1
+    }
+    total
+}

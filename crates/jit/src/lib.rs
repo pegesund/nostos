@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use cranelift_codegen::ir::{AbiParam, Block, InstBuilder, UserFuncName, Value as CraneliftValue};
+use cranelift_codegen::ir::{AbiParam, Block, FuncRef, InstBuilder, UserFuncName, Value as CraneliftValue};
 use cranelift_codegen::ir::condcodes::{IntCC, FloatCC};
 use cranelift_codegen::ir::types::{I8, I16, I32, I64, F32, F64, Type as CraneliftType};
 use cranelift_codegen::settings::{self, Configurable};
@@ -384,41 +384,57 @@ impl JitCompiler {
     }
 
     /// Process the compilation queue
+    /// Uses an iterative approach to handle dependencies: functions calling other JIT functions
+    /// are retried after their callees are compiled.
     pub fn process_queue(&mut self, functions: &[Arc<FunctionValue>]) -> Result<usize, JitError> {
         let mut compiled = 0;
+        let mut pending: Vec<u16> = std::mem::take(&mut self.compile_queue);
 
-        while let Some(func_index) = self.compile_queue.pop() {
-            if let Some(func) = functions.get(func_index as usize) {
-                eprintln!("[JIT] Attempting to compile: {} (index {})", func.name, func_index);
-                // Try numeric JIT first
-                match self.compile_int_function(func_index, func) {
-                    Ok(_) => {
-                        eprintln!("[JIT] Compiled {} as numeric", func.name);
-                        compiled += 1;
-                        continue;
+        // Keep iterating until no more progress is made
+        loop {
+            let mut retry_later: Vec<u16> = Vec::new();
+            let mut made_progress = false;
+
+            for func_index in pending.drain(..) {
+                if let Some(func) = functions.get(func_index as usize) {
+                    // Try numeric JIT first
+                    match self.compile_int_function(func_index, func) {
+                        Ok(_) => {
+                            compiled += 1;
+                            made_progress = true;
+                            continue;
+                        }
+                        Err(JitError::NotSuitable(reason)) => {
+                            // Check if it's because of CallDirect to non-compiled function
+                            if reason.contains("CallDirect to non-compiled") {
+                                // Retry later after callees are compiled
+                                retry_later.push(func_index);
+                                continue;
+                            }
+                            // Function not suitable for numeric JIT - try loop array JIT
+                        }
+                        Err(_) => {
+                            // Compilation error - try loop array JIT
+                        }
                     }
-                    Err(JitError::NotSuitable(reason)) => {
-                        eprintln!("[JIT] {} not suitable: {}", func.name, reason);
-                        // Function not suitable for numeric JIT - try loop array JIT
-                    }
-                    Err(e) => {
-                        eprintln!("[JIT] {} error: {:?}", func.name, e);
-                        // Compilation error - try loop array JIT
+
+                    // Try loop-based array JIT
+                    match self.compile_loop_array_function(func_index, func) {
+                        Ok(_) => {
+                            compiled += 1;
+                            made_progress = true;
+                        }
+                        Err(JitError::NotSuitable(_)) => {}
+                        Err(_) => {}
                     }
                 }
+            }
 
-                // Try loop-based array JIT
-                match self.compile_loop_array_function(func_index, func) {
-                    Ok(_) => {
-                        compiled += 1;
-                    }
-                    Err(JitError::NotSuitable(_)) => {
-                        // Function not suitable for loop array JIT - silently skip
-                    }
-                    Err(_) => {
-                        // Compilation error - silently skip for now
-                    }
-                }
+            // If we made progress and have pending functions, retry them
+            if made_progress && !retry_later.is_empty() {
+                pending = retry_later;
+            } else {
+                break;
             }
         }
 
@@ -506,6 +522,24 @@ impl JitCompiler {
                 // Error handling - Panic/Throw are allowed but should never be reached in correct execution
                 Instruction::Panic(_) => {}
                 Instruction::Throw(_) => {}
+
+                // CallDirect to other compiled functions - allowed if callee is already JIT-compiled
+                Instruction::CallDirect(_, func_idx, args) => {
+                    // Check if callee is already compiled (for Int64 - we only support same-type calls for now)
+                    if !self.is_compiled(*func_idx) {
+                        return Err(JitError::NotSuitable(
+                            format!("CallDirect to non-compiled function {}", func_idx)
+                        ));
+                    }
+                    // Verify arity matches
+                    if let Some(compiled) = self.cache.get(&(*func_idx, NumericType::Int64)) {
+                        if compiled.arity != args.len() {
+                            return Err(JitError::NotSuitable(
+                                format!("CallDirect arity mismatch: expected {}, got {}", compiled.arity, args.len())
+                            ));
+                        }
+                    }
+                }
 
                 // Integer arithmetic
                 Instruction::AddInt(_, _, _) |
@@ -647,6 +681,20 @@ impl JitCompiler {
 
             // Import our own function for recursive calls
             let self_func_ref = self.module.declare_func_in_func(func_id, builder.func);
+
+            // Import callee functions for CallDirect instructions
+            let mut callee_func_refs: HashMap<u16, FuncRef> = HashMap::new();
+            for instr in func.code.code.iter() {
+                if let Instruction::CallDirect(_, callee_idx, _) = instr {
+                    if !callee_func_refs.contains_key(callee_idx) {
+                        // Get the callee's FuncId from declared_funcs
+                        if let Some(&callee_func_id) = self.declared_funcs.get(&(*callee_idx, num_type)) {
+                            let callee_ref = self.module.declare_func_in_func(callee_func_id, builder.func);
+                            callee_func_refs.insert(*callee_idx, callee_ref);
+                        }
+                    }
+                }
+            }
 
             // Compile each instruction
             let mut ip = 0;
@@ -929,6 +977,22 @@ impl JitCompiler {
                         // Use user trap code 1 (0 is reserved/invalid)
                         builder.ins().trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
                         block_terminated = true;
+                    }
+
+                    // Call to another JIT-compiled function
+                    Instruction::CallDirect(dst, callee_idx, arg_regs) => {
+                        if let Some(&callee_ref) = callee_func_refs.get(callee_idx) {
+                            let args: Vec<CraneliftValue> = arg_regs.iter()
+                                .map(|&r| builder.use_var(regs[r as usize]))
+                                .collect();
+                            let call = builder.ins().call(callee_ref, &args);
+                            let result = builder.inst_results(call)[0];
+                            builder.def_var(regs[*dst as usize], result);
+                        } else {
+                            return Err(JitError::UnsupportedInstruction(
+                                format!("CallDirect to non-imported function {}", callee_idx)
+                            ));
+                        }
                     }
 
                     other => {

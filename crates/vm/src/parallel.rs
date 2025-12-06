@@ -2387,13 +2387,18 @@ impl ThreadWorker {
                         if let GcValue::Int64(n) = arg {
                             // Call JIT function directly!
                             let result = jit_fn(n);
+                            let result_val = GcValue::Int64(result);
                             // For tail call: pop current frame, set result in parent
                             let proc = self.processes.get_mut(&local_id).unwrap();
                             let return_reg = proc.frames.last().and_then(|f| f.return_reg);
                             proc.frames.pop();
+                            // If no more frames, this is the final result
+                            if proc.frames.is_empty() {
+                                return Ok(StepResult::Finished(result_val));
+                            }
                             if let Some(dst) = return_reg {
                                 if let Some(parent) = proc.frames.last_mut() {
-                                    parent.registers[dst as usize] = GcValue::Int64(result);
+                                    parent.registers[dst as usize] = result_val;
                                 }
                             }
                             return Ok(StepResult::Continue);
@@ -2408,12 +2413,17 @@ impl ThreadWorker {
                                 let ptr = arr.items.as_mut_ptr();
                                 let len = arr.items.len() as i64;
                                 let result = jit_fn(ptr as *const i64, len);
+                                let result_val = GcValue::Int64(result);
                                 // For tail call: pop current frame, set result in parent
                                 let return_reg = proc.frames.last().and_then(|f| f.return_reg);
                                 proc.frames.pop();
+                                // If no more frames, this is the final result
+                                if proc.frames.is_empty() {
+                                    return Ok(StepResult::Finished(result_val));
+                                }
                                 if let Some(dst) = return_reg {
                                     if let Some(parent) = proc.frames.last_mut() {
-                                        parent.registers[dst as usize] = GcValue::Int64(result);
+                                        parent.registers[dst as usize] = result_val;
                                     }
                                 }
                                 return Ok(StepResult::Continue);

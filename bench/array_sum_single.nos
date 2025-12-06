@@ -1,0 +1,23 @@
+# Single array sum - 10M elements
+# Tests loop array JIT with single call
+sum_arr(arr) = {
+    i = 0
+    total = 0
+    n = length(arr)
+    while i < n {
+        total = total + arr[i]
+        i = i + 1
+    }
+    total
+}
+
+main() = {
+    n = 10000000
+    arr = newInt64Array(n)
+    i = 0
+    while i < n {
+        arr[i] = i + 1
+        i = i + 1
+    }
+    sum_arr(arr)
+}

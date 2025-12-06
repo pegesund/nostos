@@ -1513,6 +1513,34 @@ impl Worker {
                             return Ok(ProcessResult::Continue);
                         }
                     }
+                    // Check for loop array JIT (1-arg Int64Array function)
+                    if let Some(jit_fn) = self.scheduler.jit_loop_array_functions.read().get(&func_idx).copied() {
+                        let arg = get_reg!(arg_regs[0]);
+                        if let GcValue::Int64Array(arr_ptr) = arg {
+                            let result = self.scheduler.with_process_mut(pid, |proc| {
+                                if let Some(arr) = proc.heap.get_int64_array_mut(arr_ptr) {
+                                    let ptr = arr.items.as_mut_ptr();
+                                    let len = arr.items.len() as i64;
+                                    Some(jit_fn(ptr as *const i64, len))
+                                } else {
+                                    None
+                                }
+                            });
+                            if let Some(Some(r)) = result {
+                                // For tail call: pop current frame, set result in parent
+                                self.scheduler.with_process_mut(pid, |proc| {
+                                    let return_reg = proc.frames.last().and_then(|f| f.return_reg);
+                                    proc.frames.pop();
+                                    if let Some(dst) = return_reg {
+                                        if let Some(parent) = proc.frames.last_mut() {
+                                            parent.registers[dst as usize] = GcValue::Int64(r);
+                                        }
+                                    }
+                                });
+                                return Ok(ProcessResult::Continue);
+                            }
+                        }
+                    }
                 }
 
                 // Fall back to interpreted execution
@@ -1571,6 +1599,25 @@ impl Worker {
                             let result = jit_fn(n);
                             set_reg!(dst, GcValue::Int64(result));
                             return Ok(ProcessResult::Continue);
+                        }
+                    }
+                    // Check for loop array JIT (1-arg Int64Array function)
+                    if let Some(jit_fn) = self.scheduler.jit_loop_array_functions.read().get(&func_idx).copied() {
+                        let arg = get_reg!(arg_regs[0]);
+                        if let GcValue::Int64Array(arr_ptr) = arg {
+                            let result = self.scheduler.with_process_mut(pid, |proc| {
+                                if let Some(arr) = proc.heap.get_int64_array_mut(arr_ptr) {
+                                    let ptr = arr.items.as_mut_ptr();
+                                    let len = arr.items.len() as i64;
+                                    Some(jit_fn(ptr as *const i64, len))
+                                } else {
+                                    None
+                                }
+                            });
+                            if let Some(Some(r)) = result {
+                                set_reg!(dst, GcValue::Int64(r));
+                                return Ok(ProcessResult::Continue);
+                            }
                         }
                     }
                 }
