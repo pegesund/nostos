@@ -1,0 +1,29 @@
+# expect: ()
+# GC Preserves Live Data Test
+# Verifies that GC doesn't collect data that's still reachable
+
+# Sum a list while creating garbage in between
+sum_with_garbage([]) = 0
+sum_with_garbage([h | t]) = {
+    # Create some garbage
+    garbage = ["discard", "this", "data"]
+    # The list 't' must survive GC!
+    h + sum_with_garbage(t)
+}
+
+# Build a list and sum it, creating garbage along the way
+build_and_sum(0, acc) = sum_with_garbage(acc)
+build_and_sum(n, acc) = {
+    # Create garbage
+    junk = [n * 100, n * 200, n * 300]
+    # Build up the accumulator list (this must survive!)
+    build_and_sum(n - 1, [n | acc])
+}
+
+main() = {
+    # Build list [1,2,3,...,100] and sum it
+    result = build_and_sum(100, [])
+
+    # Sum of 1..100 = 5050
+    assert_eq(5050, result)
+}

@@ -941,14 +941,18 @@ impl ThreadWorker {
 
     /// Execute a process for one time slice.
     fn execute_slice(&mut self, local_id: u64) -> Result<SliceResult, RuntimeError> {
-        let reductions = self.config.reductions_per_slice;
+        let mut remaining = self.config.reductions_per_slice;
 
         // FAST PATH: Execute as many instructions as possible with ONE HashMap lookup
         // Only break out for slow-path instructions or when done
         loop {
-            match self.execute_fast_loop(local_id, reductions)? {
+            match self.execute_fast_loop(local_id, remaining)? {
                 FastLoopResult::Continue => {
                     // Did all reductions - time to yield
+                    // GC safepoint: collect garbage if heap threshold exceeded
+                    if let Some(proc) = self.get_process_mut(local_id) {
+                        proc.maybe_gc();
+                    }
                     return Ok(SliceResult::Continue);
                 }
                 FastLoopResult::Finished(v) => return Ok(SliceResult::Finished(v)),
@@ -959,8 +963,24 @@ impl ThreadWorker {
                         proc.frames.last().unwrap().function.code.constants.clone()
                     };
                     match self.execute_instruction(local_id, &instr, &constants)? {
-                        StepResult::Continue => continue, // Back to fast loop
-                        StepResult::Yield => return Ok(SliceResult::Continue),
+                        StepResult::Continue => {
+                            // GC safepoint after slow-path instruction (where allocations happen)
+                            if let Some(proc) = self.get_process_mut(local_id) {
+                                proc.maybe_gc();
+                            }
+                            remaining = remaining.saturating_sub(1);
+                            if remaining == 0 {
+                                return Ok(SliceResult::Continue);
+                            }
+                            continue; // Back to fast loop
+                        }
+                        StepResult::Yield => {
+                            // GC safepoint at slow-path yield
+                            if let Some(proc) = self.get_process_mut(local_id) {
+                                proc.maybe_gc();
+                            }
+                            return Ok(SliceResult::Continue);
+                        }
                         StepResult::Waiting => return Ok(SliceResult::Waiting),
                         StepResult::Finished(v) => return Ok(SliceResult::Finished(v)),
                     }
@@ -3789,7 +3809,10 @@ enum SliceResult {
 
 /// Result from fast loop execution.
 enum FastLoopResult {
+    /// Completed all iterations
     Continue,
+    /// Process finished with a value
     Finished(GcValue),
+    /// Need slow path for this instruction
     NeedSlowPath(Instruction),
 }

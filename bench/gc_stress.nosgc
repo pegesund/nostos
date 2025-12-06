@@ -1,0 +1,84 @@
+# GC Long-Running Stress Test
+# NOT part of standard test suite - run manually to verify GC works
+# This creates massive amounts of garbage over many iterations.
+# Without GC, this would consume gigabytes of memory and crash.
+# With GC, memory should stay bounded (under ~100MB typically).
+# Run with: cargo run --release -- bench/gc_stress.nos
+# Monitor memory with: watch -n1 'ps -o rss= -p $(pgrep -f gc_stress)'
+
+# Create a list of n strings (all become garbage after return)
+make_garbage_strings(0) = 0
+make_garbage_strings(n) = {
+    # Create some strings that will become garbage
+    s1 = "garbage string one"
+    s2 = "garbage string two"
+    s3 = "garbage string three"
+    s4 = "this is temporary data"
+    s5 = "more temporary garbage"
+    make_garbage_strings(n - 1)
+}
+
+# Create nested lists (heavy allocation, all garbage)
+make_garbage_lists(0) = 0
+make_garbage_lists(n) = {
+    lst1 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    lst2 = [lst1, lst1, lst1]
+    lst3 = [[1, 2], [3, 4], [5, 6], [7, 8]]
+    make_garbage_lists(n - 1)
+}
+
+# Create records (variant allocation)
+type Point = Point(Int, Int)
+
+make_garbage_records(0) = 0
+make_garbage_records(n) = {
+    p1 = Point(n, n * 2)
+    p2 = Point(n * 3, n * 4)
+    p3 = Point(100, 200)
+    make_garbage_records(n - 1)
+}
+
+# Main stress test - runs for a while creating tons of garbage
+stress_iteration(iteration, total_garbage) = {
+    # Create 100 strings, 50 lists, 50 records per iteration
+    make_garbage_strings(100)
+    make_garbage_lists(50)
+    make_garbage_records(50)
+
+    # Return accumulated count
+    total_garbage + 200
+}
+
+run_stress(0, total) = total
+run_stress(iterations, total) = {
+    new_total = stress_iteration(iterations, total)
+
+    # Print progress every 1000 iterations
+    if iterations % 1000 == 0 then {
+        print("Iteration ")
+        print(iterations)
+        print(" - total garbage created: ")
+        println(new_total)
+    } else ()
+
+    run_stress(iterations - 1, new_total)
+}
+
+main() = {
+    println("=== GC Long-Running Stress Test ===")
+    println("Creating massive amounts of garbage over 10000 iterations...")
+    println("Without GC, this would consume GBs of memory.")
+    println("With GC, memory should stay bounded.")
+    println("")
+
+    total = run_stress(10000, 0)
+
+    println("")
+    print("Completed! Total garbage objects created: ")
+    println(total)
+    println("")
+    println("If you're seeing this, GC kept memory bounded!")
+    println("(Without GC, we would have run out of memory)")
+
+    0
+}

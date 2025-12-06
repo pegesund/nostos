@@ -1,0 +1,40 @@
+# expect: ()
+# GC Stress Test - allocates lots of temporary data
+# If GC doesn't run, this would exhaust memory
+
+# Create a temporary list that will be garbage
+make_garbage(0) = []
+make_garbage(n) = {
+    # Create some garbage strings and lists
+    garbage = ["garbage", "more garbage", "even more"]
+    # Recurse - the local 'garbage' becomes unreachable
+    make_garbage(n - 1)
+}
+
+# Accumulator that keeps only final result
+accumulate(0, acc) = acc
+accumulate(n, acc) = {
+    # Create temporary data
+    temp = [n, n * 2, n * 3]
+    # Only keep the sum, discard the list
+    new_acc = acc + n
+    accumulate(n - 1, new_acc)
+}
+
+main() = {
+    # Run garbage generator many times
+    # Each iteration creates ~3 strings that become garbage
+    i = 0
+    while i < 1000 {
+        make_garbage(10)
+        i = i + 1
+    }
+
+    # Accumulate with lots of temporary allocations
+    result = accumulate(1000, 0)
+
+    # Sum of 1..1000 = 500500
+    assert_eq(500500, result)
+
+    # If we got here without OOM, GC is working!
+}

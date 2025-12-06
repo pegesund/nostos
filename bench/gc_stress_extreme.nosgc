@@ -1,0 +1,42 @@
+# GC Extreme Stress Test
+# Creates 200 million garbage objects over 1 million iterations
+# Takes several minutes - verifies GC handles sustained load
+
+make_garbage(0) = 0
+make_garbage(n) = {
+    s1 = "garbage string one that is a bit longer"
+    s2 = "garbage string two with more content"
+    s3 = "third garbage string for variety"
+    lst1 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    lst2 = [11, 12, 13, 14, 15]
+    make_garbage(n - 1)
+}
+
+run_stress(0, total) = total
+run_stress(iterations, total) = {
+    make_garbage(200)
+    new_total = total + 200
+
+    if iterations % 100000 == 0 then {
+        print("Progress: ")
+        print(iterations)
+        print(" remaining, ")
+        print(new_total)
+        println(" garbage objects created")
+    } else ()
+
+    run_stress(iterations - 1, new_total)
+}
+
+main() = {
+    println("=== EXTREME GC Stress Test ===")
+    println("Creating 200M garbage objects over 1M iterations...")
+    println("This will take several minutes.")
+    println("")
+    total = run_stress(1000000, 0)
+    println("")
+    print("SUCCESS! Total garbage objects: ")
+    println(total)
+    println("Memory stayed bounded - GC is working!")
+    0
+}

@@ -1,0 +1,36 @@
+# GC Long-Running Stress Test (Extended Version)
+# Creates 20 million garbage objects over 100k iterations
+# Takes about 30-60 seconds, should stay under 100MB memory
+
+make_garbage(0) = 0
+make_garbage(n) = {
+    s1 = "garbage string one"
+    s2 = "garbage string two"
+    lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    make_garbage(n - 1)
+}
+
+run_stress(0, total) = total
+run_stress(iterations, total) = {
+    make_garbage(200)
+    new_total = total + 200
+
+    if iterations % 10000 == 0 then {
+        print("Progress: ")
+        print(iterations)
+        print(" iterations, ")
+        print(new_total)
+        println(" garbage objects")
+    } else ()
+
+    run_stress(iterations - 1, new_total)
+}
+
+main() = {
+    println("=== Extended GC Stress Test ===")
+    println("Creating 20M garbage objects...")
+    total = run_stress(100000, 0)
+    print("Done! Total: ")
+    println(total)
+    0
+}

@@ -13,7 +13,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::gc::{GcConfig, GcValue, Heap};
+use crate::gc::{GcConfig, GcValue, Heap, RawGcPtr};
 use crate::value::{FunctionValue, Pid, RefId, Reg};
 
 /// A call frame on the stack.
@@ -394,6 +394,58 @@ impl Process {
     /// Record that another process is monitoring us.
     pub fn add_monitored_by(&mut self, ref_id: RefId, watcher: Pid) {
         self.monitored_by.insert(ref_id, watcher);
+    }
+
+    // === Garbage Collection ===
+
+    /// Gather all GC roots from this process's state.
+    /// Roots include: registers, captures, and mailbox messages.
+    pub fn gather_gc_roots(&self) -> Vec<RawGcPtr> {
+        let mut roots = Vec::new();
+
+        // Collect from all call frames
+        for frame in &self.frames {
+            // Registers in this frame
+            for reg in &frame.registers {
+                roots.extend(reg.gc_pointers());
+            }
+            // Captured variables (for closures)
+            for cap in &frame.captures {
+                roots.extend(cap.gc_pointers());
+            }
+        }
+
+        // Mailbox messages are also roots (they're on our heap)
+        for msg in &self.mailbox {
+            roots.extend(msg.gc_pointers());
+        }
+
+        roots
+    }
+
+    /// Run garbage collection if heap threshold exceeded.
+    /// Should be called at yield points (when process is about to be preempted).
+    pub fn maybe_gc(&mut self) {
+        if self.heap.should_collect() {
+            // Gather roots from live state
+            let roots = self.gather_gc_roots();
+
+            // Set roots and collect
+            self.heap.set_roots(roots);
+            self.heap.collect();
+
+            // Clear roots after collection (they're only valid during this GC)
+            self.heap.clear_roots();
+        }
+    }
+
+    /// Force garbage collection regardless of threshold.
+    /// Useful for testing or when memory pressure is high.
+    pub fn force_gc(&mut self) {
+        let roots = self.gather_gc_roots();
+        self.heap.set_roots(roots);
+        self.heap.collect();
+        self.heap.clear_roots();
     }
 }
 
