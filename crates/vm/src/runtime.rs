@@ -14,8 +14,14 @@ use std::sync::Arc;
 /// JIT compilation threshold - compile after this many calls
 pub const JIT_THRESHOLD: u32 = 1000;
 
-/// JIT-compiled integer function: fn(i64) -> i64
+/// JIT-compiled integer function: fn(i64) -> i64 (single argument)
 pub type JitIntFn = fn(i64) -> i64;
+
+/// JIT-compiled integer functions with different arities
+pub type JitIntFn0 = fn() -> i64;
+pub type JitIntFn2 = fn(i64, i64) -> i64;
+pub type JitIntFn3 = fn(i64, i64, i64) -> i64;
+pub type JitIntFn4 = fn(i64, i64, i64, i64) -> i64;
 
 /// JIT-compiled loop array function: fn(arr_ptr, arr_len) -> i64
 pub type JitLoopArrayFn = fn(*const i64, i64) -> i64;
@@ -59,8 +65,16 @@ pub struct Runtime {
     cached_function_list: Vec<Arc<FunctionValue>>,
     cached_natives: std::collections::HashMap<String, Arc<GcNativeFn>>,
     cached_types: std::collections::HashMap<String, Arc<TypeValue>>,
-    /// JIT-compiled integer functions (func_index → native fn)
+    /// JIT-compiled integer functions (func_index → native fn) - arity 1
     jit_int_functions: std::collections::HashMap<u16, JitIntFn>,
+    /// JIT-compiled integer functions with arity 0
+    jit_int_functions_0: std::collections::HashMap<u16, JitIntFn0>,
+    /// JIT-compiled integer functions with arity 2
+    jit_int_functions_2: std::collections::HashMap<u16, JitIntFn2>,
+    /// JIT-compiled integer functions with arity 3
+    jit_int_functions_3: std::collections::HashMap<u16, JitIntFn3>,
+    /// JIT-compiled integer functions with arity 4
+    jit_int_functions_4: std::collections::HashMap<u16, JitIntFn4>,
     /// JIT-compiled loop array functions (func_index → native fn)
     jit_loop_array_functions: std::collections::HashMap<u16, JitLoopArrayFn>,
     /// Debug mode: show local variable values in stack traces
@@ -78,6 +92,10 @@ impl Runtime {
             cached_natives: std::collections::HashMap::new(),
             cached_types: std::collections::HashMap::new(),
             jit_int_functions: std::collections::HashMap::new(),
+            jit_int_functions_0: std::collections::HashMap::new(),
+            jit_int_functions_2: std::collections::HashMap::new(),
+            jit_int_functions_3: std::collections::HashMap::new(),
+            jit_int_functions_4: std::collections::HashMap::new(),
             jit_loop_array_functions: std::collections::HashMap::new(),
             debug_mode: false,
         }
@@ -88,9 +106,29 @@ impl Runtime {
         self.debug_mode = enabled;
     }
 
-    /// Register a JIT-compiled integer function.
+    /// Register a JIT-compiled integer function (arity 1).
     pub fn register_jit_int_function(&mut self, func_index: u16, jit_fn: JitIntFn) {
         self.jit_int_functions.insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT-compiled integer function (arity 0).
+    pub fn register_jit_int_function_0(&mut self, func_index: u16, jit_fn: JitIntFn0) {
+        self.jit_int_functions_0.insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT-compiled integer function (arity 2).
+    pub fn register_jit_int_function_2(&mut self, func_index: u16, jit_fn: JitIntFn2) {
+        self.jit_int_functions_2.insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT-compiled integer function (arity 3).
+    pub fn register_jit_int_function_3(&mut self, func_index: u16, jit_fn: JitIntFn3) {
+        self.jit_int_functions_3.insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT-compiled integer function (arity 4).
+    pub fn register_jit_int_function_4(&mut self, func_index: u16, jit_fn: JitIntFn4) {
+        self.jit_int_functions_4.insert(func_index, jit_fn);
     }
 
     /// Register a JIT-compiled loop array function.

@@ -22,7 +22,7 @@ use crossbeam::channel::{self, Sender, Receiver, TryRecvError};
 
 use crate::gc::{GcConfig, GcNativeFn, GcValue, Heap};
 use crate::process::{CallFrame, Process, ProcessState};
-use crate::runtime::{JitIntFn, JitLoopArrayFn};
+use crate::runtime::{JitIntFn, JitIntFn0, JitIntFn2, JitIntFn3, JitIntFn4, JitLoopArrayFn};
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, TypeValue, Value};
 
 /// Number of bits reserved for thread ID in Pid.
@@ -221,8 +221,16 @@ pub struct SharedState {
     pub natives: HashMap<String, Arc<GcNativeFn>>,
     /// Type definitions (read-only after startup)
     pub types: HashMap<String, Arc<TypeValue>>,
-    /// JIT-compiled integer functions (func_index → native fn)
+    /// JIT-compiled integer functions (func_index → native fn) - arity 1
     pub jit_int_functions: HashMap<u16, JitIntFn>,
+    /// JIT-compiled integer functions with arity 0
+    pub jit_int_functions_0: HashMap<u16, JitIntFn0>,
+    /// JIT-compiled integer functions with arity 2
+    pub jit_int_functions_2: HashMap<u16, JitIntFn2>,
+    /// JIT-compiled integer functions with arity 3
+    pub jit_int_functions_3: HashMap<u16, JitIntFn3>,
+    /// JIT-compiled integer functions with arity 4
+    pub jit_int_functions_4: HashMap<u16, JitIntFn4>,
     /// JIT-compiled loop array functions (func_index → native fn)
     pub jit_loop_array_functions: HashMap<u16, JitLoopArrayFn>,
     /// Shutdown signal
@@ -394,6 +402,10 @@ impl ParallelVM {
             natives: HashMap::new(),
             types: HashMap::new(),
             jit_int_functions: HashMap::new(),
+            jit_int_functions_0: HashMap::new(),
+            jit_int_functions_2: HashMap::new(),
+            jit_int_functions_3: HashMap::new(),
+            jit_int_functions_4: HashMap::new(),
             jit_loop_array_functions: HashMap::new(),
             shutdown: AtomicBool::new(false),
             spawn_counter: AtomicU64::new(0),
@@ -434,11 +446,43 @@ impl ParallelVM {
             .insert(name.to_string(), native);
     }
 
-    /// Register a JIT-compiled integer function.
+    /// Register a JIT-compiled integer function (arity 1).
     pub fn register_jit_int_function(&mut self, func_index: u16, jit_fn: JitIntFn) {
         Arc::get_mut(&mut self.shared)
             .expect("Cannot register after threads started")
             .jit_int_functions
+            .insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT-compiled integer function (arity 0).
+    pub fn register_jit_int_function_0(&mut self, func_index: u16, jit_fn: JitIntFn0) {
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot register after threads started")
+            .jit_int_functions_0
+            .insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT-compiled integer function (arity 2).
+    pub fn register_jit_int_function_2(&mut self, func_index: u16, jit_fn: JitIntFn2) {
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot register after threads started")
+            .jit_int_functions_2
+            .insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT-compiled integer function (arity 3).
+    pub fn register_jit_int_function_3(&mut self, func_index: u16, jit_fn: JitIntFn3) {
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot register after threads started")
+            .jit_int_functions_3
+            .insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT-compiled integer function (arity 4).
+    pub fn register_jit_int_function_4(&mut self, func_index: u16, jit_fn: JitIntFn4) {
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot register after threads started")
+            .jit_int_functions_4
             .insert(func_index, jit_fn);
     }
 
@@ -1148,27 +1192,83 @@ impl ThreadWorker {
                 CallDirect(dst, func_idx, args) => {
                     proc.frames[frame_idx].ip += 1;
 
-                    // Check for JIT-compiled version first (like runtime.rs)
-                    if args.len() == 1 {
-                        // Pure numeric JIT
-                        if let Some(jit_fn) = shared.jit_int_functions.get(func_idx) {
-                            if let GcValue::Int64(n) = &proc.frames[frame_idx].registers[args[0] as usize] {
-                                let result = jit_fn(*n);
+                    // Check for JIT-compiled version first based on arity
+                    match args.len() {
+                        0 => {
+                            // Arity 0: no arguments
+                            if let Some(jit_fn) = shared.jit_int_functions_0.get(func_idx) {
+                                let result = jit_fn();
                                 proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(result);
                                 continue;
                             }
                         }
-                        // Loop array JIT
-                        if let Some(jit_fn) = shared.jit_loop_array_functions.get(func_idx) {
-                            if let GcValue::Int64Array(arr_ptr) = &proc.frames[frame_idx].registers[args[0] as usize] {
-                                if let Some(arr) = proc.heap.get_int64_array_mut(*arr_ptr) {
-                                    let ptr = arr.items.as_mut_ptr();
-                                    let len = arr.items.len() as i64;
-                                    let result = jit_fn(ptr as *const i64, len);
+                        1 => {
+                            // Arity 1: single argument (most common case)
+                            // Pure numeric JIT
+                            if let Some(jit_fn) = shared.jit_int_functions.get(func_idx) {
+                                if let GcValue::Int64(n) = &proc.frames[frame_idx].registers[args[0] as usize] {
+                                    let result = jit_fn(*n);
                                     proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(result);
                                     continue;
                                 }
                             }
+                            // Loop array JIT
+                            if let Some(jit_fn) = shared.jit_loop_array_functions.get(func_idx) {
+                                if let GcValue::Int64Array(arr_ptr) = &proc.frames[frame_idx].registers[args[0] as usize] {
+                                    if let Some(arr) = proc.heap.get_int64_array_mut(*arr_ptr) {
+                                        let ptr = arr.items.as_mut_ptr();
+                                        let len = arr.items.len() as i64;
+                                        let result = jit_fn(ptr as *const i64, len);
+                                        proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(result);
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        2 => {
+                            // Arity 2: two arguments
+                            if let Some(jit_fn) = shared.jit_int_functions_2.get(func_idx) {
+                                if let (GcValue::Int64(a), GcValue::Int64(b)) = (
+                                    &proc.frames[frame_idx].registers[args[0] as usize],
+                                    &proc.frames[frame_idx].registers[args[1] as usize],
+                                ) {
+                                    let result = jit_fn(*a, *b);
+                                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(result);
+                                    continue;
+                                }
+                            }
+                        }
+                        3 => {
+                            // Arity 3: three arguments
+                            if let Some(jit_fn) = shared.jit_int_functions_3.get(func_idx) {
+                                if let (GcValue::Int64(a), GcValue::Int64(b), GcValue::Int64(c)) = (
+                                    &proc.frames[frame_idx].registers[args[0] as usize],
+                                    &proc.frames[frame_idx].registers[args[1] as usize],
+                                    &proc.frames[frame_idx].registers[args[2] as usize],
+                                ) {
+                                    let result = jit_fn(*a, *b, *c);
+                                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(result);
+                                    continue;
+                                }
+                            }
+                        }
+                        4 => {
+                            // Arity 4: four arguments
+                            if let Some(jit_fn) = shared.jit_int_functions_4.get(func_idx) {
+                                if let (GcValue::Int64(a), GcValue::Int64(b), GcValue::Int64(c), GcValue::Int64(d)) = (
+                                    &proc.frames[frame_idx].registers[args[0] as usize],
+                                    &proc.frames[frame_idx].registers[args[1] as usize],
+                                    &proc.frames[frame_idx].registers[args[2] as usize],
+                                    &proc.frames[frame_idx].registers[args[3] as usize],
+                                ) {
+                                    let result = jit_fn(*a, *b, *c, *d);
+                                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(result);
+                                    continue;
+                                }
+                            }
+                        }
+                        _ => {
+                            // More than 4 arguments: no JIT support
                         }
                     }
 
