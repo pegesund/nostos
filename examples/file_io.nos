@@ -54,23 +54,50 @@ demoDirectories() = {
     println("")
 }
 
-# File handle operations
+# File handle operations with different modes
 demoHandles() = {
     println("--- File Handle Operations ---")
     println("")
 
     path = "/tmp/nostos_handle.txt"
 
+    # Write mode ("w") - creates or overwrites
     (s, handle) = File.open(path, "w")
-    File.write(handle, "Line 1\nLine 2\n")
+    File.write(handle, "Initial content")
     File.flush(handle)
     File.close(handle)
-    println("Wrote file with handle")
+    println("Wrote with mode 'w'")
+
+    # Append mode ("a") - adds to end
+    (s, ah) = File.open(path, "a")
+    File.write(ah, " + appended")
+    File.close(ah)
+    println("Appended with mode 'a'")
+
+    (s, c1) = File.readAll(path)
+    println("After append: " ++ c1)
+
+    # Read mode ("r") with readLine
+    File.writeAll(path, "Line 1
+Line 2
+Line 3")
 
     (s, rh) = File.open(path, "r")
-    (s, data) = File.read(rh, 7)
-    println("Read: " ++ data)
+    (s, line1) = File.readLine(rh)
+    print("First line: ")
+    print(line1)
     File.close(rh)
+
+    # Read/write mode ("rw") with seek
+    (s, rwh) = File.open(path, "rw")
+    File.seek(rwh, 0, "end")
+    File.write(rwh, "
+Line 4")
+    File.close(rwh)
+
+    (s, c2) = File.readAll(path)
+    println("After rw append:")
+    println(c2)
 
     File.remove(path)
     println("Handle demo complete")
