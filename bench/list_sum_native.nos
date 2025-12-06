@@ -6,11 +6,11 @@ range(0) = []
 range(n) = [n | range(n - 1)]
 
 main() = {
-    # Create list of 1000 integers and sum 10 times
+    # Create list of 1000 integers and sum 100 times
     lst = range(1000)
     total = 0
     i = 0
-    while i < 10 {
+    while i < 100 {
         total = total + listSum(lst)
         i = i + 1
     }

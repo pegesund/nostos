@@ -1,0 +1,24 @@
+# List sum benchmark - tail-call optimized version
+# Restructured to have recursive call in tail position
+
+# Tail-recursive fold - the recursive call is now in tail position
+fold_tco(f, acc, lst) =
+    if isEmpty(lst) then acc
+    else fold_tco(f, f(acc, head(lst)), tail(lst))
+
+sum(lst) = fold_tco((a, b) => a + b, 0, lst)
+
+# Build a list of n integers
+range(0) = []
+range(n) = [n | range(n - 1)]
+
+main() = {
+    lst = range(1000)
+    total = 0
+    i = 0
+    while i < 10 {
+        total = total + sum(lst)
+        i = i + 1
+    }
+    total
+}

@@ -2413,9 +2413,49 @@ impl ThreadWorker {
             Call(dst, func_reg, args) => {
                 let func_val = reg!(*func_reg).clone();
                 let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r).clone()).collect();
-
                 match func_val {
                     GcValue::Function(func) => {
+                        // Fast path: inline simple binary functions like (a, b) => a + b
+                        if arg_values.len() == 2 {
+                            let instrs = &func.code.code;
+                            // Check for pattern: BinaryOp(dst, 0, 1); Return(dst)
+                            if instrs.len() == 2 {
+                                if let Instruction::Return(ret_reg) = &instrs[1] {
+                                    let result = match &instrs[0] {
+                                        Instruction::AddInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                                            match (&arg_values[0], &arg_values[1]) {
+                                                (GcValue::Int64(x), GcValue::Int64(y)) => Some(GcValue::Int64(x + y)),
+                                                _ => None,
+                                            }
+                                        }
+                                        Instruction::SubInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                                            match (&arg_values[0], &arg_values[1]) {
+                                                (GcValue::Int64(x), GcValue::Int64(y)) => Some(GcValue::Int64(x - y)),
+                                                _ => None,
+                                            }
+                                        }
+                                        Instruction::MulInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                                            match (&arg_values[0], &arg_values[1]) {
+                                                (GcValue::Int64(x), GcValue::Int64(y)) => Some(GcValue::Int64(x * y)),
+                                                _ => None,
+                                            }
+                                        }
+                                        Instruction::DivInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                                            match (&arg_values[0], &arg_values[1]) {
+                                                (GcValue::Int64(x), GcValue::Int64(y)) if *y != 0 => Some(GcValue::Int64(x / y)),
+                                                _ => None,
+                                            }
+                                        }
+                                        _ => None,
+                                    };
+                                    if let Some(r) = result {
+                                        set_reg!(*dst, r);
+                                        return Ok(StepResult::Continue);
+                                    }
+                                }
+                            }
+                        }
+                        // Normal function call
                         self.call_function(local_id, func, arg_values, Some(*dst))?;
                     }
                     GcValue::Closure(ptr) => {
@@ -2424,6 +2464,55 @@ impl ThreadWorker {
                         let func = closure.function.clone();
                         let captures = closure.captures.clone();
                         drop(proc);
+
+                        // Fast path: inline simple binary closures like (a, b) => a + b
+                        if arg_values.len() == 2 && captures.is_empty() {
+                            let instrs = &func.code.code;
+                            // Check for pattern: BinaryOp(dst, 0, 1); Return(dst)
+                            if instrs.len() == 2 {
+                                if let Instruction::Return(ret_reg) = &instrs[1] {
+                                    let result = match &instrs[0] {
+                                        Instruction::AddInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                                            match (&arg_values[0], &arg_values[1]) {
+                                                (GcValue::Int64(x), GcValue::Int64(y)) => Some(GcValue::Int64(x + y)),
+                                                _ => None,
+                                            }
+                                        }
+                                        Instruction::AddFloat(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                                            match (&arg_values[0], &arg_values[1]) {
+                                                (GcValue::Float64(x), GcValue::Float64(y)) => Some(GcValue::Float64(x + y)),
+                                                _ => None,
+                                            }
+                                        }
+                                        Instruction::SubInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                                            match (&arg_values[0], &arg_values[1]) {
+                                                (GcValue::Int64(x), GcValue::Int64(y)) => Some(GcValue::Int64(x - y)),
+                                                _ => None,
+                                            }
+                                        }
+                                        Instruction::MulInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                                            match (&arg_values[0], &arg_values[1]) {
+                                                (GcValue::Int64(x), GcValue::Int64(y)) => Some(GcValue::Int64(x * y)),
+                                                _ => None,
+                                            }
+                                        }
+                                        Instruction::DivInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                                            match (&arg_values[0], &arg_values[1]) {
+                                                (GcValue::Int64(x), GcValue::Int64(y)) if *y != 0 => Some(GcValue::Int64(x / y)),
+                                                _ => None,
+                                            }
+                                        }
+                                        _ => None,
+                                    };
+                                    if let Some(r) = result {
+                                        set_reg!(*dst, r);
+                                        return Ok(StepResult::Continue);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Normal closure call
                         self.call_closure(local_id, func, arg_values, captures, Some(*dst))?;
                     }
                     _ => return Err(RuntimeError::TypeError {
