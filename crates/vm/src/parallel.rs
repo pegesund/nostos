@@ -964,14 +964,20 @@ impl ThreadWorker {
     }
 
     /// Convert an IO result to a GcValue. This is a static method to avoid borrow issues.
+    /// All results are wrapped in ("ok", value) or ("error", message) tuples for consistency.
     fn io_result_to_gc_value(
         result: Result<IoResponseValue, crate::io_runtime::IoError>,
         proc: &mut Process,
     ) -> GcValue {
         match result {
-            Ok(response) => Self::io_response_to_gc_value_static(response, proc),
+            Ok(response) => {
+                let value = Self::io_response_to_gc_value_static(response, proc);
+                // Wrap in ("ok", value) tuple for consistency
+                let ok_tag = GcValue::String(proc.heap.alloc_string("ok".to_string()));
+                GcValue::Tuple(proc.heap.alloc_tuple(vec![ok_tag, value]))
+            }
             Err(io_err) => {
-                // Create error tuple: {"error", message}
+                // Create error tuple: ("error", message)
                 let err_tag = GcValue::String(proc.heap.alloc_string("error".to_string()));
                 let msg = GcValue::String(proc.heap.alloc_string(io_err.to_string()));
                 GcValue::Tuple(proc.heap.alloc_tuple(vec![err_tag, msg]))
@@ -985,22 +991,23 @@ impl ThreadWorker {
         match response {
             Unit => GcValue::Unit,
             Bytes(bytes) => {
-                // Convert bytes to a list of integers
-                let values: Vec<GcValue> = bytes.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                GcValue::List(GcList { data: Arc::new(values), start: 0 })
+                // Try to convert bytes to string (UTF-8), fallback to list of integers
+                match std::string::String::from_utf8(bytes.clone()) {
+                    Ok(s) => GcValue::String(proc.heap.alloc_string(s)),
+                    Err(_) => {
+                        let values: Vec<GcValue> = bytes.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
+                        GcValue::List(GcList { data: Arc::new(values), start: 0 })
+                    }
+                }
             }
             String(s) => GcValue::String(proc.heap.alloc_string(s)),
             FileHandle(handle_id) => {
-                // Return as tuple {"file_handle", id}
-                let tag = GcValue::String(proc.heap.alloc_string("file_handle".to_string()));
-                let id = GcValue::Int64(handle_id as i64);
-                GcValue::Tuple(proc.heap.alloc_tuple(vec![tag, id]))
+                // Return as int (file handle id) - wrapping in ("ok", ...) is done by caller
+                GcValue::Int64(handle_id as i64)
             }
             Int(n) => GcValue::Int64(n),
             HttpResponse { status, headers, body } => {
-                // Return as tuple ("ok", HttpResponse{status, headers, body})
-                let ok_str = GcValue::String(proc.heap.alloc_string("ok".to_string()));
-
+                // Return as HttpResponse{status, headers, body} - wrapping in ("ok", ...) is done by caller
                 // Build headers list of {key, value} tuples
                 let header_tuples: Vec<GcValue> = headers
                     .into_iter()
@@ -1022,26 +1029,32 @@ impl ThreadWorker {
                 };
 
                 // Build response as a record with named fields
-                let record = GcValue::Record(proc.heap.alloc_record(
+                GcValue::Record(proc.heap.alloc_record(
                     "HttpResponse".to_string(),
                     vec!["status".to_string(), "headers".to_string(), "body".to_string()],
                     vec![GcValue::Int64(status as i64), headers_list, body_value],
                     vec![false, false, false], // all immutable
-                ));
-                GcValue::Tuple(proc.heap.alloc_tuple(vec![ok_str, record]))
+                ))
             }
             OptionString(opt) => {
+                // Return value directly - wrapping in ("ok", ...) is done by caller
                 match opt {
-                    Some(s) => {
-                        let ok = GcValue::String(proc.heap.alloc_string("ok".to_string()));
-                        let str_val = GcValue::String(proc.heap.alloc_string(s));
-                        GcValue::Tuple(proc.heap.alloc_tuple(vec![ok, str_val]))
-                    }
+                    Some(s) => GcValue::String(proc.heap.alloc_string(s)),
                     None => {
-                        // EOF or no data
+                        // EOF - return special eof indicator that caller will wrap
                         GcValue::String(proc.heap.alloc_string("eof".to_string()))
                     }
                 }
+            }
+            Bool(b) => {
+                GcValue::Bool(b)
+            }
+            StringList(strings) => {
+                let values: Vec<GcValue> = strings
+                    .into_iter()
+                    .map(|s| GcValue::String(proc.heap.alloc_string(s)))
+                    .collect();
+                GcValue::List(GcList { data: Arc::new(values), start: 0 })
             }
         }
     }
@@ -3869,6 +3882,660 @@ impl ThreadWorker {
                         let tuple = proc.heap.alloc_tuple(vec![GcValue::String(err_str), GcValue::String(msg_str)]);
                         set_reg!(*dst, GcValue::Tuple(tuple));
                     }
+                }
+            }
+
+            // === File Handle Operations ===
+            FileOpen(dst, path_reg, mode_reg) => {
+                let (path_str, mode) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let path = match reg!(*path_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    let mode_str = match reg!(*mode_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    let mode = match mode_str.as_str() {
+                        "r" => crate::io_runtime::FileMode::Read,
+                        "w" => crate::io_runtime::FileMode::Write,
+                        "a" => crate::io_runtime::FileMode::Append,
+                        "rw" => crate::io_runtime::FileMode::ReadWrite,
+                        _ => return Err(RuntimeError::IOError(format!("Invalid file mode: {}", mode_str))),
+                    };
+                    (path, mode)
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::FileOpen {
+                        path: std::path::PathBuf::from(path_str),
+                        mode,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileWrite(dst, handle_reg, data_reg) => {
+                let (handle, data) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let handle = match reg!(*handle_reg) {
+                        GcValue::Int64(n) => *n as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (file handle)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    };
+                    let data = match reg!(*data_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.as_bytes().to_vec())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    (handle, data)
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::FileWrite { handle, data, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileRead(dst, handle_reg, size_reg) => {
+                let (handle, size) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let handle = match reg!(*handle_reg) {
+                        GcValue::Int64(n) => *n as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (file handle)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    };
+                    let size = match reg!(*size_reg) {
+                        GcValue::Int64(n) => *n as usize,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    };
+                    (handle, size)
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::FileRead { handle, size, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileReadLine(dst, handle_reg) => {
+                let handle = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*handle_reg) {
+                        GcValue::Int64(n) => *n as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (file handle)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    }
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::FileReadLine { handle, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileFlush(dst, handle_reg) => {
+                let handle = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*handle_reg) {
+                        GcValue::Int64(n) => *n as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (file handle)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    }
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::FileFlush { handle, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileClose(dst, handle_reg) => {
+                let handle = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*handle_reg) {
+                        GcValue::Int64(n) => *n as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (file handle)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    }
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::FileClose { handle, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileSeek(dst, handle_reg, offset_reg, whence_reg) => {
+                let (handle, offset, whence) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let handle = match reg!(*handle_reg) {
+                        GcValue::Int64(n) => *n as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (file handle)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    };
+                    let offset = match reg!(*offset_reg) {
+                        GcValue::Int64(n) => *n,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    };
+                    let whence_str = match reg!(*whence_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    let whence = match whence_str.as_str() {
+                        "start" => crate::io_runtime::SeekWhence::Start,
+                        "current" => crate::io_runtime::SeekWhence::Current,
+                        "end" => crate::io_runtime::SeekWhence::End,
+                        _ => return Err(RuntimeError::IOError(format!("Invalid seek whence: {}", whence_str))),
+                    };
+                    (handle, offset, whence)
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::FileSeek { handle, offset, whence, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileAppend(dst, path_reg, content_reg) => {
+                let (path_str, content) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let path = match reg!(*path_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    let data = match reg!(*content_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.as_bytes().to_vec())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    (path, data)
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::FileAppend {
+                        path: std::path::PathBuf::from(path_str),
+                        data: content,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            // === Directory Operations ===
+            DirCreate(dst, path_reg) => {
+                let path_str = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*path_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    }
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::DirCreate {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            DirCreateAll(dst, path_reg) => {
+                let path_str = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*path_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    }
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::DirCreateAll {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            DirList(dst, path_reg) => {
+                let path_str = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*path_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    }
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::DirList {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            DirRemove(dst, path_reg) => {
+                let path_str = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*path_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    }
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::DirRemove {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            DirRemoveAll(dst, path_reg) => {
+                let path_str = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*path_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    }
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::DirRemoveAll {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            // === File Utilities ===
+            FileExists(dst, path_reg) => {
+                let path_str = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*path_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    }
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::FileExists {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            DirExists(dst, path_reg) => {
+                let path_str = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*path_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    }
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::DirExists {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileRemove(dst, path_reg) => {
+                let path_str = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*path_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    }
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::FileRemove {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileRename(dst, old_path_reg, new_path_reg) => {
+                let (old_path, new_path) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let old = match reg!(*old_path_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    let new = match reg!(*new_path_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    (old, new)
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::FileRename {
+                        old_path: std::path::PathBuf::from(old_path),
+                        new_path: std::path::PathBuf::from(new_path),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileCopy(dst, src_path_reg, dest_path_reg) => {
+                let (src_path, dest_path) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let src = match reg!(*src_path_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    let dest = match reg!(*dest_path_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    (src, dest)
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::FileCopy {
+                        src_path: std::path::PathBuf::from(src_path),
+                        dest_path: std::path::PathBuf::from(dest_path),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileSize(dst, path_reg) => {
+                let path_str = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*path_reg) {
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    }
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::FileSize {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
             }
 

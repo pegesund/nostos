@@ -101,6 +101,14 @@ impl std::fmt::Display for IoError {
 /// Response type for all IO requests
 pub type IoResponse = oneshot::Sender<IoResult<IoResponseValue>>;
 
+/// Seek whence position
+#[derive(Debug, Clone, Copy)]
+pub enum SeekWhence {
+    Start,
+    Current,
+    End,
+}
+
 /// Request sent from worker thread to IO runtime
 pub enum IoRequest {
     // File operations - convenience for one-shot file ops
@@ -111,6 +119,96 @@ pub enum IoRequest {
     FileWriteAll {
         path: PathBuf,
         data: Vec<u8>,
+        response: IoResponse,
+    },
+    FileAppend {
+        path: PathBuf,
+        data: Vec<u8>,
+        response: IoResponse,
+    },
+
+    // File handle operations
+    FileOpen {
+        path: PathBuf,
+        mode: FileMode,
+        response: IoResponse,
+    },
+    FileWrite {
+        handle: u64,
+        data: Vec<u8>,
+        response: IoResponse,
+    },
+    FileRead {
+        handle: u64,
+        size: usize,
+        response: IoResponse,
+    },
+    FileReadLine {
+        handle: u64,
+        response: IoResponse,
+    },
+    FileFlush {
+        handle: u64,
+        response: IoResponse,
+    },
+    FileClose {
+        handle: u64,
+        response: IoResponse,
+    },
+    FileSeek {
+        handle: u64,
+        offset: i64,
+        whence: SeekWhence,
+        response: IoResponse,
+    },
+
+    // Directory operations
+    DirCreate {
+        path: PathBuf,
+        response: IoResponse,
+    },
+    DirCreateAll {
+        path: PathBuf,
+        response: IoResponse,
+    },
+    DirList {
+        path: PathBuf,
+        response: IoResponse,
+    },
+    DirRemove {
+        path: PathBuf,
+        response: IoResponse,
+    },
+    DirRemoveAll {
+        path: PathBuf,
+        response: IoResponse,
+    },
+
+    // File utilities
+    FileExists {
+        path: PathBuf,
+        response: IoResponse,
+    },
+    DirExists {
+        path: PathBuf,
+        response: IoResponse,
+    },
+    FileRemove {
+        path: PathBuf,
+        response: IoResponse,
+    },
+    FileRename {
+        old_path: PathBuf,
+        new_path: PathBuf,
+        response: IoResponse,
+    },
+    FileCopy {
+        src_path: PathBuf,
+        dest_path: PathBuf,
+        response: IoResponse,
+    },
+    FileSize {
+        path: PathBuf,
         response: IoResponse,
     },
 
@@ -190,6 +288,13 @@ impl IoRuntime {
         mut request_rx: mpsc::UnboundedReceiver<IoRequest>,
         http_client: reqwest::Client,
     ) {
+        use std::io::SeekFrom;
+        use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, AsyncBufReadExt};
+
+        // Track open file handles
+        let mut open_files: HashMap<u64, tokio::fs::File> = HashMap::new();
+        let mut next_handle: u64 = 1;
+
         while let Some(request) = request_rx.recv().await {
             match request {
                 IoRequest::Shutdown => break,
@@ -204,6 +309,253 @@ impl IoRuntime {
                     let _ = response.send(result.map(|_| IoResponseValue::Unit));
                 }
 
+                IoRequest::FileAppend { path, data, response } => {
+                    let result = tokio::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&path)
+                        .await;
+                    let result = match result {
+                        Ok(mut file) => {
+                            match file.write_all(&data).await {
+                                Ok(()) => Ok(IoResponseValue::Unit),
+                                Err(e) => Err(IoError::IoError(e.to_string())),
+                            }
+                        }
+                        Err(e) => Err(Self::convert_io_error(e, &path)),
+                    };
+                    let _ = response.send(result);
+                }
+
+                // File handle operations
+                IoRequest::FileOpen { path, mode, response } => {
+                    use tokio::fs::OpenOptions;
+                    let file_result = match mode {
+                        FileMode::Read => OpenOptions::new().read(true).open(&path).await,
+                        FileMode::Write => OpenOptions::new()
+                            .write(true)
+                            .create(true)
+                            .truncate(true)
+                            .open(&path)
+                            .await,
+                        FileMode::Append => OpenOptions::new()
+                            .write(true)
+                            .create(true)
+                            .append(true)
+                            .open(&path)
+                            .await,
+                        FileMode::ReadWrite => OpenOptions::new()
+                            .read(true)
+                            .write(true)
+                            .create(true)
+                            .open(&path)
+                            .await,
+                    };
+                    let result = match file_result {
+                        Ok(file) => {
+                            let handle = next_handle;
+                            next_handle += 1;
+                            open_files.insert(handle, file);
+                            Ok(IoResponseValue::FileHandle(handle))
+                        }
+                        Err(e) => Err(Self::convert_io_error(e, &path)),
+                    };
+                    let _ = response.send(result);
+                }
+
+                IoRequest::FileWrite { handle, data, response } => {
+                    let result = match open_files.get_mut(&handle) {
+                        Some(file) => {
+                            match file.write(&data).await {
+                                Ok(n) => Ok(IoResponseValue::Int(n as i64)),
+                                Err(e) => Err(IoError::IoError(e.to_string())),
+                            }
+                        }
+                        None => Err(IoError::InvalidHandle),
+                    };
+                    let _ = response.send(result);
+                }
+
+                IoRequest::FileRead { handle, size, response } => {
+                    let result = match open_files.get_mut(&handle) {
+                        Some(file) => {
+                            let mut buf = vec![0u8; size];
+                            match file.read(&mut buf).await {
+                                Ok(n) => {
+                                    buf.truncate(n);
+                                    Ok(IoResponseValue::Bytes(buf))
+                                }
+                                Err(e) => Err(IoError::IoError(e.to_string())),
+                            }
+                        }
+                        None => Err(IoError::InvalidHandle),
+                    };
+                    let _ = response.send(result);
+                }
+
+                IoRequest::FileReadLine { handle, response } => {
+                    let result = match open_files.get_mut(&handle) {
+                        Some(file) => {
+                            // Read file position and content
+                            let mut buf = Vec::new();
+                            match file.read_to_end(&mut buf).await {
+                                Ok(0) => Ok(IoResponseValue::OptionString(None)),
+                                Ok(_) => {
+                                    // Find first line
+                                    if let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                                        let line = String::from_utf8_lossy(&buf[..=pos]).to_string();
+                                        Ok(IoResponseValue::OptionString(Some(line)))
+                                    } else {
+                                        let line = String::from_utf8_lossy(&buf).to_string();
+                                        Ok(IoResponseValue::OptionString(Some(line)))
+                                    }
+                                }
+                                Err(e) => Err(IoError::IoError(e.to_string())),
+                            }
+                        }
+                        None => Err(IoError::InvalidHandle),
+                    };
+                    let _ = response.send(result);
+                }
+
+                IoRequest::FileFlush { handle, response } => {
+                    let result = match open_files.get_mut(&handle) {
+                        Some(file) => {
+                            match file.flush().await {
+                                Ok(()) => Ok(IoResponseValue::Unit),
+                                Err(e) => Err(IoError::IoError(e.to_string())),
+                            }
+                        }
+                        None => Err(IoError::InvalidHandle),
+                    };
+                    let _ = response.send(result);
+                }
+
+                IoRequest::FileClose { handle, response } => {
+                    let result = match open_files.remove(&handle) {
+                        Some(file) => {
+                            drop(file);
+                            Ok(IoResponseValue::Unit)
+                        }
+                        None => Err(IoError::InvalidHandle),
+                    };
+                    let _ = response.send(result);
+                }
+
+                IoRequest::FileSeek { handle, offset, whence, response } => {
+                    let result = match open_files.get_mut(&handle) {
+                        Some(file) => {
+                            let seek_from = match whence {
+                                SeekWhence::Start => SeekFrom::Start(offset as u64),
+                                SeekWhence::Current => SeekFrom::Current(offset),
+                                SeekWhence::End => SeekFrom::End(offset),
+                            };
+                            match file.seek(seek_from).await {
+                                Ok(pos) => Ok(IoResponseValue::Int(pos as i64)),
+                                Err(e) => Err(IoError::IoError(e.to_string())),
+                            }
+                        }
+                        None => Err(IoError::InvalidHandle),
+                    };
+                    let _ = response.send(result);
+                }
+
+                // Directory operations
+                IoRequest::DirCreate { path, response } => {
+                    let result = match tokio::fs::create_dir(&path).await {
+                        Ok(()) => Ok(IoResponseValue::Unit),
+                        Err(e) => Err(Self::convert_io_error(e, &path)),
+                    };
+                    let _ = response.send(result);
+                }
+
+                IoRequest::DirCreateAll { path, response } => {
+                    let result = match tokio::fs::create_dir_all(&path).await {
+                        Ok(()) => Ok(IoResponseValue::Unit),
+                        Err(e) => Err(Self::convert_io_error(e, &path)),
+                    };
+                    let _ = response.send(result);
+                }
+
+                IoRequest::DirList { path, response } => {
+                    let result = match tokio::fs::read_dir(&path).await {
+                        Ok(mut entries) => {
+                            let mut names = Vec::new();
+                            while let Ok(Some(entry)) = entries.next_entry().await {
+                                if let Ok(name) = entry.file_name().into_string() {
+                                    names.push(name);
+                                }
+                            }
+                            Ok(IoResponseValue::StringList(names))
+                        }
+                        Err(e) => Err(Self::convert_io_error(e, &path)),
+                    };
+                    let _ = response.send(result);
+                }
+
+                IoRequest::DirRemove { path, response } => {
+                    let result = match tokio::fs::remove_dir(&path).await {
+                        Ok(()) => Ok(IoResponseValue::Unit),
+                        Err(e) => Err(Self::convert_io_error(e, &path)),
+                    };
+                    let _ = response.send(result);
+                }
+
+                IoRequest::DirRemoveAll { path, response } => {
+                    let result = match tokio::fs::remove_dir_all(&path).await {
+                        Ok(()) => Ok(IoResponseValue::Unit),
+                        Err(e) => Err(Self::convert_io_error(e, &path)),
+                    };
+                    let _ = response.send(result);
+                }
+
+                // File utilities
+                IoRequest::FileExists { path, response } => {
+                    let exists = tokio::fs::try_exists(&path).await.unwrap_or(false);
+                    let _ = response.send(Ok(IoResponseValue::Bool(exists)));
+                }
+
+                IoRequest::DirExists { path, response } => {
+                    let result = match tokio::fs::metadata(&path).await {
+                        Ok(meta) => Ok(IoResponseValue::Bool(meta.is_dir())),
+                        Err(_) => Ok(IoResponseValue::Bool(false)),
+                    };
+                    let _ = response.send(result);
+                }
+
+                IoRequest::FileRemove { path, response } => {
+                    let result = match tokio::fs::remove_file(&path).await {
+                        Ok(()) => Ok(IoResponseValue::Unit),
+                        Err(e) => Err(Self::convert_io_error(e, &path)),
+                    };
+                    let _ = response.send(result);
+                }
+
+                IoRequest::FileRename { old_path, new_path, response } => {
+                    let result = match tokio::fs::rename(&old_path, &new_path).await {
+                        Ok(()) => Ok(IoResponseValue::Unit),
+                        Err(e) => Err(Self::convert_io_error(e, &old_path)),
+                    };
+                    let _ = response.send(result);
+                }
+
+                IoRequest::FileCopy { src_path, dest_path, response } => {
+                    let result = match tokio::fs::copy(&src_path, &dest_path).await {
+                        Ok(bytes) => Ok(IoResponseValue::Int(bytes as i64)),
+                        Err(e) => Err(Self::convert_io_error(e, &src_path)),
+                    };
+                    let _ = response.send(result);
+                }
+
+                IoRequest::FileSize { path, response } => {
+                    let result = match tokio::fs::metadata(&path).await {
+                        Ok(meta) => Ok(IoResponseValue::Int(meta.len() as i64)),
+                        Err(e) => Err(Self::convert_io_error(e, &path)),
+                    };
+                    let _ = response.send(result);
+                }
+
+                // HTTP operations
                 IoRequest::HttpGet { url, response } => {
                     let result = Self::handle_http_get(&http_client, &url).await;
                     let _ = response.send(result.map(|resp| IoResponseValue::HttpResponse {

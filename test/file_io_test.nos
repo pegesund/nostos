@@ -1,0 +1,408 @@
+# Test file IO functions
+
+# Test basic file read/write (high-level API)
+testReadWriteAll() = {
+    println("Testing File.readAll and File.writeAll...")
+
+    path = "/tmp/nostos_test_basic.txt"
+    content = "Hello, Nostos File IO!"
+
+    # Write content to file
+    (status, result) = File.writeAll(path, content)
+    println("Write status: " ++ status)
+    assert(status == "ok")
+
+    # Read content back
+    (status2, data) = File.readAll(path)
+    println("Read status: " ++ status2)
+    println("Content: " ++ data)
+
+    assert(status2 == "ok")
+    assert(data == content)
+
+    # Cleanup
+    File.remove(path)
+    println("Basic read/write test PASSED")
+}
+
+# Test file existence checking
+testFileExists() = {
+    println("")
+    println("Testing File.exists...")
+
+    path = "/tmp/nostos_test_exists.txt"
+
+    # File should not exist yet
+    (status1, exists1) = File.exists(path)
+    assert(status1 == "ok")
+    assert(exists1 == false)
+    println("File does not exist (expected): OK")
+
+    # Create the file
+    File.writeAll(path, "test")
+
+    # Now it should exist
+    (status2, exists2) = File.exists(path)
+    assert(status2 == "ok")
+    assert(exists2 == true)
+    println("File exists after creation: OK")
+
+    # Cleanup
+    File.remove(path)
+    println("File.exists test PASSED")
+}
+
+# Test file removal
+testFileRemove() = {
+    println("")
+    println("Testing File.remove...")
+
+    path = "/tmp/nostos_test_remove.txt"
+
+    # Create a file
+    File.writeAll(path, "to be deleted")
+
+    # Verify it exists
+    (ok, exists1) = File.exists(path)
+    assert(exists1 == true)
+
+    # Remove it
+    (status, ignore) = File.remove(path)
+    assert(status == "ok")
+
+    # Verify it's gone
+    (ok, exists2) = File.exists(path)
+    assert(exists2 == false)
+
+    println("File.remove test PASSED")
+}
+
+# Test file rename
+testFileRename() = {
+    println("")
+    println("Testing File.rename...")
+
+    oldPath = "/tmp/nostos_test_old.txt"
+    newPath = "/tmp/nostos_test_new.txt"
+
+    # Create original file
+    File.writeAll(oldPath, "rename me")
+
+    # Rename it
+    (status, ignore) = File.rename(oldPath, newPath)
+    assert(status == "ok")
+
+    # Old path should not exist
+    (s, oldExists) = File.exists(oldPath)
+    assert(oldExists == false)
+
+    # New path should exist with same content
+    (s, newExists) = File.exists(newPath)
+    assert(newExists == true)
+
+    (status, content) = File.readAll(newPath)
+    assert(content == "rename me")
+
+    # Cleanup
+    File.remove(newPath)
+    println("File.rename test PASSED")
+}
+
+# Test file copy
+testFileCopy() = {
+    println("")
+    println("Testing File.copy...")
+
+    srcPath = "/tmp/nostos_test_src.txt"
+    destPath = "/tmp/nostos_test_dest.txt"
+    content = "copy this content"
+
+    # Create source file
+    File.writeAll(srcPath, content)
+
+    # Copy it
+    (status, ignore) = File.copy(srcPath, destPath)
+    assert(status == "ok")
+
+    # Both should exist
+    (s, srcExists) = File.exists(srcPath)
+    (s, destExists) = File.exists(destPath)
+    assert(srcExists == true)
+    assert(destExists == true)
+
+    # Content should match
+    (s, destContent) = File.readAll(destPath)
+    assert(destContent == content)
+
+    # Cleanup
+    File.remove(srcPath)
+    File.remove(destPath)
+    println("File.copy test PASSED")
+}
+
+# Test file size
+testFileSize() = {
+    println("")
+    println("Testing File.size...")
+
+    path = "/tmp/nostos_test_size.txt"
+    content = "12345678901234567890"  # 20 bytes
+
+    File.writeAll(path, content)
+
+    (status, size) = File.size(path)
+    assert(status == "ok")
+    print("File size: ")
+    println(size)
+    assert(size == 20)
+
+    # Cleanup
+    File.remove(path)
+    println("File.size test PASSED")
+}
+
+# Test directory creation
+testDirCreate() = {
+    println("")
+    println("Testing Dir.create...")
+
+    path = "/tmp/nostos_test_dir"
+
+    # Create directory
+    (status, ignore) = Dir.create(path)
+    println("Dir.create status: " ++ status)
+
+    # Check it exists
+    (ok, exists) = Dir.exists(path)
+    assert(exists == true)
+    println("Directory exists: OK")
+
+    # Cleanup
+    Dir.remove(path)
+    println("Dir.create test PASSED")
+}
+
+# Test recursive directory creation
+testDirCreateAll() = {
+    println("")
+    println("Testing Dir.createAll...")
+
+    path = "/tmp/nostos_test_nested/level1/level2"
+
+    # Create nested directories
+    (status, ignore) = Dir.createAll(path)
+    assert(status == "ok")
+
+    # Check it exists
+    (ok, exists) = Dir.exists(path)
+    assert(exists == true)
+
+    # Cleanup (remove recursively)
+    Dir.removeAll("/tmp/nostos_test_nested")
+    println("Dir.createAll test PASSED")
+}
+
+# Test directory listing
+testDirList() = {
+    println("")
+    println("Testing Dir.list...")
+
+    basePath = "/tmp/nostos_test_list"
+
+    # Create directory with some files
+    Dir.create(basePath)
+    File.writeAll(basePath ++ "/file1.txt", "one")
+    File.writeAll(basePath ++ "/file2.txt", "two")
+    File.writeAll(basePath ++ "/file3.txt", "three")
+
+    # List contents
+    (status, files) = Dir.list(basePath)
+    assert(status == "ok")
+    print("Files found: ")
+    println(files)
+
+    # Cleanup
+    Dir.removeAll(basePath)
+    println("Dir.list test PASSED")
+}
+
+# Test directory exists
+testDirExists() = {
+    println("")
+    println("Testing Dir.exists...")
+
+    path = "/tmp/nostos_test_dir_exists"
+
+    # Should not exist
+    (ok, exists1) = Dir.exists(path)
+    assert(exists1 == false)
+
+    # Create it
+    Dir.create(path)
+
+    # Now should exist
+    (ok, exists2) = Dir.exists(path)
+    assert(exists2 == true)
+
+    # Cleanup
+    Dir.remove(path)
+    println("Dir.exists test PASSED")
+}
+
+# Test file handle operations (low-level API)
+testFileHandle() = {
+    println("")
+    println("Testing file handle operations...")
+
+    path = "/tmp/nostos_test_handle.txt"
+
+    # Open for writing (mode: "w")
+    (status1, handle) = File.open(path, "w")
+    println("Open status: " ++ status1)
+    assert(status1 == "ok")
+
+    # Write some data
+    (status2, written) = File.write(handle, "Hello from handle!")
+    println("Write status: " ++ status2)
+    assert(status2 == "ok")
+
+    # Flush to ensure data is written
+    (status3, r3) = File.flush(handle)
+    assert(status3 == "ok")
+
+    # Close the handle
+    (status4, r4) = File.close(handle)
+    assert(status4 == "ok")
+
+    # Read back with readAll to verify
+    (status, content) = File.readAll(path)
+    println("Content after handle write: " ++ content)
+    assert(content == "Hello from handle!")
+
+    # Cleanup
+    File.remove(path)
+    println("File handle test PASSED")
+}
+
+# Test file read with handle
+testFileReadHandle() = {
+    println("")
+    println("Testing File.read with handle...")
+
+    path = "/tmp/nostos_test_read_handle.txt"
+    content = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+    # Create file
+    File.writeAll(path, content)
+
+    # Open for reading
+    (status1, handle) = File.open(path, "r")
+    assert(status1 == "ok")
+
+    # Read first 10 bytes
+    (status2, data) = File.read(handle, 10)
+    assert(status2 == "ok")
+    println("First 10 bytes: " ++ data)
+    assert(data == "ABCDEFGHIJ")
+
+    # Read next 10 bytes
+    (status3, data2) = File.read(handle, 10)
+    assert(status3 == "ok")
+    println("Next 10 bytes: " ++ data2)
+    assert(data2 == "KLMNOPQRST")
+
+    # Close
+    File.close(handle)
+
+    # Cleanup
+    File.remove(path)
+    println("File.read with handle test PASSED")
+}
+
+# Test file readLine
+testFileReadLine() = {
+    println("")
+    println("Testing File.readLine...")
+
+    path = "/tmp/nostos_test_readline.txt"
+    content = "Line 1\nLine 2\nLine 3"
+
+    # Create file
+    File.writeAll(path, content)
+
+    # Open for reading
+    (s, handle) = File.open(path, "r")
+
+    # Read lines
+    (status1, line1) = File.readLine(handle)
+    println("Line 1: " ++ line1)
+
+    (status2, line2) = File.readLine(handle)
+    println("Line 2: " ++ line2)
+
+    (status3, line3) = File.readLine(handle)
+    println("Line 3: " ++ line3)
+
+    # Close
+    File.close(handle)
+
+    # Cleanup
+    File.remove(path)
+    println("File.readLine test PASSED")
+}
+
+# Test file seek
+testFileSeek() = {
+    println("")
+    println("Testing File.seek...")
+
+    path = "/tmp/nostos_test_seek.txt"
+    content = "0123456789ABCDEFGHIJ"
+
+    # Create file
+    File.writeAll(path, content)
+
+    # Open for reading
+    (s, handle) = File.open(path, "r")
+
+    # Seek to position 10 from start
+    (status1, pos1) = File.seek(handle, 10, "start")
+    assert(status1 == "ok")
+    print("Position after seek: ")
+    println(pos1)
+
+    # Read from that position
+    (s, data) = File.read(handle, 5)
+    println("Data at position 10: " ++ data)
+    assert(data == "ABCDE")
+
+    # Close
+    File.close(handle)
+
+    # Cleanup
+    File.remove(path)
+    println("File.seek test PASSED")
+}
+
+main() = {
+    println("=== File IO Tests ===")
+    println("")
+
+    testReadWriteAll()
+    testFileExists()
+    testFileRemove()
+    testFileRename()
+    testFileCopy()
+    testFileSize()
+    testDirCreate()
+    testDirCreateAll()
+    testDirList()
+    testDirExists()
+    testFileHandle()
+    testFileReadHandle()
+    testFileReadLine()
+    testFileSeek()
+
+    println("")
+    println("=== All file IO tests PASSED! ===")
+}

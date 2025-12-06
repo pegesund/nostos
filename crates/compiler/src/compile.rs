@@ -1101,6 +1101,131 @@ impl Compiler {
                             self.chunk.emit(Instruction::Utf8Decode(dst, bytes_reg), line);
                             return Ok(dst);
                         }
+                        // File handle operations
+                        "File.open" if args.len() == 2 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let mode_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FileOpen(dst, path_reg, mode_reg), line);
+                            return Ok(dst);
+                        }
+                        "File.write" if args.len() == 2 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let data_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FileWrite(dst, handle_reg, data_reg), line);
+                            return Ok(dst);
+                        }
+                        "File.read" if args.len() == 2 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let size_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FileRead(dst, handle_reg, size_reg), line);
+                            return Ok(dst);
+                        }
+                        "File.readLine" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FileReadLine(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
+                        "File.flush" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FileFlush(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
+                        "File.close" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FileClose(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
+                        "File.seek" if args.len() == 3 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let offset_reg = self.compile_expr_tail(&args[1], false)?;
+                            let whence_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FileSeek(dst, handle_reg, offset_reg, whence_reg), line);
+                            return Ok(dst);
+                        }
+                        // Directory operations
+                        "Dir.create" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::DirCreate(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        "Dir.createAll" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::DirCreateAll(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        "Dir.list" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::DirList(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        "Dir.remove" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::DirRemove(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        "Dir.removeAll" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::DirRemoveAll(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        // File utilities
+                        "File.exists" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FileExists(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        "Dir.exists" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::DirExists(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        "File.remove" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FileRemove(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        "File.rename" if args.len() == 2 => {
+                            let old_reg = self.compile_expr_tail(&args[0], false)?;
+                            let new_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FileRename(dst, old_reg, new_reg), line);
+                            return Ok(dst);
+                        }
+                        "File.copy" if args.len() == 2 => {
+                            let src_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dest_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FileCopy(dst, src_reg, dest_reg), line);
+                            return Ok(dst);
+                        }
+                        "File.size" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FileSize(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        "File.append" if args.len() == 2 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let content_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FileAppend(dst, path_reg, content_reg), line);
+                            return Ok(dst);
+                        }
                         _ => {} // Fall through to user-defined functions
                     }
 

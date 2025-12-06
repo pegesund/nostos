@@ -440,18 +440,107 @@ Nostos provides non-blocking I/O operations that integrate seamlessly with the p
 
 ### File I/O
 
+Nostos provides comprehensive file I/O operations with both high-level convenience functions and low-level handle-based operations.
+
+#### High-Level File Operations
+
 ```nos
 # Read entire file as string
-content = File.readAll("/path/to/file.txt")
+(status, content) = File.readAll("/path/to/file.txt")
 
 # Write string to file (creates or overwrites)
-File.writeAll("/path/to/file.txt", "Hello, World!")
+(status, result) = File.writeAll("/path/to/file.txt", "Hello, World!")
 
-# Example: Copy a file
+# Check if file exists
+(status, exists) = File.exists("/path/to/file.txt")
+
+# Get file size in bytes
+(status, size) = File.size("/path/to/file.txt")
+
+# Remove a file
+(status, result) = File.remove("/path/to/file.txt")
+
+# Rename/move a file
+(status, result) = File.rename("/old/path.txt", "/new/path.txt")
+
+# Copy a file
+(status, result) = File.copy("/source.txt", "/dest.txt")
+```
+
+#### File Handle Operations
+
+For more control, use file handles with explicit open/close:
+
+```nos
+# Open a file - modes: "r" (read), "w" (write), "a" (append), "rw" (read/write)
+(status, handle) = File.open("/path/to/file.txt", "w")
+
+# Write to file
+(status, result) = File.write(handle, "Hello, World!\n")
+
+# Flush buffered data to disk
+(status, result) = File.flush(handle)
+
+# Close the file
+(status, result) = File.close(handle)
+
+# Reading with handles
+(status, handle) = File.open("/path/to/file.txt", "r")
+(status, data) = File.read(handle, 100)      # Read up to 100 bytes
+(status, line) = File.readLine(handle)       # Read one line
+
+# Seek to position - whence: "start", "current", "end"
+(status, newPos) = File.seek(handle, 10, "start")    # Seek to byte 10
+(status, newPos) = File.seek(handle, -5, "current")  # Move back 5 bytes
+(status, newPos) = File.seek(handle, 0, "end")       # Seek to end
+
+File.close(handle)
+```
+
+#### Directory Operations
+
+```nos
+# Create a directory
+(status, result) = Dir.create("/path/to/dir")
+
+# Create nested directories (like mkdir -p)
+(status, result) = Dir.createAll("/path/to/nested/dirs")
+
+# Check if directory exists
+(status, exists) = Dir.exists("/path/to/dir")
+
+# List directory contents
+(status, files) = Dir.list("/path/to/dir")
+
+# Remove an empty directory
+(status, result) = Dir.remove("/path/to/dir")
+
+# Remove directory and all contents recursively
+(status, result) = Dir.removeAll("/path/to/dir")
+```
+
+#### Complete Example
+
+```nos
 main() = {
-    content = File.readAll("/tmp/source.txt")
-    File.writeAll("/tmp/dest.txt", content)
-    println("File copied!")
+    # Create a directory
+    Dir.create("/tmp/myapp")
+
+    # Write some files
+    File.writeAll("/tmp/myapp/config.txt", "setting=value")
+    File.writeAll("/tmp/myapp/data.txt", "some data")
+
+    # List the directory
+    (s, files) = Dir.list("/tmp/myapp")
+    println("Files: ")
+    println(files)
+
+    # Read a file
+    (s, content) = File.readAll("/tmp/myapp/config.txt")
+    println("Config: " ++ content)
+
+    # Clean up
+    Dir.removeAll("/tmp/myapp")
 }
 ```
 

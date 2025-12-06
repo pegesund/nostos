@@ -1,20 +1,115 @@
+# File IO Example
+# Demonstrates reading and writing files and directories in Nostos
+
+# High-level file operations
+demoHighLevel() = {
+    println("--- High-level File Operations ---")
+    println("")
+
+    path = "/tmp/nostos_example.txt"
+    (status, r) = File.writeAll(path, "Hello, Nostos!\nThis is a test file.")
+    println("Write status: " ++ status)
+
+    (status2, content) = File.readAll(path)
+    println("File content:")
+    println(content)
+
+    (s, size) = File.size(path)
+    print("File size: ")
+    print(size)
+    println(" bytes")
+
+    (s, exists) = File.exists(path)
+    print("File exists: ")
+    println(exists)
+
+    File.remove(path)
+    println("High-level demo complete")
+    println("")
+}
+
+# Directory operations
+demoDirectories() = {
+    println("--- Directory Operations ---")
+    println("")
+
+    dirPath = "/tmp/nostos_example_dir"
+    Dir.create(dirPath)
+    println("Created directory: " ++ dirPath)
+
+    nestedPath = "/tmp/nostos_nested/level1/level2"
+    Dir.createAll(nestedPath)
+    println("Created nested dirs: " ++ nestedPath)
+
+    File.writeAll(dirPath ++ "/file1.txt", "Content 1")
+    File.writeAll(dirPath ++ "/file2.txt", "Content 2")
+
+    (s, files) = Dir.list(dirPath)
+    print("Directory contents: ")
+    println(files)
+
+    Dir.removeAll(dirPath)
+    Dir.removeAll("/tmp/nostos_nested")
+    println("Directory demo complete")
+    println("")
+}
+
+# File handle operations
+demoHandles() = {
+    println("--- File Handle Operations ---")
+    println("")
+
+    path = "/tmp/nostos_handle.txt"
+
+    (s, handle) = File.open(path, "w")
+    File.write(handle, "Line 1\nLine 2\n")
+    File.flush(handle)
+    File.close(handle)
+    println("Wrote file with handle")
+
+    (s, rh) = File.open(path, "r")
+    (s, data) = File.read(rh, 7)
+    println("Read: " ++ data)
+    File.close(rh)
+
+    File.remove(path)
+    println("Handle demo complete")
+    println("")
+}
+
+# File copy and rename
+demoCopyRename() = {
+    println("--- Copy and Rename ---")
+    println("")
+
+    src = "/tmp/nostos_src.txt"
+    copy = "/tmp/nostos_copy.txt"
+    dest = "/tmp/nostos_dest.txt"
+
+    File.writeAll(src, "Original content")
+    File.copy(src, copy)
+    println("Copied file")
+
+    File.rename(copy, dest)
+    println("Renamed file")
+
+    (s, content) = File.readAll(dest)
+    println("Content: " ++ content)
+
+    File.remove(src)
+    File.remove(dest)
+    println("Copy/rename demo complete")
+}
+
 main() = {
-  println("=== File IO Demo ===")
-  println("")
-  
-  path = "/tmp/nostos_example.txt"
-  content = "Hello from Nostos!\nThis file was written asynchronously."
-  
-  println("Writing to " ++ path ++ "...")
-  File.writeAll(path, content)
-  println("Write complete!")
-  println("")
-  
-  println("Reading back...")
-  result = File.readAll(path)
-  println("File contents:")
-  println(result)
-  println("")
-  
-  println("File IO demo complete!")
+    println("=== File IO Example ===")
+    println("")
+
+    demoHighLevel()
+    demoDirectories()
+    demoHandles()
+    demoCopyRename()
+
+    println("")
+    println("=== All demos complete ===")
 }

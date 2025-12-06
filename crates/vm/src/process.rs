@@ -33,8 +33,12 @@ pub enum IoResponseValue {
     String(String),
     /// File handle ID
     FileHandle(u64),
-    /// Integer (bytes written)
+    /// Integer (bytes written, file size)
     Int(i64),
+    /// Boolean (for exists checks)
+    Bool(bool),
+    /// List of strings (for directory listing)
+    StringList(Vec<String>),
     /// HTTP response
     HttpResponse {
         status: u16,

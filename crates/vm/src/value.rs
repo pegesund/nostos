@@ -687,6 +687,57 @@ pub enum Instruction {
     /// body: string or () for no body
     HttpRequest(Reg, Reg, Reg, Reg, Reg),
 
+    // === File Handle Operations ===
+    /// Open file: dst = File.open(path, mode)
+    /// mode: "r" (read), "w" (write/create), "a" (append), "rw" (read+write)
+    /// Returns (status, handle) where handle is Int
+    FileOpen(Reg, Reg, Reg),
+    /// Write to file handle: dst = File.write(handle, data)
+    /// Returns (status, bytes_written)
+    FileWrite(Reg, Reg, Reg),
+    /// Read from file handle: dst = File.read(handle, size)
+    /// Returns (status, data)
+    FileRead(Reg, Reg, Reg),
+    /// Read line from file handle: dst = File.readLine(handle)
+    /// Returns (status, line) where line is string or None at EOF
+    FileReadLine(Reg, Reg),
+    /// Flush file handle: dst = File.flush(handle)
+    FileFlush(Reg, Reg),
+    /// Close file handle: dst = File.close(handle)
+    FileClose(Reg, Reg),
+    /// Seek in file: dst = File.seek(handle, offset, whence)
+    /// whence: "start", "current", "end"
+    FileSeek(Reg, Reg, Reg, Reg),
+
+    // === Directory Operations ===
+    /// Create directory: dst = Dir.create(path)
+    DirCreate(Reg, Reg),
+    /// Create directory recursively: dst = Dir.createAll(path)
+    DirCreateAll(Reg, Reg),
+    /// List directory contents: dst = Dir.list(path)
+    /// Returns (status, [entries])
+    DirList(Reg, Reg),
+    /// Remove empty directory: dst = Dir.remove(path)
+    DirRemove(Reg, Reg),
+    /// Remove directory recursively: dst = Dir.removeAll(path)
+    DirRemoveAll(Reg, Reg),
+
+    // === File Utilities ===
+    /// Check if file exists: dst = File.exists(path)
+    FileExists(Reg, Reg),
+    /// Check if path is directory: dst = Dir.exists(path)
+    DirExists(Reg, Reg),
+    /// Remove file: dst = File.remove(path)
+    FileRemove(Reg, Reg),
+    /// Rename/move file: dst = File.rename(old, new)
+    FileRename(Reg, Reg, Reg),
+    /// Copy file: dst = File.copy(src, dest)
+    FileCopy(Reg, Reg, Reg),
+    /// Get file size: dst = File.size(path)
+    FileSize(Reg, Reg),
+    /// Append string to file: dst = File.append(path, content)
+    FileAppend(Reg, Reg, Reg),
+
     // === String Encoding ===
     /// Base64 encode: dst = Base64.encode(string)
     Base64Encode(Reg, Reg),
