@@ -434,6 +434,83 @@ main() = {
 }
 ```
 
+## Async I/O
+
+Nostos provides non-blocking I/O operations that integrate seamlessly with the process scheduler. When a process performs I/O, it yields to allow other processes to run, then resumes when the operation completes.
+
+### File I/O
+
+```nos
+# Read entire file as string
+content = File.readAll("/path/to/file.txt")
+
+# Write string to file (creates or overwrites)
+File.writeAll("/path/to/file.txt", "Hello, World!")
+
+# Example: Copy a file
+main() = {
+    content = File.readAll("/tmp/source.txt")
+    File.writeAll("/tmp/dest.txt", content)
+    println("File copied!")
+}
+```
+
+### HTTP Client
+
+```nos
+# HTTP GET request
+(status, response) = Http.get("https://api.example.com/data")
+
+# Response is a record with fields:
+#   - status: HTTP status code (Int)
+#   - headers: List of (name, value) tuples
+#   - body: Response body as String
+
+main() = {
+    (status, resp) = Http.get("https://httpbin.org/ip")
+    println("Status: " ++ show(resp.status))
+    println("Body: " ++ resp.body)
+}
+```
+
+### Parallel I/O
+
+I/O operations run concurrently with other processes. Multiple I/O operations can be in flight simultaneously:
+
+```nos
+# Spawn multiple HTTP requests in parallel
+httpWorker(parent, id) = {
+    (status, data) = Http.get("https://httpbin.org/delay/1")
+    parent <- ("done", id, data.status)
+}
+
+main() = {
+    me = self()
+
+    # All 5 requests run in parallel (~1-2s total, not 5s)
+    spawn(() => httpWorker(me, 1))
+    spawn(() => httpWorker(me, 2))
+    spawn(() => httpWorker(me, 3))
+    spawn(() => httpWorker(me, 4))
+    spawn(() => httpWorker(me, 5))
+
+    # Collect results...
+}
+```
+
+### Error Handling
+
+I/O operations return result tuples:
+- Success: `("ok", value)` for Http.get, or the content directly for File operations
+- Error: `("error", message)` when operations fail
+
+```nos
+main() = {
+    result = File.readAll("/nonexistent/file.txt")
+    # result will be an error if file doesn't exist
+}
+```
+
 ## Command-Line Interface
 
 ### Running Programs

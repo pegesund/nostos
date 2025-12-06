@@ -13,8 +13,37 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
+use tokio::sync::oneshot;
+
 use crate::gc::{GcConfig, GcValue, Heap, RawGcPtr};
+use crate::io_runtime::IoResult;
 use crate::value::{FunctionValue, Pid, RefId, Reg};
+
+/// Type alias for IO response receiver
+pub type IoReceiver = oneshot::Receiver<IoResult<IoResponseValue>>;
+
+/// Value types that can be returned from IO operations
+#[derive(Debug)]
+pub enum IoResponseValue {
+    /// Unit (for operations like close)
+    Unit,
+    /// Bytes (for file read, HTTP body)
+    Bytes(Vec<u8>),
+    /// String (for file read as string)
+    String(String),
+    /// File handle ID
+    FileHandle(u64),
+    /// Integer (bytes written)
+    Int(i64),
+    /// HTTP response
+    HttpResponse {
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    },
+    /// Optional string (e.g., readline returning None at EOF)
+    OptionString(Option<String>),
+}
 
 /// A call frame on the stack.
 #[derive(Clone)]
@@ -167,6 +196,9 @@ pub enum ProcessState {
     WaitingTimeout,
     /// Sleeping until wake_time.
     Sleeping,
+    /// Waiting for async IO operation to complete.
+    /// The actual receiver is stored in Process::io_receiver.
+    WaitingIO,
     /// Yielded, ready to be scheduled.
     Suspended,
     /// Process has exited with a value.
@@ -244,6 +276,12 @@ pub struct Process {
 
     /// Output buffer (for testing/REPL).
     pub output: Vec<String>,
+
+    /// Receiver for pending IO operation (when state is WaitingIO).
+    pub io_receiver: Option<IoReceiver>,
+
+    /// Destination register for IO result (when state is WaitingIO).
+    pub io_result_reg: Option<Reg>,
 }
 
 impl Process {
@@ -271,6 +309,8 @@ impl Process {
             wake_time: None,
             timeout_dst: None,
             output: Vec::new(),
+            io_receiver: None,
+            io_result_reg: None,
         }
     }
 
@@ -446,6 +486,47 @@ impl Process {
         self.heap.set_roots(roots);
         self.heap.collect();
         self.heap.clear_roots();
+    }
+
+    // === Async IO Support ===
+
+    /// Start waiting for an IO operation.
+    /// Sets state to WaitingIO and stores the receiver.
+    pub fn start_io_wait(&mut self, receiver: IoReceiver, result_reg: Reg) {
+        self.state = ProcessState::WaitingIO;
+        self.io_receiver = Some(receiver);
+        self.io_result_reg = Some(result_reg);
+    }
+
+    /// Check if IO operation has completed.
+    /// Returns Some((result, dest_reg)) if done, None if still pending.
+    pub fn poll_io(&mut self) -> Option<(IoResult<IoResponseValue>, Reg)> {
+        if let Some(ref mut receiver) = self.io_receiver {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    // IO completed - clean up and return result with destination register
+                    self.io_receiver = None;
+                    let result_reg = self.io_result_reg.take().expect("IO result register should be set");
+                    self.state = ProcessState::Running;
+                    Some((result, result_reg))
+                }
+                Err(oneshot::error::TryRecvError::Empty) => {
+                    // Still waiting
+                    None
+                }
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    // Sender dropped - IO runtime shut down
+                    self.io_receiver = None;
+                    let result_reg = self.io_result_reg.take().expect("IO result register should be set");
+                    self.state = ProcessState::Running;
+                    Some((Err(crate::io_runtime::IoError::Other(
+                        "IO runtime closed".to_string(),
+                    )), result_reg))
+                }
+            }
+        } else {
+            None
+        }
     }
 }
 

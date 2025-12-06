@@ -1,0 +1,501 @@
+//! Async IO Runtime for Nostos
+//!
+//! Provides non-blocking IO operations (file, HTTP, etc.) that integrate
+//! with the process scheduler. Processes can initiate IO operations and
+//! yield while waiting for completion.
+//!
+//! Architecture:
+//! - Single tokio runtime shared across all worker threads
+//! - Worker threads send IO requests via channel
+//! - Each request includes a oneshot channel for the response
+//! - Process state becomes WaitingIO until response arrives
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use tokio::runtime::Runtime;
+use tokio::sync::{mpsc, oneshot};
+
+use crate::process::IoResponseValue;
+
+/// Unique handle for an open file
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileHandle(pub u64);
+
+/// Unique handle for an HTTP client (for connection reuse)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HttpClientHandle(pub u64);
+
+/// File open mode
+#[derive(Debug, Clone, Copy)]
+pub enum FileMode {
+    Read,
+    Write,
+    Append,
+    ReadWrite,
+}
+
+/// HTTP method
+#[derive(Debug, Clone)]
+pub enum HttpMethod {
+    Get,
+    Post,
+    Put,
+    Delete,
+    Patch,
+    Head,
+}
+
+/// HTTP request configuration
+#[derive(Debug, Clone)]
+pub struct HttpRequest {
+    pub method: HttpMethod,
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Option<Vec<u8>>,
+    pub timeout_ms: Option<u64>,
+}
+
+/// HTTP response
+#[derive(Debug, Clone)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+/// Result type for IO operations
+pub type IoResult<T> = Result<T, IoError>;
+
+/// IO error type
+#[derive(Debug, Clone)]
+pub enum IoError {
+    FileNotFound(String),
+    PermissionDenied(String),
+    IoError(String),
+    InvalidHandle,
+    HttpError(String),
+    Timeout,
+    InvalidUrl(String),
+    ConnectionFailed(String),
+    Other(String),
+}
+
+impl std::fmt::Display for IoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IoError::FileNotFound(p) => write!(f, "File not found: {}", p),
+            IoError::PermissionDenied(p) => write!(f, "Permission denied: {}", p),
+            IoError::IoError(e) => write!(f, "IO error: {}", e),
+            IoError::InvalidHandle => write!(f, "Invalid handle"),
+            IoError::HttpError(e) => write!(f, "HTTP error: {}", e),
+            IoError::Timeout => write!(f, "Operation timed out"),
+            IoError::InvalidUrl(u) => write!(f, "Invalid URL: {}", u),
+            IoError::ConnectionFailed(e) => write!(f, "Connection failed: {}", e),
+            IoError::Other(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+/// Response type for all IO requests
+pub type IoResponse = oneshot::Sender<IoResult<IoResponseValue>>;
+
+/// Request sent from worker thread to IO runtime
+pub enum IoRequest {
+    // File operations - convenience for one-shot file ops
+    FileReadToString {
+        path: PathBuf,
+        response: IoResponse,
+    },
+    FileWriteAll {
+        path: PathBuf,
+        data: Vec<u8>,
+        response: IoResponse,
+    },
+
+    // HTTP operations
+    HttpGet {
+        url: String,
+        response: IoResponse,
+    },
+    HttpRequest {
+        request: HttpRequest,
+        response: IoResponse,
+    },
+
+    // Shutdown
+    Shutdown,
+}
+
+/// Open file state (held by the IO runtime)
+struct OpenFile {
+    file: tokio::fs::File,
+    path: PathBuf,
+    #[allow(dead_code)]
+    mode: FileMode,
+}
+
+/// The IO runtime - runs on a separate tokio runtime
+pub struct IoRuntime {
+    /// Tokio runtime handle
+    runtime: Runtime,
+    /// Channel to send requests to the runtime
+    request_tx: mpsc::UnboundedSender<IoRequest>,
+    /// Next file handle ID
+    next_handle: AtomicU64,
+    /// HTTP client for connection pooling
+    http_client: reqwest::Client,
+}
+
+impl IoRuntime {
+    /// Create a new IO runtime
+    pub fn new() -> Self {
+        let runtime = Runtime::new().expect("Failed to create tokio runtime");
+        let (request_tx, request_rx) = mpsc::unbounded_channel();
+
+        let http_client = reqwest::Client::builder()
+            .pool_max_idle_per_host(10)
+            .build()
+            .expect("Failed to create HTTP client");
+
+        let io_runtime = IoRuntime {
+            runtime,
+            request_tx,
+            next_handle: AtomicU64::new(1),
+            http_client: http_client.clone(),
+        };
+
+        // Spawn the request handler
+        let client = http_client;
+        io_runtime.runtime.spawn(async move {
+            Self::run_handler(request_rx, client).await;
+        });
+
+        io_runtime
+    }
+
+    /// Get sender for IO requests (clone for each worker thread)
+    pub fn request_sender(&self) -> mpsc::UnboundedSender<IoRequest> {
+        self.request_tx.clone()
+    }
+
+    /// Generate a new unique file handle
+    pub fn next_file_handle(&self) -> FileHandle {
+        FileHandle(self.next_handle.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// The main handler loop running on tokio
+    async fn run_handler(
+        mut request_rx: mpsc::UnboundedReceiver<IoRequest>,
+        http_client: reqwest::Client,
+    ) {
+        while let Some(request) = request_rx.recv().await {
+            match request {
+                IoRequest::Shutdown => break,
+
+                IoRequest::FileReadToString { path, response } => {
+                    let result = Self::handle_file_read_to_string(&path).await;
+                    let _ = response.send(result.map(IoResponseValue::String));
+                }
+
+                IoRequest::FileWriteAll { path, data, response } => {
+                    let result = Self::handle_file_write_all(&path, &data).await;
+                    let _ = response.send(result.map(|_| IoResponseValue::Unit));
+                }
+
+                IoRequest::HttpGet { url, response } => {
+                    let result = Self::handle_http_get(&http_client, &url).await;
+                    let _ = response.send(result.map(|resp| IoResponseValue::HttpResponse {
+                        status: resp.status,
+                        headers: resp.headers,
+                        body: resp.body,
+                    }));
+                }
+
+                IoRequest::HttpRequest { request, response } => {
+                    let result = Self::handle_http_request(&http_client, request).await;
+                    let _ = response.send(result.map(|resp| IoResponseValue::HttpResponse {
+                        status: resp.status,
+                        headers: resp.headers,
+                        body: resp.body,
+                    }));
+                }
+            }
+        }
+    }
+
+    async fn handle_file_open(
+        path: &PathBuf,
+        mode: FileMode,
+        next_handle: &mut u64,
+    ) -> IoResult<(FileHandle, OpenFile)> {
+        use tokio::fs::OpenOptions;
+
+        let file = match mode {
+            FileMode::Read => OpenOptions::new().read(true).open(path).await,
+            FileMode::Write => OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(path)
+                .await,
+            FileMode::Append => OpenOptions::new()
+                .write(true)
+                .create(true)
+                .append(true)
+                .open(path)
+                .await,
+            FileMode::ReadWrite => OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(path)
+                .await,
+        };
+
+        match file {
+            Ok(file) => {
+                let handle = FileHandle(*next_handle);
+                *next_handle += 1;
+                Ok((handle, OpenFile {
+                    file,
+                    path: path.clone(),
+                    mode,
+                }))
+            }
+            Err(e) => Err(Self::convert_io_error(e, path)),
+        }
+    }
+
+    async fn handle_file_read(file: &mut tokio::fs::File, size: usize) -> IoResult<Vec<u8>> {
+        use tokio::io::AsyncReadExt;
+        let mut buf = vec![0u8; size];
+        match file.read(&mut buf).await {
+            Ok(n) => {
+                buf.truncate(n);
+                Ok(buf)
+            }
+            Err(e) => Err(IoError::IoError(e.to_string())),
+        }
+    }
+
+    async fn handle_file_read_all(file: &mut tokio::fs::File) -> IoResult<Vec<u8>> {
+        use tokio::io::AsyncReadExt;
+        let mut buf = Vec::new();
+        match file.read_to_end(&mut buf).await {
+            Ok(_) => Ok(buf),
+            Err(e) => Err(IoError::IoError(e.to_string())),
+        }
+    }
+
+    async fn handle_file_read_line(file: &mut tokio::fs::File) -> IoResult<Option<String>> {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let mut reader = BufReader::new(file);
+        let mut line = String::new();
+        match reader.read_line(&mut line).await {
+            Ok(0) => Ok(None), // EOF
+            Ok(_) => Ok(Some(line)),
+            Err(e) => Err(IoError::IoError(e.to_string())),
+        }
+    }
+
+    async fn handle_file_write(file: &mut tokio::fs::File, data: &[u8]) -> IoResult<usize> {
+        use tokio::io::AsyncWriteExt;
+        match file.write(data).await {
+            Ok(n) => Ok(n),
+            Err(e) => Err(IoError::IoError(e.to_string())),
+        }
+    }
+
+    async fn handle_file_read_to_string(path: &PathBuf) -> IoResult<String> {
+        match tokio::fs::read_to_string(path).await {
+            Ok(s) => Ok(s),
+            Err(e) => Err(Self::convert_io_error(e, path)),
+        }
+    }
+
+    async fn handle_file_write_all(path: &PathBuf, data: &[u8]) -> IoResult<()> {
+        match tokio::fs::write(path, data).await {
+            Ok(()) => Ok(()),
+            Err(e) => Err(Self::convert_io_error(e, path)),
+        }
+    }
+
+    async fn handle_http_get(client: &reqwest::Client, url: &str) -> IoResult<HttpResponse> {
+        let result = client.get(url).send().await;
+        match result {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let headers: Vec<(String, String)> = resp
+                    .headers()
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                    .collect();
+
+                match resp.bytes().await {
+                    Ok(body) => Ok(HttpResponse {
+                        status,
+                        headers,
+                        body: body.to_vec(),
+                    }),
+                    Err(e) => Err(IoError::HttpError(e.to_string())),
+                }
+            }
+            Err(e) => {
+                if e.is_timeout() {
+                    Err(IoError::Timeout)
+                } else if e.is_connect() {
+                    Err(IoError::ConnectionFailed(e.to_string()))
+                } else {
+                    Err(IoError::HttpError(e.to_string()))
+                }
+            }
+        }
+    }
+
+    async fn handle_http_request(
+        client: &reqwest::Client,
+        request: HttpRequest,
+    ) -> IoResult<HttpResponse> {
+        let method = match request.method {
+            HttpMethod::Get => reqwest::Method::GET,
+            HttpMethod::Post => reqwest::Method::POST,
+            HttpMethod::Put => reqwest::Method::PUT,
+            HttpMethod::Delete => reqwest::Method::DELETE,
+            HttpMethod::Patch => reqwest::Method::PATCH,
+            HttpMethod::Head => reqwest::Method::HEAD,
+        };
+
+        let mut req_builder = client.request(method, &request.url);
+
+        for (key, value) in request.headers {
+            req_builder = req_builder.header(key, value);
+        }
+
+        if let Some(body) = request.body {
+            req_builder = req_builder.body(body);
+        }
+
+        if let Some(timeout_ms) = request.timeout_ms {
+            req_builder = req_builder.timeout(std::time::Duration::from_millis(timeout_ms));
+        }
+
+        let result = req_builder.send().await;
+
+        match result {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let headers: Vec<(String, String)> = resp
+                    .headers()
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                    .collect();
+
+                match resp.bytes().await {
+                    Ok(body) => Ok(HttpResponse {
+                        status,
+                        headers,
+                        body: body.to_vec(),
+                    }),
+                    Err(e) => Err(IoError::HttpError(e.to_string())),
+                }
+            }
+            Err(e) => {
+                if e.is_timeout() {
+                    Err(IoError::Timeout)
+                } else if e.is_connect() {
+                    Err(IoError::ConnectionFailed(e.to_string()))
+                } else {
+                    Err(IoError::HttpError(e.to_string()))
+                }
+            }
+        }
+    }
+
+    fn convert_io_error(e: std::io::Error, path: &PathBuf) -> IoError {
+        use std::io::ErrorKind;
+        match e.kind() {
+            ErrorKind::NotFound => IoError::FileNotFound(path.display().to_string()),
+            ErrorKind::PermissionDenied => IoError::PermissionDenied(path.display().to_string()),
+            _ => IoError::IoError(e.to_string()),
+        }
+    }
+
+    /// Shutdown the IO runtime
+    pub fn shutdown(&self) {
+        let _ = self.request_tx.send(IoRequest::Shutdown);
+    }
+}
+
+impl Default for IoRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for IoRuntime {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn test_file_read_to_string() {
+        let io = IoRuntime::new();
+        let tx = io.request_sender();
+
+        // Create a temp file
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("nostos_test_io.txt");
+        std::fs::write(&path, "Hello, Nostos!\n").unwrap();
+
+        // Send read request
+        let (resp_tx, resp_rx) = oneshot::channel();
+        tx.send(IoRequest::FileReadToString {
+            path: path.clone(),
+            response: resp_tx,
+        }).unwrap();
+
+        // Block on response (for testing only)
+        let result = io.runtime.block_on(async {
+            resp_rx.await.unwrap()
+        });
+
+        // Clean up
+        let _ = std::fs::remove_file(&path);
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            IoResponseValue::String(s) => assert_eq!(s.trim(), "Hello, Nostos!"),
+            _ => panic!("Expected String response"),
+        }
+    }
+
+    #[test]
+    fn test_http_get() {
+        let io = IoRuntime::new();
+        let tx = io.request_sender();
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+        tx.send(IoRequest::HttpGet {
+            url: "https://httpbin.org/get".to_string(),
+            response: resp_tx,
+        }).unwrap();
+
+        let result = io.runtime.block_on(async {
+            resp_rx.await.unwrap()
+        });
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            IoResponseValue::HttpResponse { status, .. } => assert_eq!(status, 200),
+            _ => panic!("Expected HttpResponse"),
+        }
+    }
+}

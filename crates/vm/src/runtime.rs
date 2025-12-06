@@ -2358,6 +2358,14 @@ impl Runtime {
                 set_reg!(*dst, GcValue::List(list));
             }
 
+            // === Async IO operations ===
+            // These are only supported in the parallel VM
+            Instruction::FileReadAll(_, _) | Instruction::FileWriteAll(_, _, _) | Instruction::HttpGet(_, _) => {
+                return Err(RuntimeError::IOError(
+                    "Async IO operations require ParallelVM".to_string()
+                ));
+            }
+
             // === IO/Debug builtins ===
             Instruction::Print(dst, src) => {
                 let s = proc.heap.display_value(reg!(*src));

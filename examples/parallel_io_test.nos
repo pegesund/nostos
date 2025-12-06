@@ -1,0 +1,51 @@
+fileWorker(parent, id) = {
+  path = "/tmp/nostos_worker_" ++ show(id) ++ ".txt"
+  content = "Data from worker " ++ show(id)
+  File.writeAll(path, content)
+  result = File.readAll(path)
+  parent <- id
+}
+
+main() = {
+  println("=== Parallel File IO Test ===")
+  println("")
+  println("10 file workers writing and reading files concurrently.")
+  println("")
+  
+  me = self()
+  
+  spawn(() => fileWorker(me, 1))
+  spawn(() => fileWorker(me, 2))
+  spawn(() => fileWorker(me, 3))
+  spawn(() => fileWorker(me, 4))
+  spawn(() => fileWorker(me, 5))
+  spawn(() => fileWorker(me, 6))
+  spawn(() => fileWorker(me, 7))
+  spawn(() => fileWorker(me, 8))
+  spawn(() => fileWorker(me, 9))
+  spawn(() => fileWorker(me, 10))
+  
+  r1 = receive x -> x end
+  println("Worker done: " ++ show(r1))
+  r2 = receive x -> x end
+  println("Worker done: " ++ show(r2))
+  r3 = receive x -> x end
+  println("Worker done: " ++ show(r3))
+  r4 = receive x -> x end
+  println("Worker done: " ++ show(r4))
+  r5 = receive x -> x end
+  println("Worker done: " ++ show(r5))
+  r6 = receive x -> x end
+  println("Worker done: " ++ show(r6))
+  r7 = receive x -> x end
+  println("Worker done: " ++ show(r7))
+  r8 = receive x -> x end
+  println("Worker done: " ++ show(r8))
+  r9 = receive x -> x end
+  println("Worker done: " ++ show(r9))
+  r10 = receive x -> x end
+  println("Worker done: " ++ show(r10))
+  
+  println("")
+  println("All 10 workers completed!")
+}

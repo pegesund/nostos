@@ -393,6 +393,11 @@ impl Worker {
                     // Already exited, nothing to do
                     false
                 }
+                ProcessState::WaitingIO => {
+                    // Waiting for async IO - check if complete
+                    // For now, just skip - IO polling happens elsewhere
+                    false
+                }
                 ProcessState::Running | ProcessState::Waiting
                 | ProcessState::WaitingTimeout | ProcessState::Sleeping
                 | ProcessState::Suspended => {

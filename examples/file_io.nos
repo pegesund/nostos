@@ -1,0 +1,20 @@
+main() = {
+  println("=== File IO Demo ===")
+  println("")
+  
+  path = "/tmp/nostos_example.txt"
+  content = "Hello from Nostos!\nThis file was written asynchronously."
+  
+  println("Writing to " ++ path ++ "...")
+  File.writeAll(path, content)
+  println("Write complete!")
+  println("")
+  
+  println("Reading back...")
+  result = File.readAll(path)
+  println("File contents:")
+  println(result)
+  println("")
+  
+  println("File IO demo complete!")
+}

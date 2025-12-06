@@ -29,6 +29,10 @@ cranelift-jit = "0.116"
 cranelift-native = "0.116"
 target-lexicon = "0.12"
 
+# Async IO
+tokio = { version = "1", features = ["rt-multi-thread", "fs", "io-util", "sync", "time"] }
+reqwest = { version = "0.12", features = ["json"] }
+
 # Internal crates
 nostos-syntax = { path = "crates/syntax" }
 nostos-compiler = { path = "crates/compiler" }

@@ -660,6 +660,18 @@ pub enum Instruction {
     /// Create list [1..n]: dst = rangeList(n)
     RangeList(Reg, Reg),
 
+    // === Async IO operations ===
+    /// Read entire file as string: dst = File.readAll(path)
+    /// Suspends process until IO completes
+    FileReadAll(Reg, Reg),
+    /// Write string to file: dst = File.writeAll(path, content)
+    /// Suspends process until IO completes
+    FileWriteAll(Reg, Reg, Reg),
+    /// HTTP GET request: dst = Http.get(url)
+    /// Returns {"ok", %{status: n, headers: [...], body: "..."}} or {"error", msg}
+    /// Suspends process until request completes
+    HttpGet(Reg, Reg),
+
     // === IO/Debug builtins ===
     /// Print value, return string representation: dst = print(value)
     Print(Reg, Reg),

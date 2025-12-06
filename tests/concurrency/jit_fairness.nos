@@ -1,0 +1,41 @@
+# expect: ()
+# Test that JIT-heavy processes don't completely starve other processes
+# All spawned processes should complete and report back
+
+# JIT-eligible fibonacci (will be JIT compiled)
+fib(0) = 0
+fib(1) = 1
+fib(n) = fib(n - 1) + fib(n - 2)
+
+# Light worker - just sends back immediately
+light_worker(parent, id) = {
+    parent <- id
+}
+
+# Heavy worker - runs JIT fib then reports
+heavy_worker(parent) = {
+    result = fib(25)  # ~75k calls, JIT-compiled
+    parent <- result
+}
+
+main() = {
+    me = self()
+
+    # Spawn heavy JIT worker first
+    spawn(() => heavy_worker(me))
+
+    # Spawn several light workers
+    spawn(() => light_worker(me, 1))
+    spawn(() => light_worker(me, 2))
+    spawn(() => light_worker(me, 3))
+
+    # Collect all 4 results
+    r1 = receive x -> x end
+    r2 = receive x -> x end
+    r3 = receive x -> x end
+    r4 = receive x -> x end
+
+    # Sum them - should include 75025 (fib 25) + 1 + 2 + 3 = 75031
+    total = r1 + r2 + r3 + r4
+    assert_eq(75031, total)
+}

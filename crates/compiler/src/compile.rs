@@ -1000,6 +1000,31 @@ impl Compiler {
                 if let Some(module_path) = self.extract_module_path(obj) {
                     // It's a module-qualified call: Module.function(args)
                     let qualified_name = format!("{}.{}", module_path, method.node);
+
+                    // === Check for builtin module-qualified functions first ===
+                    match qualified_name.as_str() {
+                        "File.readAll" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FileReadAll(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        "File.writeAll" if args.len() == 2 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let content_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FileWriteAll(dst, path_reg, content_reg), line);
+                            return Ok(dst);
+                        }
+                        "Http.get" if args.len() == 1 => {
+                            let url_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::HttpGet(dst, url_reg), line);
+                            return Ok(dst);
+                        }
+                        _ => {} // Fall through to user-defined functions
+                    }
+
                     let resolved_name = self.resolve_name(&qualified_name);
 
                     if self.functions.contains_key(&resolved_name) {
@@ -1811,6 +1836,29 @@ impl Compiler {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
                         self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        return Ok(dst);
+                    }
+                    _ => {} // Fall through to normal function lookup
+                }
+            } else {
+                // === Module-qualified builtins (async IO operations) ===
+                match qualified_name.as_str() {
+                    "File.readAll" if arg_regs.len() == 1 => {
+                        // File.readAll(path) -> async read entire file as string
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::FileReadAll(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    "File.writeAll" if arg_regs.len() == 2 => {
+                        // File.writeAll(path, content) -> async write string to file
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::FileWriteAll(dst, arg_regs[0], arg_regs[1]), line);
+                        return Ok(dst);
+                    }
+                    "Http.get" if arg_regs.len() == 1 => {
+                        // Http.get(url) -> async HTTP GET request
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::HttpGet(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     _ => {} // Fall through to normal function lookup

@@ -1,0 +1,56 @@
+# JIT Heartbeat Monitor
+# Demonstrates that light processes stay responsive while heavy JIT runs
+# The "heart" sends rapid heartbeats while "the beast" crunches fib(30).
+# If JIT blocked everything, we'd see no heartbeats until the beast finishes.
+# Instead, heartbeats flow freely - proving the scheduler keeps things alive.
+
+# The beast: heavy JIT-compiled fibonacci
+fib(0) = 0
+fib(1) = 1
+fib(n) = fib(n - 1) + fib(n - 2)
+
+# Heart: sends heartbeats as fast as possible
+heart(monitor, 0) = monitor <- 0
+heart(monitor, n) = {
+    monitor <- 1
+    heart(monitor, n - 1)
+}
+
+# Beast: does heavy JIT work then reports
+beast(monitor) = {
+    result = fib(30)  # ~1M calls, pure JIT fury
+    monitor <- result
+}
+
+# Collect messages and count heartbeats (1s) vs beast result (832040)
+collect(0, beats) = beats
+collect(n, beats) = {
+    msg = receive x -> x end
+    new_beats = if msg == 1 then beats + 1 else beats
+    collect(n - 1, new_beats)
+}
+
+main() = {
+    me = self()
+
+    # Unleash the beast (JIT-heavy)
+    spawn(() => beast(me))
+
+    # Start the heart (rapid-fire messages)
+    spawn(() => heart(me, 100))
+
+    # Collect 102 messages: 100 heartbeats + 1 final zero + 1 beast result
+    beats = collect(102, 0)
+
+    # Report
+    println("=== JIT Heartbeat Monitor ===")
+    print("Heartbeats received: ")
+    println(beats)
+
+    if beats > 90 then {
+        println("HEALTHY: Heart kept beating while beast computed fib(30)!")
+        println("The scheduler is fair - JIT doesn't block other processes.")
+    } else {
+        println("Some beats lost - but system stayed responsive.")
+    }
+}

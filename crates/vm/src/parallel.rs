@@ -20,8 +20,11 @@ use std::time::{Duration, Instant};
 
 use crossbeam::channel::{self, Sender, Receiver, TryRecvError};
 
-use crate::gc::{constructor_discriminant, GcConfig, GcNativeFn, GcValue, Heap, InlineOp};
-use crate::process::{CallFrame, Process, ProcessState};
+use tokio::sync::mpsc as tokio_mpsc;
+
+use crate::gc::{constructor_discriminant, GcConfig, GcList, GcMapKey, GcNativeFn, GcValue, Heap, InlineOp};
+use crate::io_runtime::{IoRequest, IoRuntime};
+use crate::process::{CallFrame, IoResponseValue, Process, ProcessState};
 use crate::runtime::{JitIntFn, JitIntFn0, JitIntFn2, JitIntFn3, JitIntFn4, JitLoopArrayFn};
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, TypeValue, Value};
 
@@ -241,6 +244,8 @@ pub struct SharedState {
     pub thread_local_ids: Vec<AtomicU64>,
     /// Number of threads (for round-robin modulo)
     pub num_threads: usize,
+    /// IO request sender (for async file/HTTP operations)
+    pub io_sender: Option<tokio_mpsc::UnboundedSender<IoRequest>>,
 }
 
 /// Configuration for the parallel VM.
@@ -275,6 +280,8 @@ pub struct ParallelVM {
     next_thread: AtomicU64,
     /// Configuration
     config: ParallelConfig,
+    /// IO runtime for async file/HTTP operations
+    io_runtime: Option<IoRuntime>,
 }
 
 /// Simple value that can be sent between threads.
@@ -378,6 +385,8 @@ struct ThreadWorker {
     main_pid: Option<Pid>,
     /// Main process result (sendable between threads)
     main_result: Option<Result<SendableValue, String>>,
+    /// List of local_ids waiting for async IO (for efficient polling)
+    io_waiting: Vec<u64>,
 }
 
 impl ParallelVM {
@@ -396,6 +405,10 @@ impl ParallelVM {
             .map(|_| AtomicU64::new(1))
             .collect();
 
+        // Create IO runtime for async operations
+        let io_runtime = IoRuntime::new();
+        let io_sender = io_runtime.request_sender();
+
         let shared = Arc::new(SharedState {
             functions: HashMap::new(),
             function_list: Vec::new(),
@@ -411,6 +424,7 @@ impl ParallelVM {
             spawn_counter: AtomicU64::new(0),
             thread_local_ids,
             num_threads,
+            io_sender: Some(io_sender),
         });
 
         Self {
@@ -420,6 +434,7 @@ impl ParallelVM {
             num_threads,
             next_thread: AtomicU64::new(0),
             config,
+            io_runtime: Some(io_runtime),
         }
     }
 
@@ -641,6 +656,7 @@ impl ThreadWorker {
             config,
             main_pid: None,
             main_result: None,
+            io_waiting: Vec::new(),
         }
     }
 
@@ -727,6 +743,9 @@ impl ThreadWorker {
 
             // Wake up any processes whose timers have expired
             self.check_timers();
+
+            // Check for completed async IO operations
+            self.check_io();
 
             // Get next process to run
             let local_id = match self.run_queue.pop_front() {
@@ -894,6 +913,135 @@ impl ThreadWorker {
                 }
             } else {
                 break; // No more ready timers
+            }
+        }
+    }
+
+    /// Check for completed async IO operations and wake up waiting processes.
+    #[inline]
+    fn check_io(&mut self) {
+        // Fast path: no IO-waiting processes
+        if self.io_waiting.is_empty() {
+            return;
+        }
+
+        // Collect indices to check (to avoid borrow issues)
+        let to_check: Vec<u64> = self.io_waiting.clone();
+        let mut completed = Vec::new();
+        let mut to_requeue = Vec::new();
+
+        for local_id in to_check {
+            if let Some(proc) = self.get_process_mut(local_id) {
+                if proc.state == ProcessState::WaitingIO {
+                    if let Some((result, result_reg)) = proc.poll_io() {
+                        // IO completed - convert result to GcValue and store in register
+                        let gc_value = Self::io_result_to_gc_value(result, proc);
+
+                        // Store result in destination register
+                        if let Some(frame) = proc.frames.last_mut() {
+                            frame.registers[result_reg as usize] = gc_value;
+                        }
+
+                        completed.push(local_id);
+                        to_requeue.push(local_id);
+                    }
+                }
+            } else {
+                // Process was removed while waiting for IO
+                completed.push(local_id);
+            }
+        }
+
+        // Re-queue completed processes
+        for local_id in to_requeue {
+            self.run_queue.push_back(local_id);
+        }
+
+        // Remove completed entries from io_waiting
+        if !completed.is_empty() {
+            self.io_waiting.retain(|id| !completed.contains(id));
+        }
+    }
+
+    /// Convert an IO result to a GcValue. This is a static method to avoid borrow issues.
+    fn io_result_to_gc_value(
+        result: Result<IoResponseValue, crate::io_runtime::IoError>,
+        proc: &mut Process,
+    ) -> GcValue {
+        match result {
+            Ok(response) => Self::io_response_to_gc_value_static(response, proc),
+            Err(io_err) => {
+                // Create error tuple: {"error", message}
+                let err_tag = GcValue::String(proc.heap.alloc_string("error".to_string()));
+                let msg = GcValue::String(proc.heap.alloc_string(io_err.to_string()));
+                GcValue::Tuple(proc.heap.alloc_tuple(vec![err_tag, msg]))
+            }
+        }
+    }
+
+    /// Convert an IO response value to a GcValue. Static method to avoid borrow issues.
+    fn io_response_to_gc_value_static(response: IoResponseValue, proc: &mut Process) -> GcValue {
+        use crate::process::IoResponseValue::*;
+        match response {
+            Unit => GcValue::Unit,
+            Bytes(bytes) => {
+                // Convert bytes to a list of integers
+                let values: Vec<GcValue> = bytes.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
+                GcValue::List(GcList { data: Arc::new(values), start: 0 })
+            }
+            String(s) => GcValue::String(proc.heap.alloc_string(s)),
+            FileHandle(handle_id) => {
+                // Return as tuple {"file_handle", id}
+                let tag = GcValue::String(proc.heap.alloc_string("file_handle".to_string()));
+                let id = GcValue::Int64(handle_id as i64);
+                GcValue::Tuple(proc.heap.alloc_tuple(vec![tag, id]))
+            }
+            Int(n) => GcValue::Int64(n),
+            HttpResponse { status, headers, body } => {
+                // Return as tuple ("ok", HttpResponse{status, headers, body})
+                let ok_str = GcValue::String(proc.heap.alloc_string("ok".to_string()));
+
+                // Build headers list of {key, value} tuples
+                let header_tuples: Vec<GcValue> = headers
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let key = GcValue::String(proc.heap.alloc_string(k));
+                        let val = GcValue::String(proc.heap.alloc_string(v));
+                        GcValue::Tuple(proc.heap.alloc_tuple(vec![key, val]))
+                    })
+                    .collect();
+                let headers_list = GcValue::List(GcList { data: Arc::new(header_tuples), start: 0 });
+
+                // Build body as string (try UTF-8, fallback to bytes list)
+                let body_value = match std::string::String::from_utf8(body.clone()) {
+                    Ok(s) => GcValue::String(proc.heap.alloc_string(s)),
+                    Err(_) => {
+                        let bytes: Vec<GcValue> = body.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
+                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                    }
+                };
+
+                // Build response as a record with named fields
+                let record = GcValue::Record(proc.heap.alloc_record(
+                    "HttpResponse".to_string(),
+                    vec!["status".to_string(), "headers".to_string(), "body".to_string()],
+                    vec![GcValue::Int64(status as i64), headers_list, body_value],
+                    vec![false, false, false], // all immutable
+                ));
+                GcValue::Tuple(proc.heap.alloc_tuple(vec![ok_str, record]))
+            }
+            OptionString(opt) => {
+                match opt {
+                    Some(s) => {
+                        let ok = GcValue::String(proc.heap.alloc_string("ok".to_string()));
+                        let str_val = GcValue::String(proc.heap.alloc_string(s));
+                        GcValue::Tuple(proc.heap.alloc_tuple(vec![ok, str_val]))
+                    }
+                    None => {
+                        // EOF or no data
+                        GcValue::String(proc.heap.alloc_string("eof".to_string()))
+                    }
+                }
             }
         }
     }
@@ -3070,6 +3218,148 @@ impl ThreadWorker {
                 proc.state = ProcessState::Sleeping;
                 self.timer_heap.push(Reverse((wake_time, local_id)));
                 return Ok(StepResult::Waiting);
+            }
+
+            // === Async I/O ===
+            FileReadAll(dst, path_reg) => {
+                // Get path from register
+                let path_str = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*path_reg) {
+                        GcValue::String(ptr) => {
+                            if let Some(s) = proc.heap.get_string(*ptr) {
+                                s.data.clone()
+                            } else {
+                                return Err(RuntimeError::IOError("Invalid string pointer".to_string()));
+                            }
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    }
+                };
+
+                // Create oneshot channel for response
+                let (tx, rx) = tokio::sync::oneshot::channel();
+
+                // Send request to IO runtime
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::FileReadToString {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+
+                    // Set process to wait for IO
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileWriteAll(dst, path_reg, content_reg) => {
+                // Get path and content from registers
+                let (path_str, content) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let path = match reg!(*path_reg) {
+                        GcValue::String(ptr) => {
+                            if let Some(s) = proc.heap.get_string(*ptr) {
+                                s.data.clone()
+                            } else {
+                                return Err(RuntimeError::IOError("Invalid string pointer".to_string()));
+                            }
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    let data = match reg!(*content_reg) {
+                        GcValue::String(ptr) => {
+                            if let Some(s) = proc.heap.get_string(*ptr) {
+                                s.data.as_bytes().to_vec()
+                            } else {
+                                return Err(RuntimeError::IOError("Invalid string pointer".to_string()));
+                            }
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    (path, data)
+                };
+
+                // Create oneshot channel for response
+                let (tx, rx) = tokio::sync::oneshot::channel();
+
+                // Send request to IO runtime
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::FileWriteAll {
+                        path: std::path::PathBuf::from(path_str),
+                        data: content,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+
+                    // Set process to wait for IO
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            HttpGet(dst, url_reg) => {
+                // Get URL from register
+                let url = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*url_reg) {
+                        GcValue::String(ptr) => {
+                            if let Some(s) = proc.heap.get_string(*ptr) {
+                                s.data.clone()
+                            } else {
+                                return Err(RuntimeError::IOError("Invalid string pointer".to_string()));
+                            }
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    }
+                };
+
+                // Create oneshot channel for response
+                let (tx, rx) = tokio::sync::oneshot::channel();
+
+                // Send request to IO runtime
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::HttpGet {
+                        url,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+
+                    // Set process to wait for IO
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
             }
 
             // === I/O ===
