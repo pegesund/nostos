@@ -572,8 +572,9 @@ pub enum Instruction {
     GetCapture(Reg, u8),
 
     // === Pattern matching ===
-    /// Test if value matches constructor: dst = value.tag == ctor_idx
-    TestTag(Reg, Reg, ConstIdx),
+    /// Test if value matches constructor tag by discriminant (compile-time hash)
+    /// dst = value.discriminant == discriminant
+    TestTag(Reg, Reg, u16),
     /// Test if value is unit: dst = value == ()
     TestUnit(Reg, Reg),
     /// Test if value equals constant: dst = value == const

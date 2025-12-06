@@ -2337,8 +2337,9 @@ impl Compiler {
                 self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
             }
             Pattern::Variant(ctor, fields, _) => {
-                let ctor_idx = self.chunk.add_constant(Value::String(Arc::new(ctor.node.clone())));
-                self.chunk.emit(Instruction::TestTag(success_reg, scrut_reg, ctor_idx), 0);
+                // Compute discriminant at compile time for fast runtime matching
+                let discriminant = constructor_discriminant(&ctor.node);
+                self.chunk.emit(Instruction::TestTag(success_reg, scrut_reg, discriminant), 0);
 
                 // Look up field types for this constructor
                 let field_types = self.get_constructor_field_types(&ctor.node);

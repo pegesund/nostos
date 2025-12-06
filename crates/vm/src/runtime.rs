@@ -26,7 +26,7 @@ pub type JitIntFn4 = fn(i64, i64, i64, i64) -> i64;
 /// JIT-compiled loop array function: fn(arr_ptr, arr_len) -> i64
 pub type JitLoopArrayFn = fn(*const i64, i64) -> i64;
 
-use crate::gc::{GcNativeFn, GcValue, Heap, InlineOp};
+use crate::gc::{constructor_discriminant, GcNativeFn, GcValue, Heap, InlineOp};
 use crate::process::ExitReason;
 use crate::scheduler::Scheduler;
 use crate::value::TypeValue;
@@ -1371,23 +1371,17 @@ impl Runtime {
                 set_reg!(*dst, GcValue::Record(record_ptr));
             }
 
-            Instruction::TestTag(dst, value, tag_idx) => {
-                let tag = match constants.get(*tag_idx as usize) {
-                    Some(Value::String(s)) => s.to_string(),
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "String".to_string(),
-                        found: "non-string".to_string(),
-                    }),
-                };
+            Instruction::TestTag(dst, value, discriminant) => {
+                // Discriminant is computed at compile time - just compare u16 directly!
                 let result = match reg!(*value) {
                     GcValue::Variant(ptr) => {
                         proc.heap.get_variant(*ptr)
-                            .map(|v| v.constructor == tag)
+                            .map(|v| v.discriminant == *discriminant)
                             .unwrap_or(false)
                     }
                     GcValue::Record(ptr) => {
                         proc.heap.get_record(*ptr)
-                            .map(|r| r.type_name == tag)
+                            .map(|r| constructor_discriminant(&r.type_name) == *discriminant)
                             .unwrap_or(false)
                     }
                     _ => false,

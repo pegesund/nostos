@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam::channel::{self, Sender, Receiver, TryRecvError};
 
-use crate::gc::{GcConfig, GcNativeFn, GcValue, Heap, InlineOp};
+use crate::gc::{constructor_discriminant, GcConfig, GcNativeFn, GcValue, Heap, InlineOp};
 use crate::process::{CallFrame, Process, ProcessState};
 use crate::runtime::{JitIntFn, JitIntFn0, JitIntFn2, JitIntFn3, JitIntFn4, JitLoopArrayFn};
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, TypeValue, Value};
@@ -3114,23 +3114,18 @@ impl ThreadWorker {
                 set_reg!(*dst, GcValue::Bool(result));
             }
 
-            TestTag(dst, value, tag_idx) => {
-                let tag = match &constants[*tag_idx as usize] {
-                    Value::String(s) => (**s).clone(),
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "String".to_string(),
-                        found: "non-string".to_string(),
-                    }),
-                };
+            TestTag(dst, value, discriminant) => {
+                // Discriminant is computed at compile time - just compare u16 directly!
                 let value_clone = reg!(*value).clone();
                 let result = match &value_clone {
                     GcValue::Variant(ptr) => {
                         let proc = self.get_process(local_id).unwrap();
-                        proc.heap.get_variant(*ptr).map(|v| v.constructor == tag).unwrap_or(false)
+                        proc.heap.get_variant(*ptr).map(|v| v.discriminant == *discriminant).unwrap_or(false)
                     }
                     GcValue::Record(ptr) => {
+                        // Records: compute discriminant of type_name at runtime
                         let proc = self.get_process(local_id).unwrap();
-                        proc.heap.get_record(*ptr).map(|r| r.type_name == tag).unwrap_or(false)
+                        proc.heap.get_record(*ptr).map(|r| constructor_discriminant(&r.type_name) == *discriminant).unwrap_or(false)
                     }
                     _ => false,
                 };
