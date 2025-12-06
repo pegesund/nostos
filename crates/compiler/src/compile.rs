@@ -1675,6 +1675,11 @@ impl Compiler {
                         self.chunk.emit(Instruction::ListSum(dst, arg_regs[0]), 0);
                         return Ok(dst);
                     }
+                    "rangeList" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::RangeList(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
                     "length" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::Length(dst, arg_regs[0]), 0);

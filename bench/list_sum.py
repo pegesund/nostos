@@ -11,8 +11,8 @@ def list_sum(lst):
     return fold(lambda a, b: a + b, 0, lst)
 
 def main():
-    # Create list of 1000 integers and sum 100 times
-    lst = list(range(1, 1001))  # [1..1000]
+    # Create list of 10000 integers and sum 10 times (same total work)
+    lst = list(range(1, 10001))  # [1..10000]
     total = 0
     for _ in range(100):
         total += list_sum(lst)

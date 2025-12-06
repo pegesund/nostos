@@ -1157,6 +1157,17 @@ impl Heap {
         }
     }
 
+    /// Fast unchecked closure access - skips bounds checks and Option handling.
+    /// SAFETY: ptr must be a valid closure pointer that hasn't been collected.
+    #[inline(always)]
+    pub unsafe fn get_closure_unchecked(&self, ptr: GcPtr<GcClosure>) -> &GcClosure {
+        let obj = self.objects.get_unchecked(ptr.as_raw() as usize);
+        match &obj.as_ref().unwrap_unchecked().data {
+            HeapData::Closure(ref c) => c,
+            _ => std::hint::unreachable_unchecked(),
+        }
+    }
+
     /// Get a typed reference to BigInt data.
     pub fn get_bigint(&self, ptr: GcPtr<GcBigInt>) -> Option<&GcBigInt> {
         match self.get(ptr.as_raw())?.data {
