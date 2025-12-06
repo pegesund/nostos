@@ -358,8 +358,8 @@ struct ThreadResult {
 struct ThreadWorker {
     /// This thread's ID
     thread_id: u16,
-    /// Local processes owned by this thread
-    processes: HashMap<u64, Process>, // local_id -> Process
+    /// Local processes owned by this thread - Vec indexed by local_id for O(1) access
+    processes: Vec<Option<Process>>,
     /// Local run queue (ready processes)
     run_queue: VecDeque<u64>, // local_ids
     /// Timer heap for sleeping/timed-out processes: min-heap of (wake_time, local_id)
@@ -631,7 +631,7 @@ impl ThreadWorker {
     ) -> Self {
         Self {
             thread_id,
-            processes: HashMap::new(),
+            processes: vec![None], // Slot 0 unused, local_id starts at 1
             run_queue: VecDeque::new(),
             timer_heap: BinaryHeap::new(),
             next_local_id: 1,
@@ -641,6 +641,36 @@ impl ThreadWorker {
             config,
             main_pid: None,
             main_result: None,
+        }
+    }
+
+    /// Insert a process at the given local_id, growing the Vec if needed.
+    #[inline]
+    fn insert_process(&mut self, local_id: u64, process: Process) {
+        let idx = local_id as usize;
+        if idx >= self.processes.len() {
+            self.processes.resize_with(idx + 1, || None);
+        }
+        self.processes[idx] = Some(process);
+    }
+
+    /// Get an immutable reference to a process by local_id.
+    #[inline]
+    fn get_process(&self, local_id: u64) -> Option<&Process> {
+        self.processes.get(local_id as usize).and_then(|opt| opt.as_ref())
+    }
+
+    /// Get a mutable reference to a process by local_id.
+    #[inline]
+    fn get_process_mut(&mut self, local_id: u64) -> Option<&mut Process> {
+        self.processes.get_mut(local_id as usize).and_then(|opt| opt.as_mut())
+    }
+
+    /// Remove a process by local_id.
+    #[inline]
+    fn remove_process(&mut self, local_id: u64) {
+        if let Some(slot) = self.processes.get_mut(local_id as usize) {
+            *slot = None;
         }
     }
 
@@ -678,7 +708,7 @@ impl ThreadWorker {
         };
         process.frames.push(frame);
 
-        self.processes.insert(local_id, process);
+        self.insert_process(local_id, process);
         self.run_queue.push_back(local_id);
 
         pid
@@ -724,13 +754,13 @@ impl ThreadWorker {
                     let pid = encode_pid(self.thread_id, local_id);
                     if Some(pid) == self.main_pid {
                         // Convert GcValue to SendableValue for thread-safe result
-                        let proc = self.processes.get(&local_id).unwrap();
+                        let proc = self.get_process(local_id).unwrap();
                         let sendable = SendableValue::from_gc_value(&value, &proc.heap);
                         self.main_result = Some(Ok(sendable));
                         // Signal shutdown
                         self.shared.shutdown.store(true, Ordering::SeqCst);
                     }
-                    self.processes.remove(&local_id);
+                    self.remove_process(local_id);
                 }
                 Err(e) => {
                     // Process error
@@ -739,7 +769,7 @@ impl ThreadWorker {
                         self.main_result = Some(Err(e.to_string()));
                         self.shared.shutdown.store(true, Ordering::SeqCst);
                     }
-                    self.processes.remove(&local_id);
+                    self.remove_process(local_id);
                 }
             }
         }
@@ -758,7 +788,7 @@ impl ThreadWorker {
                     match msg {
                         CrossThreadMessage::SendMessage { target_pid, payload } => {
                             let local_id = pid_local_id(target_pid);
-                            if let Some(process) = self.processes.get_mut(&local_id) {
+                            if let Some(process) = self.get_process_mut(local_id) {
                                 // Convert thread-safe value to GcValue on this process's heap
                                 let gc_value = payload.to_gc_value(&mut process.heap);
 
@@ -812,7 +842,7 @@ impl ThreadWorker {
                                 return_reg: None,
                             });
 
-                            self.processes.insert(local_id, process);
+                            self.insert_process(local_id, process);
                             self.run_queue.push_back(local_id);
                         }
                     }
@@ -834,7 +864,7 @@ impl ThreadWorker {
         while let Some(&Reverse((wake_time, local_id))) = self.timer_heap.peek() {
             if wake_time <= now {
                 self.timer_heap.pop();
-                if let Some(proc) = self.processes.get_mut(&local_id) {
+                if let Some(proc) = self.get_process_mut(local_id) {
                     match proc.state {
                         ProcessState::Sleeping => {
                             // Sleep completed - wake the process
@@ -877,11 +907,11 @@ impl ThreadWorker {
             let target_local_id = pid_local_id(target);
 
             // Convert to thread-safe value first (to avoid borrow conflicts)
-            let sender_process = self.processes.get(&sender_local_id).unwrap();
+            let sender_process = self.get_process(sender_local_id).unwrap();
             let safe_value = ThreadSafeValue::from_gc_value(&message, &sender_process.heap);
 
             // Then convert back to target's heap
-            if let (Some(safe), Some(target_process)) = (safe_value, self.processes.get_mut(&target_local_id)) {
+            if let (Some(safe), Some(target_process)) = (safe_value, self.get_process_mut(target_local_id)) {
                 let copied_message = safe.to_gc_value(&mut target_process.heap);
                 target_process.mailbox.push_back(copied_message);
 
@@ -896,7 +926,7 @@ impl ThreadWorker {
         } else {
             // Cross-thread send
             // Convert to thread-safe value
-            let sender_process = self.processes.get(&sender_local_id).unwrap();
+            let sender_process = self.get_process(sender_local_id).unwrap();
             if let Some(safe_value) = ThreadSafeValue::from_gc_value(&message, &sender_process.heap) {
                 if let Some(sender) = self.thread_senders.get(target_thread as usize) {
                     let _ = sender.send(CrossThreadMessage::SendMessage {
@@ -925,7 +955,7 @@ impl ThreadWorker {
                 FastLoopResult::NeedSlowPath(instr) => {
                     // Fall back to slow path for complex instructions
                     let constants = {
-                        let proc = self.processes.get(&local_id).unwrap();
+                        let proc = self.get_process(local_id).unwrap();
                         proc.frames.last().unwrap().function.code.constants.clone()
                     };
                     match self.execute_instruction(local_id, &instr, &constants)? {
@@ -948,7 +978,7 @@ impl ThreadWorker {
 
         // Clone Arc to access shared state without conflicting with processes borrow
         let shared = Arc::clone(&self.shared);
-        let proc = self.processes.get_mut(&local_id).unwrap();
+        let proc = self.get_process_mut(local_id).unwrap();
 
         for _ in 0..max_iters {
             let frame_len = proc.frames.len();
@@ -1413,6 +1443,51 @@ impl ThreadWorker {
                         _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
                     }
                 }
+                // Fast path for Call with simple binary function inlining
+                Call(dst, func_reg, args) => {
+                    proc.frames[frame_idx].ip += 1;
+                    // Only try fast path for 2-arg calls
+                    if args.len() == 2 {
+                        let func_val = &proc.frames[frame_idx].registers[*func_reg as usize];
+                        if let GcValue::Function(func) = func_val {
+                            let instrs = &func.code.code;
+                            // Check for pattern: BinaryOp(dst, 0, 1); Return(dst)
+                            if instrs.len() == 2 {
+                                if let Instruction::Return(ret_reg) = &instrs[1] {
+                                    let arg0 = &proc.frames[frame_idx].registers[args[0] as usize];
+                                    let arg1 = &proc.frames[frame_idx].registers[args[1] as usize];
+                                    let result = match &instrs[0] {
+                                        Instruction::AddInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                                            match (arg0, arg1) {
+                                                (GcValue::Int64(x), GcValue::Int64(y)) => Some(GcValue::Int64(x + y)),
+                                                _ => None,
+                                            }
+                                        }
+                                        Instruction::SubInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                                            match (arg0, arg1) {
+                                                (GcValue::Int64(x), GcValue::Int64(y)) => Some(GcValue::Int64(x - y)),
+                                                _ => None,
+                                            }
+                                        }
+                                        Instruction::MulInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                                            match (arg0, arg1) {
+                                                (GcValue::Int64(x), GcValue::Int64(y)) => Some(GcValue::Int64(x * y)),
+                                                _ => None,
+                                            }
+                                        }
+                                        _ => None,
+                                    };
+                                    if let Some(r) = result {
+                                        proc.frames[frame_idx].registers[*dst as usize] = r;
+                                        continue; // Stay in fast loop!
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Fall back to slow path for non-inlinable calls
+                    return Ok(FastLoopResult::NeedSlowPath(instr.clone()));
+                }
                 _ => {
                     // Slow path instruction - need to release proc and call method on self
                     proc.frames[frame_idx].ip += 1;
@@ -1429,7 +1504,7 @@ impl ThreadWorker {
         use Instruction::*;
 
         // Single HashMap lookup - get instruction and increment IP together
-        let proc = self.processes.get_mut(&local_id).unwrap();
+        let proc = self.get_process_mut(local_id).unwrap();
 
         if proc.frames.is_empty() {
             return Ok(StepResult::Finished(GcValue::Unit));
@@ -1654,7 +1729,7 @@ impl ThreadWorker {
         // FAST PATH: Handle hot-path instructions with minimal overhead
         // These instructions only need register access, no &mut self methods
         {
-            let proc = self.processes.get_mut(&local_id).unwrap();
+            let proc = self.get_process_mut(local_id).unwrap();
             let frame_idx = proc.frames.len() - 1;
 
             macro_rules! fast_reg {
@@ -1963,7 +2038,7 @@ impl ThreadWorker {
         // Re-acquire process reference with macros that do HashMap lookup
         macro_rules! reg {
             ($r:expr) => {{
-                let proc = self.processes.get(&local_id).unwrap();
+                let proc = self.get_process(local_id).unwrap();
                 let frame = proc.frames.last().unwrap();
                 &frame.registers[$r as usize]
             }};
@@ -1971,7 +2046,7 @@ impl ThreadWorker {
 
         macro_rules! set_reg {
             ($r:expr, $v:expr) => {{
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 let frame = proc.frames.last_mut().unwrap();
                 frame.registers[$r as usize] = $v;
             }};
@@ -2018,7 +2093,7 @@ impl ThreadWorker {
                     (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x + y),
                     (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x + y),
                     (GcValue::BigInt(px), GcValue::BigInt(py)) => {
-                        let proc = self.processes.get_mut(&local_id).unwrap();
+                        let proc = self.get_process_mut(local_id).unwrap();
                         let bx = proc.heap.get_bigint(*px).unwrap().value.clone();
                         let by = proc.heap.get_bigint(*py).unwrap().value.clone();
                         let result_ptr = proc.heap.alloc_bigint(&bx + &by);
@@ -2048,7 +2123,7 @@ impl ThreadWorker {
                     (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x - y),
                     (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x - y),
                     (GcValue::BigInt(px), GcValue::BigInt(py)) => {
-                        let proc = self.processes.get_mut(&local_id).unwrap();
+                        let proc = self.get_process_mut(local_id).unwrap();
                         let bx = proc.heap.get_bigint(*px).unwrap().value.clone();
                         let by = proc.heap.get_bigint(*py).unwrap().value.clone();
                         let result_ptr = proc.heap.alloc_bigint(&bx - &by);
@@ -2078,7 +2153,7 @@ impl ThreadWorker {
                     (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x * y),
                     (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x * y),
                     (GcValue::BigInt(px), GcValue::BigInt(py)) => {
-                        let proc = self.processes.get_mut(&local_id).unwrap();
+                        let proc = self.get_process_mut(local_id).unwrap();
                         let bx = proc.heap.get_bigint(*px).unwrap().value.clone();
                         let by = proc.heap.get_bigint(*py).unwrap().value.clone();
                         let result_ptr = proc.heap.alloc_bigint(&bx * &by);
@@ -2191,7 +2266,7 @@ impl ThreadWorker {
             Eq(dst, a, b) => {
                 let va = reg!(*a).clone();
                 let vb = reg!(*b).clone();
-                let proc = self.processes.get(&local_id).unwrap();
+                let proc = self.get_process(local_id).unwrap();
                 let result = proc.heap.gc_values_equal(&va, &vb);
                 set_reg!(*dst, GcValue::Bool(result));
             }
@@ -2354,7 +2429,7 @@ impl ThreadWorker {
                     GcValue::Float32(v) => GcValue::Int64(v as i64),
                     GcValue::Float64(v) => GcValue::Int64(v as i64),
                     GcValue::BigInt(ptr) => {
-                        let proc = self.processes.get(&local_id).unwrap();
+                        let proc = self.get_process(local_id).unwrap();
                         let bi = proc.heap.get_bigint(ptr).unwrap();
                         use num_traits::ToPrimitive;
                         GcValue::Int64(bi.value.to_i64().unwrap_or(0))
@@ -2369,7 +2444,7 @@ impl ThreadWorker {
 
             // === Control Flow ===
             Jump(offset) => {
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 let frame = proc.frames.last_mut().unwrap();
                 frame.ip = (frame.ip as isize + *offset as isize) as usize;
             }
@@ -2377,7 +2452,7 @@ impl ThreadWorker {
             JumpIfFalse(cond, offset) => {
                 let val = reg!(*cond).clone();
                 if let GcValue::Bool(false) = val {
-                    let proc = self.processes.get_mut(&local_id).unwrap();
+                    let proc = self.get_process_mut(local_id).unwrap();
                     let frame = proc.frames.last_mut().unwrap();
                     frame.ip = (frame.ip as isize + *offset as isize) as usize;
                 }
@@ -2386,7 +2461,7 @@ impl ThreadWorker {
             JumpIfTrue(cond, offset) => {
                 let val = reg!(*cond).clone();
                 if let GcValue::Bool(true) = val {
-                    let proc = self.processes.get_mut(&local_id).unwrap();
+                    let proc = self.get_process_mut(local_id).unwrap();
                     let frame = proc.frames.last_mut().unwrap();
                     frame.ip = (frame.ip as isize + *offset as isize) as usize;
                 }
@@ -2394,7 +2469,7 @@ impl ThreadWorker {
 
             Return(src) => {
                 let ret_val = reg!(*src).clone();
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
 
                 // Get return_reg from current frame BEFORE popping (for tail call support)
                 let return_reg = proc.frames.last().unwrap().return_reg;
@@ -2459,7 +2534,7 @@ impl ThreadWorker {
                         self.call_function(local_id, func, arg_values, Some(*dst))?;
                     }
                     GcValue::Closure(ptr) => {
-                        let proc = self.processes.get(&local_id).unwrap();
+                        let proc = self.get_process(local_id).unwrap();
                         let closure = proc.heap.get_closure(ptr).unwrap();
                         let func = closure.function.clone();
                         let captures = closure.captures.clone();
@@ -2536,11 +2611,11 @@ impl ThreadWorker {
                         }
                     }
                     // Check for loop array JIT
-                    if let Some(jit_fn) = self.shared.jit_loop_array_functions.get(func_idx) {
+                    if let Some(&jit_fn) = self.shared.jit_loop_array_functions.get(func_idx) {
                         let arg = reg!(args[0]).clone();
                         if let GcValue::Int64Array(arr_ptr) = arg {
-                            // Get array data from heap (mutable for IndexSet support)
-                            let proc = self.processes.get_mut(&local_id).unwrap();
+                            // Copy jit_fn to avoid borrow conflict, then get process
+                            let proc = self.get_process_mut(local_id).unwrap();
                             if let Some(arr) = proc.heap.get_int64_array_mut(arr_ptr) {
                                 let ptr = arr.items.as_mut_ptr();
                                 let len = arr.items.len() as i64;
@@ -2564,7 +2639,7 @@ impl ThreadWorker {
             CallSelf(dst, args) => {
                 // Self-recursion: call the same function
                 let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r).clone()).collect();
-                let proc = self.processes.get(&local_id).unwrap();
+                let proc = self.get_process(local_id).unwrap();
                 let func = proc.frames.last().unwrap().function.clone();
                 self.call_function(local_id, func, arg_values, Some(*dst))?;
             }
@@ -2580,7 +2655,7 @@ impl ThreadWorker {
                             let result = jit_fn(n);
                             let result_val = GcValue::Int64(result);
                             // For tail call: pop current frame, set result in parent
-                            let proc = self.processes.get_mut(&local_id).unwrap();
+                            let proc = self.get_process_mut(local_id).unwrap();
                             let return_reg = proc.frames.last().and_then(|f| f.return_reg);
                             proc.frames.pop();
                             // If no more frames, this is the final result
@@ -2597,10 +2672,10 @@ impl ThreadWorker {
                     }
                     // Check for loop array JIT (only check if we have any registered)
                     if !self.shared.jit_loop_array_functions.is_empty() {
-                        if let Some(jit_fn) = self.shared.jit_loop_array_functions.get(func_idx) {
+                        if let Some(&jit_fn) = self.shared.jit_loop_array_functions.get(func_idx) {
                             let arg = reg!(args[0]).clone();
                             if let GcValue::Int64Array(arr_ptr) = arg {
-                                let proc = self.processes.get_mut(&local_id).unwrap();
+                                let proc = self.get_process_mut(local_id).unwrap();
                                 if let Some(arr) = proc.heap.get_int64_array_mut(arr_ptr) {
                                     let ptr = arr.items.as_mut_ptr();
                                     let len = arr.items.len() as i64;
@@ -2637,7 +2712,7 @@ impl ThreadWorker {
             TailCallSelf(args) => {
                 // Self tail-recursion: reuse current frame
                 let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r).clone()).collect();
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 let frame = proc.frames.last_mut().unwrap();
                 let reg_count = frame.function.code.register_count;
                 frame.ip = 0;
@@ -2658,7 +2733,7 @@ impl ThreadWorker {
                         self.tail_call_function(local_id, func, arg_values)?;
                     }
                     GcValue::Closure(ptr) => {
-                        let proc = self.processes.get(&local_id).unwrap();
+                        let proc = self.get_process(local_id).unwrap();
                         let closure = proc.heap.get_closure(ptr).unwrap();
                         let func = closure.function.clone();
                         let captures = closure.captures.clone();
@@ -2684,7 +2759,7 @@ impl ThreadWorker {
                 // Check for trait overrides for "show" and "copy"
                 let trait_method = if !arg_values.is_empty() && (name == "show" || name == "copy") {
                     let trait_name = if name == "show" { "Show" } else { "Copy" };
-                    let proc = self.processes.get(&local_id).unwrap();
+                    let proc = self.get_process(local_id).unwrap();
                     let type_name = arg_values[0].type_name(&proc.heap).to_string();
                     let qualified_name = format!("{}.{}.{}", type_name, trait_name, name);
                     self.shared.functions.get(&qualified_name).cloned()
@@ -2713,13 +2788,13 @@ impl ThreadWorker {
                 let captures: Vec<GcValue> = capture_regs.iter().map(|r| reg!(*r).clone()).collect();
                 let capture_names = func_val.param_names.clone();
 
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 let ptr = proc.heap.alloc_closure(func_val, captures, capture_names);
                 set_reg!(*dst, GcValue::Closure(ptr));
             }
 
             GetCapture(dst, idx) => {
-                let proc = self.processes.get(&local_id).unwrap();
+                let proc = self.get_process(local_id).unwrap();
                 let frame = proc.frames.last().unwrap();
                 let val = frame.captures.get(*idx as usize)
                     .cloned()
@@ -2740,7 +2815,7 @@ impl ThreadWorker {
                 let (func, captures) = match func_val {
                     GcValue::Function(f) => (f, vec![]),
                     GcValue::Closure(ptr) => {
-                        let proc = self.processes.get(&local_id).unwrap();
+                        let proc = self.get_process(local_id).unwrap();
                         let closure = proc.heap.get_closure(ptr).unwrap();
                         (closure.function.clone(), closure.captures.clone())
                     }
@@ -2760,7 +2835,7 @@ impl ThreadWorker {
                     self.spawn_process(func, arg_values, captures)
                 } else {
                     // Spawn on another thread - convert args to thread-safe values
-                    let proc = self.processes.get(&local_id).unwrap();
+                    let proc = self.get_process(local_id).unwrap();
                     let safe_args: Vec<ThreadSafeValue> = arg_values.iter()
                         .filter_map(|v| ThreadSafeValue::from_gc_value(v, &proc.heap))
                         .collect();
@@ -2805,7 +2880,7 @@ impl ThreadWorker {
             }
 
             Receive(dst) => {
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 if let Some(msg) = proc.mailbox.pop_front() {
                     // Result goes in destination register
                     let frame = proc.frames.last_mut().unwrap();
@@ -2821,8 +2896,15 @@ impl ThreadWorker {
             }
 
             ReceiveTimeout(dst, timeout_reg) => {
-                let proc = self.processes.get_mut(&local_id).unwrap();
-                if let Some(msg) = proc.mailbox.pop_front() {
+                // First check if there's a message
+                let has_msg = {
+                    let proc = self.get_process(local_id).unwrap();
+                    !proc.mailbox.is_empty()
+                };
+
+                if has_msg {
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    let msg = proc.mailbox.pop_front().unwrap();
                     // Message available - put in destination register
                     let frame = proc.frames.last_mut().unwrap();
                     frame.registers[*dst as usize] = msg;
@@ -2831,22 +2913,31 @@ impl ThreadWorker {
                     proc.timeout_dst = None;
                 } else {
                     // No message - check if this is a timeout wake-up or first entry
-                    let frame = proc.frames.last().unwrap();
-                    let timeout_ms = match frame.registers[*timeout_reg as usize] {
-                        GcValue::Int64(n) => n as u64,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "Int64".to_string(),
-                            found: "non-integer".to_string(),
-                        }),
+                    // First get timeout value and state
+                    let (timeout_ms, is_first_entry) = {
+                        let proc = self.get_process(local_id).unwrap();
+                        let frame = proc.frames.last().unwrap();
+                        let timeout_ms = match frame.registers[*timeout_reg as usize] {
+                            GcValue::Int64(n) => n as u64,
+                            _ => return Err(RuntimeError::TypeError {
+                                expected: "Int64".to_string(),
+                                found: "non-integer".to_string(),
+                            }),
+                        };
+                        let is_first = proc.state == ProcessState::Running && proc.wake_time.is_none();
+                        (timeout_ms, is_first)
                     };
 
-                    if proc.state == ProcessState::Running && proc.wake_time.is_none() {
+                    if is_first_entry {
                         // First entry - set up timeout and wait
                         let wake_time = Instant::now() + Duration::from_millis(timeout_ms);
+                        // Push to timer_heap before borrowing proc
+                        self.timer_heap.push(Reverse((wake_time, local_id)));
+                        // Now update proc state
+                        let proc = self.get_process_mut(local_id).unwrap();
                         proc.wake_time = Some(wake_time);
                         proc.timeout_dst = Some(*dst); // Store destination register for check_timers
                         proc.state = ProcessState::WaitingTimeout;
-                        self.timer_heap.push(Reverse((wake_time, local_id)));
                         // Decrement IP so we retry when woken
                         let frame = proc.frames.last_mut().unwrap();
                         frame.ip -= 1;
@@ -2854,13 +2945,14 @@ impl ThreadWorker {
                     } else {
                         // Woken by timeout (not by message) - dst already set to Unit by check_timers
                         // Clear timeout_dst since we're done
+                        let proc = self.get_process_mut(local_id).unwrap();
                         proc.timeout_dst = None;
                     }
                 }
             }
 
             Sleep(duration_reg) => {
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 let frame = proc.frames.last().unwrap();
                 let duration_ms = match frame.registers[*duration_reg as usize] {
                     GcValue::Int64(n) => n as u64,
@@ -2879,7 +2971,7 @@ impl ThreadWorker {
 
             // === I/O ===
             Println(src) => {
-                let proc = self.processes.get(&local_id).unwrap();
+                let proc = self.get_process(local_id).unwrap();
                 let s = proc.heap.display_value(reg!(*src));
                 println!("{}", s);
             }
@@ -2904,7 +2996,7 @@ impl ThreadWorker {
             AssertEq(a, b) => {
                 let va = reg!(*a).clone();
                 let vb = reg!(*b).clone();
-                let proc = self.processes.get(&local_id).unwrap();
+                let proc = self.get_process(local_id).unwrap();
                 if !proc.heap.gc_values_equal(&va, &vb) {
                     let sa = proc.heap.display_value(&va);
                     let sb = proc.heap.display_value(&vb);
@@ -2918,7 +3010,7 @@ impl ThreadWorker {
             TestConst(dst, value_reg, const_idx) => {
                 let value = reg!(*value_reg).clone();
                 let constant = &constants[*const_idx as usize];
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 let gc_const = proc.heap.value_to_gc(constant);
                 let result = proc.heap.gc_values_equal(&value, &gc_const);
                 proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::Bool(result);
@@ -2928,7 +3020,7 @@ impl ThreadWorker {
                 let list_val = reg!(*list).clone();
                 let result = match list_val {
                     GcValue::List(ptr) => {
-                        let proc = self.processes.get(&local_id).unwrap();
+                        let proc = self.get_process(local_id).unwrap();
                         proc.heap.get_list(ptr).map(|l| l.is_empty()).unwrap_or(false)
                     }
                     _ => false,
@@ -2953,11 +3045,11 @@ impl ThreadWorker {
                 let value_clone = reg!(*value).clone();
                 let result = match &value_clone {
                     GcValue::Variant(ptr) => {
-                        let proc = self.processes.get(&local_id).unwrap();
+                        let proc = self.get_process(local_id).unwrap();
                         proc.heap.get_variant(*ptr).map(|v| v.constructor == tag).unwrap_or(false)
                     }
                     GcValue::Record(ptr) => {
-                        let proc = self.processes.get(&local_id).unwrap();
+                        let proc = self.get_process(local_id).unwrap();
                         proc.heap.get_record(*ptr).map(|r| r.type_name == tag).unwrap_or(false)
                     }
                     _ => false,
@@ -2975,7 +3067,7 @@ impl ThreadWorker {
                     _ => return Err(RuntimeError::Panic("Variant constructor must be string".to_string())),
                 };
                 let fields: Vec<GcValue> = field_regs.iter().map(|&r| reg!(r).clone()).collect();
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 let ptr = proc.heap.alloc_variant(type_name, constructor, fields);
                 set_reg!(*dst, GcValue::Variant(ptr));
             }
@@ -2988,7 +3080,7 @@ impl ThreadWorker {
                 let rec_val = reg!(*record).clone();
                 match rec_val {
                     GcValue::Record(ptr) => {
-                        let proc = self.processes.get(&local_id).unwrap();
+                        let proc = self.get_process(local_id).unwrap();
                         let rec = proc.heap.get_record(ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid record reference".to_string()))?;
                         let idx = rec.field_names.iter().position(|n| n == &field_name)
@@ -2997,7 +3089,7 @@ impl ThreadWorker {
                         set_reg!(*dst, value);
                     }
                     GcValue::Variant(ptr) => {
-                        let proc = self.processes.get(&local_id).unwrap();
+                        let proc = self.get_process(local_id).unwrap();
                         let var = proc.heap.get_variant(ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid variant reference".to_string()))?;
                         let idx: usize = field_name.parse()
@@ -3015,14 +3107,14 @@ impl ThreadWorker {
                 let src_val = reg!(*src).clone();
                 let value = match src_val {
                     GcValue::Variant(ptr) => {
-                        let proc = self.processes.get(&local_id).unwrap();
+                        let proc = self.get_process(local_id).unwrap();
                         let variant = proc.heap.get_variant(ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid variant reference".to_string()))?;
                         variant.fields.get(*idx as usize).cloned()
                             .ok_or_else(|| RuntimeError::Panic(format!("Variant field {} out of bounds", idx)))?
                     }
                     GcValue::Record(ptr) => {
-                        let proc = self.processes.get(&local_id).unwrap();
+                        let proc = self.get_process(local_id).unwrap();
                         let record = proc.heap.get_record(ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid record reference".to_string()))?;
                         record.fields.get(*idx as usize).cloned()
@@ -3042,7 +3134,7 @@ impl ThreadWorker {
                 let rec_val = reg!(*record).clone();
                 match rec_val {
                     GcValue::Record(ptr) => {
-                        let proc = self.processes.get_mut(&local_id).unwrap();
+                        let proc = self.get_process_mut(local_id).unwrap();
                         let rec = proc.heap.get_record_mut(ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid record reference".to_string()))?;
                         let idx = rec.field_names.iter().position(|n| n == &field_name)
@@ -3058,7 +3150,7 @@ impl ThreadWorker {
 
             Length(dst, src) => {
                 let val = reg!(*src).clone();
-                let proc = self.processes.get(&local_id).unwrap();
+                let proc = self.get_process(local_id).unwrap();
                 let len = match val {
                     GcValue::List(ptr) => proc.heap.get_list(ptr).map(|l| l.len()).unwrap_or(0),
                     GcValue::Tuple(ptr) => proc.heap.get_tuple(ptr).map(|t| t.items.len()).unwrap_or(0),
@@ -3074,14 +3166,14 @@ impl ThreadWorker {
             // === Collections ===
             MakeList(dst, ref elements) => {
                 let items: Vec<GcValue> = elements.iter().map(|&r| reg!(r).clone()).collect();
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 let ptr = proc.heap.alloc_list(items);
                 set_reg!(*dst, GcValue::List(ptr));
             }
 
             MakeTuple(dst, ref elements) => {
                 let items: Vec<GcValue> = elements.iter().map(|&r| reg!(r).clone()).collect();
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 let ptr = proc.heap.alloc_tuple(items);
                 set_reg!(*dst, GcValue::Tuple(ptr));
             }
@@ -3094,7 +3186,7 @@ impl ThreadWorker {
                         found: format!("{:?}", other),
                     }),
                 };
-                let proc = self.processes.get(&local_id).unwrap();
+                let proc = self.get_process(local_id).unwrap();
                 let item = proc.heap.get_tuple(ptr)
                     .and_then(|t| t.items.get(*idx as usize).cloned());
                 match item {
@@ -3124,7 +3216,7 @@ impl ThreadWorker {
                     .as_ref()
                     .map(|t| t.fields.iter().map(|f| f.mutable).collect())
                     .unwrap_or_else(|| vec![false; fields.len()]);
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 let ptr = proc.heap.alloc_record(type_name, field_names, fields, mutable_fields);
                 set_reg!(*dst, GcValue::Record(ptr));
             }
@@ -3132,7 +3224,7 @@ impl ThreadWorker {
             Cons(dst, head, tail) => {
                 let head_val = reg!(*head).clone();
                 let tail_val = reg!(*tail).clone();
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 match tail_val {
                     GcValue::List(ptr) => {
                         let tail_list = proc.heap.get_list(ptr).unwrap();
@@ -3152,7 +3244,7 @@ impl ThreadWorker {
 
             ListIsEmpty(dst, list_reg) => {
                 let list_val = reg!(*list_reg).clone();
-                let proc = self.processes.get(&local_id).unwrap();
+                let proc = self.get_process(local_id).unwrap();
                 let is_empty = match list_val {
                     GcValue::List(ptr) => {
                         let list = proc.heap.get_list(ptr).unwrap();
@@ -3165,7 +3257,7 @@ impl ThreadWorker {
 
             ListSum(dst, list_reg) => {
                 let list_val = reg!(*list_reg).clone();
-                let proc = self.processes.get(&local_id).unwrap();
+                let proc = self.get_process(local_id).unwrap();
                 let sum = match &list_val {
                     GcValue::List(ptr) => {
                         let list = proc.heap.get_list(*ptr).unwrap();
@@ -3192,7 +3284,7 @@ impl ThreadWorker {
             ListHead(dst, list_reg) => {
                 let list_val = reg!(*list_reg).clone();
                 let result = {
-                    let proc = self.processes.get(&local_id).unwrap();
+                    let proc = self.get_process(local_id).unwrap();
                     match &list_val {
                         GcValue::List(ptr) => {
                             let list = proc.heap.get_list(*ptr).unwrap();
@@ -3213,7 +3305,7 @@ impl ThreadWorker {
 
             ListTail(dst, list_reg) => {
                 let list_val = reg!(*list_reg).clone();
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 match list_val {
                     GcValue::List(ptr) => {
                         let list = proc.heap.get_list(ptr).unwrap();
@@ -3238,7 +3330,7 @@ impl ThreadWorker {
                     _ => return Err(RuntimeError::Panic("Array size must be Int64".to_string())),
                 };
                 let items = vec![0i64; size];
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 let ptr = proc.heap.alloc_int64_array(items);
                 set_reg!(*dst, GcValue::Int64Array(ptr));
             }
@@ -3249,7 +3341,7 @@ impl ThreadWorker {
                     _ => return Err(RuntimeError::Panic("Array size must be Int64".to_string())),
                 };
                 let items = vec![0.0f64; size];
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 let ptr = proc.heap.alloc_float64_array(items);
                 set_reg!(*dst, GcValue::Float64Array(ptr));
             }
@@ -3260,7 +3352,7 @@ impl ThreadWorker {
                     _ => return Err(RuntimeError::Panic("Index must be integer".to_string())),
                 };
                 let coll_val = reg!(*coll).clone();
-                let proc = self.processes.get(&local_id).unwrap();
+                let proc = self.get_process(local_id).unwrap();
                 let value = match coll_val {
                     GcValue::List(ptr) => {
                         let list = proc.heap.get_list(ptr)
@@ -3308,7 +3400,7 @@ impl ThreadWorker {
                 match coll_val {
                     GcValue::Array(ptr) => {
                         let new_value = reg!(*val).clone();
-                        let proc = self.processes.get_mut(&local_id).unwrap();
+                        let proc = self.get_process_mut(local_id).unwrap();
                         let array = proc.heap.get_array_mut(ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid array reference".to_string()))?;
                         if idx_val >= array.items.len() {
@@ -3321,7 +3413,7 @@ impl ThreadWorker {
                             GcValue::Int64(v) => *v,
                             _ => return Err(RuntimeError::Panic("Int64Array expects Int64 value".to_string())),
                         };
-                        let proc = self.processes.get_mut(&local_id).unwrap();
+                        let proc = self.get_process_mut(local_id).unwrap();
                         let array = proc.heap.get_int64_array_mut(ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid int64 array reference".to_string()))?;
                         if idx_val >= array.items.len() {
@@ -3334,7 +3426,7 @@ impl ThreadWorker {
                             GcValue::Float64(v) => *v,
                             _ => return Err(RuntimeError::Panic("Float64Array expects Float64 value".to_string())),
                         };
-                        let proc = self.processes.get_mut(&local_id).unwrap();
+                        let proc = self.get_process_mut(local_id).unwrap();
                         let array = proc.heap.get_float64_array_mut(ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid float64 array reference".to_string()))?;
                         if idx_val >= array.items.len() {
@@ -3352,7 +3444,7 @@ impl ThreadWorker {
                     GcValue::List(ptr) => ptr,
                     _ => return Err(RuntimeError::Panic("Decons expects list".to_string())),
                 };
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 let items = proc.heap.get_list(list_ptr)
                     .map(|l| l.items().to_vec())
                     .unwrap_or_default();
@@ -3376,7 +3468,7 @@ impl ThreadWorker {
                         found: "non-string".to_string(),
                     }),
                 };
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 let a_str = proc.heap.get_string(a_ptr).map(|s| s.data.as_str()).unwrap_or("");
                 let b_str = proc.heap.get_string(b_ptr).map(|s| s.data.as_str()).unwrap_or("");
                 let result = format!("{}{}", a_str, b_str);
@@ -3387,7 +3479,7 @@ impl ThreadWorker {
             Throw(src) => {
                 // Simple throw - just return the exception as an error
                 let exception = reg!(*src).clone();
-                let proc = self.processes.get(&local_id).unwrap();
+                let proc = self.get_process(local_id).unwrap();
                 let msg = proc.heap.display_value(&exception);
                 return Err(RuntimeError::Panic(format!("Exception: {}", msg)));
             }
@@ -3395,7 +3487,7 @@ impl ThreadWorker {
             // === I/O ===
             Print(dst, src) => {
                 let val = reg!(*src).clone();
-                let proc = self.processes.get_mut(&local_id).unwrap();
+                let proc = self.get_process_mut(local_id).unwrap();
                 let s = proc.heap.display_value(&val);
                 println!("{}", s);
                 let str_ptr = proc.heap.alloc_string(s);
@@ -3469,7 +3561,7 @@ impl ThreadWorker {
 
     /// Load a constant value into the process heap.
     fn load_constant(&mut self, value: &Value, local_id: u64) -> GcValue {
-        let proc = self.processes.get_mut(&local_id).unwrap();
+        let proc = self.get_process_mut(local_id).unwrap();
         proc.heap.value_to_gc(value)
     }
 
@@ -3498,7 +3590,7 @@ impl ThreadWorker {
             return_reg,
         };
 
-        let proc = self.processes.get_mut(&local_id).unwrap();
+        let proc = self.get_process_mut(local_id).unwrap();
         proc.frames.push(frame);
         Ok(())
     }
@@ -3529,7 +3621,7 @@ impl ThreadWorker {
             return_reg,
         };
 
-        let proc = self.processes.get_mut(&local_id).unwrap();
+        let proc = self.get_process_mut(local_id).unwrap();
         proc.frames.push(frame);
         Ok(())
     }
@@ -3550,7 +3642,7 @@ impl ThreadWorker {
             }
         }
 
-        let proc = self.processes.get_mut(&local_id).unwrap();
+        let proc = self.get_process_mut(local_id).unwrap();
 
         // Get return_reg from current frame before popping
         let return_reg = proc.frames.last().and_then(|f| f.return_reg);
@@ -3587,7 +3679,7 @@ impl ThreadWorker {
             }
         }
 
-        let proc = self.processes.get_mut(&local_id).unwrap();
+        let proc = self.get_process_mut(local_id).unwrap();
 
         // Get return_reg from current frame before popping
         let return_reg = proc.frames.last().and_then(|f| f.return_reg);
@@ -3619,7 +3711,7 @@ impl ThreadWorker {
             .ok_or_else(|| RuntimeError::UnknownFunction(name.to_string()))?
             .clone();
 
-        let proc = self.processes.get_mut(&local_id).unwrap();
+        let proc = self.get_process_mut(local_id).unwrap();
         (native.func)(&args, &mut proc.heap)
     }
 }
