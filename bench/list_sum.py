@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-# List sum benchmark - iterative style (matching Nostos)
+# Array sum benchmark - matching Nostos Int64Array version
+import numpy as np
 
-def list_sum(lst):
+def array_sum(arr):
     acc = 0
-    idx = 0
-    while idx < len(lst):
-        acc = acc + lst[idx]
-        idx = idx + 1
+    i = 0
+    length = len(arr)
+    while i < length:
+        acc = acc + arr[i]
+        i = i + 1
     return acc
 
 def main():
-    lst = list(range(1, 10001))  # [1..10000]
+    arr = np.arange(1, 10001, dtype=np.int64)
     total = 0
-    i = 0
-    while i < 100:
-        total = total + list_sum(lst)
-        i = i + 1
+    j = 0
+    while j < 100:
+        total = total + array_sum(arr)
+        j = j + 1
     print(total)
 
 if __name__ == "__main__":
