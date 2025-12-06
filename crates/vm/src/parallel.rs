@@ -1148,16 +1148,45 @@ impl ThreadWorker {
                     array.items[idx_val] = new_value;
                 }
                 TailCallSelf(args) => {
-                    let arg_values: Vec<GcValue> = args.iter()
-                        .map(|r| proc.frames[frame_idx].registers[*r as usize].clone())
-                        .collect();
-                    let reg_count = proc.frames[frame_idx].function.code.register_count;
-                    proc.frames[frame_idx].ip = 0;
-                    proc.frames[frame_idx].registers.clear();
-                    proc.frames[frame_idx].registers.resize(reg_count, GcValue::Unit);
-                    for (i, arg) in arg_values.into_iter().enumerate() {
-                        if i < reg_count {
-                            proc.frames[frame_idx].registers[i] = arg;
+                    // OPTIMIZATION: Use stack array instead of heap allocation
+                    // This is critical for recursive functions like fold
+                    if args.len() <= 8 {
+                        let mut saved_args: [std::mem::MaybeUninit<GcValue>; 8] =
+                            unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+
+                        // Save args to stack (take ownership)
+                        for (i, &r) in args.iter().enumerate() {
+                            saved_args[i] = std::mem::MaybeUninit::new(
+                                std::mem::take(&mut proc.frames[frame_idx].registers[r as usize])
+                            );
+                        }
+
+                        // Clear remaining registers
+                        let arg_count = args.len();
+                        for i in arg_count..proc.frames[frame_idx].registers.len() {
+                            proc.frames[frame_idx].registers[i] = GcValue::Unit;
+                        }
+
+                        // Write args to positions 0, 1, 2, ...
+                        for i in 0..arg_count {
+                            proc.frames[frame_idx].registers[i] =
+                                unsafe { saved_args[i].assume_init_read() };
+                        }
+
+                        proc.frames[frame_idx].ip = 0;
+                    } else {
+                        // Fall back to heap allocation for many args
+                        let arg_values: Vec<GcValue> = args.iter()
+                            .map(|r| proc.frames[frame_idx].registers[*r as usize].clone())
+                            .collect();
+                        let reg_count = proc.frames[frame_idx].function.code.register_count;
+                        proc.frames[frame_idx].ip = 0;
+                        proc.frames[frame_idx].registers.clear();
+                        proc.frames[frame_idx].registers.resize(reg_count, GcValue::Unit);
+                        for (i, arg) in arg_values.into_iter().enumerate() {
+                            if i < reg_count {
+                                proc.frames[frame_idx].registers[i] = arg;
+                            }
                         }
                     }
                 }
@@ -1480,33 +1509,69 @@ impl ThreadWorker {
                 TailCallDirect(func_idx, args) => {
                     // Get target function from shared state
                     let func = match shared.function_list.get(*func_idx as usize) {
-                        Some(f) => Arc::clone(f),
+                        Some(f) => f,
                         None => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
                     };
 
-                    // Collect arguments from current frame
-                    let arg_values: Vec<GcValue> = args.iter()
-                        .map(|&r| proc.frames[frame_idx].registers[r as usize].clone())
-                        .collect();
+                    // OPTIMIZATION: If calling same function, reuse registers (no heap allocation!)
+                    // This is critical for recursive functions like fold
+                    let current_func = &proc.frames[frame_idx].function;
+                    if Arc::ptr_eq(func, current_func) && args.len() <= 8 {
+                        // Same function - reuse registers, no allocation!
+                        // Use stack array to avoid heap allocation
+                        let mut saved_args: [std::mem::MaybeUninit<GcValue>; 8] =
+                            unsafe { std::mem::MaybeUninit::uninit().assume_init() };
 
-                    // Tail call: replace current frame with new frame
-                    let reg_count = func.code.register_count;
-                    let mut registers = vec![GcValue::Unit; reg_count];
-                    for (i, arg) in arg_values.into_iter().enumerate() {
-                        if i < reg_count {
-                            registers[i] = arg;
+                        // Save args to stack (take ownership, leave Unit behind)
+                        for (i, &r) in args.iter().enumerate() {
+                            saved_args[i] = std::mem::MaybeUninit::new(
+                                std::mem::take(&mut proc.frames[frame_idx].registers[r as usize])
+                            );
                         }
-                    }
 
-                    // Keep the same return_reg (we're replacing, not pushing)
-                    let return_reg = proc.frames[frame_idx].return_reg;
-                    proc.frames[frame_idx] = CallFrame {
-                        function: func,
-                        ip: 0,
-                        registers,
-                        captures: Vec::new(),
-                        return_reg,
-                    };
+                        // Clear remaining registers
+                        let arg_count = args.len();
+                        for i in arg_count..proc.frames[frame_idx].registers.len() {
+                            proc.frames[frame_idx].registers[i] = GcValue::Unit;
+                        }
+
+                        // Write args to positions 0, 1, 2, ...
+                        for i in 0..arg_count {
+                            proc.frames[frame_idx].registers[i] =
+                                unsafe { saved_args[i].assume_init_read() };
+                        }
+
+                        // Reset IP to start - continue in same frame
+                        proc.frames[frame_idx].ip = 0;
+                        // Continue in fast loop
+                    } else {
+                        // Different function - need new frame
+                        let func = Arc::clone(func);
+
+                        // Collect arguments from current frame
+                        let arg_values: Vec<GcValue> = args.iter()
+                            .map(|&r| proc.frames[frame_idx].registers[r as usize].clone())
+                            .collect();
+
+                        // Tail call: replace current frame with new frame
+                        let reg_count = func.code.register_count;
+                        let mut registers = vec![GcValue::Unit; reg_count];
+                        for (i, arg) in arg_values.into_iter().enumerate() {
+                            if i < reg_count {
+                                registers[i] = arg;
+                            }
+                        }
+
+                        // Keep the same return_reg (we're replacing, not pushing)
+                        let return_reg = proc.frames[frame_idx].return_reg;
+                        proc.frames[frame_idx] = CallFrame {
+                            function: func,
+                            ip: 0,
+                            registers,
+                            captures: Vec::new(),
+                            return_reg,
+                        };
+                    }
                     // Continue in fast loop with new frame
                 }
                 _ => {

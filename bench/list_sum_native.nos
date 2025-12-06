@@ -1,5 +1,5 @@
-# List sum benchmark - using native listSum builtin
-# Tests native vs recursive fold performance
+# List sum benchmark using native listSum
+# Tests list traversal performance
 
 # Build a list of n integers
 range(0) = []
