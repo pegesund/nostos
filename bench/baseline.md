@@ -6,44 +6,47 @@ Recorded: 2025-12-06
 - Platform: Linux 6.14.0-113033-tuxedo
 - Rust: release build
 
-## Fibonacci (fib(35))
+## Summary Table
 
-| Runtime | Time | vs Python | vs Ruby |
-|---------|------|-----------|---------|
-| Nostos (regular VM) | 0.054s | 14x faster | 12x faster |
-| Nostos (parallel VM) | 0.073s | 10.5x faster | 9x faster |
-| Python 3 | 0.769s | - | - |
-| Ruby | 0.652s | - | - |
+| Benchmark | Nostos JIT | Nostos no-JIT | Python | JIT Speedup | vs Python |
+|-----------|------------|---------------|--------|-------------|-----------|
+| Fibonacci (fib 35) | 0.07s | 10.12s | 0.77s | **145x** | **11x faster** |
+| Array Sum (1M × 100) | 0.09s | 5.12s | 1.79s | **57x** | **20x faster** |
+| Array Write (100k × 100) | 0.05s | 1.36s | 0.99s | **27x** | **20x faster** |
 
-## Array Write (100 iterations x 100k elements)
+## Detailed Results
 
-| Runtime | Time | vs Python | vs Ruby |
-|---------|------|-----------|---------|
-| Nostos loop (regular VM) | 0.050s | 19x faster | 17x faster |
-| Nostos loop (parallel VM) | 0.051s | 19x faster | 17x faster |
-| Nostos recursive | 0.386s | 2.5x faster | 2.2x faster |
-| Python 3 | 0.972s | - | - |
-| Ruby | 0.860s | - | - |
+### Fibonacci (fib(35))
+Recursive fibonacci - tests function call overhead and JIT for numeric functions.
 
-## Array Sum JIT (1M elements x 10 calls)
+| Runtime | Time | Notes |
+|---------|------|-------|
+| Nostos (parallel, JIT) | 0.07s | Single-clause if-then-else JITs |
+| Nostos (parallel, no-JIT) | 10.12s | Interpreted only |
+| Python 3 | 0.77s | - |
 
-| Runtime | Time | JIT Speedup |
-|---------|------|-------------|
-| Nostos (parallel VM, JIT) | 0.074s | **8x faster** |
-| Nostos (no JIT) | 0.593s | baseline |
+### Array Sum (1M elements × 100 iterations)
+Tests loop array JIT for Int64Array operations.
 
-## Array Sum Single (10M elements, 1 call)
+| Runtime | Time | Notes |
+|---------|------|-------|
+| Nostos (parallel, JIT) | 0.09s | Loop array JIT compiles to native |
+| Nostos (parallel, no-JIT) | 5.12s | Interpreted loop |
+| Python 3 | 1.79s | Native list iteration |
 
-| Runtime | Time | JIT Speedup |
-|---------|------|-------------|
-| Nostos (parallel VM, JIT) | 0.547s | **2x faster** |
-| Nostos (no JIT) | 1.098s | baseline |
+### Array Write Loop (100k elements × 100 iterations)
+Tests while-loop JIT for array element writes.
+
+| Runtime | Time | Notes |
+|---------|------|-------|
+| Nostos (parallel, JIT) | 0.05s | Loop JIT for array writes |
+| Nostos (parallel, no-JIT) | 1.36s | Interpreted loop |
+| Python 3 | 0.99s | - |
 
 ## Notes
 
-- JIT compilation works for single-clause functions with `if-then-else`
-- Multi-clause pattern matching functions (e.g., `fib(0)=0; fib(1)=1; fib(n)=...`) do not JIT compile due to `TestConst` instruction
-- Loop JIT provides significant speedup for array operations
-- Loop array JIT compiles Int64Array sum functions to native code (8x speedup)
-- Single-call array sum shows 2x speedup because array filling dominates runtime
-- Both regular and parallel VMs achieve similar performance for compute-bound tasks
+- JIT provides **27-145x speedup** over interpreted execution
+- Nostos with JIT is **11-20x faster than Python**
+- Single-clause functions with `if-then-else` compile to numeric JIT
+- While loops over Int64Array compile to loop array JIT
+- Multi-clause pattern matching (e.g., `fib(0)=0; fib(1)=1; fib(n)=...`) does not JIT compile

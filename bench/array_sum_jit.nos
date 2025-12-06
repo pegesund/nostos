@@ -1,5 +1,5 @@
 # Array sum using while loop - uses loop array JIT
-# Sums an Int64Array of 1M elements, called 10 times
+# Sums an Int64Array of 1M elements, called 100 times
 sum_arr(arr) = {
     i = 0
     total = 0
@@ -20,10 +20,10 @@ main() = {
         i = i + 1
     }
 
-    # Call sum_arr 10 times to measure JIT benefit
+    # Call sum_arr 100 times to measure JIT benefit
     total = 0
     j = 0
-    while j < 10 {
+    while j < 100 {
         total = total + sum_arr(arr)
         j = j + 1
     }
