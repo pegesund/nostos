@@ -131,7 +131,7 @@ fn format_value_short(value: &GcValue) -> String {
         GcValue::Tuple(_) => "<Tuple>".to_string(),
         GcValue::Function(f) => format!("<fn {}>", f.name),
         GcValue::NativeFunction(f) => format!("<native {}>", f.name),
-        GcValue::Closure(_) => "<Closure>".to_string(),
+        GcValue::Closure(_, _) => "<Closure>".to_string(),
         GcValue::Record(_) => "<Record>".to_string(),
         GcValue::Variant(_) => "<Variant>".to_string(),
         GcValue::Int64Array(_) => "<Int64Array>".to_string(),

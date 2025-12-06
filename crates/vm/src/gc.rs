@@ -28,6 +28,45 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use num_bigint::BigInt;
+
+/// Cached inline operation for closures - avoids pattern matching on every call
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum InlineOp {
+    #[default]
+    None = 0,
+    AddInt = 1,
+    SubInt = 2,
+    MulInt = 3,
+}
+
+impl InlineOp {
+    /// Compute InlineOp from function code.
+    /// Returns Some(op) if the function is a simple 2-arg binary op like (a, b) => a + b
+    #[inline]
+    pub fn from_function(func: &FunctionValue) -> InlineOp {
+        use crate::value::Instruction;
+        let instrs = &func.code.code;
+        // Check for pattern: BinaryOp(dst, 0, 1); Return(dst)
+        if instrs.len() == 2 {
+            if let Instruction::Return(ret_reg) = &instrs[1] {
+                match &instrs[0] {
+                    Instruction::AddInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                        return InlineOp::AddInt;
+                    }
+                    Instruction::SubInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                        return InlineOp::SubInt;
+                    }
+                    Instruction::MulInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                        return InlineOp::MulInt;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        InlineOp::None
+    }
+}
 use rust_decimal::Decimal;
 
 use crate::value::{
@@ -313,7 +352,7 @@ pub enum GcValue {
     Record(GcPtr<GcRecord>),
     Variant(GcPtr<GcVariant>),
     BigInt(GcPtr<GcBigInt>),
-    Closure(GcPtr<GcClosure>),
+    Closure(GcPtr<GcClosure>, InlineOp),
 
     // Callable values (Arc-managed, not GC'd - code doesn't need collection)
     Function(Arc<FunctionValue>),
@@ -363,7 +402,7 @@ impl PartialEq for GcValue {
             (GcValue::Record(a), GcValue::Record(b)) => a == b,
             (GcValue::Variant(a), GcValue::Variant(b)) => a == b,
             (GcValue::BigInt(a), GcValue::BigInt(b)) => a == b,
-            (GcValue::Closure(a), GcValue::Closure(b)) => a == b,
+            (GcValue::Closure(a, _), GcValue::Closure(b, _)) => a == b,
             (GcValue::Function(a), GcValue::Function(b)) => Arc::ptr_eq(a, b),
             (GcValue::NativeFunction(a), GcValue::NativeFunction(b)) => Rc::ptr_eq(a, b),
             (GcValue::Pid(a), GcValue::Pid(b)) => a == b,
@@ -408,7 +447,7 @@ impl fmt::Debug for GcValue {
             GcValue::Record(ptr) => write!(f, "Record({:?})", ptr),
             GcValue::Variant(ptr) => write!(f, "Variant({:?})", ptr),
             GcValue::BigInt(ptr) => write!(f, "BigInt({:?})", ptr),
-            GcValue::Closure(ptr) => write!(f, "Closure({:?})", ptr),
+            GcValue::Closure(ptr, _) => write!(f, "Closure({:?})", ptr),
             GcValue::Function(func) => write!(f, "Function({})", func.name),
             GcValue::NativeFunction(func) => write!(f, "NativeFunction({})", func.name),
             GcValue::Pid(p) => write!(f, "Pid({})", p),
@@ -463,7 +502,7 @@ impl GcValue {
             GcValue::Record(ptr) => vec![ptr.as_raw()],
             GcValue::Variant(ptr) => vec![ptr.as_raw()],
             GcValue::BigInt(ptr) => vec![ptr.as_raw()],
-            GcValue::Closure(ptr) => vec![ptr.as_raw()],
+            GcValue::Closure(ptr, _) => vec![ptr.as_raw()],
         }
     }
 
@@ -542,7 +581,7 @@ impl GcValue {
                     .unwrap_or("Variant")
             }
             GcValue::BigInt(_) => "BigInt",
-            GcValue::Closure(_) => "Closure",
+            GcValue::Closure(_, _) => "Closure",
             GcValue::Function(_) => "Function",
             GcValue::NativeFunction(_) => "NativeFunction",
             GcValue::Pid(_) => "Pid",
@@ -1344,7 +1383,7 @@ impl Heap {
 
             // Functions and closures - compare by identity (pointer)
             (GcValue::Function(a), GcValue::Function(b)) => Arc::ptr_eq(a, b),
-            (GcValue::Closure(a), GcValue::Closure(b)) => a == b,
+            (GcValue::Closure(a, _), GcValue::Closure(b, _)) => a == b,
             (GcValue::NativeFunction(a), GcValue::NativeFunction(b)) => Rc::ptr_eq(a, b),
 
             // Different types - not equal
@@ -1485,7 +1524,7 @@ impl Heap {
                     "<invalid variant>".to_string()
                 }
             }
-            GcValue::Closure(ptr) => {
+            GcValue::Closure(ptr, _) => {
                 if let Some(closure) = self.get_closure(*ptr) {
                     format!("<closure {}>", closure.function.name)
                 } else {
@@ -1761,7 +1800,7 @@ impl Heap {
                     GcValue::Unit
                 }
             }
-            GcValue::Closure(ptr) => {
+            GcValue::Closure(ptr, inline_op) => {
                 if let Some(clo) = source.get_closure(*ptr) {
                     let captures: Vec<GcValue> = clo
                         .captures
@@ -1772,7 +1811,7 @@ impl Heap {
                         clo.function.clone(),
                         captures,
                         clo.capture_names.clone(),
-                    ))
+                    ), *inline_op)
                 } else {
                     GcValue::Unit
                 }
@@ -1945,13 +1984,13 @@ impl Heap {
                     GcValue::Unit
                 }
             }
-            GcValue::Closure(ptr) => {
+            GcValue::Closure(ptr, inline_op) => {
                 let clo_data = self.get_closure(*ptr).map(|c| {
                     (c.function.clone(), c.captures.clone(), c.capture_names.clone())
                 });
                 if let Some((function, captures, capture_names)) = clo_data {
                     let cloned: Vec<GcValue> = captures.iter().map(|v| self.clone_value(v)).collect();
-                    GcValue::Closure(self.alloc_closure(function, cloned, capture_names))
+                    GcValue::Closure(self.alloc_closure(function, cloned, capture_names), *inline_op)
                 } else {
                     GcValue::Unit
                 }
@@ -2125,8 +2164,9 @@ impl Heap {
             Value::Closure(c) => {
                 let gc_captures: Vec<GcValue> =
                     c.captures.iter().map(|v| self.value_to_gc(v)).collect();
+                let inline_op = InlineOp::from_function(&c.function);
                 let ptr = self.alloc_closure(c.function.clone(), gc_captures, c.capture_names.clone());
-                GcValue::Closure(ptr)
+                GcValue::Closure(ptr, inline_op)
             }
 
             // Function/Type - these are Rc-managed, just clone
@@ -2286,7 +2326,7 @@ impl Heap {
             }
 
             // Closure - we can't fully reconstruct without the function
-            GcValue::Closure(ptr) => {
+            GcValue::Closure(ptr, _) => {
                 let closure = self.get_closure(*ptr).expect("invalid closure pointer");
                 let captures: Vec<Value> =
                     closure.captures.iter().map(|v| self.gc_to_value(v)).collect();
@@ -3080,10 +3120,10 @@ mod tests {
             vec!["x".to_string(), "y".to_string()],
         );
 
-        let value = GcValue::Closure(closure);
+        let value = GcValue::Closure(closure, InlineOp::None);
         let copied = heap2.deep_copy(&value, &heap1);
 
-        if let GcValue::Closure(new_closure) = copied {
+        if let GcValue::Closure(new_closure, _) = copied {
             let clo = heap2.get_closure(new_closure).unwrap();
             assert_eq!(clo.function.name, "test_func");
             assert_eq!(clo.function.arity, 2);

@@ -1,0 +1,17 @@
+# Direct sum without fold - no closure overhead
+sum_tco(acc, lst) =
+    if isEmpty(lst) then acc
+    else sum_tco(acc + head(lst), tail(lst))
+
+sum(lst) = sum_tco(0, lst)
+
+main() = {
+    lst = rangeList(1000)
+    total = 0
+    i = 0
+    while i < 1000 {
+        total = total + sum(lst)
+        i = i + 1
+    }
+    total
+}

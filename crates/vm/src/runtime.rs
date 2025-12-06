@@ -26,7 +26,7 @@ pub type JitIntFn4 = fn(i64, i64, i64, i64) -> i64;
 /// JIT-compiled loop array function: fn(arr_ptr, arr_len) -> i64
 pub type JitLoopArrayFn = fn(*const i64, i64) -> i64;
 
-use crate::gc::{GcNativeFn, GcValue, Heap};
+use crate::gc::{GcNativeFn, GcValue, Heap, InlineOp};
 use crate::process::ExitReason;
 use crate::scheduler::Scheduler;
 use crate::value::TypeValue;
@@ -815,7 +815,7 @@ impl Runtime {
                 let func_val = reg_clone!(*func_reg);
                 let (func, captures) = match &func_val {
                     GcValue::Function(f) => (f.clone(), Vec::new()),
-                    GcValue::Closure(ptr) => {
+                    GcValue::Closure(ptr, _) => {
                         let closure = proc.heap.get_closure(*ptr)
                             .ok_or_else(|| RuntimeError::TypeError {
                                 expected: "Closure".to_string(),
@@ -863,7 +863,7 @@ impl Runtime {
 
                 let (func, captures) = match &func_val {
                     GcValue::Function(f) => (f.clone(), Vec::new()),
-                    GcValue::Closure(ptr) => {
+                    GcValue::Closure(ptr, _) => {
                         let closure = proc.heap.get_closure(*ptr)
                             .ok_or_else(|| RuntimeError::TypeError {
                                 expected: "Closure".to_string(),
@@ -1286,9 +1286,12 @@ impl Runtime {
                     .map(|i| format!("capture_{}", i))
                     .collect();
 
+                // Compute cached InlineOp for fast call inlining
+                let inline_op = InlineOp::from_function(&func);
+
                 // Allocate closure on process heap (direct access)
                 let closure_ptr = proc.heap.alloc_closure(func, gc_captures, capture_names);
-                set_reg!(*dst, GcValue::Closure(closure_ptr));
+                set_reg!(*dst, GcValue::Closure(closure_ptr, inline_op));
             }
 
             // === Concurrency (SelfPid is local, others need IPC) ===
@@ -2498,7 +2501,7 @@ impl Runtime {
                 let (func, captures) = self.scheduler.with_process(pid, |proc| {
                     match &func_val {
                         GcValue::Function(f) => Ok((f.clone(), Vec::new())),
-                        GcValue::Closure(ptr) => {
+                        GcValue::Closure(ptr, _) => {
                             proc.heap.get_closure(*ptr)
                                 .map(|c| (c.function.clone(), c.captures.clone()))
                                 .ok_or_else(|| RuntimeError::TypeError {
@@ -2528,7 +2531,7 @@ impl Runtime {
                 let (func, captures) = self.scheduler.with_process(pid, |proc| {
                     match &func_val {
                         GcValue::Function(f) => Ok((f.clone(), Vec::new())),
-                        GcValue::Closure(ptr) => {
+                        GcValue::Closure(ptr, _) => {
                             proc.heap.get_closure(*ptr)
                                 .map(|c| (c.function.clone(), c.captures.clone()))
                                 .ok_or_else(|| RuntimeError::TypeError {
@@ -2578,7 +2581,7 @@ impl Runtime {
                 let (func, captures) = self.scheduler.with_process(pid, |proc| {
                     match &func_val {
                         GcValue::Function(f) => Ok((f.clone(), Vec::new())),
-                        GcValue::Closure(ptr) => {
+                        GcValue::Closure(ptr, _) => {
                             proc.heap.get_closure(*ptr)
                                 .map(|c| (c.function.clone(), c.captures.clone()))
                                 .ok_or_else(|| RuntimeError::TypeError {
