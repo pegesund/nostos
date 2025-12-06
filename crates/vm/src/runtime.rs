@@ -1234,8 +1234,8 @@ impl Runtime {
             // === Collections (direct access) ===
             Instruction::MakeList(dst, ref elements) => {
                 let items: Vec<GcValue> = elements.iter().map(|&r| reg_clone!(r)).collect();
-                let ptr = proc.heap.alloc_list(items);
-                set_reg!(*dst, GcValue::List(ptr));
+                let list = proc.heap.make_list(items);
+                set_reg!(*dst, GcValue::List(list));
             }
 
             Instruction::MakeTuple(dst, ref elements) => {
@@ -1335,11 +1335,7 @@ impl Runtime {
 
             Instruction::TestNil(dst, list) => {
                 let result = match reg!(*list) {
-                    GcValue::List(ptr) => {
-                        proc.heap.get_list(*ptr)
-                            .map(|l| l.is_empty())
-                            .unwrap_or(false)
-                    }
+                    GcValue::List(list) => list.is_empty(),
                     _ => false,
                 };
                 set_reg!(*dst, GcValue::Bool(result));
@@ -1640,52 +1636,47 @@ impl Runtime {
             // === Collections ===
             Instruction::Cons(dst, head, tail) => {
                 let head_val = reg_clone!(*head);
-                let tail_ptr = match reg!(*tail) {
-                    GcValue::List(ptr) => *ptr,
+                let tail_list = match reg!(*tail) {
+                    GcValue::List(list) => list.clone(),
                     _ => return Err(RuntimeError::Panic("Cons expects list tail".to_string())),
                 };
-                let tail_items = proc.heap.get_list(tail_ptr)
-                    .map(|l| l.items().to_vec())
-                    .unwrap_or_default();
+                let tail_items = tail_list.items().to_vec();
                 let mut new_items = vec![head_val];
                 new_items.extend(tail_items);
-                let list_ptr = proc.heap.alloc_list(new_items);
-                set_reg!(*dst, GcValue::List(list_ptr));
+                let list = proc.heap.make_list(new_items);
+                set_reg!(*dst, GcValue::List(list));
             }
 
             Instruction::Decons(head_dst, tail_dst, list) => {
-                let list_ptr = match reg!(*list) {
-                    GcValue::List(ptr) => *ptr,
+                let list_val = match reg!(*list) {
+                    GcValue::List(list) => list.clone(),
                     _ => return Err(RuntimeError::Panic("Decons expects list".to_string())),
                 };
-                let items = proc.heap.get_list(list_ptr)
-                    .map(|l| l.items().to_vec())
-                    .unwrap_or_default();
+                let items = list_val.items();
                 if items.is_empty() {
                     return Err(RuntimeError::Panic("Cannot decons empty list".to_string()));
                 }
                 let head = items[0].clone();
-                let tail = items[1..].to_vec();
-                let tail_ptr = proc.heap.alloc_list(tail);
+                let tail_list = list_val.tail();
                 set_reg!(*head_dst, head);
-                set_reg!(*tail_dst, GcValue::List(tail_ptr));
+                set_reg!(*tail_dst, GcValue::List(tail_list));
             }
 
             Instruction::ListConcat(dst, a, b) => {
-                let a_ptr = match reg!(*a) {
-                    GcValue::List(ptr) => *ptr,
+                let a_list = match reg!(*a) {
+                    GcValue::List(list) => list.clone(),
                     _ => return Err(RuntimeError::Panic("ListConcat expects list".to_string())),
                 };
-                let b_ptr = match reg!(*b) {
-                    GcValue::List(ptr) => *ptr,
+                let b_list = match reg!(*b) {
+                    GcValue::List(list) => list.clone(),
                     _ => return Err(RuntimeError::Panic("ListConcat expects list".to_string())),
                 };
-                let a_items = proc.heap.get_list(a_ptr).map(|l| l.items().to_vec()).unwrap_or_default();
-                let b_items = proc.heap.get_list(b_ptr).map(|l| l.items().to_vec()).unwrap_or_default();
+                let a_items = a_list.items().to_vec();
+                let b_items = b_list.items().to_vec();
                 let mut new_items = a_items;
                 new_items.extend(b_items);
-                let list_ptr = proc.heap.alloc_list(new_items);
-                set_reg!(*dst, GcValue::List(list_ptr));
+                let list = proc.heap.make_list(new_items);
+                set_reg!(*dst, GcValue::List(list));
             }
 
             Instruction::Index(dst, coll, idx) => {
@@ -1694,9 +1685,7 @@ impl Runtime {
                     _ => return Err(RuntimeError::Panic("Index must be integer".to_string())),
                 };
                 let value = match reg!(*coll) {
-                    GcValue::List(ptr) => {
-                        let list = proc.heap.get_list(*ptr)
-                            .ok_or_else(|| RuntimeError::Panic("Invalid list reference".to_string()))?;
+                    GcValue::List(list) => {
                         list.items().get(idx_val).cloned()
                             .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?
                     }
@@ -1776,7 +1765,7 @@ impl Runtime {
 
             Instruction::Length(dst, src) => {
                 let len = match reg!(*src) {
-                    GcValue::List(ptr) => proc.heap.get_list(*ptr).map(|l| l.len()).unwrap_or(0),
+                    GcValue::List(list) => list.len(),
                     GcValue::Tuple(ptr) => proc.heap.get_tuple(*ptr).map(|t| t.items.len()).unwrap_or(0),
                     GcValue::Array(ptr) => proc.heap.get_array(*ptr).map(|a| a.items.len()).unwrap_or(0),
                     GcValue::Int64Array(ptr) => proc.heap.get_int64_array(*ptr).map(|a| a.items.len()).unwrap_or(0),
@@ -2312,15 +2301,11 @@ impl Runtime {
             // === List operations (compile-time resolved) ===
             Instruction::ListHead(dst, src) => {
                 let result = match reg!(*src) {
-                    GcValue::List(ptr) => {
-                        if let Some(list) = proc.heap.get_list(*ptr) {
-                            if list.is_empty() {
-                                return Err(RuntimeError::Panic("head: empty list".to_string()));
-                            }
-                            list.items()[0].clone()
-                        } else {
-                            return Err(RuntimeError::Panic("Invalid list pointer".to_string()));
+                    GcValue::List(list) => {
+                        if list.is_empty() {
+                            return Err(RuntimeError::Panic("head: empty list".to_string()));
                         }
+                        list.items()[0].clone()
                     }
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
@@ -2329,16 +2314,12 @@ impl Runtime {
 
             Instruction::ListTail(dst, src) => {
                 let result = match reg!(*src) {
-                    GcValue::List(ptr) => {
-                        if let Some(list) = proc.heap.get_list(*ptr) {
-                            if list.is_empty() {
-                                return Err(RuntimeError::Panic("tail: empty list".to_string()));
-                            }
-                            let tail_list = list.tail();
-                            GcValue::List(proc.heap.alloc_list_tail(tail_list))
-                        } else {
-                            return Err(RuntimeError::Panic("Invalid list pointer".to_string()));
+                    GcValue::List(list) => {
+                        if list.is_empty() {
+                            return Err(RuntimeError::Panic("tail: empty list".to_string()));
                         }
+                        let tail_list = list.tail();
+                        GcValue::List(tail_list)
                     }
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
@@ -2347,13 +2328,7 @@ impl Runtime {
 
             Instruction::ListIsEmpty(dst, src) => {
                 let result = match reg!(*src) {
-                    GcValue::List(ptr) => {
-                        if let Some(list) = proc.heap.get_list(*ptr) {
-                            list.is_empty()
-                        } else {
-                            true // Invalid pointer treated as empty
-                        }
-                    }
+                    GcValue::List(list) => list.is_empty(),
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };
                 set_reg!(*dst, GcValue::Bool(result));
@@ -2361,19 +2336,15 @@ impl Runtime {
 
             Instruction::ListSum(dst, src) => {
                 let result = match reg!(*src) {
-                    GcValue::List(ptr) => {
-                        if let Some(list) = proc.heap.get_list(*ptr) {
-                            let mut total: i64 = 0;
-                            for item in list.items() {
-                                match item {
-                                    GcValue::Int64(n) => total += n,
-                                    _ => panic!("listSum requires list of Int64"),
-                                }
+                    GcValue::List(list) => {
+                        let mut total: i64 = 0;
+                        for item in list.items() {
+                            match item {
+                                GcValue::Int64(n) => total += n,
+                                _ => panic!("listSum requires list of Int64"),
                             }
-                            total
-                        } else {
-                            0
                         }
+                        total
                     }
                     _ => unsafe { std::hint::unreachable_unchecked() }
                 };

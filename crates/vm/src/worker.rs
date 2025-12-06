@@ -911,8 +911,8 @@ impl Worker {
                         let frame = proc.frames.last().unwrap();
                         elements.iter().map(|&r| frame.registers[r as usize].clone()).collect()
                     };
-                    let ptr = proc.heap.alloc_list(items);
-                    proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::List(ptr);
+                    let list = proc.heap.make_list(items);
+                    proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::List(list);
                 }
 
                 Instruction::MakeTuple(dst, elements) => {
@@ -944,7 +944,7 @@ impl Worker {
                     let len = match val {
                         GcValue::Int64Array(ptr) => proc.heap.get_int64_array(*ptr).map(|a| a.items.len()),
                         GcValue::Float64Array(ptr) => proc.heap.get_float64_array(*ptr).map(|a| a.items.len()),
-                        GcValue::List(ptr) => proc.heap.get_list(*ptr).map(|l| l.len()),
+                        GcValue::List(list) => Some(list.len()),
                         GcValue::Array(ptr) => proc.heap.get_array(*ptr).map(|a| a.items.len()),
                         _ => None,
                     }.unwrap_or(0);
@@ -970,9 +970,8 @@ impl Worker {
                             proc.heap.get_float64_array(*ptr)
                                 .and_then(|arr| arr.items.get(idx_num).map(|v| GcValue::Float64(*v)))
                         }
-                        GcValue::List(ptr) => {
-                            proc.heap.get_list(*ptr)
-                                .and_then(|list| list.items().get(idx_num).cloned())
+                        GcValue::List(list) => {
+                            list.items().get(idx_num).cloned()
                         }
                         _ => None,
                     }.ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_num)))?;
@@ -1843,11 +1842,11 @@ impl Worker {
             // === Collections ===
             Instruction::MakeList(dst, ref elements) => {
                 let items: Vec<GcValue> = elements.iter().map(|&r| get_reg!(r)).collect();
-                let ptr = self
+                let list = self
                     .scheduler
-                    .with_process_mut(pid, |proc| proc.heap.alloc_list(items))
+                    .with_process_mut(pid, |proc| proc.heap.make_list(items))
                     .ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
-                set_reg!(dst, GcValue::List(ptr));
+                set_reg!(dst, GcValue::List(list));
             }
 
             Instruction::MakeTuple(dst, ref elements) => {
@@ -2413,18 +2412,16 @@ impl Worker {
             Instruction::Cons(dst, head, tail) => {
                 let head_val = get_reg!(head);
                 let tail_val = get_reg!(tail);
-                let tail_ptr = match tail_val {
-                    GcValue::List(ptr) => ptr,
+                let tail_list = match tail_val {
+                    GcValue::List(list) => list,
                     _ => return Err(RuntimeError::Panic("Cons expects list tail".to_string())),
                 };
                 let result = self.scheduler.with_process_mut(pid, |proc| {
-                    let tail_items = proc.heap.get_list(tail_ptr)
-                        .map(|l| l.items().to_vec())
-                        .unwrap_or_default();
+                    let tail_items = tail_list.items().to_vec();
                     let mut new_items = vec![head_val];
                     new_items.extend(tail_items);
-                    let list_ptr = proc.heap.alloc_list(new_items);
-                    GcValue::List(list_ptr)
+                    let list = proc.heap.make_list(new_items);
+                    GcValue::List(list)
                 }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
                 set_reg!(dst, result);
             }
@@ -2432,17 +2429,12 @@ impl Worker {
             Instruction::ListHead(dst, list) => {
                 let l = get_reg!(list);
                 let result = match l {
-                    GcValue::List(ptr) => {
-                        self.scheduler.with_process(pid, |proc| {
-                            proc.heap.get_list(ptr)
-                                .and_then(|list| {
-                                    if list.is_empty() {
-                                        None
-                                    } else {
-                                        Some(list.items()[0].clone())
-                                    }
-                                })
-                        }).flatten()
+                    GcValue::List(list) => {
+                        if list.is_empty() {
+                            None
+                        } else {
+                            Some(list.items()[0].clone())
+                        }
                     }
                     _ => None,
                 }.ok_or_else(|| RuntimeError::Panic("head: empty or invalid list".to_string()))?;
@@ -2452,13 +2444,7 @@ impl Worker {
             Instruction::TestNil(dst, list) => {
                 let l = get_reg!(list);
                 let is_nil = match l {
-                    GcValue::List(ptr) => {
-                        self.scheduler.with_process(pid, |proc| {
-                            proc.heap.get_list(ptr)
-                                .map(|list| list.is_empty())
-                                .unwrap_or(false)
-                        }).unwrap_or(false)
-                    }
+                    GcValue::List(list) => list.is_empty(),
                     _ => false,
                 };
                 set_reg!(dst, GcValue::Bool(is_nil));
@@ -2636,7 +2622,7 @@ impl Worker {
                 let val = get_reg!(src);
                 let len = self.scheduler.with_process(pid, |proc| {
                     match &val {
-                        GcValue::List(ptr) => proc.heap.get_list(*ptr).map(|l| l.len()),
+                        GcValue::List(list) => Some(list.len()),
                         GcValue::Tuple(ptr) => proc.heap.get_tuple(*ptr).map(|t| t.items.len()),
                         GcValue::Array(ptr) => proc.heap.get_array(*ptr).map(|a| a.items.len()),
                         GcValue::Int64Array(ptr) => proc.heap.get_int64_array(*ptr).map(|a| a.items.len()),
@@ -2727,25 +2713,22 @@ impl Worker {
 
             Instruction::Decons(head_dst, tail_dst, list) => {
                 let list_val = get_reg!(list);
-                let list_ptr = match list_val {
-                    GcValue::List(ptr) => ptr,
+                let list_data = match list_val {
+                    GcValue::List(list) => list,
                     _ => return Err(RuntimeError::Panic("Decons expects list".to_string())),
                 };
-                let (head, tail_ptr) = self.scheduler.with_process_mut(pid, |proc| {
-                    let items = proc.heap.get_list(list_ptr)
-                        .map(|l| l.items().to_vec())
-                        .unwrap_or_default();
+                let (head, tail_list) = {
+                    let items = list_data.items();
                     if items.is_empty() {
-                        None
+                        return Err(RuntimeError::Panic("Cannot decons empty list".to_string()));
                     } else {
                         let head = items[0].clone();
-                        let tail = items[1..].to_vec();
-                        let tail_ptr = proc.heap.alloc_list(tail);
-                        Some((head, tail_ptr))
+                        let tail_list = list_data.tail();
+                        (head, tail_list)
                     }
-                }).flatten().ok_or_else(|| RuntimeError::Panic("Cannot decons empty list".to_string()))?;
+                };
                 set_reg!(head_dst, head);
-                set_reg!(tail_dst, GcValue::List(tail_ptr));
+                set_reg!(tail_dst, GcValue::List(tail_list));
             }
 
             // === Float comparisons ===
