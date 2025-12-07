@@ -336,11 +336,10 @@ impl Compiler {
                     _ => false,
                 }).unwrap_or(false)
             }
-            // For function calls, check if any argument is float-typed
-            // This is a heuristic: if the function is called with float args, assume it returns float
-            Expr::Call(_, args, _) => {
-                args.iter().any(|arg| self.is_float_expr(arg))
-            }
+            // Function calls: assume non-float by default.
+            // We can't know the return type without proper type inference,
+            // and assuming float based on arguments is incorrect (e.g., show(3.14) returns String).
+            Expr::Call(_, _, _) => false,
             _ => false, // Assume non-float by default for other expressions
         }
     }
@@ -2718,6 +2717,10 @@ impl Compiler {
                             self.chunk.emit(Instruction::Eq(success_reg, len_reg, n_reg), 0);
                         }
 
+                        // Guard the Decons block: skip if success_reg is false (list too short)
+                        // This prevents "Cannot decons empty list" errors when pattern doesn't match
+                        let skip_decons_jump = self.chunk.emit(Instruction::JumpIfFalse(success_reg, 0), 0);
+
                         // Decons each head element
                         let mut current_list = scrut_reg;
                         for (i, head_pat) in head_patterns.iter().enumerate() {
@@ -2738,6 +2741,9 @@ impl Compiler {
                                 current_list = tail_reg;
                             }
                         }
+
+                        // Patch jump to skip past the Decons block
+                        self.chunk.patch_jump(skip_decons_jump, self.chunk.code.len());
                     }
                 }
             }
