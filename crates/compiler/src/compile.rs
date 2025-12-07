@@ -3847,7 +3847,7 @@ impl Compiler {
 mod tests {
     use super::*;
     use nostos_syntax::parser::parse;
-    use nostos_vm::Runtime;
+    use nostos_vm::parallel::{ParallelVM, ParallelConfig};
 
     fn compile_and_run(source: &str) -> Result<Value, String> {
         let (module_opt, errors) = parse(source);
@@ -3857,13 +3857,20 @@ mod tests {
         let module = module_opt.ok_or_else(|| "Parse returned no module".to_string())?;
         let compiler = compile_module(&module, source).map_err(|e| format!("Compile error: {:?}", e))?;
 
-        let mut runtime = Runtime::new();
+        // Use ParallelVM with single thread for deterministic tests
+        let config = ParallelConfig {
+            num_threads: 1,
+            ..Default::default()
+        };
+        let mut vm = ParallelVM::new(config);
+        vm.register_default_natives();
+
         for (name, func) in compiler.get_all_functions() {
-            runtime.register_function(&name, func.clone());
+            vm.register_function(&name, func.clone());
         }
-        runtime.set_function_list(compiler.get_function_list());
+        vm.set_function_list(compiler.get_function_list());
         for (name, type_val) in compiler.get_vm_types() {
-            runtime.register_type(&name, type_val);
+            vm.register_type(&name, type_val);
         }
 
         // Look for a main function
@@ -3875,9 +3882,9 @@ mod tests {
             return Err("No functions to run".to_string());
         };
 
-        runtime.spawn_initial(main_func);
-        runtime.run_to_value()
+        vm.run(main_func)
             .map_err(|e| format!("Runtime error: {:?}", e))?
+            .map(|v| v.to_value())
             .ok_or_else(|| "No result returned".to_string())
     }
 

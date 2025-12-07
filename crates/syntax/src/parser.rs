@@ -651,11 +651,17 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                 stmt.clone()
                     .separated_by(separator)
                     .allow_trailing()
-                    .at_least(1)
             )
             .then_ignore(leading_newlines)
             .delimited_by(just(Token::LBrace), just(Token::RBrace))
-            .map_with_span(|stmts, span| Expr::Block(stmts, to_span(span)));
+            .map_with_span(|stmts, span| {
+                if stmts.is_empty() {
+                    // Empty block is equivalent to unit
+                    Expr::Unit(to_span(span))
+                } else {
+                    Expr::Block(stmts, to_span(span))
+                }
+            });
 
         // Lambda: x => expr or (a, b) => expr
         let lambda_params = choice((

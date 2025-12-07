@@ -5,7 +5,8 @@
 
 use nostos_compiler::compile::compile_module;
 use nostos_syntax::parse;
-use nostos_vm::{value::Value, Runtime, GcValue};
+use nostos_vm::value::Value;
+use nostos_vm::parallel::{ParallelVM, ParallelConfig};
 use std::fs;
 use std::path::Path;
 
@@ -69,42 +70,7 @@ fn value_to_string(value: &Value) -> String {
     }
 }
 
-/// Convert GcValue to string for comparison (used by Runtime-based tests).
-/// Only handles simple value types - complex heap-allocated types show as placeholders.
-fn gc_value_to_string(value: &GcValue) -> String {
-    match value {
-        // Signed integers
-        GcValue::Int8(n) => format!("{}i8", n),
-        GcValue::Int16(n) => format!("{}i16", n),
-        GcValue::Int32(n) => format!("{}i32", n),
-        GcValue::Int64(n) => n.to_string(),
-        // Unsigned integers
-        GcValue::UInt8(n) => format!("{}u8", n),
-        GcValue::UInt16(n) => format!("{}u16", n),
-        GcValue::UInt32(n) => format!("{}u32", n),
-        GcValue::UInt64(n) => format!("{}u64", n),
-        // Floats
-        GcValue::Float32(f) => format!("{}f32", f),
-        GcValue::Float64(f) => f.to_string(),
-        // BigInt and Decimal - show as placeholders since they're heap-allocated
-        GcValue::BigInt(_) => "<bigint>".to_string(),
-        GcValue::Decimal(d) => format!("{}d", d),
-        // Other types
-        GcValue::Bool(b) => b.to_string(),
-        GcValue::Char(c) => format!("'{}'", c),
-        GcValue::Unit => "()".to_string(),
-        GcValue::Pid(pid) => format!("Pid({})", pid),
-        // For heap-allocated types, we can't display them properly without heap access
-        GcValue::String(_) => "<string>".to_string(),
-        GcValue::List(_) => "<list>".to_string(),
-        GcValue::Tuple(_) => "<tuple>".to_string(),
-        GcValue::Record(_) => "<record>".to_string(),
-        GcValue::Variant(_) => "<variant>".to_string(),
-        _ => format!("{:?}", value),
-    }
-}
-
-/// Compile and run a Nostos source file using the Runtime, returning a Value.
+/// Compile and run a Nostos source file using ParallelVM, returning a Value.
 fn run_nos_source(source: &str) -> Result<Value, String> {
     // Parse
     let (module_opt, errors) = parse(source);
@@ -116,28 +82,34 @@ fn run_nos_source(source: &str) -> Result<Value, String> {
     // Compile
     let compiler = compile_module(&module, source).map_err(|e| format!("Compile error: {:?}", e))?;
 
-    // Create Runtime and load functions/types
-    let mut runtime = Runtime::new();
+    // Create ParallelVM with single thread for deterministic tests
+    let config = ParallelConfig {
+        num_threads: 1,
+        ..Default::default()
+    };
+    let mut vm = ParallelVM::new(config);
+    vm.register_default_natives();
+
     for (name, func) in compiler.get_all_functions() {
-        runtime.register_function(name, func.clone());
+        vm.register_function(name, func.clone());
     }
-    runtime.set_function_list(compiler.get_function_list());
+    vm.set_function_list(compiler.get_function_list());
     for (name, type_val) in compiler.get_vm_types() {
-        runtime.register_type(&name, type_val);
+        vm.register_type(&name, type_val);
     }
 
     // Get main function
     let main_func = compiler.get_function("main")
         .ok_or_else(|| "No main function".to_string())?;
 
-    // Spawn initial process and run, returning Value
-    runtime.spawn_initial(main_func);
-    let result = runtime.run_to_value().map_err(|e| format!("Runtime error: {:?}", e))?;
-
-    result.ok_or_else(|| "No result returned".to_string())
+    // Run and convert result
+    vm.run(main_func)
+        .map_err(|e| format!("Runtime error: {:?}", e))?
+        .map(|v| v.to_value())
+        .ok_or_else(|| "No result returned".to_string())
 }
 
-/// Compile and run a Nostos source file using the Runtime (returns GcValue string).
+/// Compile and run a Nostos source file using ParallelVM (returns string display).
 fn run_nos_source_gc(source: &str) -> Result<String, String> {
     // Parse
     let (module_opt, errors) = parse(source);
@@ -149,27 +121,32 @@ fn run_nos_source_gc(source: &str) -> Result<String, String> {
     // Compile
     let compiler = compile_module(&module, source).map_err(|e| format!("Compile error: {:?}", e))?;
 
-    // Create Runtime and load functions/types
-    let mut runtime = Runtime::new();
+    // Create ParallelVM with single thread for deterministic tests
+    let config = ParallelConfig {
+        num_threads: 1,
+        ..Default::default()
+    };
+    let mut vm = ParallelVM::new(config);
+    vm.register_default_natives();
+
     for (name, func) in compiler.get_all_functions() {
-        runtime.register_function(name, func.clone());
+        vm.register_function(name, func.clone());
     }
-    runtime.set_function_list(compiler.get_function_list());
+    vm.set_function_list(compiler.get_function_list());
     for (name, type_val) in compiler.get_vm_types() {
-        runtime.register_type(&name, type_val);
+        vm.register_type(&name, type_val);
     }
 
     // Get main function
     let main_func = compiler.get_function("main")
         .ok_or_else(|| "No main function".to_string())?;
 
-    // Spawn initial process and run
-    runtime.spawn_initial(main_func);
-    let result = runtime.run().map_err(|e| format!("Runtime error: {:?}", e))?;
+    // Run and get display string
+    let result = vm.run(main_func)
+        .map_err(|e| format!("Runtime error: {:?}", e))?;
 
-    // Convert result to string
     match result {
-        Some(value) => Ok(gc_value_to_string(&value)),
+        Some(value) => Ok(value.display()),
         None => Ok("()".to_string()),
     }
 }
