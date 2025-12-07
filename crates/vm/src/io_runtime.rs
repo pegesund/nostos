@@ -596,8 +596,9 @@ impl IoRuntime {
                 // HTTP operations - spawned as tasks to avoid blocking the IO loop
                 IoRequest::HttpGet { url, response } => {
                     let client = http_client.clone();
+                    let url_clone = url.clone();
                     tokio::spawn(async move {
-                        let result = Self::handle_http_get(&client, &url).await;
+                        let result = Self::handle_http_get(&client, &url_clone).await;
                         let _ = response.send(result.map(|resp| IoResponseValue::HttpResponse {
                             status: resp.status,
                             headers: resp.headers,

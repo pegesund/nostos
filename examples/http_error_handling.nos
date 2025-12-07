@@ -70,9 +70,9 @@ workerErrorHandling() = {
   println("Pattern 4: Worker processes with error handling")
   me = self()
 
-  spawn { httpWorker(me, 1, "https://httpbin.org/get"  }
-  spawn { httpWorker(me, 2, "https://invalid-domain-xyz.com/"  }
-  spawn { httpWorker(me, 3, "https://httpbin.org/status/500"  }
+  spawn { httpWorker(me, 1, "https://httpbin.org/get") }
+  spawn { httpWorker(me, 2, "https://invalid-domain-xyz.com/") }
+  spawn { httpWorker(me, 3, "https://httpbin.org/status/500") }
 
   r1 = receive
     ("success", id, httpStatus) -> ("worker " ++ show(id), "success", httpStatus)
