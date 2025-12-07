@@ -1,0 +1,5 @@
+# expect: ()
+main() = {
+  if true then
+    ()
+}

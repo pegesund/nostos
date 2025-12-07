@@ -673,10 +673,18 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
             .then_ignore(skip_newlines())
             .then_ignore(just(Token::Then))
             .then(skip_newlines().ignore_then(expr.clone()))
-            .then_ignore(skip_newlines())
-            .then_ignore(just(Token::Else))
-            .then(skip_newlines().ignore_then(expr.clone()))
-            .map_with_span(|((cond, then_branch), else_branch), span| {
+            .then(
+                skip_newlines()
+                    .ignore_then(just(Token::Else))
+                    .ignore_then(skip_newlines())
+                    .ignore_then(expr.clone())
+                    .or_not(), // Make the else branch optional
+            )
+            .map_with_span(|((cond, then_branch), else_branch_opt), span| {
+                let else_branch = else_branch_opt.unwrap_or_else(|| {
+                    let then_span = get_span(&then_branch);
+                    Expr::Unit(Span::new(then_span.end, then_span.end))
+                });
                 Expr::If(
                     Box::new(cond),
                     Box::new(then_branch),
