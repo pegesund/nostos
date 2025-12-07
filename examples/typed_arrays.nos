@@ -1,11 +1,11 @@
 # Typed Arrays
-#
+# 
 # Demonstrates efficient numeric arrays:
 # - Int64Array: contiguous array of 64-bit integers
 # - Float64Array: contiguous array of 64-bit floats
 # - Index-based access and mutation (arr[i], arr[i] = x)
 # - length() function for array size
-#
+# 
 # These are more efficient than generic lists for numeric computation.
 
 # Fill array with values [1, 2, 3, ..., n]

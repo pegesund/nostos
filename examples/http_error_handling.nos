@@ -1,12 +1,12 @@
 # HTTP Error Handling
-#
+# 
 # Demonstrates IO error handling patterns:
 # - All IO returns ("ok", value) or ("error", message) tuples
 # - DNS errors: invalid domain names
 # - HTTP errors: 404, 500 are successful connections (not IO errors)
 # - Retry pattern: exponential backoff on failures
 # - File IO: same tuple pattern for file operations
-#
+# 
 # Run with: nostos examples/http_error_handling.nos
 
 # Pattern 1: Basic error checking

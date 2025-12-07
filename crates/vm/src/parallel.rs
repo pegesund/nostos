@@ -14,7 +14,7 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -25,8 +25,15 @@ use tokio::sync::mpsc as tokio_mpsc;
 use crate::gc::{constructor_discriminant, GcConfig, GcList, GcMapKey, GcNativeFn, GcValue, Heap, InlineOp};
 use crate::io_runtime::{IoRequest, IoRuntime};
 use crate::process::{CallFrame, IoResponseValue, Process, ProcessState};
-use crate::runtime::{JitIntFn, JitIntFn0, JitIntFn2, JitIntFn3, JitIntFn4, JitLoopArrayFn};
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, TypeValue, Value};
+
+// JIT function pointer types (moved from runtime.rs)
+pub type JitIntFn = fn(i64) -> i64;
+pub type JitIntFn0 = fn() -> i64;
+pub type JitIntFn2 = fn(i64, i64) -> i64;
+pub type JitIntFn3 = fn(i64, i64, i64) -> i64;
+pub type JitIntFn4 = fn(i64, i64, i64, i64) -> i64;
+pub type JitLoopArrayFn = fn(*const i64, i64) -> i64;
 
 /// Number of bits reserved for thread ID in Pid.
 /// With 16 bits, we support up to 65536 threads.
@@ -246,8 +253,6 @@ pub struct SharedState {
     pub num_threads: usize,
     /// IO request sender (for async file/HTTP operations)
     pub io_sender: Option<tokio_mpsc::UnboundedSender<IoRequest>>,
-    /// Thread handles for unpark() wake-ups (populated by threads after starting)
-    pub thread_handles: RwLock<Vec<Option<thread::Thread>>>,
 }
 
 /// Configuration for the parallel VM.
@@ -429,7 +434,6 @@ impl ParallelVM {
             thread_local_ids,
             num_threads,
             io_sender: Some(io_sender),
-            thread_handles: RwLock::new(vec![None; num_threads]),
         });
 
         Self {
@@ -738,12 +742,6 @@ impl ThreadWorker {
 
     /// Main execution loop for this thread.
     fn run(mut self) -> ThreadResult {
-        // Register this thread's handle for unpark() wake-ups
-        {
-            let mut handles = self.shared.thread_handles.write().unwrap();
-            handles[self.thread_id as usize] = Some(thread::current());
-        }
-
         loop {
             // Check for shutdown
             if self.shared.shutdown.load(Ordering::Relaxed) {
@@ -767,41 +765,18 @@ impl ThreadWorker {
                     id
                 }
                 None => {
-                    // No runnable work - decide sleep duration based on pending work
-                    let sleep_duration = if !self.io_waiting.is_empty() {
-                        // Processes waiting for IO - poll frequently (100µs)
-                        // This ensures IO completions are detected promptly
-                        std::time::Duration::from_micros(100)
-                    } else if let Some(&Reverse((wake_time, _))) = self.timer_heap.peek() {
-                        // Timer pending - sleep until timer fires (max 100µs for responsiveness)
-                        // Short max ensures we drain inbox quickly for cross-thread messages
-                        let now = Instant::now();
-                        if wake_time > now {
-                            (wake_time - now).min(std::time::Duration::from_micros(100))
-                        } else {
-                            // Timer already due, don't sleep
-                            std::time::Duration::ZERO
-                        }
-                    } else {
-                        // Truly idle - use exponential backoff
-                        // Start at 50µs, double each iteration, cap at 500µs
-                        // Keep max low to ensure we check inbox frequently for new work
-                        let base_us = 50u64;
-                        let max_us = 500u64; // 500µs max - need to check inbox frequently
-                        let sleep_us = (base_us << self.idle_backoff.min(4)).min(max_us);
+                    // No runnable work - use exponential backoff
+                    // Start at 50µs, double each iteration, cap at 10ms
+                    let base_us = 50u64;
+                    let max_us = 10_000u64; // 10ms max
+                    let sleep_us = (base_us << self.idle_backoff.min(8)).min(max_us);
 
-                        // Increment backoff (will reset when we find work)
-                        if self.idle_backoff < 4 {
-                            self.idle_backoff += 1;
-                        }
-
-                        std::time::Duration::from_micros(sleep_us)
-                    };
-
-                    if !sleep_duration.is_zero() {
-                        // Use park_timeout instead of sleep so unpark() can wake us
-                        thread::park_timeout(sleep_duration);
+                    // Increment backoff (will reset when we find work)
+                    if self.idle_backoff < 8 {
+                        self.idle_backoff += 1;
                     }
+
+                    std::thread::sleep(std::time::Duration::from_micros(sleep_us));
                     continue;
                 }
             };
@@ -978,7 +953,6 @@ impl ThreadWorker {
         let mut completed = Vec::new();
         let mut to_requeue = Vec::new();
 
-        let my_thread = self.thread_id;
         for local_id in to_check {
             if let Some(proc) = self.get_process_mut(local_id) {
                 if proc.state == ProcessState::WaitingIO {
@@ -1154,9 +1128,8 @@ impl ThreadWorker {
     /// Send a message to a process (local or remote).
     fn send_message(&mut self, target: Pid, message: GcValue, sender_local_id: u64) {
         let target_thread = pid_thread_id(target);
-        let my_thread = self.thread_id;
 
-        if target_thread == my_thread {
+        if target_thread == self.thread_id {
             // Local send - need to deep copy from sender's heap to target's heap
             let target_local_id = pid_local_id(target);
 
@@ -1187,12 +1160,6 @@ impl ThreadWorker {
                         target_pid: target,
                         payload: safe_value,
                     });
-                    // Wake up target thread immediately if it's parked
-                    if let Ok(handles) = self.shared.thread_handles.read() {
-                        if let Some(Some(handle)) = handles.get(target_thread as usize) {
-                            handle.unpark();
-                        }
-                    }
                 }
             }
             // If value can't be converted (e.g., function), message is dropped
@@ -2669,17 +2636,6 @@ impl ThreadWorker {
                 set_reg!(*dst, GcValue::Bool(result));
             }
 
-            EqFloat(dst, a, b) => {
-                let va = reg!(*a).clone();
-                let vb = reg!(*b).clone();
-                let result = match (&va, &vb) {
-                    (GcValue::Float64(x), GcValue::Float64(y)) => x == y,
-                    (GcValue::Float32(x), GcValue::Float32(y)) => x == y,
-                    _ => false,
-                };
-                set_reg!(*dst, GcValue::Bool(result));
-            }
-
             LtFloat(dst, a, b) => {
                 let va = reg!(*a).clone();
                 let vb = reg!(*b).clone();
@@ -3230,12 +3186,6 @@ impl ThreadWorker {
                             captures: safe_captures,
                             pre_allocated_local_id,
                         });
-                        // Wake up target thread immediately if it's parked
-                        if let Ok(handles) = self.shared.thread_handles.read() {
-                            if let Some(Some(handle)) = handles.get(target_thread as usize) {
-                                handle.unpark();
-                            }
-                        }
                     }
 
                     // Return the pre-computed PID
@@ -3474,7 +3424,7 @@ impl ThreadWorker {
                 // Send request to IO runtime
                 if let Some(sender) = &self.shared.io_sender {
                     let request = crate::io_runtime::IoRequest::HttpGet {
-                        url: url.clone(),
+                        url,
                         response: tx,
                     };
                     if sender.send(request).is_err() {
@@ -4942,7 +4892,19 @@ impl ThreadWorker {
                             .clone();
                         set_reg!(*dst, value);
                     }
-                    _ => return Err(RuntimeError::Panic("GetField expects record or variant".to_string())),
+                    GcValue::Tuple(ptr) => {
+                        // Support tuple field access with numeric indices (t.0, t.1, etc.)
+                        let proc = self.get_process(local_id).unwrap();
+                        let tuple = proc.heap.get_tuple(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".to_string()))?;
+                        let idx: usize = field_name.parse()
+                            .map_err(|_| RuntimeError::Panic(format!("Invalid tuple index: {}", field_name)))?;
+                        let value = tuple.items.get(idx)
+                            .ok_or_else(|| RuntimeError::Panic(format!("Tuple index {} out of bounds", idx)))?
+                            .clone();
+                        set_reg!(*dst, value);
+                    }
+                    _ => return Err(RuntimeError::Panic("GetField expects record, variant, or tuple".to_string())),
                 }
             }
 
@@ -5366,6 +5328,34 @@ impl ThreadWorker {
                     }
                     _ => return Err(RuntimeError::TypeError {
                         expected: "Int64".to_string(),
+                        found: format!("{:?}", va),
+                    }),
+                }
+            }
+
+            And(dst, a, b) => {
+                let va = reg!(*a).clone();
+                let vb = reg!(*b).clone();
+                match (&va, &vb) {
+                    (GcValue::Bool(x), GcValue::Bool(y)) => {
+                        set_reg!(*dst, GcValue::Bool(*x && *y));
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Bool".to_string(),
+                        found: format!("{:?}", va),
+                    }),
+                }
+            }
+
+            Or(dst, a, b) => {
+                let va = reg!(*a).clone();
+                let vb = reg!(*b).clone();
+                match (&va, &vb) {
+                    (GcValue::Bool(x), GcValue::Bool(y)) => {
+                        set_reg!(*dst, GcValue::Bool(*x || *y));
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Bool".to_string(),
                         found: format!("{:?}", va),
                     }),
                 }

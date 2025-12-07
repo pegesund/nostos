@@ -1,11 +1,11 @@
 # Comparable Trait
-#
+# 
 # Demonstrates comparison traits with custom ordering:
 # - Comparable trait returns -1 (less), 0 (equal), or 1 (greater)
 # - Version: semantic versioning comparison (major.minor.patch)
 # - Temperature: numeric comparison by celsius value
 # - Priority: higher level means higher priority
-#
+# 
 # Custom comparison logic encapsulated in trait implementations.
 
 # ========== Type Definitions ==========

@@ -1,10 +1,10 @@
 # Simple Chain
-#
+# 
 # Minimal test for process chain messaging:
 # - Two forwarder processes in a chain
 # - Message passes through chain, incrementing at each hop
 # - Tests spawn, send (<-), receive with timeout
-#
+# 
 # Used to debug basic cross-process communication.
 
 forwarder(next) = {

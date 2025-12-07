@@ -1,10 +1,10 @@
 # Expression Calculator
-#
+# 
 # Demonstrates algebraic data types for AST representation:
 # - Expr type models arithmetic expressions
 # - Pattern matching for recursive evaluation
 # - Simplification rules for algebraic identities
-#
+# 
 # This is a classic example of using ADTs to build interpreters.
 
 type Expr =

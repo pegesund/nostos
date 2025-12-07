@@ -368,6 +368,8 @@ pub enum Expr {
     Bool(bool, Span),
     /// Unit value: `()`
     Unit(Span),
+    /// Wildcard: `_` (only valid in pattern contexts, but parsed as expression first)
+    Wildcard(Span),
     /// Variable reference
     Var(Ident),
     /// Binary operation
@@ -448,6 +450,7 @@ impl Expr {
             Expr::Char(_, s) => *s,
             Expr::Bool(_, s) => *s,
             Expr::Unit(s) => *s,
+            Expr::Wildcard(s) => *s,
             Expr::Var(ident) => ident.span,
             Expr::BinOp(_, _, _, s) => *s,
             Expr::UnaryOp(_, _, s) => *s,

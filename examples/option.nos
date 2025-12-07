@@ -1,12 +1,12 @@
 # Option Type
-#
+# 
 # Demonstrates the Option monad for null-safe programming:
 # - Option[T] type with None and Some(T) variants
 # - map_opt: transform the inner value if present
 # - flat_map: chain operations that return Options (monadic bind)
 # - get_or: provide a default for None cases
 # - filter_opt: conditionally keep or discard values
-#
+# 
 # This pattern eliminates null pointer errors at compile time.
 
 type Option[T] = None | Some(T)

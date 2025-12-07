@@ -1,11 +1,11 @@
 # File IO
-#
+# 
 # Demonstrates comprehensive file and directory operations:
 # - High-level: File.writeAll, File.readAll, File.size, File.exists
 # - Handles: File.open, File.read, File.write, File.seek, File.close
 # - Directory: Dir.create, Dir.createAll, Dir.list, Dir.removeAll
 # - Operations: File.copy, File.rename, File.remove
-#
+# 
 # Shows both simple one-shot and streaming file access patterns.
 
 # High-level file operations

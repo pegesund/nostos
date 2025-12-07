@@ -1,10 +1,10 @@
 # HTTP Server Test
-#
+# 
 # Simple HTTP server for manual testing:
 # - Listens on port 8080
 # - /hello returns "hello world"
 # - Other paths return 404
-#
+# 
 # Test with: curl http://localhost:8080/hello
 
 serverLoop(server, count) = {

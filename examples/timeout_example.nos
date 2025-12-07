@@ -1,12 +1,12 @@
 # Timeout Example
-#
+# 
 # Demonstrates receive timeout patterns:
 # - Simple timeout: waiting for messages that never arrive
 # - HTTP with retry: timeout during async HTTP operations
 # - Race requests: take first response from multiple sources
 # - Collect with timeout: gather as many results as possible
 # - Sleep vs timeout: interleaving sleep and receive
-#
+# 
 # Run with: nostos examples/timeout_example.nos
 
 # Pattern 1: Simple timeout - wait for a message that never arrives

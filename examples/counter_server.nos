@@ -1,10 +1,10 @@
 # Counter Server
-#
+# 
 # Demonstrates stateful server processes:
 # - counter_loop: maintains state via recursive message handling
 # - Inc/Dec/Get/Stop messages for state manipulation
 # - Client functions for clean API (increment, decrement, get_value)
-#
+# 
 # This is the OTP GenServer pattern: state as function arguments.
 
 # Counter loop with state

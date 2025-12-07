@@ -1,11 +1,11 @@
 # List Operations
-#
+# 
 # Demonstrates higher-order functions and pattern matching on lists:
 # - map: apply a function to each element
 # - filter: keep elements matching a predicate
 # - fold: reduce a list to a single value
 # - reverse, take, drop: common list manipulations
-#
+# 
 # These are fundamental building blocks for functional programming.
 
 # Map a function over a list

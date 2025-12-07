@@ -1,10 +1,10 @@
 # State Machines
-#
+# 
 # Demonstrates encoding finite state machines with algebraic data types:
 # - TrafficLight: cyclic state transitions (Red -> Green -> Yellow -> Red)
 # - DoorState: guarded transitions (can't open a locked door)
 # - State equality checking via pattern matching
-#
+# 
 # ADTs make illegal states unrepresentable and transitions explicit.
 
 type TrafficLight = Red | Yellow | Green

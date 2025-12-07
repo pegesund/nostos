@@ -1,10 +1,10 @@
 # Polymorphic Functions with Traits
-#
+# 
 # Demonstrates polymorphic dispatch with traits:
 # - Describable trait for media items (Book, Movie, Song)
 # - Functions call trait methods on their arguments
 # - Compiler generates specialized versions for each type
-#
+# 
 # This enables writing generic code that works with any implementing type.
 
 # ========== Type Definitions ==========

@@ -1,10 +1,10 @@
 # Parallel Map
-#
+# 
 # Demonstrates parallel data processing with multiple processes:
 # - pmap: spawns a worker for each list element
 # - Workers compute in parallel, results collected and sorted
 # - Uses index-based sorting to preserve element order
-#
+# 
 # Pattern for embarrassingly parallel computations.
 
 # Worker: apply function and send result back

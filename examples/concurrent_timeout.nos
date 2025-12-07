@@ -1,12 +1,12 @@
 # Concurrent Timeout Test
-#
+# 
 # Stress test for timer heap under heavy load:
 # - 20 concurrent timeout counters (10 timeouts each)
 # - Mixed results: some get messages, some timeout
 # - Staggered timeout durations
 # - Timeout cancellation when message arrives
 # - High volume: 50 processes, 5 timeouts each
-#
+# 
 # Run with: nostos --parallel-affinity 4 examples/concurrent_timeout.nos
 
 # Process that does N receives with timeout, counts how many timed out

@@ -571,7 +571,8 @@ fn extract_dependencies_from_expr(expr: &Expr, deps: &mut HashSet<String>) {
         | Expr::Decimal(_, _)
         | Expr::Bool(_, _)
         | Expr::Char(_, _)
-        | Expr::Unit(_) => {}
+        | Expr::Unit(_)
+        | Expr::Wildcard(_) => {}
     }
 }
 

@@ -29,6 +29,7 @@ fn expr_to_pattern(expr: Expr) -> Option<Pattern> {
         Expr::Char(c, span) => Some(Pattern::Char(c, span)),
         Expr::Bool(b, span) => Some(Pattern::Bool(b, span)),
         Expr::Unit(span) => Some(Pattern::Unit(span)),
+        Expr::Wildcard(span) => Some(Pattern::Wildcard(span)),
         Expr::Tuple(exprs, span) => {
             let pats: Option<Vec<Pattern>> = exprs.into_iter().map(expr_to_pattern).collect();
             pats.map(|p| Pattern::Tuple(p, span))
@@ -472,6 +473,10 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
             .then(just(Token::RParen))
             .map_with_span(|_, span| Expr::Unit(to_span(span)));
 
+        // Wildcard: _ (for use in destructuring patterns like `(a, _) = expr`)
+        let wildcard = just(Token::Underscore)
+            .map_with_span(|_, span| Expr::Wildcard(to_span(span)));
+
         // Separator for collection elements: comma optionally surrounded by newlines
         // This allows multi-line lists, tuples, etc.
         let nl = just(Token::Newline).repeated();
@@ -829,7 +834,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         let special = skip_newlines().ignore_then(choice((spawn_expr, quote_expr, lambda))).boxed();
         let lit = skip_newlines().ignore_then(choice((bool_expr, int, float, string, char_expr))).boxed();
         let collections = skip_newlines().ignore_then(choice((map, set, record, unit_variant, tuple, unit, list, block))).boxed();
-        let simple = skip_newlines().ignore_then(choice((grouped, var))).boxed();
+        let simple = skip_newlines().ignore_then(choice((grouped, wildcard, var))).boxed();
         let primary = choice((control_flow, special, lit, collections, simple));
 
         // Postfix: function calls, method calls, field access, try operator
@@ -1058,6 +1063,7 @@ fn get_span(expr: &Expr) -> Span {
         Expr::Char(_, s) => *s,
         Expr::Bool(_, s) => *s,
         Expr::Unit(s) => *s,
+        Expr::Wildcard(s) => *s,
         Expr::Var(id) => id.span,
         Expr::BinOp(_, _, _, s) => *s,
         Expr::UnaryOp(_, _, s) => *s,

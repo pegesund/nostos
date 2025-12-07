@@ -1,10 +1,10 @@
 # Mass Spawn
-#
+# 
 # Stress test for lightweight process creation:
 # - Spawns 100,000 processes (~2KB memory each)
 # - Each process echoes a secret value back
 # - Verifies all 100,000 responses are correct
-#
+# 
 # Demonstrates Erlang-style massive concurrency.
 # Run with: nostos examples/mass_spawn.nos
 # Or parallel: nostos --parallel examples/mass_spawn.nos

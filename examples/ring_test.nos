@@ -1,10 +1,10 @@
 # Ring Test
-#
+# 
 # Tests message passing around rings of processes:
 # - Simple ring: 5 nodes, 1 message, value incremented at each hop
 # - Multi-round ring: 3 nodes, 5 messages cycling through
 # - Parallel rings: 4 independent rings running concurrently
-#
+# 
 # Tests cross-thread messaging, ordering, and process coordination.
 # Run with: nostos --parallel-affinity 4 examples/ring_test.nos
 

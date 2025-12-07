@@ -1,9 +1,9 @@
 # Fibonacci Sequence
-#
+# 
 # Demonstrates recursion and pattern matching with two implementations:
 # - Naive recursive (exponential time complexity)
 # - Tail-recursive (linear time complexity, efficient)
-#
+# 
 # The tail-recursive version uses an accumulator pattern to avoid stack overflow.
 
 # Naive recursive fibonacci - O(2^n) time

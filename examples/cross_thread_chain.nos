@@ -1,12 +1,12 @@
 # Cross-Thread Chain Test
-#
+# 
 # Tests data flow through process chains across threads:
 # - Simple chain: value incremented at each hop
 # - Delayed chain: each link sleeps before forwarding
 # - Multi-message: multiple messages through same chain
 # - Parallel chains: fork-join pattern with different delays
 # - Deep chain: stress test with 20 links
-#
+# 
 # Run with: nostos --parallel-affinity 4 examples/cross_thread_chain.nos
 
 # Chain link: receives, transforms, passes to next

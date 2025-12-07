@@ -251,6 +251,9 @@ pub enum TypeError {
 
     #[error("Occurs check failed: {0} appears in {1}")]
     OccursCheck(String, String),
+
+    #[error("Wildcard '_' is only valid in pattern contexts, not as a standalone expression")]
+    InvalidWildcard(nostos_syntax::Span),
 }
 
 /// Type environment for tracking bindings and definitions.

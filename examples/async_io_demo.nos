@@ -1,10 +1,10 @@
 # Async IO Demo
-#
+# 
 # Demonstrates parallel async HTTP requests:
 # - 5 workers make concurrent HTTP requests
 # - Each request has 1s server-side delay
 # - With parallelism: ~1-2s total, without: ~5s total
-#
+# 
 # Shows non-blocking IO in the Nostos runtime.
 
 httpWorker(parent, id) = {

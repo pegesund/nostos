@@ -1,10 +1,10 @@
 # Binary Tree
-#
+# 
 # Demonstrates recursive algebraic data types and tree operations:
 # - Tree[T] type with Leaf and Node constructors
 # - Recursive traversal and aggregation
 # - Tree mapping and transformation
-#
+# 
 # Binary trees are a fundamental data structure in computer science.
 
 type Tree[T] = Leaf | Node(T, Tree[T], Tree[T])

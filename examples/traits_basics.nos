@@ -1,11 +1,11 @@
 # Traits Basics
-#
+# 
 # Demonstrates the trait system for polymorphic behavior:
 # - trait Animal: defines speak() and describe() methods
 # - Multiple types (Dog, Cat, Parrot) implement the same trait
 # - Each implementation provides type-specific behavior
 # - Trait methods are called directly on instances
-#
+# 
 # Traits enable ad-hoc polymorphism without inheritance.
 
 # ========== Type Definitions ==========

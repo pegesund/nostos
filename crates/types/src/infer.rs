@@ -343,6 +343,9 @@ impl<'a> InferCtx<'a> {
             Expr::String(_, _) => Ok(Type::String),
             Expr::Unit(_) => Ok(Type::Unit),
 
+            // Wildcard is only valid in pattern contexts, not as a standalone expression
+            Expr::Wildcard(span) => Err(TypeError::InvalidWildcard(*span)),
+
             // Variable lookup
             Expr::Var(ident) => {
                 let name = &ident.node;

@@ -1,12 +1,12 @@
 # Higher-Order Functions
-#
+# 
 # Demonstrates functional programming fundamentals:
 # - compose: combine two functions into one
 # - curry/uncurry: convert between curried and uncurried forms
 # - flip: swap argument order of a binary function
 # - apply_n: repeated function application
 # - partial application with make_adder/make_multiplier
-#
+# 
 # These are essential tools for building composable programs.
 
 # Identity function

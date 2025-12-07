@@ -1,12 +1,12 @@
 # HTTP Server
-#
+# 
 # Multi-worker HTTP server with routing:
 # - /       : Hello message
 # - /health : Health check
 # - /echo   : Echo request body
 # - /work   : CPU-bound work (fib(25))
 # - /shutdown: Gracefully shuts down the server
-#
+# 
 # Spawns 8 worker processes for parallel request handling.
 
 # Simulate CPU work - compute fib(n)
@@ -48,10 +48,7 @@ acceptLoop(server, main_pid) = {
   if status == "error" then {
     () # Exit if Server.accept returns error (e.g., server closed)
   } else {
-    # WORKAROUND: Assign to a temporary variable to avoid parser bug
-    # with `(signal, _)` pattern.
-    result = handleRequest(server, req, main_pid)
-    signal = result.0 # Access first element of the tuple
+    (signal, _) = handleRequest(server, req, main_pid)
 
     if signal == "shutdown_signal" then {
       () # Exit worker process

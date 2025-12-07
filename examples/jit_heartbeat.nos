@@ -1,11 +1,11 @@
 # JIT Heartbeat Monitor
-#
+# 
 # Tests scheduler fairness during JIT-heavy computation:
 # - "Heart" sends 100 rapid heartbeats
 # - "Beast" computes fib(30) (~1M recursive calls)
 # - If JIT blocked everything, no heartbeats until beast finishes
 # - Heartbeats flow freely, proving fair scheduling
-#
+# 
 # Demonstrates that light processes stay responsive during heavy JIT work.
 
 # The beast: heavy JIT-compiled fibonacci

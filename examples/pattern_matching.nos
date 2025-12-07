@@ -1,11 +1,11 @@
 # Pattern Matching
-#
+# 
 # Demonstrates various pattern matching capabilities:
 # - Matching on algebraic data types (ADTs)
 # - Guards with when clauses
 # - Tuple patterns in match expressions
 # - List patterns with head/tail destructuring
-#
+# 
 # Pattern matching is exhaustive - the compiler ensures all cases are handled.
 
 type Shape =

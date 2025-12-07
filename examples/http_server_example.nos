@@ -1,11 +1,11 @@
 # HTTP Server Example
-#
+# 
 # Demonstrates server and client in the same VM:
 # - Server.bind(port) starts listening
 # - Server.accept(handle) waits for requests
 # - Server.respond(reqId, status, headers, body) sends response
 # - Server.close(handle) stops the server
-#
+# 
 # Request fields: req.id, req.method, req.path, req.headers, req.body
 
 # Route handler - determines response based on path

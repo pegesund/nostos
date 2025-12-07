@@ -1,11 +1,11 @@
 # Copy Trait
-#
+# 
 # Demonstrates customizable deep copying:
 # - Default: structural deep copy of all fields
 # - Custom Copy trait: control what happens during copying
 # - Document: appends "(copy)" to title, increments version
 # - Counter: tracks number of times it was copied
-#
+# 
 # Useful for metadata, modified clones, and copy-on-write patterns.
 
 type Document = { title: String, content: String, version: Int }

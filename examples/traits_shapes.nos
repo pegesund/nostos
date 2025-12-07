@@ -1,10 +1,10 @@
 # Shapes Trait
-#
+# 
 # Demonstrates traits for geometric calculations:
 # - Shape trait with area(), perimeter(), and name() methods
 # - Circle, Rectangle, Triangle implementations with different formulas
 # - Helper functions that work with specific shape types
-#
+# 
 # Each shape computes its area and perimeter using its own formula.
 
 # ========== Type Definitions ==========

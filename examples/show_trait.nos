@@ -1,11 +1,11 @@
 # Show Trait
-#
+# 
 # Demonstrates custom string representation:
 # - Show trait provides custom toString-like behavior
 # - Point: coordinate format "(x, y)"
 # - Person: human readable "name (age X)"
 # - Rectangle: dimension format "WxH"
-#
+# 
 # Similar to Java's toString() or Rust's Display trait.
 
 type Point = { x: Int, y: Int }
