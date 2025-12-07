@@ -12,6 +12,7 @@ use thiserror::Error;
 
 pub mod infer;
 pub mod check;
+pub mod mono;
 
 /// Unique identifier for type variables during inference.
 pub type TypeVarId = u32;
