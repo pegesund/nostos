@@ -1,0 +1,48 @@
+# Set Literals
+#
+# Demonstrates set literal creation in Nostos:
+# - Set literals with #{} syntax
+# - Sets automatically remove duplicates
+# - Sets can contain strings, integers, and other hashable types
+#
+# Sets are unordered collections of unique elements.
+# The #{} syntax creates an immutable set.
+
+main() = {
+    # === Creating sets ===
+
+    # Empty set
+    empty = #{}
+
+    # Set with integer elements - duplicates are automatically removed
+    # #{1, 2, 3, 2, 1} becomes #{1, 2, 3}
+    numbers = #{1, 2, 3, 2, 1}
+
+    # Set of strings
+    fruits = #{"apple", "banana", "cherry"}
+
+    # Mixed set creation - duplicates removed at creation time
+    with_dups = #{10, 20, 10, 30, 20, 10}
+
+    # Boolean set
+    bools = #{true, false, true}
+
+    # === Practical uses ===
+
+    # Sets are useful for representing unique collections
+    unique_ids = #{100, 200, 300, 400, 500}
+
+    # Tags or categories
+    tags = #{"urgent", "review", "bug"}
+
+    # Status codes
+    success_codes = #{200, 201, 204}
+    error_codes = #{400, 401, 403, 404, 500}
+
+    println("Set literals created successfully!")
+    println("numbers: " ++ show(numbers))
+    println("fruits: " ++ show(fruits))
+    println("tags: " ++ show(tags))
+
+    0
+}
