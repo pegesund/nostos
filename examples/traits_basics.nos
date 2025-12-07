@@ -1,0 +1,62 @@
+# Traits Basics Example
+# Traits define shared behavior that types can implement.
+# This example shows the fundamentals of trait definition and implementation.
+
+# ========== Type Definitions ==========
+
+type Dog = { name: String, age: Int }
+type Cat = { name: String, lives: Int }
+type Parrot = { name: String, vocabulary: Int }
+
+# ========== Trait Definition ==========
+# A trait declares methods that implementing types must provide.
+# 'self' refers to the instance the method is called on.
+
+trait Animal
+    speak(self) -> String
+    describe(self) -> String
+end
+
+# ========== Trait Implementations ==========
+# Each type provides its own implementation of the trait methods.
+
+Dog: Animal
+    speak(self) = "Woof! My name is " ++ self.name
+    describe(self) = self.name ++ " is a " ++ show(self.age) ++ "-year-old dog"
+end
+
+Cat: Animal
+    speak(self) = "Meow! I'm " ++ self.name ++ " with " ++ show(self.lives) ++ " lives"
+    describe(self) = self.name ++ " the cat (" ++ show(self.lives) ++ " lives remaining)"
+end
+
+Parrot: Animal
+    speak(self) = "Squawk! " ++ self.name ++ " knows " ++ show(self.vocabulary) ++ " words!"
+    describe(self) = self.name ++ " the parrot (vocabulary: " ++ show(self.vocabulary) ++ " words)"
+end
+
+# ========== Using Traits ==========
+
+main() = {
+    println("=== Traits Basics ===")
+    println("")
+
+    # Create instances
+    dog = Dog("Buddy", 5)
+    cat = Cat("Whiskers", 9)
+    parrot = Parrot("Polly", 50)
+
+    # Call trait methods directly on instances
+    println("Speaking:")
+    println("  " ++ dog.speak())
+    println("  " ++ cat.speak())
+    println("  " ++ parrot.speak())
+
+    println("")
+    println("Descriptions:")
+    println("  " ++ dog.describe())
+    println("  " ++ cat.describe())
+    println("  " ++ parrot.describe())
+
+    0
+}
