@@ -5,6 +5,7 @@
 # - /health : Health check
 # - /echo   : Echo request body
 # - /work   : CPU-bound work (fib(25))
+# - /shutdown: Gracefully shuts down the server
 #
 # Spawns 8 worker processes for parallel request handling.
 
@@ -13,47 +14,73 @@ fib(0) = 0
 fib(1) = 1
 fib(n) = fib(n - 1) + fib(n - 2)
 
-handleRequest(server, req) = {
+handleRequest(server, req, main_pid) = {
   path = req.path
 
-  (body, status) = if path == "/" then
-    ("Hello from Nostos HTTP Server!", 200)
-  else if path == "/health" then
-    ("OK", 200)
-  else if path == "/echo" then
-    (req.body, 200)
-  else if path == "/work" then
-    # Do actual CPU work - should use multiple cores
-    (show(fib(25)), 200)
-  else
-    ("Not Found", 404)
+  # Shutdown route
+  if path == "/shutdown" then {
+    main_pid <- ("shutdown", ()) # Signal main process to shut down
+    Server.respond(req.id, 200, [("Content-Type", "text/plain")], "Shutting down...")
+    ("shutdown_signal", ()) # Signal worker to exit
+  }
+  else {
+    (body, status) = if path == "/" then
+      ("Hello from Nostos HTTP Server!", 200)
+    else if path == "/health" then
+      ("OK", 200)
+    else if path == "/echo" then
+      (req.body, 200)
+    else if path == "/work" then
+      # Do actual CPU work - should use multiple cores
+      (show(fib(25)), 200)
+    else
+      ("Not Found", 404)
 
-  headers = [("Content-Type", "text/plain")]
-  Server.respond(req.id, status, headers, body)
-
-  acceptLoop(server)
+    headers = [("Content-Type", "text/plain")]
+    Server.respond(req.id, status, headers, body)
+    ("continue", ()) # Signal worker to continue
+  }
 }
 
-acceptLoop(server) = {
+acceptLoop(server, main_pid) = {
   (status, req) = Server.accept(server)
-  handleRequest(server, req)
+  
+  if status == "error" then {
+    () # Exit if Server.accept returns error (e.g., server closed)
+  } else {
+    # WORKAROUND: Assign to a temporary variable to avoid parser bug
+    # with `(signal, _)` pattern.
+    result = handleRequest(server, req, main_pid)
+    signal = result.0 # Access first element of the tuple
+
+    if signal == "shutdown_signal" then {
+      () # Exit worker process
+    } else {
+      acceptLoop(server, main_pid) # Continue accepting requests
+    }
+  }
 }
 
 # Spawn N worker processes all accepting from same server
-spawnWorkers(server, 0) = ()
-spawnWorkers(server, n) = {
-  spawn { acceptLoop(server) }
-  spawnWorkers(server, n - 1)
+spawnWorkers(server, main_pid, 0) = ()
+spawnWorkers(server, main_pid, n) = {
+  spawn { acceptLoop(server, main_pid) }
+  spawnWorkers(server, main_pid, n - 1)
 }
 
 main() = {
+  main_pid = self()
   (status, server) = Server.bind(8080)
 
-  # Spawn 8 workers for parallel request handling
-  spawnWorkers(server, 8)
+  if status == "ok" then {
+    # Spawn 8 workers for parallel request handling
+    spawnWorkers(server, main_pid, 8)
 
-  # Keep main alive
-  receive
-    _ -> ()
-  end
+    # Keep main alive, listening for shutdown signal
+    receive
+      ("shutdown", _) -> () # Exit the loop on shutdown signal
+    end
+  } else {
+    println("Error: Failed to bind server on port 8080.")
+  }
 }

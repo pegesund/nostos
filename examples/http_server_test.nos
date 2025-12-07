@@ -11,18 +11,24 @@ serverLoop(server, count) = {
   println("Waiting for request...")
   (status, req) = Server.accept(server)
 
-  print("Request #")
-  print(count)
-  print(": ")
-  print(req.method)
-  print(" ")
-  println(req.path)
+  if req.path == "/shutdown" then {
+    Server.respond(req.id, 200, [("Content-Type", "text/plain")], "Shutting down...")
+    () # Exit by returning from the recursive loop
+  }
+  else {
+    print("Request #")
+    print(count)
+    print(": ")
+    print(req.method)
+    print(" ")
+    println(req.path)
 
-  body = if req.path == "/hello" then "hello world" else "not found"
-  statusCode = if req.path == "/hello" then 200 else 404
+    body = if req.path == "/hello" then "hello world" else "not found"
+    statusCode = if req.path == "/hello" then 200 else 404
 
-  Server.respond(req.id, statusCode, [("Content-Type", "text/plain")], body)
-  serverLoop(server, count + 1)
+    Server.respond(req.id, statusCode, [("Content-Type", "text/plain")], body)
+    serverLoop(server, count + 1)
+  }
 }
 
 main() = {
