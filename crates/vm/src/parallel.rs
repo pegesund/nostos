@@ -2669,6 +2669,17 @@ impl ThreadWorker {
                 set_reg!(*dst, GcValue::Bool(result));
             }
 
+            EqFloat(dst, a, b) => {
+                let va = reg!(*a).clone();
+                let vb = reg!(*b).clone();
+                let result = match (&va, &vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => x == y,
+                    (GcValue::Float32(x), GcValue::Float32(y)) => x == y,
+                    _ => false,
+                };
+                set_reg!(*dst, GcValue::Bool(result));
+            }
+
             LtFloat(dst, a, b) => {
                 let va = reg!(*a).clone();
                 let vb = reg!(*b).clone();
