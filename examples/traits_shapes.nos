@@ -1,6 +1,11 @@
-# Shapes Trait Example
-# A practical example showing traits for geometric calculations.
-# Multiple types implement the same trait with different formulas.
+# Shapes Trait
+#
+# Demonstrates traits for geometric calculations:
+# - Shape trait with area(), perimeter(), and name() methods
+# - Circle, Rectangle, Triangle implementations with different formulas
+# - Helper functions that work with specific shape types
+#
+# Each shape computes its area and perimeter using its own formula.
 
 # ========== Type Definitions ==========
 
@@ -69,6 +74,19 @@ main() = {
     rect = Rectangle(4.0, 6.0)
     tri = Triangle(3.0, 4.0)
 
+    # Test circle area: π * r² = 3.14159 * 25 = 78.53975
+    assert_eq(78.53975, circle.area())
+    # Test circle perimeter: 2πr = 2 * 3.14159 * 5 = 31.4159
+    assert_eq(31.4159, circle.perimeter())
+
+    # Test rectangle area: w * h = 4 * 6 = 24
+    assert_eq(24.0, rect.area())
+    # Test rectangle perimeter: 2(w + h) = 2 * 10 = 20
+    assert_eq(20.0, rect.perimeter())
+
+    # Test triangle area: 0.5 * b * h = 0.5 * 3 * 4 = 6
+    assert_eq(6.0, tri.area())
+
     print_shape_info_circle(circle)
     println("")
     print_shape_info_rect(rect)
@@ -76,14 +94,10 @@ main() = {
     print_shape_info_tri(tri)
 
     println("")
-    println("=== Area Comparisons ===")
-    println("Circle area:    " ++ show(circle.area()))
-    println("Rectangle area: " ++ show(rect.area()))
-    println("Triangle area:  " ++ show(tri.area()))
-
     total = circle.area() + rect.area() + tri.area()
-    println("")
-    println("Total area: " ++ show(total))
+    # Total: 78.53975 + 24 + 6 = 108.53975
+    assert_eq(108.53975, total)
 
+    println("Shapes trait tests passed!")
     0
 }

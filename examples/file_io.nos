@@ -1,30 +1,39 @@
-# File IO Example
-# Demonstrates reading and writing files and directories in Nostos
+# File IO
+#
+# Demonstrates comprehensive file and directory operations:
+# - High-level: File.writeAll, File.readAll, File.size, File.exists
+# - Handles: File.open, File.read, File.write, File.seek, File.close
+# - Directory: Dir.create, Dir.createAll, Dir.list, Dir.removeAll
+# - Operations: File.copy, File.rename, File.remove
+#
+# Shows both simple one-shot and streaming file access patterns.
 
 # High-level file operations
 demoHighLevel() = {
     println("--- High-level File Operations ---")
-    println("")
 
     path = "/tmp/nostos_example.txt"
-    (status, r) = File.writeAll(path, "Hello, Nostos!\nThis is a test file.")
-    println("Write status: " ++ status)
+    testContent = "Hello, Nostos!\nThis is a test file."
+    (status, r) = File.writeAll(path, testContent)
+    assert_eq("ok", status)
 
     (status2, content) = File.readAll(path)
-    println("File content:")
-    println(content)
+    assert_eq("ok", status2)
+    assert_eq(testContent, content)
 
     (s, size) = File.size(path)
-    print("File size: ")
-    print(size)
-    println(" bytes")
+    assert_eq("ok", s)
+    assert_eq(36, size)  # "Hello, Nostos!\nThis is a test file." = 36 bytes
 
-    (s, exists) = File.exists(path)
-    print("File exists: ")
-    println(exists)
+    (s2, exists) = File.exists(path)
+    assert_eq(true, exists)
 
     File.remove(path)
-    println("High-level demo complete")
+
+    (s3, exists2) = File.exists(path)
+    assert_eq(false, exists2)
+
+    println("High-level tests passed")
     println("")
 }
 
@@ -107,7 +116,6 @@ Line 4")
 # File copy and rename
 demoCopyRename() = {
     println("--- Copy and Rename ---")
-    println("")
 
     src = "/tmp/nostos_src.txt"
     copy = "/tmp/nostos_copy.txt"
@@ -115,17 +123,24 @@ demoCopyRename() = {
 
     File.writeAll(src, "Original content")
     File.copy(src, copy)
-    println("Copied file")
+
+    # Verify copy has same content
+    (s1, copiedContent) = File.readAll(copy)
+    assert_eq("Original content", copiedContent)
 
     File.rename(copy, dest)
-    println("Renamed file")
 
-    (s, content) = File.readAll(dest)
-    println("Content: " ++ content)
+    # Verify rename worked
+    (s2, renamedContent) = File.readAll(dest)
+    assert_eq("Original content", renamedContent)
+
+    # Verify old copy is gone
+    (s3, copyExists) = File.exists(copy)
+    assert_eq(false, copyExists)
 
     File.remove(src)
     File.remove(dest)
-    println("Copy/rename demo complete")
+    println("Copy/rename tests passed")
 }
 
 main() = {
@@ -138,5 +153,5 @@ main() = {
     demoCopyRename()
 
     println("")
-    println("=== All demos complete ===")
+    println("File IO tests passed!")
 }

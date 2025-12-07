@@ -1,8 +1,12 @@
-# Show Trait Example
-# The Show trait allows custom string representations for types,
-# similar to Java's toString() or Rust's Display trait.
-# When a type implements Show, calling show() on it will use
-# the custom implementation instead of the default.
+# Show Trait
+#
+# Demonstrates custom string representation:
+# - Show trait provides custom toString-like behavior
+# - Point: coordinate format "(x, y)"
+# - Person: human readable "name (age X)"
+# - Rectangle: dimension format "WxH"
+#
+# Similar to Java's toString() or Rust's Display trait.
 
 type Point = { x: Int, y: Int }
 
@@ -34,23 +38,23 @@ main() = {
     # Points with custom display
     p1 = Point(3, 4)
     p2 = Point(0, 0)
-    println("Point 1: " ++ show(p1))
-    println("Point 2: " ++ show(p2))
+    assert_eq("(3, 4)", show(p1))
+    assert_eq("(0, 0)", show(p2))
 
     # Person with custom display
     alice = Person("Alice", 30)
     bob = Person("Bob", 25)
-    println("Person 1: " ++ show(alice))
-    println("Person 2: " ++ show(bob))
+    assert_eq("Alice (age 30)", show(alice))
+    assert_eq("Bob (age 25)", show(bob))
 
     # Rectangle with custom display
     rect = Rectangle(1920, 1080)
-    println("Screen resolution: " ++ show(rect))
+    assert_eq("1920x1080", show(rect))
 
     # Built-in types still use default show
-    println("List: " ++ show([1, 2, 3]))
-    println("Tuple: " ++ show((1, "hello", true)))
-    println("Int: " ++ show(42))
+    assert_eq("[1, 2, 3]", show([1, 2, 3]))
+    assert_eq("42", show(42))
 
+    println("Show trait tests passed!")
     0
 }

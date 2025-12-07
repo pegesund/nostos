@@ -1,5 +1,13 @@
-# Higher-order functions example
-# Demonstrates closures, currying, and function composition
+# Higher-Order Functions
+#
+# Demonstrates functional programming fundamentals:
+# - compose: combine two functions into one
+# - curry/uncurry: convert between curried and uncurried forms
+# - flip: swap argument order of a binary function
+# - apply_n: repeated function application
+# - partial application with make_adder/make_multiplier
+#
+# These are essential tools for building composable programs.
 
 # Identity function
 id(x) = x
@@ -32,23 +40,51 @@ mul(a, b) = a * b
 make_multiplier(n) = curry(mul)(n)
 
 main() = {
-    # Create specialized functions
+    # Test identity
+    assert_eq(42, id(42))
+    assert_eq("hello", id("hello"))
+
+    # Test const
+    always5 = const(5)
+    assert_eq(5, always5(999))
+    assert_eq(5, always5("ignored"))
+
+    # Test compose
     add5 = make_adder(5)
     double = make_multiplier(2)
-
-    # Compose: first double, then add 5
     double_then_add5 = compose(add5, double)
+    # double(10) = 20, then add5(20) = 25
+    assert_eq(25, double_then_add5(10))
 
-    # Apply to 10: double(10) = 20, add5(20) = 25
-    result1 = double_then_add5(10)
+    # Test apply_n
+    # double applied 4 times to 3: 3*2*2*2*2 = 48
+    assert_eq(48, apply_n(4, double, 3))
+    assert_eq(3, apply_n(0, double, 3))
 
-    # Apply double 4 times: 2^4 * 3 = 48
-    result2 = apply_n(4, double, 3)
+    # Test curry and uncurry
+    curried_add = curry(add)
+    assert_eq(15, curried_add(10)(5))
 
-    # Use flip
+    uncurried_add = uncurry(curried_add)
+    assert_eq(15, uncurried_add(10, 5))
+
+    # Test flip
     sub = (a, b) => a - b
     flipped_sub = flip(sub)
-    result3 = flipped_sub(3, 10)  # 10 - 3 = 7
+    # Normal: 3 - 10 = -7, Flipped: 10 - 3 = 7
+    assert_eq(-7, sub(3, 10))
+    assert_eq(7, flipped_sub(3, 10))
 
-    result1 + result2 + result3
+    # Test make_adder (partial application)
+    add10 = make_adder(10)
+    assert_eq(15, add10(5))
+    assert_eq(110, add10(100))
+
+    # Test make_multiplier
+    triple = make_multiplier(3)
+    assert_eq(15, triple(5))
+    assert_eq(30, triple(10))
+
+    println("Higher-order functions tests passed!")
+    0
 }

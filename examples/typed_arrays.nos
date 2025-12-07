@@ -1,5 +1,12 @@
-# Typed Arrays example
-# Demonstrates Int64Array and Float64Array for efficient numeric computation
+# Typed Arrays
+#
+# Demonstrates efficient numeric arrays:
+# - Int64Array: contiguous array of 64-bit integers
+# - Float64Array: contiguous array of 64-bit floats
+# - Index-based access and mutation (arr[i], arr[i] = x)
+# - length() function for array size
+#
+# These are more efficient than generic lists for numeric computation.
 
 # Fill array with values [1, 2, 3, ..., n]
 fillRange(arr, i) =
@@ -23,30 +30,41 @@ fillSquares(arr, i) =
     }
 
 main() = {
-    # Int64Array: contiguous array of 64-bit integers
+    # Test Int64Array
     intArr = newInt64Array(10)
+    assert_eq(10, length(intArr))
     fillRange(intArr, 0)
-    intSum = sumInt64(intArr, 0, 0)
+
+    # Verify range values [1, 2, ..., 10]
+    assert_eq(1, intArr[0])
+    assert_eq(5, intArr[4])
+    assert_eq(10, intArr[9])
+
     # Sum of 1..10 = 55
-    print("Sum of 1..10: " ++ show(intSum))
+    assert_eq(55, sumInt64(intArr, 0, 0))
 
     # Array of squares
     squares = newInt64Array(10)
     fillSquares(squares, 0)
-    print("9^2 = " ++ show(squares[9]))  # 81
+    assert_eq(0, squares[0])   # 0^2 = 0
+    assert_eq(1, squares[1])   # 1^2 = 1
+    assert_eq(4, squares[2])   # 2^2 = 4
+    assert_eq(81, squares[9])  # 9^2 = 81
 
-    # Float64Array: contiguous array of 64-bit floats
+    # Test Float64Array
     floats = newFloat64Array(5)
+    assert_eq(5, length(floats))
+
     floats[0] = 1.5
     floats[1] = 2.5
     floats[2] = 3.5
     floats[3] = 4.5
     floats[4] = 5.5
-    print("floats[2] = " ++ show(floats[2]))
 
-    # Verify length
-    print("Float array length: " ++ show(length(floats)))
+    assert_eq(1.5, floats[0])
+    assert_eq(3.5, floats[2])
+    assert_eq(5.5, floats[4])
 
-    # Return sum for verification
-    intSum
+    println("Typed arrays tests passed!")
+    55
 }

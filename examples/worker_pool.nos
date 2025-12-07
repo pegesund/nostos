@@ -1,5 +1,11 @@
-# Worker Pool example
-# A pool of workers that process tasks
+# Worker Pool
+#
+# Demonstrates a pool of worker processes:
+# - worker: receives Task messages, executes work, returns Result
+# - start_workers: spawns n worker processes
+# - submit_task: sends work to a worker in the pool
+#
+# Pattern for distributing work across multiple concurrent workers.
 
 # Worker process
 worker(pool) = receive
@@ -37,11 +43,27 @@ main() = {
     # Start 2 workers
     workers = start_workers(2, me)
 
-    # Submit tasks to workers
+    # Submit fib(10) task
     submit_task(workers, me, compute_fib)
 
     # Wait for result
-    receive
+    result = receive
         Result(r) -> r
     end
+
+    # fib(10) = 55
+    assert_eq(55, result)
+
+    # Submit fact(5) task
+    submit_task(workers, me, compute_fact)
+
+    result2 = receive
+        Result(r) -> r
+    end
+
+    # fact(5) = 120
+    assert_eq(120, result2)
+
+    println("Worker pool tests passed!")
+    result + result2  # 55 + 120 = 175
 }

@@ -1,5 +1,12 @@
-# Pattern matching showcase
-# Demonstrates various pattern matching capabilities
+# Pattern Matching
+#
+# Demonstrates various pattern matching capabilities:
+# - Matching on algebraic data types (ADTs)
+# - Guards with when clauses
+# - Tuple patterns in match expressions
+# - List patterns with head/tail destructuring
+#
+# Pattern matching is exhaustive - the compiler ensures all cases are handled.
 
 type Shape =
     | Circle(Float)
@@ -25,7 +32,7 @@ classify_number(n) when n > 0 = "positive"
 classify_number(n) when n < 0 = "negative"
 classify_number(0) = "zero"
 
-# Match on multiple conditions
+# Match on tuple of conditions
 compare(a, b) = match (a > b, a < b)
     (true, _) -> "greater"
     (_, true) -> "less"
@@ -42,20 +49,31 @@ main() = {
     circle = Circle(5.0)
     rect = Rectangle(3.0, 4.0)
 
-    # Calculate areas
+    # Test area calculations
     a1 = area(circle)
     a2 = area(rect)
+    assert_eq(12.0, a2)
 
-    # Test number classification
-    c1 = classify_number(42)
-    c2 = classify_number(-5)
-    c3 = classify_number(0)
+    # Test describe
+    assert_eq("circle with radius", describe(circle))
+    assert_eq("rectangle", describe(rect))
+
+    # Test number classification with guards
+    assert_eq("positive", classify_number(42))
+    assert_eq("negative", classify_number(-5))
+    assert_eq("zero", classify_number(0))
+
+    # Test tuple pattern matching in compare
+    assert_eq("greater", compare(10, 5))
+    assert_eq("less", compare(3, 8))
+    assert_eq("equal", compare(5, 5))
 
     # Test list patterns
-    d1 = describe_list([])
-    d2 = describe_list([1])
-    d3 = describe_list([1, 2, 3, 4])
+    assert_eq("empty", describe_list([]))
+    assert_eq("singleton", describe_list([1]))
+    assert_eq("pair", describe_list([1, 2]))
+    assert_eq("many", describe_list([1, 2, 3, 4]))
 
-    # Return total area (circle + rect)
+    println("Pattern matching tests passed!")
     a1 + a2
 }

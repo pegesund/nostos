@@ -1,6 +1,10 @@
-# HTTP Client Example
-# 
-# Demonstrates all HTTP verbs and the HTTP client API.
+# HTTP Client
+#
+# Demonstrates the HTTP client API:
+# - Http.get, Http.post, Http.put, Http.delete, Http.patch, Http.head
+# - Http.request for custom headers and methods
+# - Response has .status (int) and .body (string) fields
+#
 # Uses httpbin.org as a test server.
 
 # Simple GET request

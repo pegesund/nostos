@@ -1,5 +1,12 @@
-# Ping-Pong example
-# Two processes send messages back and forth
+# Ping-Pong
+#
+# Demonstrates message passing between processes:
+# - Two processes communicate via async messages
+# - Ping sends message and waits for Pong response
+# - Countdown from n to 0, then notify parent
+# - Classic example of actor-model concurrency
+#
+# Shows spawn, self(), send (<-), and receive patterns.
 
 # Ping process: sends Ping, waits for Pong, counts down
 ping(pong_pid, 0, parent) = {
@@ -27,10 +34,16 @@ main() = {
     pong_pid = spawn { pong() }
     spawn { ping(pong_pid, 5, me) }
 
-    receive
+    result = receive
         Done(n) -> {
             pong_pid <- Stop
             n
         }
     end
+
+    # After 5 ping-pongs counting down, final value is 0
+    assert_eq(0, result)
+
+    println("Ping-pong test passed!")
+    result
 }

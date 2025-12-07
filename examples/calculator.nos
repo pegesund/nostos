@@ -1,5 +1,11 @@
-# Expression calculator example
-# Demonstrates algebraic data types and recursive evaluation
+# Expression Calculator
+#
+# Demonstrates algebraic data types for AST representation:
+# - Expr type models arithmetic expressions
+# - Pattern matching for recursive evaluation
+# - Simplification rules for algebraic identities
+#
+# This is a classic example of using ADTs to build interpreters.
 
 type Expr =
     | Num(Int)
@@ -17,7 +23,7 @@ eval(Mul(a, b)) = eval(a) * eval(b)
 eval(Div(a, b)) = eval(a) / eval(b)
 eval(Neg(e)) = -eval(e)
 
-# Simplify constant expressions
+# Simplify constant expressions using algebraic identities
 simplify(Add(Num(0), e)) = simplify(e)
 simplify(Add(e, Num(0))) = simplify(e)
 simplify(Mul(Num(1), e)) = simplify(e)
@@ -32,18 +38,22 @@ simplify(Div(a, b)) = Div(simplify(a), simplify(b))
 simplify(e) = e
 
 main() = {
-    # Build expression: (3 + 4) * (10 - 5)
-    expr = Mul(
-        Add(Num(3), Num(4)),
-        Sub(Num(10), Num(5))
-    )
+    # Test basic evaluation: (3 + 4) * (10 - 5) = 7 * 5 = 35
+    expr1 = Mul(Add(Num(3), Num(4)), Sub(Num(10), Num(5)))
+    assert_eq(35, eval(expr1))
 
-    # Evaluate: 7 * 5 = 35
-    result1 = eval(expr)
+    # Test negation: -(5 - 8) = -(-3) = 3
+    expr2 = Neg(Sub(Num(5), Num(8)))
+    assert_eq(3, eval(expr2))
 
-    # Build expression with simplifiable parts: 0 + (1 * x) where x = 42
-    expr2 = Add(Num(0), Mul(Num(1), Num(42)))
-    result2 = eval(simplify(expr2))
+    # Test simplification: 0 + (1 * 42) simplifies to 42
+    expr3 = Add(Num(0), Mul(Num(1), Num(42)))
+    assert_eq(42, eval(simplify(expr3)))
 
-    result1 + result2
+    # Test x * 0 = 0
+    expr4 = Mul(Add(Num(100), Num(200)), Num(0))
+    assert_eq(0, eval(simplify(expr4)))
+
+    println("Calculator tests passed!")
+    eval(expr1)
 }

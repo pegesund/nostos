@@ -1,11 +1,12 @@
-# Copy Trait Example
-# The copy() function creates a deep copy of any value.
-# By default, it performs a structural deep copy.
-# When a type implements the Copy trait, you can customize
-# what happens during copying - useful for:
-# - Adding metadata (like copy count)
-# - Resetting certain fields
-# - Creating modified clones
+# Copy Trait
+#
+# Demonstrates customizable deep copying:
+# - Default: structural deep copy of all fields
+# - Custom Copy trait: control what happens during copying
+# - Document: appends "(copy)" to title, increments version
+# - Counter: tracks number of times it was copied
+#
+# Useful for metadata, modified clones, and copy-on-write patterns.
 
 type Document = { title: String, content: String, version: Int }
 
@@ -29,39 +30,40 @@ end
 main() = {
     # Document copying increments version
     doc1 = Document("My Document", "Hello, world!", 1)
-    println("Original: " ++ doc1.title ++ " v" ++ show(doc1.version))
+    assert_eq("My Document", doc1.title)
+    assert_eq(1, doc1.version)
 
     doc2 = copy(doc1)
-    println("Copy 1: " ++ doc2.title ++ " v" ++ show(doc2.version))
+    assert_eq("My Document (copy)", doc2.title)
+    assert_eq(2, doc2.version)
 
     doc3 = copy(doc2)
-    println("Copy 2: " ++ doc3.title ++ " v" ++ show(doc3.version))
-
-    println("")
+    assert_eq("My Document (copy) (copy)", doc3.title)
+    assert_eq(3, doc3.version)
 
     # Counter tracks copy count
     c1 = Counter(100, 0)
-    println("Original counter: value=" ++ show(c1.value) ++ ", copies=" ++ show(c1.copies))
+    assert_eq(100, c1.value)
+    assert_eq(0, c1.copies)
 
     c2 = copy(c1)
-    println("After 1st copy: value=" ++ show(c2.value) ++ ", copies=" ++ show(c2.copies))
+    assert_eq(100, c2.value)
+    assert_eq(1, c2.copies)
 
     c3 = copy(c2)
-    println("After 2nd copy: value=" ++ show(c3.value) ++ ", copies=" ++ show(c3.copies))
-
-    println("")
+    assert_eq(100, c3.value)
+    assert_eq(2, c3.copies)
 
     # Built-in types use default deep copy
     list1 = [1, 2, 3]
     list2 = copy(list1)
-    println("Original list: " ++ show(list1))
-    println("Copied list: " ++ show(list2))
+    assert_eq([1, 2, 3], list2)
 
     # Nested structures are deep copied
     nested = [[1, 2], [3, 4]]
     nested_copy = copy(nested)
-    println("Nested original: " ++ show(nested))
-    println("Nested copy: " ++ show(nested_copy))
+    assert_eq([[1, 2], [3, 4]], nested_copy)
 
+    println("Copy trait tests passed!")
     0
 }
