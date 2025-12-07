@@ -20,6 +20,7 @@ percent-encoding = { workspace = true }
 axum = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
+async-channel = "2"
 
 [[bench]]
 name = "vm_vs_runtime"

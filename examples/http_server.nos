@@ -1,3 +1,8 @@
+# Simulate CPU work - compute fib(n)
+fib(0) = 0
+fib(1) = 1
+fib(n) = fib(n - 1) + fib(n - 2)
+
 handleRequest(server, req) = {
   path = req.path
 
@@ -7,6 +12,9 @@ handleRequest(server, req) = {
     ("OK", 200)
   else if path == "/echo" then
     (req.body, 200)
+  else if path == "/work" then
+    # Do actual CPU work - should use multiple cores
+    (show(fib(25)), 200)
   else
     ("Not Found", 404)
 

@@ -326,12 +326,13 @@ impl IoRuntime {
         // HTTP Server state
         // Request type: (request_id, method, path, headers, body)
         type ServerRequest = (u64, String, String, Vec<(String, String)>, Vec<u8>);
-        type ServerRequestTx = mpsc::UnboundedSender<ServerRequest>;
-        type ServerRequestRx = mpsc::UnboundedReceiver<ServerRequest>;
+        // Use async_channel for MPMC (multi-producer multi-consumer) - receivers are Clone!
+        type ServerRequestTx = async_channel::Sender<ServerRequest>;
+        type ServerRequestRx = async_channel::Receiver<ServerRequest>;
 
-        // Maps server handle -> shared receiver for incoming requests
-        // Multiple ServerAccept calls can wait on the same receiver concurrently
-        let server_request_receivers: Arc<Mutex<HashMap<u64, Arc<Mutex<ServerRequestRx>>>>> = Arc::new(Mutex::new(HashMap::new()));
+        // Maps server handle -> receiver for incoming requests
+        // async_channel::Receiver is Clone, so multiple workers can recv concurrently
+        let server_request_receivers: Arc<Mutex<HashMap<u64, ServerRequestRx>>> = Arc::new(Mutex::new(HashMap::new()));
 
         // Maps request_id -> oneshot sender for the response
         type ResponseSender = oneshot::Sender<(u16, Vec<(String, String)>, Vec<u8>)>;
@@ -628,10 +629,9 @@ impl IoRuntime {
                     let handle = next_server_handle;
                     next_server_handle += 1;
 
-                    // Create channel for incoming requests - wrap receiver in Arc<Mutex<>> for sharing
-                    let (req_tx, req_rx) = mpsc::unbounded_channel();
-                    let shared_rx = Arc::new(Mutex::new(req_rx));
-                    server_request_receivers.lock().await.insert(handle, shared_rx);
+                    // Create MPMC channel - receiver is Clone, multiple workers can recv concurrently
+                    let (req_tx, req_rx) = async_channel::unbounded();
+                    server_request_receivers.lock().await.insert(handle, req_rx);
 
                     // Clone shared state for the axum handler
                     let pending = pending_responses.clone();
@@ -668,7 +668,7 @@ impl IoRuntime {
                             pending.lock().await.insert(request_id, resp_tx);
 
                             // Send request to the Nostos process
-                            let _ = req_tx.send((request_id, method, path, headers, body));
+                            let _ = req_tx.send((request_id, method, path, headers, body)).await;
 
                             // Wait for response from Nostos
                             match resp_rx.await {
@@ -710,22 +710,18 @@ impl IoRuntime {
                 }
 
                 IoRequest::ServerAccept { handle, response } => {
-                    // Get the shared receiver for this server handle
-                    let receivers = server_request_receivers.clone();
-                    tokio::spawn(async move {
-                        // Get the shared receiver (briefly lock the map)
-                        let shared_rx = {
-                            let map = receivers.lock().await;
-                            map.get(&handle).cloned()
-                        };
+                    // Clone the receiver - async_channel supports concurrent recv!
+                    let rx = {
+                        let map = server_request_receivers.lock().await;
+                        map.get(&handle).cloned()
+                    };
 
-                        match shared_rx {
-                            Some(rx) => {
-                                // Lock the receiver and wait for next request
-                                // Only one waiter at a time can hold this lock
-                                let result = rx.lock().await.recv().await;
-                                match result {
-                                    Some((request_id, method, path, headers, body)) => {
+                    match rx {
+                        Some(rx) => {
+                            // Spawn task that waits for request - multiple can wait concurrently!
+                            tokio::spawn(async move {
+                                match rx.recv().await {
+                                    Ok((request_id, method, path, headers, body)) => {
                                         let _ = response.send(Ok(IoResponseValue::ServerRequest {
                                             request_id,
                                             method,
@@ -734,16 +730,16 @@ impl IoRuntime {
                                             body,
                                         }));
                                     }
-                                    None => {
+                                    Err(_) => {
                                         let _ = response.send(Err(IoError::Other("Server closed".to_string())));
                                     }
                                 }
-                            }
-                            None => {
-                                let _ = response.send(Err(IoError::InvalidHandle));
-                            }
+                            });
                         }
-                    });
+                        None => {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    }
                 }
 
                 IoRequest::ServerRespond { request_id, status, headers, body, response } => {
