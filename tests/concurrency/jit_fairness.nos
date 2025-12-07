@@ -22,12 +22,12 @@ main() = {
     me = self()
 
     # Spawn heavy JIT worker first
-    spawn(() => heavy_worker(me))
+    spawn { heavy_worker(me) }
 
     # Spawn several light workers
-    spawn(() => light_worker(me, 1))
-    spawn(() => light_worker(me, 2))
-    spawn(() => light_worker(me, 3))
+    spawn { light_worker(me, 1) }
+    spawn { light_worker(me, 2) }
+    spawn { light_worker(me, 3) }
 
     # Collect all 4 results
     r1 = receive x -> x end

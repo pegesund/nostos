@@ -14,16 +14,16 @@ main() = {
   
   me = self()
   
-  spawn(() => fileWorker(me, 1))
-  spawn(() => fileWorker(me, 2))
-  spawn(() => fileWorker(me, 3))
-  spawn(() => fileWorker(me, 4))
-  spawn(() => fileWorker(me, 5))
-  spawn(() => fileWorker(me, 6))
-  spawn(() => fileWorker(me, 7))
-  spawn(() => fileWorker(me, 8))
-  spawn(() => fileWorker(me, 9))
-  spawn(() => fileWorker(me, 10))
+  spawn { fileWorker(me, 1) }
+  spawn { fileWorker(me, 2) }
+  spawn { fileWorker(me, 3) }
+  spawn { fileWorker(me, 4) }
+  spawn { fileWorker(me, 5) }
+  spawn { fileWorker(me, 6) }
+  spawn { fileWorker(me, 7) }
+  spawn { fileWorker(me, 8) }
+  spawn { fileWorker(me, 9) }
+  spawn { fileWorker(me, 10) }
   
   r1 = receive x -> x end
   println("Worker done: " ++ show(r1))

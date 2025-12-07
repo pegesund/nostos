@@ -13,7 +13,7 @@ end
 
 # Start n workers
 start_workers(0, _) = []
-start_workers(n, pool) = [spawn(() => worker(pool)) | start_workers(n - 1, pool)]
+start_workers(n, pool) = [spawn { worker(pool) } | start_workers(n - 1, pool)]
 
 # Round-robin task distribution
 submit_task([], _, _) = ()

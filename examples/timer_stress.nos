@@ -58,16 +58,16 @@ test_concurrent_sleepers() = {
     me = self()
 
     # Spawn 10 workers, each sleeping different amounts
-    spawn(() => timed_counter(me, 1, 5, 10))   # 5 x 10ms = 50ms total
-    spawn(() => timed_counter(me, 2, 3, 20))   # 3 x 20ms = 60ms total
-    spawn(() => timed_counter(me, 3, 2, 30))   # 2 x 30ms = 60ms total
-    spawn(() => timed_counter(me, 4, 6, 8))    # 6 x 8ms = 48ms total
-    spawn(() => timed_counter(me, 5, 4, 15))   # 4 x 15ms = 60ms total
-    spawn(() => timed_counter(me, 6, 10, 5))   # 10 x 5ms = 50ms total
-    spawn(() => timed_counter(me, 7, 2, 25))   # 2 x 25ms = 50ms total
-    spawn(() => timed_counter(me, 8, 3, 18))   # 3 x 18ms = 54ms total
-    spawn(() => timed_counter(me, 9, 1, 55))   # 1 x 55ms = 55ms total
-    spawn(() => timed_counter(me, 10, 5, 12))  # 5 x 12ms = 60ms total
+    spawn { timed_counter(me, 1, 5, 10) }   # 5 x 10ms = 50ms total
+    spawn { timed_counter(me, 2, 3, 20) }   # 3 x 20ms = 60ms total
+    spawn { timed_counter(me, 3, 2, 30) }   # 2 x 30ms = 60ms total
+    spawn { timed_counter(me, 4, 6, 8) }    # 6 x 8ms = 48ms total
+    spawn { timed_counter(me, 5, 4, 15) }   # 4 x 15ms = 60ms total
+    spawn { timed_counter(me, 6, 10, 5) }   # 10 x 5ms = 50ms total
+    spawn { timed_counter(me, 7, 2, 25) }   # 2 x 25ms = 50ms total
+    spawn { timed_counter(me, 8, 3, 18) }   # 3 x 18ms = 54ms total
+    spawn { timed_counter(me, 9, 1, 55) }   # 1 x 55ms = 55ms total
+    spawn { timed_counter(me, 10, 5, 12) }  # 5 x 12ms = 60ms total
 
     # Collect all completions
     collect_n(10)
@@ -104,7 +104,7 @@ test_interleaved() = {
     println("Test 3: Interleaved sleep and receive with timeout")
     me = self()
 
-    spawn(() => interleaved_worker(me))
+    spawn { interleaved_worker(me) }
 
     # Receive with short timeout - might miss some
     r1 = receive n -> n after 30 -> 0 end
@@ -168,11 +168,11 @@ test_sleep_ordering() = {
 
     # Spawn workers with known sleep times - should complete in order
     # Longer delays first, shorter delays last
-    spawn(() => sleeper(me, 5, 250))
-    spawn(() => sleeper(me, 4, 200))
-    spawn(() => sleeper(me, 3, 150))
-    spawn(() => sleeper(me, 2, 100))
-    spawn(() => sleeper(me, 1, 50))
+    spawn { sleeper(me, 5, 250) }
+    spawn { sleeper(me, 4, 200) }
+    spawn { sleeper(me, 3, 150) }
+    spawn { sleeper(me, 2, 100) }
+    spawn { sleeper(me, 1, 50) }
 
     # Receive in order - shorter sleeps should arrive first
     first = receive n -> n after 1000 -> 0 end

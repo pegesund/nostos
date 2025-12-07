@@ -11,7 +11,7 @@ worker(parent, n) = {
 
 main() = {
     me = self()
-    spawn(() => worker(me, 5))
+    spawn { worker(me, 5) }
     result = receive
         r -> r
     end

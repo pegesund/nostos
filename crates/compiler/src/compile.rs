@@ -1377,9 +1377,16 @@ impl Compiler {
                 Ok(dst)
             }
 
-            // Spawn: spawn(func) or spawn(() => expr)
-            Expr::Spawn(kind, func_expr, args, _) => {
-                let func_reg = self.compile_expr_tail(func_expr, false)?;
+            // Spawn: spawn(func), spawn(() => expr), or spawn { block }
+            Expr::Spawn(kind, func_expr, args, span) => {
+                // If func_expr is a Block, wrap it in a zero-param Lambda (thunk)
+                let effective_func = match func_expr.as_ref() {
+                    Expr::Block(_, block_span) => {
+                        Expr::Lambda(vec![], func_expr.clone(), block_span.clone())
+                    }
+                    _ => func_expr.as_ref().clone(),
+                };
+                let func_reg = self.compile_expr_tail(&effective_func, false)?;
                 let mut arg_regs = Vec::new();
                 for arg in args {
                     let reg = self.compile_expr_tail(arg, false)?;

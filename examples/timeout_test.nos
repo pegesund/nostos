@@ -29,7 +29,7 @@ test_message_before_timeout() = {
     me = self()
 
     # Spawn worker that sends message quickly (50ms)
-    spawn(() => delayed_sender(me, 50, "hello"))
+    spawn { delayed_sender(me, 50, "hello") }
 
     # Wait with 200ms timeout - should get message
     result = receive
@@ -49,7 +49,7 @@ test_timeout_before_message() = {
     me = self()
 
     # Spawn worker that sends message late (300ms)
-    spawn(() => delayed_sender(me, 300, "late_message"))
+    spawn { delayed_sender(me, 300, "late_message") }
 
     # Wait with 100ms timeout - should timeout
     result = receive

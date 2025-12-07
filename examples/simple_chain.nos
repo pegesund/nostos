@@ -23,12 +23,12 @@ main() = {
     println(me)
 
     println("Creating node1 (sends to me)")
-    node1 = spawn(() => forwarder(me))
+    node1 = spawn { forwarder(me) }
     println("node1 pid:")
     println(node1)
 
     println("Creating node2 (sends to node1)")
-    node2 = spawn(() => forwarder(node1))
+    node2 = spawn { forwarder(node1) }
     println("node2 pid:")
     println(node2)
 

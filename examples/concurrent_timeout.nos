@@ -59,26 +59,26 @@ test_concurrent_counters() = {
     me = self()
 
     # Spawn 20 processes, each doing 10 receives with 20ms timeout
-    spawn(() => timeout_counter(me, 1, 10, 20))
-    spawn(() => timeout_counter(me, 2, 10, 20))
-    spawn(() => timeout_counter(me, 3, 10, 20))
-    spawn(() => timeout_counter(me, 4, 10, 20))
-    spawn(() => timeout_counter(me, 5, 10, 20))
-    spawn(() => timeout_counter(me, 6, 10, 20))
-    spawn(() => timeout_counter(me, 7, 10, 20))
-    spawn(() => timeout_counter(me, 8, 10, 20))
-    spawn(() => timeout_counter(me, 9, 10, 20))
-    spawn(() => timeout_counter(me, 10, 10, 20))
-    spawn(() => timeout_counter(me, 11, 10, 20))
-    spawn(() => timeout_counter(me, 12, 10, 20))
-    spawn(() => timeout_counter(me, 13, 10, 20))
-    spawn(() => timeout_counter(me, 14, 10, 20))
-    spawn(() => timeout_counter(me, 15, 10, 20))
-    spawn(() => timeout_counter(me, 16, 10, 20))
-    spawn(() => timeout_counter(me, 17, 10, 20))
-    spawn(() => timeout_counter(me, 18, 10, 20))
-    spawn(() => timeout_counter(me, 19, 10, 20))
-    spawn(() => timeout_counter(me, 20, 10, 20))
+    spawn { timeout_counter(me, 1, 10, 20) }
+    spawn { timeout_counter(me, 2, 10, 20) }
+    spawn { timeout_counter(me, 3, 10, 20) }
+    spawn { timeout_counter(me, 4, 10, 20) }
+    spawn { timeout_counter(me, 5, 10, 20) }
+    spawn { timeout_counter(me, 6, 10, 20) }
+    spawn { timeout_counter(me, 7, 10, 20) }
+    spawn { timeout_counter(me, 8, 10, 20) }
+    spawn { timeout_counter(me, 9, 10, 20) }
+    spawn { timeout_counter(me, 10, 10, 20) }
+    spawn { timeout_counter(me, 11, 10, 20) }
+    spawn { timeout_counter(me, 12, 10, 20) }
+    spawn { timeout_counter(me, 13, 10, 20) }
+    spawn { timeout_counter(me, 14, 10, 20) }
+    spawn { timeout_counter(me, 15, 10, 20) }
+    spawn { timeout_counter(me, 16, 10, 20) }
+    spawn { timeout_counter(me, 17, 10, 20) }
+    spawn { timeout_counter(me, 18, 10, 20) }
+    spawn { timeout_counter(me, 19, 10, 20) }
+    spawn { timeout_counter(me, 20, 10, 20) }
 
     # Collect all results
     results = collect_n(20)
@@ -99,16 +99,16 @@ test_mixed_results() = {
     me = self()
 
     # Spawn 10 receivers with 100ms timeout
-    p1 = spawn(() => message_receiver(me, 1, 100))
-    p2 = spawn(() => message_receiver(me, 2, 100))
-    p3 = spawn(() => message_receiver(me, 3, 100))
-    p4 = spawn(() => message_receiver(me, 4, 100))
-    p5 = spawn(() => message_receiver(me, 5, 100))
-    p6 = spawn(() => message_receiver(me, 6, 100))
-    p7 = spawn(() => message_receiver(me, 7, 100))
-    p8 = spawn(() => message_receiver(me, 8, 100))
-    p9 = spawn(() => message_receiver(me, 9, 100))
-    p10 = spawn(() => message_receiver(me, 10, 100))
+    p1 = spawn { message_receiver(me, 1, 100) }
+    p2 = spawn { message_receiver(me, 2, 100) }
+    p3 = spawn { message_receiver(me, 3, 100) }
+    p4 = spawn { message_receiver(me, 4, 100) }
+    p5 = spawn { message_receiver(me, 5, 100) }
+    p6 = spawn { message_receiver(me, 6, 100) }
+    p7 = spawn { message_receiver(me, 7, 100) }
+    p8 = spawn { message_receiver(me, 8, 100) }
+    p9 = spawn { message_receiver(me, 9, 100) }
+    p10 = spawn { message_receiver(me, 10, 100) }
 
     # Send messages to only odd-numbered ones
     p1 <- "got_it"
@@ -140,11 +140,11 @@ test_staggered_timeouts() = {
     me = self()
 
     # Spawn processes with different timeout durations
-    spawn(() => message_receiver(me, 1, 50))   # 50ms
-    spawn(() => message_receiver(me, 2, 100))  # 100ms
-    spawn(() => message_receiver(me, 3, 150))  # 150ms
-    spawn(() => message_receiver(me, 4, 200))  # 200ms
-    spawn(() => message_receiver(me, 5, 250))  # 250ms
+    spawn { message_receiver(me, 1, 50) }   # 50ms
+    spawn { message_receiver(me, 2, 100) }  # 100ms
+    spawn { message_receiver(me, 3, 150) }  # 150ms
+    spawn { message_receiver(me, 4, 200) }  # 200ms
+    spawn { message_receiver(me, 5, 250) }  # 250ms
 
     # Collect results - should arrive in order of timeout (shortest first)
     results = collect_n(5)
@@ -165,11 +165,11 @@ test_timeout_cancellation() = {
     me = self()
 
     # Spawn receivers with long timeout
-    p1 = spawn(() => message_receiver(me, 1, 500))
-    p2 = spawn(() => message_receiver(me, 2, 500))
-    p3 = spawn(() => message_receiver(me, 3, 500))
-    p4 = spawn(() => message_receiver(me, 4, 500))
-    p5 = spawn(() => message_receiver(me, 5, 500))
+    p1 = spawn { message_receiver(me, 1, 500) }
+    p2 = spawn { message_receiver(me, 2, 500) }
+    p3 = spawn { message_receiver(me, 3, 500) }
+    p4 = spawn { message_receiver(me, 4, 500) }
+    p5 = spawn { message_receiver(me, 5, 500) }
 
     # Wait a bit then send messages (should cancel timeouts)
     sleep(50)
@@ -193,7 +193,7 @@ test_timeout_cancellation() = {
 # Spawner for stress test
 spawn_counters(parent, n, count, timeout_ms) = {
     if n > 0 then {
-        spawn(() => timeout_counter(parent, n, count, timeout_ms))
+        spawn { timeout_counter(parent, n, count, timeout_ms) }
         spawn_counters(parent, n - 1, count, timeout_ms)
     } else {
         ()
