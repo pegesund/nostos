@@ -262,8 +262,8 @@ pub enum ThreadSafeValue {
     },
     /// A variant with type, constructor and fields
     Variant {
-        type_name: String,
-        constructor: String,
+        type_name: Arc<String>,
+        constructor: Arc<String>,
         fields: Vec<ThreadSafeValue>,
     },
     /// A function (already thread-safe via Arc)
@@ -329,8 +329,8 @@ impl ThreadSafeValue {
                     .map(|v| ThreadSafeValue::from_gc_value(v, heap))
                     .collect();
                 ThreadSafeValue::Variant {
-                    type_name: (*variant.type_name).clone(),
-                    constructor: (*variant.constructor).clone(),
+                    type_name: variant.type_name.clone(),
+                    constructor: variant.constructor.clone(),
                     fields: fields?,
                 }
             }
@@ -399,8 +399,8 @@ impl ThreadSafeValue {
                     .map(|v| v.to_gc_value(heap))
                     .collect();
                 let ptr = heap.alloc_variant(
-                    Arc::new(type_name.clone()),
-                    Arc::new(constructor.clone()),
+                    type_name.clone(),
+                    constructor.clone(),
                     gc_fields,
                 );
                 GcValue::Variant(ptr)
