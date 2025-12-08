@@ -16,7 +16,7 @@ use std::time::Instant;
 use tokio::sync::oneshot;
 use crossbeam_channel; // Added
 
-use crate::gc::{GcConfig, GcValue, Heap, RawGcPtr};
+use crate::gc::{GcConfig, GcValue, Heap, RawGcPtr, InlineOp, GcNativeFn};
 use crate::io_runtime::IoResult;
 use crate::value::{FunctionValue, Pid, RefId, Reg};
 
@@ -235,6 +235,182 @@ pub enum ExitReason {
     Shutdown,
 }
 
+/// Thread-safe message value for cross-thread communication.
+/// This is a subset of values that can be serialized and sent between threads.
+#[derive(Debug, Clone)]
+pub enum ThreadSafeValue {
+    Unit,
+    Bool(bool),
+    Int64(i64),
+    Float64(f64),
+    Pid(u64),
+    String(String),
+    Char(char),
+    List(Vec<ThreadSafeValue>),
+    Tuple(Vec<ThreadSafeValue>),
+    Record {
+        type_name: String,
+        field_names: Vec<String>,
+        fields: Vec<ThreadSafeValue>,
+        mutable_fields: Vec<bool>,
+    },
+    /// A closure with its function and captured values
+    Closure {
+        function: Arc<FunctionValue>,
+        captures: Vec<ThreadSafeValue>,
+        capture_names: Vec<String>,
+    },
+    /// A variant with type, constructor and fields
+    Variant {
+        type_name: String,
+        constructor: String,
+        fields: Vec<ThreadSafeValue>,
+    },
+    /// A function (already thread-safe via Arc)
+    Function(Arc<FunctionValue>),
+    /// A native function (already thread-safe via Arc)
+    NativeFunction(Arc<GcNativeFn>),
+}
+
+impl ThreadSafeValue {
+    /// Convert a GcValue to a thread-safe value (deep copy).
+    pub fn from_gc_value(value: &GcValue, heap: &Heap) -> Option<Self> {
+        Some(match value {
+            GcValue::Unit => ThreadSafeValue::Unit,
+            GcValue::Bool(b) => ThreadSafeValue::Bool(*b),
+            GcValue::Int64(i) => ThreadSafeValue::Int64(*i),
+            GcValue::Float64(f) => ThreadSafeValue::Float64(*f),
+            GcValue::Pid(p) => ThreadSafeValue::Pid(*p),
+            GcValue::Char(c) => ThreadSafeValue::Char(*c),
+            GcValue::String(ptr) => {
+                let s = heap.get_string(*ptr)?;
+                ThreadSafeValue::String(s.data.clone())
+            }
+            GcValue::List(list) => {
+                let items: Option<Vec<_>> = list.items().iter()
+                    .map(|v| ThreadSafeValue::from_gc_value(v, heap))
+                    .collect();
+                ThreadSafeValue::List(items?)
+            }
+            GcValue::Tuple(ptr) => {
+                let tuple = heap.get_tuple(*ptr)?;
+                let items: Option<Vec<_>> = tuple.items.iter()
+                    .map(|v| ThreadSafeValue::from_gc_value(v, heap))
+                    .collect();
+                ThreadSafeValue::Tuple(items?)
+            }
+            GcValue::Record(ptr) => {
+                let rec = heap.get_record(*ptr)?;
+                let fields: Option<Vec<_>> = rec.fields.iter()
+                    .map(|v| ThreadSafeValue::from_gc_value(v, heap))
+                    .collect();
+                ThreadSafeValue::Record {
+                    type_name: rec.type_name.clone(),
+                    field_names: rec.field_names.clone(),
+                    fields: fields?,
+                    mutable_fields: rec.mutable_fields.clone(),
+                }
+            }
+            GcValue::Closure(ptr, _) => {
+                let closure = heap.get_closure(*ptr)?;
+                // Recursively convert captures to thread-safe values
+                let captures: Option<Vec<_>> = closure.captures.iter()
+                    .map(|v| ThreadSafeValue::from_gc_value(v, heap))
+                    .collect();
+                ThreadSafeValue::Closure {
+                    function: closure.function.clone(),
+                    captures: captures?,
+                    capture_names: closure.capture_names.clone(),
+                }
+            }
+            GcValue::Variant(ptr) => {
+                let variant = heap.get_variant(*ptr)?;
+                let fields: Option<Vec<_>> = variant.fields.iter()
+                    .map(|v| ThreadSafeValue::from_gc_value(v, heap))
+                    .collect();
+                ThreadSafeValue::Variant {
+                    type_name: (*variant.type_name).clone(),
+                    constructor: (*variant.constructor).clone(),
+                    fields: fields?,
+                }
+            }
+            // Functions are already thread-safe (Arc<FunctionValue>)
+            GcValue::Function(func) => ThreadSafeValue::Function(func.clone()),
+            GcValue::NativeFunction(func) => ThreadSafeValue::NativeFunction(func.clone()),
+            // Other values cannot be sent safely
+            _ => return None,
+        })
+    }
+
+    /// Convert back to GcValue, allocating on the given heap.
+    pub fn to_gc_value(&self, heap: &mut Heap) -> GcValue {
+        match self {
+            ThreadSafeValue::Unit => GcValue::Unit,
+            ThreadSafeValue::Bool(b) => GcValue::Bool(*b),
+            ThreadSafeValue::Int64(i) => GcValue::Int64(*i),
+            ThreadSafeValue::Float64(f) => GcValue::Float64(*f),
+            ThreadSafeValue::Pid(p) => GcValue::Pid(*p),
+            ThreadSafeValue::Char(c) => GcValue::Char(*c),
+            ThreadSafeValue::String(s) => {
+                let ptr = heap.alloc_string(s.clone());
+                GcValue::String(ptr)
+            }
+            ThreadSafeValue::List(items) => {
+                let gc_items: Vec<GcValue> = items.iter()
+                    .map(|v| v.to_gc_value(heap))
+                    .collect();
+                let list = heap.make_list(gc_items);
+                GcValue::List(list)
+            }
+            ThreadSafeValue::Tuple(items) => {
+                let gc_items: Vec<GcValue> = items.iter()
+                    .map(|v| v.to_gc_value(heap))
+                    .collect();
+                let ptr = heap.alloc_tuple(gc_items);
+                GcValue::Tuple(ptr)
+            }
+            ThreadSafeValue::Record { type_name, field_names, fields, mutable_fields } => {
+                let gc_fields: Vec<GcValue> = fields.iter()
+                    .map(|v| v.to_gc_value(heap))
+                    .collect();
+                let ptr = heap.alloc_record(
+                    type_name.clone(),
+                    field_names.clone(),
+                    gc_fields,
+                    mutable_fields.clone(),
+                );
+                GcValue::Record(ptr)
+            }
+            ThreadSafeValue::Closure { function, captures, capture_names } => {
+                // Recursively convert captures to GcValue
+                let gc_captures: Vec<GcValue> = captures.iter()
+                    .map(|v| v.to_gc_value(heap))
+                    .collect();
+                let inline_op = InlineOp::from_function(function);
+                let ptr = heap.alloc_closure(
+                    function.clone(),
+                    gc_captures,
+                    capture_names.clone(),
+                );
+                GcValue::Closure(ptr, inline_op)
+            }
+            ThreadSafeValue::Variant { type_name, constructor, fields } => {
+                let gc_fields: Vec<GcValue> = fields.iter()
+                    .map(|v| v.to_gc_value(heap))
+                    .collect();
+                let ptr = heap.alloc_variant(
+                    Arc::new(type_name.clone()),
+                    Arc::new(constructor.clone()),
+                    gc_fields,
+                );
+                GcValue::Variant(ptr)
+            }
+            ThreadSafeValue::Function(func) => GcValue::Function(func.clone()),
+            ThreadSafeValue::NativeFunction(func) => GcValue::NativeFunction(func.clone()),
+        }
+    }
+}
+
 /// A lightweight process (like Erlang processes).
 ///
 /// Each process is isolated with its own heap. Communication
@@ -254,10 +430,11 @@ pub struct Process {
     /// Pool of reusable register vectors (avoids allocation on function calls).
     pub register_pool: Vec<Vec<GcValue>>,
 
-    /// Message queue (inbox).
-    /// Messages are deep-copied into process's heap.
-    pub sender: crossbeam_channel::Sender<GcValue>,
-    pub receiver: crossbeam_channel::Receiver<GcValue>,
+    /// Channel receiver for incoming messages (thread-safe).
+    pub receiver: crossbeam_channel::Receiver<ThreadSafeValue>,
+
+    /// Channel sender (kept for cloning/distribution).
+    pub sender: crossbeam_channel::Sender<ThreadSafeValue>,
 
     /// Current state.
     pub state: ProcessState,
@@ -314,8 +491,8 @@ impl Process {
             heap: Heap::with_config(gc_config),
             frames: Vec::new(),
             register_pool: Vec::new(),
-            sender,
             receiver,
+            sender,
             state: ProcessState::Running,
             reductions: REDUCTIONS_PER_SLICE,
             links: Vec::new(),
@@ -384,8 +561,9 @@ impl Process {
     /// Deliver a message to this process's mailbox.
     /// The message is deep-copied from the sender's heap.
     pub fn deliver_message(&mut self, message: GcValue, source_heap: &Heap) {
-        let copied = self.heap.deep_copy(&message, source_heap);
-        self.sender.send(copied).expect("Failed to send message to process via crossbeam channel");
+        if let Some(safe_msg) = ThreadSafeValue::from_gc_value(&message, source_heap) {
+            let _ = self.sender.send(safe_msg);
+        }
 
         // Wake up if waiting for messages
         if self.state == ProcessState::Waiting {
@@ -396,7 +574,10 @@ impl Process {
     /// Try to receive a message (simple FIFO for now).
     /// Returns None if mailbox is empty.
     pub fn try_receive(&mut self) -> Option<GcValue> {
-        self.receiver.try_recv().ok()
+        match self.receiver.try_recv() {
+            Ok(msg) => Some(msg.to_gc_value(&mut self.heap)),
+            Err(_) => None,
+        }
     }
 
     /// Check if mailbox has messages.
@@ -472,10 +653,6 @@ impl Process {
                 roots.extend(cap.gc_pointers());
             }
         }
-
-        // Mailbox messages are not directly in the process's heap for GC root purposes.
-        // They are moved by the channel.
-        // roots will be gathered when message is received into the heap.
 
         roots
     }
@@ -570,7 +747,7 @@ mod tests {
         assert_eq!(proc.pid, Pid(1));
         assert_eq!(proc.state, ProcessState::Running);
         assert_eq!(proc.reductions, REDUCTIONS_PER_SLICE);
-        assert!(proc.mailbox.is_empty());
+        assert!(proc.receiver.is_empty());
     }
 
     #[test]

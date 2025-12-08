@@ -2083,7 +2083,7 @@ impl Worker {
 
                 // Check for message in mailbox
                 let msg = self.scheduler.with_process_mut(pid, |proc| {
-                    proc.receiver.try_recv().ok()
+                    proc.try_receive()
                 }).flatten();
 
                 if let Some(msg) = msg {

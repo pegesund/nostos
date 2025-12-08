@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use parking_lot::{Mutex, RwLock};
 
 use crate::gc::{GcConfig, GcNativeFn, GcValue};
-use crate::process::{ExitReason, Process, ProcessState};
+use crate::process::{ExitReason, Process, ProcessState, ThreadSafeValue};
 use crate::parallel::{JitIntFn, JitLoopArrayFn};
 use crate::value::{FunctionValue, Pid, RefId, RuntimeError, TypeValue, Value};
 
@@ -576,67 +576,36 @@ impl Scheduler {
     /// Send a message from one process to another.
     /// The message is deep-copied to the target's heap.
     pub fn send(&self, from_pid: Pid, to_pid: Pid, message: GcValue) -> Result<(), RuntimeError> {
-        // Lock ordering: always lock lower Pid first to prevent deadlock
-        let (first_pid, second_pid, from_is_first) = if from_pid.0 < to_pid.0 {
-            (from_pid, to_pid, true)
-        } else if from_pid.0 > to_pid.0 {
-            (to_pid, from_pid, false)
-        } else {
-            // Sending to self - just push the message directly
-                            let processes = self.processes.read();
-                            if let Some(handle) = processes.get(&from_pid) {
-                                let mut proc = handle.lock();
-                                // For self-send, the message is already on our heap - just clone it
-                                proc.sender.send(message.clone()).expect("Failed to self-send message");
-                            }
-                            return Ok(());        };
-
         let processes = self.processes.read();
 
-        let first_handle = processes.get(&first_pid);
-        let second_handle = processes.get(&second_pid);
+        // 1. Convert to ThreadSafeValue using source heap
+        let safe_msg = if let Some(handle) = processes.get(&from_pid) {
+            let source = handle.lock();
+            ThreadSafeValue::from_gc_value(&message, &source.heap)
+        } else {
+            return Err(RuntimeError::Panic(format!("Sender process {:?} not found", from_pid)));
+        };
 
-        match (first_handle, second_handle) {
-            (Some(first), Some(second)) => {
-                let mut first_lock = first.lock();
-                let mut second_lock = second.lock();
-
-                let (source, target) = if from_is_first {
-                    (&*first_lock, &mut *second_lock)
-                } else {
-                    (&*second_lock, &mut *first_lock)
-                };
-
-                // Deep copy message from source heap to target heap
-                let copied = target.heap.deep_copy(&message, &source.heap);
-                // Use crossbeam_channel sender
-                target.sender.send(copied).expect("Failed to send message to process mailbox");
+        // 2. Send to target
+        if let Some(msg) = safe_msg {
+            if let Some(handle) = processes.get(&to_pid) {
+                let mut target = handle.lock();
+                let _ = target.sender.send(msg);
 
                 // Wake up the target if it was waiting for a message
                 if target.state == ProcessState::Waiting {
                     target.state = ProcessState::Running;
                 } else if target.state == ProcessState::WaitingTimeout {
                     target.state = ProcessState::Running;
-                    // Keep wake_time/timeout_dst - ReceiveTimeout will clear them when it gets the message
                 }
-
-                drop(first_lock);
-                drop(second_lock);
-                drop(processes);
+                drop(target); // Unlock before waking
 
                 // Add to run queue if was waiting
                 self.wake_process(to_pid);
-
-                Ok(())
-            }
-            (None, _) => {
-                Err(RuntimeError::Panic(format!("Sender process {:?} not found", from_pid)))
-            }
-            (_, None) => {
-                // Target doesn't exist - message is silently dropped (Erlang behavior)
-                Ok(())
             }
         }
+
+        Ok(())
     }
 
     /// Wake a waiting process (add to run queue if not there).
@@ -747,11 +716,11 @@ impl Scheduler {
         for (ref_id, watcher_pid) in monitored_by {
             self.with_process_mut(watcher_pid, |watcher| {
                 // Create DOWN message: (ref, pid)
-                let down_msg = GcValue::Tuple(watcher.heap.alloc_tuple(vec![
-                    GcValue::Int64(ref_id.0 as i64),
-                    GcValue::Pid(pid.0),
-                ]));
-                watcher.sender.send(down_msg).expect("Failed to send DOWN message");
+                let down_msg = ThreadSafeValue::Tuple(vec![
+                    ThreadSafeValue::Int64(ref_id.0 as i64),
+                    ThreadSafeValue::Pid(pid.0),
+                ]);
+                let _ = watcher.sender.send(down_msg);
 
                 // Wake if waiting
                 if watcher.state == ProcessState::Waiting {
@@ -1042,7 +1011,7 @@ mod tests {
         }
 
         // Receiver should have 400 messages
-        sched.with_process(receiver, |proc| {
+        sched.with_process_mut(receiver, |proc| {
             // Drain all messages from the receiver's channel
             let mut count = 0;
             while proc.try_receive().is_some() {
