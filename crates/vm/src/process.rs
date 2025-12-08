@@ -9,7 +9,7 @@
 //! This design is JIT-compatible: JIT-compiled code operates on
 //! the same Process struct, accessing heap/registers directly.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 

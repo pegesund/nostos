@@ -1917,6 +1917,7 @@ impl ThreadWorker {
     }
 
     /// Execute one instruction.
+    #[allow(unused, dropping_references)]
     fn execute_one(&mut self, local_id: u64) -> Result<StepResult, RuntimeError> {
         use Instruction::*;
 
