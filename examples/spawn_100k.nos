@@ -29,5 +29,10 @@ main() = {
     }
 
     println("All workers completed! Total sum of counters: " ++ show(total_sum_of_counters))
+    
+    expected_sum = 4999950000
+    assert_eq(total_sum_of_counters, expected_sum)
+    println("Assertion passed!")
+    
     total_sum_of_counters # The final expression returned by main
 }
