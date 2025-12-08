@@ -23,7 +23,7 @@ demoHighLevel() = {
 
     (s, size) = File.size(path)
     assert_eq("ok", s)
-    assert_eq(36, size)  # "Hello, Nostos!\nThis is a test file." = 36 bytes
+    assert_eq(35, size)  # "Hello, Nostos!\nThis is a test file." = 35 bytes (14 + 1 newline + 20)
 
     (s2, exists) = File.exists(path)
     assert_eq(true, exists)

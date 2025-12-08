@@ -201,7 +201,7 @@ pub enum Token {
     // String literal
     #[regex(r#""([^"\\]|\\.)*""#, |lex| {
         let s = lex.slice();
-        Some(s[1..s.len()-1].to_string())
+        Some(parse_string_escapes(&s[1..s.len()-1]))
     })]
     String(String),
 
@@ -338,6 +338,38 @@ fn parse_char(s: &str) -> Option<char> {
         },
         c => Some(c),
     }
+}
+
+/// Parse string with escape sequences.
+fn parse_string_escapes(s: &str) -> String {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(&next) = chars.peek() {
+                let escaped = match next {
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    '\\' => '\\',
+                    '\'' => '\'',
+                    '"' => '"',
+                    '0' => '\0',
+                    _ => {
+                        result.push(c);
+                        continue;
+                    }
+                };
+                chars.next();
+                result.push(escaped);
+            } else {
+                result.push(c);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 impl fmt::Display for Token {
