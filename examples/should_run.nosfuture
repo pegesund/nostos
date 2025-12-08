@@ -1,0 +1,33 @@
+type Message = Increase(Int) | Nothing
+
+# Worker function reports its assigned counter back to parent
+report_counter(parent, current_counter) = {
+    parent <- Increase(current_counter) # Send an 'Increase' message variant
+}
+
+# Spawn 100,000 lightweight processes and collect results
+main() = {
+    me = self()
+    num_workers = 100000
+    var total_sum_of_counters = 0 # Variable to sum the counter values
+    
+    for i = 0 to num_workers {
+        spawn { 
+            report_counter(me, i) # Each worker gets its loop counter 'i'
+        }
+    }
+
+    println("All workers spawned! Collecting results...")
+
+    # Collect and sum results from workers
+    for i = 0 to num_workers { # Using _ because we don't need the loop counter here
+        # Receive the message and perform update within the clause
+        receive
+            Increase(counter_value) -> {  total_sum_of_counters = total_sum_of_counters + counter_value }
+            Nothing -> () # Handle 'Nothing' messages explicitly without updating the sum
+        end
+    }
+
+    println("All workers completed! Total sum of counters: " ++ show(total_sum_of_counters))
+    total_sum_of_counters # The final expression returned by main
+}

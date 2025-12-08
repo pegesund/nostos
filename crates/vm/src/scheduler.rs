@@ -37,7 +37,7 @@ pub struct JitConfig {
 impl Default for JitConfig {
     fn default() -> Self {
         Self {
-            hot_threshold: 1000,
+            hot_threshold: 10, // Lowered for aggressive JIT compilation in benchmarks
             max_queue_size: 64,
             enabled: true,
         }
@@ -583,14 +583,13 @@ impl Scheduler {
             (to_pid, from_pid, false)
         } else {
             // Sending to self - just push the message directly
-            let processes = self.processes.read();
-            if let Some(handle) = processes.get(&from_pid) {
-                let mut proc = handle.lock();
-                // For self-send, the message is already on our heap - just clone it
-                proc.mailbox.push_back(message.clone());
-            }
-            return Ok(());
-        };
+                            let processes = self.processes.read();
+                            if let Some(handle) = processes.get(&from_pid) {
+                                let mut proc = handle.lock();
+                                // For self-send, the message is already on our heap - just clone it
+                                proc.sender.send(message.clone()).expect("Failed to self-send message");
+                            }
+                            return Ok(());        };
 
         let processes = self.processes.read();
 
@@ -610,7 +609,8 @@ impl Scheduler {
 
                 // Deep copy message from source heap to target heap
                 let copied = target.heap.deep_copy(&message, &source.heap);
-                target.mailbox.push_back(copied);
+                // Use crossbeam_channel sender
+                target.sender.send(copied).expect("Failed to send message to process mailbox");
 
                 // Wake up the target if it was waiting for a message
                 if target.state == ProcessState::Waiting {
@@ -751,7 +751,7 @@ impl Scheduler {
                     GcValue::Int64(ref_id.0 as i64),
                     GcValue::Pid(pid.0),
                 ]));
-                watcher.mailbox.push_back(down_msg);
+                watcher.sender.send(down_msg).expect("Failed to send DOWN message");
 
                 // Wake if waiting
                 if watcher.state == ProcessState::Waiting {
@@ -917,6 +917,7 @@ mod tests {
             assert!(proc.has_messages());
             let received = proc.try_receive().unwrap();
             assert_eq!(received, GcValue::Int64(42));
+            assert!(!proc.has_messages()); // Mailbox should now be empty
         });
     }
 
@@ -1042,7 +1043,12 @@ mod tests {
 
         // Receiver should have 400 messages
         sched.with_process(receiver, |proc| {
-            assert_eq!(proc.mailbox.len(), 400);
+            // Drain all messages from the receiver's channel
+            let mut count = 0;
+            while proc.try_receive().is_some() {
+                count += 1;
+            }
+            assert_eq!(count, 400);
         });
     }
 

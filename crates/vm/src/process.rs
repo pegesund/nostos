@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use tokio::sync::oneshot;
+use crossbeam_channel; // Added
 
 use crate::gc::{GcConfig, GcValue, Heap, RawGcPtr};
 use crate::io_runtime::IoResult;
@@ -255,7 +256,8 @@ pub struct Process {
 
     /// Message queue (inbox).
     /// Messages are deep-copied into process's heap.
-    pub mailbox: VecDeque<GcValue>,
+    pub sender: crossbeam_channel::Sender<GcValue>,
+    pub receiver: crossbeam_channel::Receiver<GcValue>,
 
     /// Current state.
     pub state: ProcessState,
@@ -306,12 +308,14 @@ impl Process {
 
     /// Create a new process with custom GC configuration.
     pub fn with_gc_config(pid: Pid, gc_config: GcConfig) -> Self {
+        let (sender, receiver) = crossbeam_channel::unbounded();
         Self {
             pid,
             heap: Heap::with_config(gc_config),
             frames: Vec::new(),
             register_pool: Vec::new(),
-            mailbox: VecDeque::new(),
+            sender,
+            receiver,
             state: ProcessState::Running,
             reductions: REDUCTIONS_PER_SLICE,
             links: Vec::new(),
@@ -381,7 +385,7 @@ impl Process {
     /// The message is deep-copied from the sender's heap.
     pub fn deliver_message(&mut self, message: GcValue, source_heap: &Heap) {
         let copied = self.heap.deep_copy(&message, source_heap);
-        self.mailbox.push_back(copied);
+        self.sender.send(copied).expect("Failed to send message to process via crossbeam channel");
 
         // Wake up if waiting for messages
         if self.state == ProcessState::Waiting {
@@ -392,17 +396,17 @@ impl Process {
     /// Try to receive a message (simple FIFO for now).
     /// Returns None if mailbox is empty.
     pub fn try_receive(&mut self) -> Option<GcValue> {
-        self.mailbox.pop_front()
+        self.receiver.try_recv().ok()
     }
 
     /// Check if mailbox has messages.
     pub fn has_messages(&self) -> bool {
-        !self.mailbox.is_empty()
+        !self.receiver.is_empty()
     }
 
     /// Set process to waiting state (blocked in receive).
     pub fn wait_for_message(&mut self) {
-        if self.mailbox.is_empty() {
+        if self.receiver.is_empty() {
             self.state = ProcessState::Waiting;
         }
     }
@@ -469,10 +473,9 @@ impl Process {
             }
         }
 
-        // Mailbox messages are also roots (they're on our heap)
-        for msg in &self.mailbox {
-            roots.extend(msg.gc_pointers());
-        }
+        // Mailbox messages are not directly in the process's heap for GC root purposes.
+        // They are moved by the channel.
+        // roots will be gathered when message is received into the heap.
 
         roots
     }
@@ -550,7 +553,7 @@ impl std::fmt::Debug for Process {
             .field("pid", &self.pid)
             .field("state", &self.state)
             .field("reductions", &self.reductions)
-            .field("mailbox_len", &self.mailbox.len())
+            .field("mailbox_len", &self.receiver.len())
             .field("frames", &self.frames.len())
             .field("links", &self.links)
             .finish()

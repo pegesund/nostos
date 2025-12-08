@@ -1,59 +1,48 @@
-# Batching Optimization for Mass Spawn Benchmark
-# This version reduces inter-process communication overhead by
-# having fewer, larger worker processes (batchers) each verifying
-# a chunk of the total.
+# Mass Spawn
+# 
+# Stress test for lightweight process creation:
+# - Spawns 100,000 processes (~2KB memory each)
+# - Each process echoes a secret value back
+# - Verifies all 100,000 responses are correct
+# 
+# Demonstrates Erlang-style massive concurrency.
+# Run with: nostos examples/mass_spawn.nos
+# Or parallel: nostos --parallel examples/mass_spawn.nos
 
-batcher_worker(parent_pid, start_idx, end_idx, secret) = {
-    local_correct_count = 0
-    for i = start_idx to end_idx {
-        # Simulate the original worker's task:
-        # Check if the 'secret' would have been "correct" for this item.
-        # In the original, the worker sends 'secret' and parent verifies.
-        # Here, the batcher verifies locally.
-        if secret == 42 then # Assuming secret '42' is always correct for simplicity
-            local_correct_count = local_correct_count + 1
-        end
-    }
-    # Send one aggregated result back to the main process
-    parent_pid <- local_correct_count
+# Worker: receives a value and the parent pid, echoes the value back
+worker(parent, secret) = {
+    parent <- secret
+    ()
 }
 
 main() = {
     me = self()
-    n = 100000        # Total items to process
-    secret = 42       # The value each simulated worker would echo back
-    n_batchers = 100  # Number of batcher processes to spawn
+    n = 100000
+    secret = 42
 
-    # Ensure n is divisible by n_batchers for simplicity
-    assert(n % n_batchers == 0, "n must be divisible by n_batchers")
-    batch_size = n / n_batchers
+    println("Spawning 100,000 lightweight processes...")
 
-    println("Spawning " ++ show(n_batchers) ++ " batcher processes...")
-
-    # Spawn batcher workers
-    for i = 0 to n_batchers {
-        start_idx = i * batch_size
-        end_idx = start_idx + batch_size - 1
-        spawn { batcher_worker(me, start_idx, end_idx, secret) }
+    # Spawn all workers - each receives the secret and sends it back
+    for i = 0 to n {
+        spawn { worker(me, secret) }
     }
 
-    println("Collecting and verifying results from batchers...")
+    println("Collecting and verifying responses...")
 
-    # Collect results from batchers and sum them
-    total_correct_responses = 0
-    for i = 0 to n_batchers {
-        received_correct_count = receive
-            count -> count # Receive the aggregated count from a batcher
+    # Collect all responses and count correct ones
+    correct = 0
+    for i = 0 to n {
+        correct = receive
+            value -> if value == secret then correct + 1 else correct
         end
-        total_correct_responses = total_correct_responses + received_correct_count
     }
 
-    println("Verification complete! Total correct responses: " ++ show(total_correct_responses))
+    println("Verification complete!")
+    println(correct)
 
-    # Assert that the total sum matches the expected number of correct responses
-    # If secret is always 42 and we increment local_correct_count, then total should be n
-    assert(total_correct_responses == n, "Total correct responses mismatch")
+    # Assert all responses were correct
+    assert(correct == n)
 
-    println("All " ++ show(n) ++ " items processed and verified via " ++ show(n_batchers) ++ " batchers.")
-    total_correct_responses
+    println("All 100,000 processes echoed the correct value!")
+    correct
 }

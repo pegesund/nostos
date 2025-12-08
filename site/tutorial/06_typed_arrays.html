@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Typed Arrays - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75; /* A distinct red/orange for operators */
+        }
+        .hljs-function {
+            color: #e5c07b; /* A distinct yellow/gold for functions */
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/yourusername/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+        
+        <!-- Sidebar -->
+        <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-blue-400 font-medium">6. Typed Arrays</a></li>
+                    <li><a href="07_concurrency.html" class="block text-slate-400 hover:text-white transition">7. Concurrency</a></li>
+                    <li><a href="08_async_io_http.html" class="block text-slate-400 hover:text-white transition">8. Async I/O & HTTP</a></li>
+                    <li><a href="09_type_system.html" class="block text-slate-400 hover:text-white transition">9. Type System</a></li>
+                    <li><a href="10_error_handling.html" class="block text-slate-400 hover:text-white transition">10. Error Handling</a></li>
+                    <li><a href="11_traits.html" class="block text-slate-400 hover:text-white transition">11. Traits</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Typed Arrays</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    For high-performance numerical computing, Nostos offers specialized typed arrays: <code>Int64Array</code> and <code>Float64Array</code>. These provide contiguous memory storage for unboxed numeric values, enabling efficient operations, especially when combined with Nostos's JIT compiler.
+                </p>
+
+                <!-- Int64Array -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Int64Array</h2>
+                <p class="text-slate-400 mb-4"><code>Int64Array</code> stores 64-bit signed integers. It's ideal for tasks like image processing, simulations, or any computation involving large sets of integer data where memory layout and access speed are critical.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# Create an array of 5 64-bit integers, initialized to 0
+my_int_array = newInt64Array(5)
+
+main() = {
+    println(length(my_int_array)) # Prints 5
+
+    # Access and mutate elements using 0-based indexing
+    my_int_array[0] = 10
+    my_int_array[1] = 20
+    my_int_array[2] = my_int_array[0] + my_int_array[1] # 30
+
+    println(my_int_array[2]) # Prints 30
+
+    # Iterate and sum elements
+    total = 0
+    for i = 0 to length(my_int_array) {
+        total = total + my_int_array[i]
+    }
+    println("Sum: " ++ show(total)) # Prints "Sum: 60" (10+20+30+0+0)
+}
+</code></pre>
+                </div>
+
+                <!-- Float64Array -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Float64Array</h2>
+                <p class="text-slate-400 mb-4"><code>Float64Array</code> stores 64-bit floating-point numbers. It's perfect for scientific computing, machine learning, and graphics, where precision and speed for real numbers are paramount.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# Create an array of 3 64-bit floats, initialized to 0.0
+my_float_array = newFloat64Array(3)
+
+main() = {
+    my_float_array[0] = 3.14
+    my_float_array[1] = 2.71
+    my_float_array[2] = my_float_array[0] * my_float_array[1]
+
+    println(my_float_array[2]) # Prints ~8.5094
+
+    # Example: Scale all elements
+    scale_factor = 2.0
+    for i = 0 to length(my_float_array) {
+        my_float_array[i] = my_float_array[i] * scale_factor
+    }
+    println(my_float_array[0]) # Prints 6.28
+}
+</code></pre>
+                </div>
+
+                <!-- Comparison with Lists -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Typed Arrays vs. Lists</h2>
+                <p class="text-slate-400 mb-4">While lists are flexible and immutable, typed arrays offer significant performance advantages for numerical work due to their contiguous memory, fixed element size, and direct indexing.</p>
+                <ul class="list-disc list-inside text-slate-400 mb-8 space-y-2">
+                    <li>**Lists**: Immutable, linked-list structure, good for functional patterns and variable-sized elements.</li>
+                    <li>**Typed Arrays**: Mutable, contiguous memory, fixed element types (<code>Int64</code>, <code>Float64</code>), 0-indexed random access, excellent for performance-critical numerical computations.</li>
+                </ul>
+
+            </div>
+
+            <!-- Navigation Buttons -->
+            <div class="flex justify-between border-t border-slate-800 pt-8">
+                <a href="05_maps_sets.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
+                    Previous: Maps & Sets
+                </a>
+                <a href="07_concurrency.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    Next: Concurrency
+                    <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m0 0h18"></path></svg>
+                </a>
+            </div>
+        </main>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>

@@ -120,9 +120,9 @@ pub struct RecordValue {
 #[derive(Clone)]
 pub struct VariantValue {
     /// Type name (e.g., "Option")
-    pub type_name: String,
+    pub type_name: Arc<String>,
     /// Constructor name (e.g., "Some")
-    pub constructor: String,
+    pub constructor: Arc<String>,
     /// Payload (positional fields)
     pub fields: Vec<Value>,
     /// Named fields (if any)

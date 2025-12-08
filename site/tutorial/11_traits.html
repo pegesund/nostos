@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Traits - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75; /* A distinct red/orange for operators */
+        }
+        .hljs-function {
+            color: #e5c07b; /* A distinct yellow/gold for functions */
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/yourusername/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+        
+        <!-- Sidebar -->
+        <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_concurrency.html" class="block text-slate-400 hover:text-white transition">7. Concurrency</a></li>
+                    <li><a href="08_async_io_http.html" class="block text-slate-400 hover:text-white transition">8. Async I/O & HTTP</a></li>
+                    <li><a href="09_type_system.html" class="block text-slate-400 hover:text-white transition">9. Type System</a></li>
+                    <li><a href="10_error_handling.html" class="block text-slate-400 hover:text-white transition">10. Error Handling</a></li>
+                    <li><a href="11_traits.html" class="block text-blue-400 font-medium">11. Traits</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Traits</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Traits in Nostos provide a powerful mechanism for polymorphism, allowing you to define shared behavior that different types can implement. They are similar to interfaces in Java or Go, or type classes in Haskell.
+                </p>
+
+                <!-- Defining a Trait -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Defining a Trait</h2>
+                <p class="text-slate-400 mb-4">A trait defines a set of functions that a type must implement. It specifies the function signatures without providing an implementation.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# Define a 'Show' trait for types that can be converted to a string
+trait Show
+    show(self) -> String
+end
+
+# Define an 'Eq' trait for types that can be compared for equality
+trait Eq
+    eq(self, other: Self) -> Bool
+end
+</code></pre>
+                </div>
+
+                <!-- Implementing a Trait -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Implementing a Trait for a Type</h2>
+                <p class="text-slate-400 mb-4">Use the <code>Type: Trait</code> syntax to implement a trait for a specific type. You must provide an implementation for all functions defined in the trait.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+type Point = {x: Float, y: Float}
+
+# Implement the Show trait for Point
+Point: Show
+    show(self) = "(" ++ self.x.show() ++ ", " ++ self.y.show() ++ ")"
+end
+
+# Implement the Eq trait for Point
+Point: Eq
+    eq(self, other) = self.x == other.x && self.y == other.y
+end
+
+main() = {
+    p1 = Point(1.0, 2.0)
+    p2 = Point(1.0, 2.0)
+    p3 = Point(3.0, 4.0)
+
+    println(p1.show()) # Prints "(1.0, 2.0)"
+    is_equal1 = p1.eq(p2) # true
+    is_equal2 = p1.eq(p3) # false
+}
+</code></pre>
+                </div>
+
+                <!-- Generic Traits -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Generic Traits and Implementations</h2>
+                <p class="text-slate-400 mb-4">Traits can be generic, and you can implement them for generic types, often with constraints on the type parameters.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+type Option[T] = Some(T) | None
+
+# Implement Show for Option[T], but only if T itself implements Show
+Option[T]: Show when T: Show
+    show(None) = "None"
+    show(Some(x)) = "Some(" ++ x.show() ++ ")"
+end
+
+main() = {
+    opt_int = Some(42)
+    opt_none = None
+
+    println(opt_int.show())  # Prints "Some(42)"
+    println(opt_none.show()) # Prints "None"
+}
+</code></pre>
+                </div>
+
+                <!-- Using Traits in Functions -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Using Traits in Functions</h2>
+                <p class="text-slate-400 mb-4">Functions can accept arguments that implement a specific trait, allowing them to work polymorphically with any type that satisfies the trait's contract.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# A function that can print any 'Show'able thing
+print_showable(item: T) when T: Show = {
+    println("Item: " ++ item.show())
+}
+
+main() = {
+    p = Point(5.0, 10.0)
+    num = 123
+    text = "Hello Traits!"
+
+    print_showable(p)     # Prints "Item: (5.0, 10.0)"
+    print_showable(num)   # Prints "Item: 123" (Int has a built-in Show impl)
+    print_showable(text)  # Prints "Item: Hello Traits!" (String has a built-in Show impl)
+}
+</code></pre>
+                </div>
+            </div>
+
+            <!-- Navigation Buttons -->
+            <div class="flex justify-between border-t border-slate-800 pt-8">
+                <a href="10_error_handling.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
+                    Previous: Error Handling
+                </a>
+                <div></div>
+            </div>
+        </main>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>

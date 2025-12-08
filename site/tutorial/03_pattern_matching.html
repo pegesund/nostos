@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pattern Matching - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75; /* A distinct red/orange for operators */
+        }
+        .hljs-function {
+            color: #e5c07b; /* A distinct yellow/gold for functions */
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/yourusername/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+        
+        <!-- Sidebar -->
+        <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-blue-400 font-medium">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_concurrency.html" class="block text-slate-400 hover:text-white transition">7. Concurrency</a></li>
+                    <li><a href="08_async_io_http.html" class="block text-slate-400 hover:text-white transition">8. Async I/O & HTTP</a></li>
+                    <li><a href="09_type_system.html" class="block text-slate-400 hover:text-white transition">9. Type System</a></li>
+                    <li><a href="10_error_handling.html" class="block text-slate-400 hover:text-white transition">10. Error Handling</a></li>
+                    <li><a href="11_traits.html" class="block text-slate-400 hover:text-white transition">11. Traits</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Pattern Matching</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Pattern matching is a core feature in Nostos, allowing you to concisely extract values from data structures and control flow based on the shape of data. It's used extensively in function definitions and <code>match</code> expressions.
+                </p>
+
+                <!-- Patterns in Function Definitions -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Patterns in Function Definitions</h2>
+                <p class="text-slate-400 mb-4">As seen in the Functions chapter, you can define multiple function clauses, each with a pattern. The first matching pattern is executed.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# Literal patterns
+is_zero(0) = true
+is_zero(_) = false
+
+# List patterns (head and tail)
+first_element([x | _]) = x
+rest_elements([_ | xs]) = xs
+
+# Tuple patterns
+swap((a, b)) = (b, a)
+
+main() = {
+    println(is_zero(0))   # true
+    println(is_zero(5))   # false
+    println(first_element([1, 2, 3])) # 1
+    println(swap(("hello", 123))) # (123, "hello")
+}
+</code></pre>
+                </div>
+
+                <!-- Match Expression -->
+                <h2 class="text-2xl font-semibold text-white mb-4">The <code>match</code> Expression</h2>
+                <p class="text-slate-400 mb-4">For more complex pattern matching or when matching against a single value, the <code>match</code> expression is invaluable.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+describe(n) = match n
+    0 -> "zero"
+    1 -> "one"
+    _ -> "many" # Wildcard pattern for any other value
+end
+
+main() = {
+    println(describe(0)) # "zero"
+    println(describe(1)) # "one"
+    println(describe(5)) # "many"
+}
+</code></pre>
+                </div>
+
+                <!-- Patterns with Guards -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Patterns with Guards</h2>
+                <p class="text-slate-400 mb-4">Guards allow you to add conditional logic to patterns, making them even more powerful.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+classify(n) = match n
+    x when x > 0 -> "positive"
+    0 -> "zero"
+    _ -> "negative"
+end
+
+main() = {
+    println(classify(10)) # "positive"
+    println(classify(0))  # "zero"
+    println(classify(-3)) # "negative"
+}
+</code></pre>
+                </div>
+
+                <!-- Destructuring Records and Variants -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Destructuring Records and Variants</h2>
+                <p class="text-slate-400 mb-4">You can destructure custom data types (records and variants) to extract their internal values.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+type Point = { x: Int, y: Int }
+type Option[T] = Some(T) | None
+
+get_x_coord({ x, _ }) = x # Punning: {x, _} is short for {x: x, _}
+unwrap_option(Some(val)) = val
+
+main() = {
+    p = Point(10, 20)
+    x_val = get_x_coord(p)  # x_val is 10
+
+    opt_val = Some("hello")
+    unwrapped = unwrap_option(opt_val) # unwrapped is "hello"
+
+    # Using match for comprehensive handling
+    description = match opt_val
+        Some(s) -> "Contains: " ++ s
+        None -> "Is empty"
+    end
+    println(description) # "Contains: hello"
+}
+</code></pre>
+                </div>
+
+                <!-- The Pin Operator -->
+                <h2 class="text-2xl font-semibold text-white mb-4">The Pin Operator (<code>^</code>)</h2>
+                <p class="text-slate-400 mb-4">The pin operator <code>^</code> in a pattern asserts that a value must match an *existing* variable's value, rather than binding to a new variable.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+expected_status = 200
+
+handle_response(response) = match response
+    { status: ^expected_status, body: data } -> "Success: " ++ data
+    { status: s, body: data } -> "Error " ++ show(s) ++ ": " ++ data
+end
+
+main() = {
+    response1 = { status: 200, body: "Data received" }
+    response2 = { status: 404, body: "Not Found" }
+
+    println(handle_response(response1)) # "Success: Data received"
+    println(handle_response(response2)) # "Error 404: Not Found"
+}
+</code></pre>
+                </div>
+            </div>
+
+            <!-- Navigation Buttons -->
+            <div class="flex justify-between border-t border-slate-800 pt-8">
+                <a href="02_functions.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
+                    Previous: Functions
+                </a>
+                <a href="04_lists_tuples.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    Next: Lists & Tuples
+                    <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m0 0h18"></path></svg>
+                </a>
+            </div>
+        </main>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>

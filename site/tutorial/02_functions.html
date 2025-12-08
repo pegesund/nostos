@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Functions - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75; /* A distinct red/orange for operators */
+        }
+        .hljs-function {
+            color: #e5c07b; /* A distinct yellow/gold for functions */
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/yourusername/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+        
+        <!-- Sidebar -->
+        <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-blue-400 font-medium">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_concurrency.html" class="block text-slate-400 hover:text-white transition">7. Concurrency</a></li>
+                    <li><a href="08_async_io_http.html" class="block text-slate-400 hover:text-white transition">8. Async I/O & HTTP</a></li>
+                    <li><a href="09_type_system.html" class="block text-slate-400 hover:text-white transition">9. Type System</a></li>
+                    <li><a href="10_error_handling.html" class="block text-slate-400 hover:text-white transition">10. Error Handling</a></li>
+                    <li><a href="11_traits.html" class="block text-slate-400 hover:text-white transition">11. Traits</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Functions</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Functions are first-class citizens in Nostos. They are defined using a concise syntax and can be passed around like any other value.
+                </p>
+
+                <!-- Basic Functions -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Defining Functions</h2>
+                <p class="text-slate-400 mb-4">Simple functions are defined using the <code>name(args) = body</code> syntax.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+add(a, b) = a + b
+double(x) = x * 2
+
+main() = {
+    result_add = add(5, 3)    # result_add is 8
+    result_double = double(4) # result_double is 8
+}
+</code></pre>
+                </div>
+
+                <!-- Lambdas -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Lambda Expressions</h2>
+                <p class="text-slate-400 mb-4">Anonymous functions, or lambdas, are defined using the <code>args => body</code> syntax.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+multiply = (a, b) => a * b
+increment = x => x + 1
+
+main() = {
+    product = multiply(6, 7) # product is 42
+    next_val = increment(10) # next_val is 11
+}
+</code></pre>
+                </div>
+
+                <!-- Higher-Order Functions -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Higher-Order Functions</h2>
+                <p class="text-slate-400 mb-4">
+                    Higher-order functions (HOFs) are functions that can take other functions as arguments, or return functions as their results. This is a powerful feature for abstracting common patterns and writing more concise, reusable code.
+                </p>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Functions as Arguments</h3>
+                <p class="text-slate-400 mb-4">You can pass functions (including lambdas) as arguments to other functions.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# apply a function 'f' to a value 'x'
+apply(f, x) = f(x)
+
+# apply a function 'f' twice to a value 'x'
+twice(f, x) = f(f(x))
+
+main() = {
+    increment = x => x + 1
+    double = x => x * 2
+
+    # apply increment to 5
+    result1 = apply(increment, 5) # result1 is 6
+
+    # apply double twice to 3
+    result2 = twice(double, 3)    # result2 is 12 (double(double(3)))
+}
+</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Functions as Return Values (Closures)</h3>
+                <p class="text-slate-400 mb-4">Functions can also return new functions, often "capturing" values from their environment. These are known as closures.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# Returns a function that adds 'n' to its input
+make_adder(n) = x => x + n
+
+main() = {
+    add5 = make_adder(5)
+    add10 = make_adder(10)
+
+    result1 = add5(2)  # result1 is 7
+    result2 = add10(2) # result2 is 12
+}
+</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Common HOF Patterns (Map & Filter)</h3>
+                <p class="text-slate-400 mb-4">Higher-order functions are frequently used to implement powerful data transformation patterns like <code>map</code> and <code>filter</code>.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# Applies a function 'f' to each element of a list
+map(_, []) = []
+map(f, [x | xs]) = [f(x) | map(f, xs)]
+
+# Filters elements from a list based on a predicate 'p'
+filter(_, []) = []
+filter(p, [x | xs]) = if p(x) then [x | filter(p, xs)] else filter(p, xs)
+
+main() = {
+    numbers = [1, 2, 3, 4]
+
+    squared_numbers = map(x => x * x, numbers)
+    # squared_numbers is [1, 4, 9, 16]
+
+    even_numbers = filter(x => x % 2 == 0, numbers)
+    # even_numbers is [2, 4]
+}
+</code></pre>
+                </div>
+            </div>
+
+            <!-- Navigation Buttons -->
+            <div class="flex justify-between border-t border-slate-800 pt-8">
+                <a href="01_basics.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
+                    Previous: Basics
+                </a>
+                <a href="03_pattern_matching.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    Next: Pattern Matching
+                    <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m0 0h18"></path></svg>
+                </a>
+            </div>
+        </main>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>

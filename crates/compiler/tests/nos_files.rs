@@ -60,7 +60,7 @@ fn value_to_string(value: &Value) -> String {
         }
         Value::Variant(var) => {
             if var.fields.is_empty() {
-                var.constructor.clone()
+                var.constructor.to_string()
             } else {
                 let fields_str: Vec<String> = var.fields.iter().map(value_to_string).collect();
                 format!("{}({})", var.constructor, fields_str.join(", "))

@@ -259,8 +259,8 @@ pub struct GcRecord {
 /// A GC-managed variant.
 #[derive(Clone, Debug)]
 pub struct GcVariant {
-    pub type_name: String,
-    pub constructor: String,
+    pub type_name: Arc<String>,
+    pub constructor: Arc<String>,
     pub fields: Vec<GcValue>,
     /// Cached discriminant for fast pattern matching (hash of constructor name)
     pub discriminant: u16,
@@ -1056,11 +1056,11 @@ impl Heap {
     /// Allocate a variant.
     pub fn alloc_variant(
         &mut self,
-        type_name: String,
-        constructor: String,
+        type_name: Arc<String>,
+        constructor: Arc<String>,
         fields: Vec<GcValue>,
     ) -> GcPtr<GcVariant> {
-        let discriminant = constructor_discriminant(&constructor);
+        let discriminant = constructor_discriminant(constructor.as_ref());
         let data = HeapData::Variant(GcVariant {
             type_name,
             constructor,
@@ -1529,7 +1529,7 @@ impl Heap {
             GcValue::Variant(ptr) => {
                 if let Some(var) = self.get_variant(*ptr) {
                     if var.fields.is_empty() {
-                        var.constructor.clone()
+                        var.constructor.to_string()
                     } else {
                         let mut result = format!("{}(", var.constructor);
                         for (i, field) in var.fields.iter().enumerate() {
@@ -1813,8 +1813,8 @@ impl Heap {
                         .map(|v| self.deep_copy(v, source))
                         .collect();
                     GcValue::Variant(self.alloc_variant(
-                        var.type_name.clone(),
-                        var.constructor.clone(),
+                        Arc::clone(&var.type_name),
+                        Arc::clone(&var.constructor),
                         fields,
                     ))
                 } else {
@@ -1996,7 +1996,7 @@ impl Heap {
             }
             GcValue::Variant(ptr) => {
                 let var_data = self.get_variant(*ptr).map(|v| {
-                    (v.type_name.clone(), v.constructor.clone(), v.fields.clone())
+                    (Arc::clone(&v.type_name), Arc::clone(&v.constructor), v.fields.clone())
                 });
                 if let Some((type_name, constructor, fields)) = var_data {
                     let cloned: Vec<GcValue> = fields.iter().map(|v| self.clone_value(v)).collect();
@@ -2177,7 +2177,7 @@ impl Heap {
             Value::Variant(v) => {
                 let gc_fields: Vec<GcValue> = v.fields.iter().map(|f| self.value_to_gc(f)).collect();
                 let ptr =
-                    self.alloc_variant(v.type_name.clone(), v.constructor.clone(), gc_fields);
+                    self.alloc_variant(Arc::clone(&v.type_name), Arc::clone(&v.constructor), gc_fields);
                 GcValue::Variant(ptr)
             }
 
@@ -2339,8 +2339,8 @@ impl Heap {
                 let fields: Vec<Value> =
                     variant.fields.iter().map(|v| self.gc_to_value(v)).collect();
                 Value::Variant(Arc::new(VariantValue {
-                    type_name: variant.type_name.clone(),
-                    constructor: variant.constructor.clone(),
+                    type_name: Arc::clone(&variant.type_name),
+                    constructor: Arc::clone(&variant.constructor),
                     fields,
                     named_fields: None,
                 }))

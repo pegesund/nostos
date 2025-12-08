@@ -1079,7 +1079,7 @@ impl ThreadWorker {
                                 let gc_value = payload.to_gc_value(&mut process.heap);
 
                                 // Deliver to mailbox
-                                process.mailbox.push_back(gc_value);
+                                process.sender.send(gc_value).expect("Failed to send message to process mailbox");
 
                                 // Wake process if waiting for message (with or without timeout)
                                 if matches!(process.state, ProcessState::Waiting | ProcessState::WaitingTimeout) {
@@ -1384,7 +1384,7 @@ impl ThreadWorker {
             // Then convert back to target's heap
             if let (Some(safe), Some(target_process)) = (safe_value, self.get_process_mut(target_local_id)) {
                 let copied_message = safe.to_gc_value(&mut target_process.heap);
-                target_process.mailbox.push_back(copied_message);
+                target_process.sender.send(copied_message).expect("Failed to send message to local process");
 
                 // Wake process if waiting for message (with or without timeout)
                 if matches!(target_process.state, ProcessState::Waiting | ProcessState::WaitingTimeout) {
@@ -3465,7 +3465,7 @@ impl ThreadWorker {
 
             Receive(dst) => {
                 let proc = self.get_process_mut(local_id).unwrap();
-                if let Some(msg) = proc.mailbox.pop_front() {
+                if let Some(msg) = proc.receiver.try_recv().ok() {
                     // Result goes in destination register
                     let frame = proc.frames.last_mut().unwrap();
                     frame.registers[*dst as usize] = msg;
@@ -3483,12 +3483,12 @@ impl ThreadWorker {
                 // First check if there's a message
                 let has_msg = {
                     let proc = self.get_process(local_id).unwrap();
-                    !proc.mailbox.is_empty()
+                    !proc.receiver.is_empty()
                 };
 
                 if has_msg {
                     let proc = self.get_process_mut(local_id).unwrap();
-                    let msg = proc.mailbox.pop_front().unwrap();
+                    let msg = proc.receiver.try_recv().unwrap();
                     // Message available - put in destination register
                     let frame = proc.frames.last_mut().unwrap();
                     frame.registers[*dst as usize] = msg;
@@ -5106,11 +5106,11 @@ impl ThreadWorker {
 
             MakeVariant(dst, type_idx, ctor_idx, ref field_regs) => {
                 let type_name = match &constants[*type_idx as usize] {
-                    Value::String(s) => (**s).clone(),
+                    Value::String(s) => Arc::clone(s),
                     _ => return Err(RuntimeError::Panic("Variant type must be string".to_string())),
                 };
                 let constructor = match &constants[*ctor_idx as usize] {
-                    Value::String(s) => (**s).clone(),
+                    Value::String(s) => Arc::clone(s),
                     _ => return Err(RuntimeError::Panic("Variant constructor must be string".to_string())),
                 };
                 let fields: Vec<GcValue> = field_regs.iter().map(|&r| reg!(r).clone()).collect();

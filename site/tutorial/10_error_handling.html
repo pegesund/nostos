@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Error Handling - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75; /* A distinct red/orange for operators */
+        }
+        .hljs-function {
+            color: #e5c07b; /* A distinct yellow/gold for functions */
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/yourusername/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+        
+        <!-- Sidebar -->
+        <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_concurrency.html" class="block text-slate-400 hover:text-white transition">7. Concurrency</a></li>
+                    <li><a href="08_async_io_http.html" class="block text-slate-400 hover:text-white transition">8. Async I/O & HTTP</a></li>
+                    <li><a href="09_type_system.html" class="block text-slate-400 hover:text-white transition">9. Type System</a></li>
+                    <li><a href="10_error_handling.html" class="block text-blue-400 font-medium">10. Error Handling</a></li>
+                    <li><a href="11_traits.html" class="block text-slate-400 hover:text-white transition">11. Traits</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Error Handling</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Nostos promotes robust error handling through its type system, favoring explicit error representation over exceptions for recoverable errors. For unrecoverable errors, a panic mechanism is available, and for boundary situations, <code>try/catch</code> blocks can be used.
+                </p>
+
+                <!-- Option Type -->
+                <h2 class="text-2xl font-semibold text-white mb-4">The <code>Option</code> Type (No Nulls!)</h2>
+                <p class="text-slate-400 mb-4">Nostos does not have <code>null</code> or <code>nil</code>. Instead, it uses the <code>Option[T]</code> type to represent the possible absence of a value. This forces you to explicitly handle both cases, eliminating a common source of bugs.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+type Option[T] = Some(T) | None
+
+find_item(list, target) =
+    if list.contains?(target) then Some(target)
+    else None
+end
+
+main() = {
+    my_list = [1, 2, 3]
+    found = find_item(my_list, 2)
+    not_found = find_item(my_list, 4)
+
+    # Handle Option using pattern matching
+    result1 = match found
+        Some(val) -> "Found: " ++ show(val)
+        None -> "Not found"
+    end
+    println(result1) # "Found: 2"
+
+    result2 = match not_found
+        Some(val) -> "Found: " ++ show(val)
+        None -> "Not found"
+    end
+    println(result2) # "Not found"
+}
+</code></pre>
+                </div>
+
+                <!-- Result Type -->
+                <h2 class="text-2xl font-semibold text-white mb-4">The <code>Result</code> Type (Recoverable Errors)</h2>
+                <p class="text-slate-400 mb-4">For operations that can fail in a way you might want to recover from, Nostos uses the <code>Result[T, E]</code> type. It's either <code>Ok(T)</code> for a successful result or <code>Err(E)</code> for an error.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+type Result[T, E] = Ok(T) | Err(E)
+
+# Custom error type
+type DivideByZeroError = DivideByZeroError{message: String}
+
+safe_divide(numerator, denominator) =
+    if denominator == 0 then Err(DivideByZeroError{message: "Cannot divide by zero"})
+    else Ok(numerator / denominator)
+end
+
+main() = {
+    division_ok = safe_divide(10, 2)
+    division_err = safe_divide(10, 0)
+
+    result_ok = match division_ok
+        Ok(val) -> "Result: " ++ show(val)
+        Err(err) -> "Error: " ++ err.message
+    end
+    println(result_ok) # "Result: 5"
+
+    result_err = match division_err
+        Ok(val) -> "Result: " ++ show(val)
+        Err(err) -> "Error: " ++ err.message
+    end
+    println(result_err) # "Error: Cannot divide by zero"
+}
+</code></pre>
+                </div>
+
+                <!-- The ? Operator -->
+                <h2 class="text-2xl font-semibold text-white mb-4">The <code>?</code> Operator (Error Propagation)</h2>
+                <p class="text-slate-400 mb-4">The <code>?</code> operator provides a convenient shorthand for propagating errors from functions that return <code>Result</code>. If the <code>Result</code> is <code>Err</code>, it returns the error immediately; otherwise, it unwraps the <code>Ok</code> value.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# (Assume safe_divide and DivideByZeroError from above)
+
+calculate_complex(a, b, c) = {
+    val1 = safe_divide(a, b)?   # Returns Err if b is 0
+    val2 = safe_divide(val1, c)? # Returns Err if c is 0
+    Ok(val1 + val2)
+}
+
+main() = {
+    res1 = calculate_complex(10, 2, 1) # Ok(7)
+    res2 = calculate_complex(10, 0, 1) # Err(DivideByZeroError) from first call
+    res3 = calculate_complex(10, 2, 0) # Err(DivideByZeroError) from second call
+
+    println(res1)
+    println(res2)
+    println(res3)
+}
+</code></pre>
+                </div>
+
+                <!-- Panics -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Panics (Unrecoverable Errors)</h2>
+                <p class="text-slate-400 mb-4">For truly unrecoverable situations, like programmer errors or invariant violations, Nostos provides <code>panic(message)</code>. Panics will stop the current process, but other processes will continue to run, often handled by a supervisor (as in the concurrency model).</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+validate_positive(n) =
+    if n <= 0 then panic("Expected a positive number, got " ++ show(n))
+    else n
+end
+
+main() = {
+    valid = validate_positive(5)
+    # This will cause a panic and terminate the 'main' process
+    # invalid = validate_positive(-1)
+}
+</code></pre>
+                </div>
+
+                <!-- Try/Catch -->
+                <h2 class="text-2xl font-semibold text-white mb-4"><code>try/catch</code> (Boundary Error Handling)</h2>
+                <p class="text-slate-400 mb-4">While <code>Result</code> is for recoverable errors, <code>try/catch</code> provides a mechanism to catch and handle panics at specific boundaries, often when interacting with external systems or legacy code. It's not for general control flow but for encapsulating risky operations.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+risky_operation(should_panic) =
+    if should_panic then panic("Something went really wrong!")
+    else "Operation successful"
+end
+
+main() = {
+    result1 = try
+        risky_operation(false)
+    catch
+        err -> "Caught error: " ++ show(err)
+    end
+    println(result1) # "Operation successful"
+
+    result2 = try
+        risky_operation(true)
+    catch
+        err -> "Caught error: " ++ show(err)
+    end
+    println(result2) # "Caught error: Something went really wrong!"
+}
+</code></pre>
+                </div>
+            </div>
+
+            <!-- Navigation Buttons -->
+            <div class="flex justify-between border-t border-slate-800 pt-8">
+                <a href="09_type_system.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
+                    Previous: Type System
+                </a>
+                <a href="11_traits.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    Next: Traits
+                    <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m0 0h18"></path></svg>
+                </a>
+            </div>
+        </main>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>

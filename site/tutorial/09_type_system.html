@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Type System - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75; /* A distinct red/orange for operators */
+        }
+        .hljs-function {
+            color: #e5c07b; /* A distinct yellow/gold for functions */
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/yourusername/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+        
+        <!-- Sidebar -->
+        <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_concurrency.html" class="block text-slate-400 hover:text-white transition">7. Concurrency</a></li>
+                    <li><a href="08_async_io_http.html" class="block text-slate-400 hover:text-white transition">8. Async I/O & HTTP</a></li>
+                    <li><a href="09_type_system.html" class="block text-blue-400 font-medium">9. Type System</a></li>
+                    <li><a href="10_error_handling.html" class="block text-slate-400 hover:text-white transition">10. Error Handling</a></li>
+                    <li><a href="11_traits.html" class="block text-slate-400 hover:text-white transition">11. Traits</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Type System</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Nostos features a powerful and flexible type system based on Algebraic Data Types (ADTs), structural typing, and type inference. It emphasizes safety and expressiveness without the need for verbose type annotations.
+                </p>
+
+                <!-- Algebraic Data Types (ADTs) -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Algebraic Data Types (ADTs)</h2>
+                <p class="text-slate-400 mb-4">ADTs are fundamental for modeling complex data. Nostos supports two primary forms: Sum Types (Variants) and Product Types (Records).</p>
+
+                <!-- Sum Types (Variants) -->
+                <h3 class="text-xl font-semibold text-white mb-3">Sum Types (Variants)</h3>
+                <p class="text-slate-400 mb-4">Variants allow a type to be one of several possibilities. They are perfect for modeling states or mutually exclusive data.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# An Option type can be Some(T) or None
+type Option[T] = Some(T) | None
+
+# A Result type can be Ok(T) or Err(E)
+type Result[T, E] = Ok(T) | Err(E)
+
+# A Shape can be a Circle, Rectangle, or Triangle
+type Shape =
+  | Circle{radius: Float}
+  | Rectangle{width: Float, height: Float}
+  | Triangle{base: Float, height: Float}
+
+main() = {
+    my_circle = Circle{radius: 10.0}
+    my_rect = Rectangle{width: 5.0, height: 8.0}
+
+    # Variants are used extensively with pattern matching
+    area(Circle{radius}) = 3.14 * radius * radius
+    area(Rectangle{width, height}) = width * height
+    area(Triangle{base, height}) = 0.5 * base * height
+
+    println(area(my_circle)) # Calculates circle area
+    println(area(my_rect))   # Calculates rectangle area
+}
+</code></pre>
+                </div>
+
+                <!-- Product Types (Records) -->
+                <h3 class="text-xl font-semibold text-white mb-3">Product Types (Records)</h3>
+                <p class="text-slate-400 mb-4">Records are analogous to structs or objects, grouping named fields together. They can be immutable by default or explicitly mutable with <code>var type</code>.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# Immutable Point record
+type Point = {x: Float, y: Float}
+
+# Mutable Buffer record
+var type Buffer = {data: List[Int], size: Int}
+
+main() = {
+    p = Point(x: 10.0, y: 20.0) # Named field construction
+    x_val = p.x                 # Field access
+
+    # Update creates a new record for immutable types
+    p2 = Point(p, x: 15.0)      # p2 is {x: 15.0, y: 20.0}, p remains {x: 10.0, y: 20.0}
+
+    # For mutable records (var type)
+    buf = Buffer(data: [1, 2], size: 2)
+    buf.size = 3                # Direct mutation is allowed
+}
+</code></pre>
+                </div>
+
+                <!-- Newtypes -->
+                <h3 class="text-xl font-semibold text-white mb-3">Newtypes</h3>
+                <p class="text-slate-400 mb-4">Newtypes wrap an existing type to provide type-safety and prevent accidental misuse. They are single-field variants.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+type UserId = UserId(Int)
+type Email = Email(String)
+
+process_user(id: UserId, email: Email) = {
+    println("Processing user " ++ show(id) ++ " with email " ++ show(email))
+}
+
+main() = {
+    user_id = UserId(123)
+    user_email = Email("test@example.com")
+
+    process_user(user_id, user_email)
+
+    # This would be a type error:
+    # process_user(123, "test@example.com")
+
+    # Unwrap the value (usually through pattern matching or a .value accessor)
+    (UserId(id_val)) = user_id
+    println("Raw user ID: " ++ show(id_val))
+}
+</code></pre>
+                </div>
+
+                <!-- Type Aliases -->
+                <h3 class="text-xl font-semibold text-white mb-3">Type Aliases</h3>
+                <p class="text-slate-400 mb-4">Type aliases provide alternative names for existing types, improving readability without creating a new distinct type.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+type UserMap = Map[String, String] # Alias for a map of String to String
+type Milliseconds = Int
+
+# Now you can use Milliseconds for better clarity
+sleep(duration: Milliseconds) = {
+    # ... implementation ...
+}
+
+main() = {
+    config_map: UserMap = %{"host": "localhost", "port": "8080"}
+    sleep(1000) # Represents 1000 milliseconds
+}
+</code></pre>
+                </div>
+
+                <!-- Generics -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Generics</h2>
+                <p class="text-slate-400 mb-4">Nostos supports generics, allowing you to write functions and types that work with any type, or types constrained by traits, without sacrificing type safety.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# The Option type is generic over T
+type Option[T] = Some(T) | None
+
+# A generic identity function
+identity[T](val: T) -> T = val
+
+# A generic list type
+type List[T] = Nil | Cons(T, List[T])
+
+main() = {
+    int_opt = Some(42)
+    str_opt = Some("hello")
+
+    int_id = identity(123)       # int_id is 123, type inferred as Int
+    string_id = identity("world") # string_id is "world", type inferred as String
+}
+</code></pre>
+                </div>
+            </div>
+
+            <!-- Navigation Buttons -->
+            <div class="flex justify-between border-t border-slate-800 pt-8">
+                <a href="08_async_io_http.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
+                    Previous: Async I/O & HTTP
+                </a>
+                <a href="10_error_handling.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    Next: Error Handling
+                    <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m0 0h18"></path></svg>
+                </a>
+            </div>
+        </main>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>

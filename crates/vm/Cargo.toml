@@ -9,6 +9,9 @@ nostos-types = { path = "../types" }
 thiserror = "2.0"
 parking_lot = "0.12"
 crossbeam = "0.8"
+crossbeam-channel = "0.5.15"
+crossbeam-deque = "0.7"
+
 num-bigint = { workspace = true }
 num-traits = { workspace = true }
 rust_decimal = { workspace = true }
