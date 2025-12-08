@@ -16,9 +16,14 @@ basicErrorHandling() = {
 
   (status, response) = Http.get("https://httpbin.org/get")
 
+  # Valid URL should return "ok" status
+  assert_eq("ok", status)
+
   if status == "ok" then {
     print("    Success! HTTP status: ")
     println(response.status)
+    # httpbin.org/get should return 200
+    assert_eq(200, response.status)
   } else {
     print("    Error: ")
     println(response)
@@ -32,6 +37,9 @@ dnsErrorHandling() = {
   println("  Testing invalid domain...")
 
   (status, response) = Http.get("https://this-domain-does-not-exist-xyz123.com/test")
+
+  # Invalid domain should return "error" status (DNS failure)
+  assert_eq("error", status)
 
   if status == "ok" then {
     print("    Unexpected success: ")
@@ -50,10 +58,15 @@ http404Handling() = {
 
   (status, response) = Http.get("https://httpbin.org/status/404")
 
+  # Connection is successful even for 404 - HTTP errors are not IO errors
+  assert_eq("ok", status)
+
   if status == "ok" then {
     print("    Got response with HTTP status: ")
     println(response.status)
     println("    Note: 404 is a successful HTTP response, not an IO error")
+    # HTTP status should be 404
+    assert_eq(404, response.status)
   } else {
     print("    Connection error: ")
     println(response)
@@ -133,6 +146,11 @@ retryExample() = {
 
   print("  Final result: ")
   println(status)
+
+  # Invalid domain should fail after all retries
+  assert_eq("error", status)
+  assert_eq("max retries exceeded", result)
+
   println("")
 }
 
@@ -142,6 +160,9 @@ fileErrorHandling() = {
 
   println("  Reading non-existent file...")
   (status, content) = File.readAll("/tmp/this-file-does-not-exist-xyz.txt")
+
+  # Reading non-existent file should return error
+  assert_eq("error", status)
 
   if status == "ok" then {
     print("    Content: ")
@@ -154,10 +175,18 @@ fileErrorHandling() = {
   println("  Writing to valid path...")
   (wstatus, wresult) = File.writeAll("/tmp/nostos_test_write.txt", "Hello from Nostos!")
 
+  # Writing to /tmp should succeed
+  assert_eq("ok", wstatus)
+
   if wstatus == "ok" then {
     println("    Write successful!")
 
     (rstatus, rcontent) = File.readAll("/tmp/nostos_test_write.txt")
+
+    # Reading the file we just wrote should succeed
+    assert_eq("ok", rstatus)
+    assert_eq("Hello from Nostos!", rcontent)
+
     if rstatus == "ok" then {
       print("    Read back: ")
       println(rcontent)
@@ -185,5 +214,6 @@ main() = {
   retryExample()
   fileErrorHandling()
 
-  println("=== Example Complete ===")
+  println("=== All assertions passed! ===")
+  0
 }
