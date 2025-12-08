@@ -1,12 +1,27 @@
-use json.{parse}
+use json.{jsonParse}
 
 main() = {
-    j1 = parse("null")
+    println("Testing complex JSON...")
+    
+    # Simple values
+    j1 = jsonParse("null")
     println(show(j1))
     
-    j2 = parse("123")
+    j2 = jsonParse("123")
     println(show(j2))
     
-    j3 = parse("\"hello\"")
+    j3 = jsonParse("\"hello\"")
     println(show(j3))
+    
+    # Array
+    j4 = jsonParse("[1, 2, 3]")
+    println(show(j4))
+    
+    # Object
+    j5 = jsonParse("{\"key\": \"value\", \"num\": 42}")
+    println(show(j5))
+    
+    # Nested
+    j6 = jsonParse("{\"list\": [1, {\"inner\": null}], \"bool\": true}")
+    println(show(j6))
 }
