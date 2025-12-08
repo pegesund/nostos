@@ -1,6 +1,6 @@
 //! Nostos CLI - Command-line interface for running Nostos programs.
 
-use nostos_compiler::compile::compile_module;
+use nostos_compiler::compile::{compile_module, Compiler};
 use nostos_jit::{JitCompiler, JitConfig};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::parallel::{ParallelVM, ParallelConfig};
@@ -8,6 +8,26 @@ use nostos_vm::value::RuntimeError;
 use std::env;
 use std::fs;
 use std::process::ExitCode;
+
+/// Recursively visit directories and find .nos files
+fn visit_dirs(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
+    if dir.is_dir() {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                visit_dirs(&path, files)?;
+            } else {
+                if let Some(ext) = path.extension() {
+                    if ext == "nos" {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Format a runtime error as JSON for debugger integration.
 fn format_error_json(error: &RuntimeError, file_path: &str) -> String {
@@ -239,51 +259,137 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let file_path = &args[file_idx];
+    let file_path_arg = &args[file_idx];
+    let input_path = std::path::Path::new(file_path_arg);
 
-    // Read the source file
-    let source = match fs::read_to_string(file_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error reading file '{}': {}", file_path, e);
+    // Check if input is directory or file
+    let mut source_files = Vec::new();
+    let project_root;
+
+    if input_path.is_dir() {
+        project_root = input_path;
+        match visit_dirs(input_path, &mut source_files) {
+            Ok(_) => {},
+            Err(e) => {
+                eprintln!("Error scanning directory '{}': {}", file_path_arg, e);
+                return ExitCode::FAILURE;
+            }
+        }
+        if source_files.is_empty() {
+            eprintln!("No .nos files found in '{}'", file_path_arg);
             return ExitCode::FAILURE;
         }
-    };
+    } else {
+        project_root = input_path.parent().unwrap_or(std::path::Path::new("."));
+        source_files.push(input_path.to_path_buf());
+    }
 
-    // Parse
-    let (module_opt, errors) = parse(&source);
-    if !errors.is_empty() {
-        let source_errors = parse_errors_to_source_errors(&errors);
-        eprint_errors(&source_errors, file_path, &source);
+    // Initialize empty compiler
+    let mut compiler = Compiler::new_empty();
+
+    // Load stdlib
+    let stdlib_path = std::path::Path::new("stdlib");
+    if stdlib_path.is_dir() {
+        let mut stdlib_files = Vec::new();
+        visit_dirs(stdlib_path, &mut stdlib_files).ok();
+
+        for path in &stdlib_files {
+             let source = fs::read_to_string(path).expect("Failed to read stdlib file");
+             let (module_opt, _) = parse(&source);
+             if let Some(module) = module_opt {
+                 let relative = path.strip_prefix(stdlib_path).unwrap();
+                 let mut components: Vec<String> = relative.components()
+                    .map(|c| c.as_os_str().to_string_lossy().to_string())
+                    .collect();
+                 if let Some(last) = components.last_mut() {
+                    if last.ends_with(".nos") {
+                        *last = last.trim_end_matches(".nos").to_string();
+                    }
+                 }
+                 
+                 compiler.add_module(&module, components, std::sync::Arc::new(source.clone()), path.to_str().unwrap().to_string()).expect("Failed to compile stdlib");
+             }
+        }
+    }
+
+    // Process each file
+    for path in &source_files {
+        let source = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error reading file '{}': {}", path.display(), e);
+                return ExitCode::FAILURE;
+            }
+        };
+
+        let (module_opt, errors) = parse(&source);
+        if !errors.is_empty() {
+            let source_errors = parse_errors_to_source_errors(&errors);
+            eprint_errors(&source_errors, path.to_str().unwrap_or("unknown"), &source);
+            return ExitCode::FAILURE;
+        }
+
+        let module = match module_opt {
+            Some(m) => m,
+            None => {
+                eprintln!("Failed to parse '{}'", path.display());
+                return ExitCode::FAILURE;
+            }
+        };
+
+        // Determine module path based on file location relative to project root
+        // For single file, module path is empty (top-level)
+        let module_path = if input_path.is_dir() {
+            let relative = path.strip_prefix(project_root).unwrap();
+            let mut components: Vec<String> = relative.components()
+                .map(|c| c.as_os_str().to_string_lossy().to_string())
+                .collect();
+
+            // Remove .nos extension from last component
+            if let Some(last) = components.last_mut() {
+                if last.ends_with(".nos") {
+                    *last = last.trim_end_matches(".nos").to_string();
+                }
+            }
+            components
+        } else {
+            vec![]
+        };
+
+        // Add to compiler with source tracking
+        if let Err(e) = compiler.add_module(&module, module_path, std::sync::Arc::new(source.clone()), path.to_str().unwrap_or("unknown").to_string()) {
+            let source_error = e.to_source_error();
+            source_error.eprint(path.to_str().unwrap_or("unknown"), &source);
+            return ExitCode::FAILURE;
+        }
+    }
+
+    // Compile all bodies
+    if let Err((e, filename, source)) = compiler.compile_all() {
+        let source_error = e.to_source_error();
+        source_error.eprint(&filename, &source);
         return ExitCode::FAILURE;
     }
 
-    let module = match module_opt {
-        Some(m) => m,
-        None => {
-            eprintln!("Failed to parse '{}'", file_path);
-            return ExitCode::FAILURE;
+    // Resolve entry point
+    let entry_point_name = if input_path.is_dir() {
+        if compiler.get_all_functions().contains_key("main.main") {
+            "main.main"
+        } else if compiler.get_all_functions().contains_key("main") {
+            "main"
+        } else {
+             eprintln!("Error: No 'main.main' or 'main' function found in project.");
+             return ExitCode::FAILURE;
         }
+    } else {
+        "main"
     };
-
-    // Compile
-    let compiler = match compile_module(&module, &source) {
-        Ok(c) => c,
-        Err(e) => {
-            let source_error = e.to_source_error();
-            source_error.eprint(file_path, &source);
-            return ExitCode::FAILURE;
-        }
-    };
-
-    // Create runtime and load functions/types
-    let function_list = compiler.get_function_list();
 
     // Get main function
-    let main_func = match compiler.get_all_functions().get("main") {
+    let main_func = match compiler.get_all_functions().get(entry_point_name) {
         Some(func) => func.clone(),
         None => {
-            eprintln!("Error: No 'main' function found in '{}'", file_path);
+            eprintln!("Error: Entry point '{}' not found", entry_point_name);
             return ExitCode::FAILURE;
         }
     };
@@ -313,6 +419,7 @@ fn main() -> ExitCode {
     }
 
     // JIT compile suitable functions (unless --no-jit was specified)
+    let function_list = compiler.get_function_list(); // Reuse variable name or shadow
     if enable_jit {
         if let Ok(mut jit) = JitCompiler::new(JitConfig::default()) {
             for idx in 0..function_list.len() {
@@ -358,9 +465,9 @@ fn main() -> ExitCode {
         Ok(None) => ExitCode::SUCCESS,
         Err(e) => {
             if json_errors {
-                println!("{}", format_error_json(&e, file_path));
+                println!("{}", format_error_json(&e, file_path_arg));
             } else {
-                eprintln!("Runtime error in {}:", file_path);
+                eprintln!("Runtime error:");
                 eprintln!("{}", e);
             }
             ExitCode::FAILURE

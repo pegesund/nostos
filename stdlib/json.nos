@@ -1,0 +1,53 @@
+type Json = Null | Bool(Bool) | Number(Int) | String(String)
+
+skip_ws(chars) = match chars
+    [' ' | rest] -> skip_ws(rest)
+    ['\n' | rest] -> skip_ws(rest)
+    ['\t' | rest] -> skip_ws(rest)
+    ['\r' | rest] -> skip_ws(rest)
+    _ -> chars
+
+parse_null(chars) = match chars
+    ['n', 'u', 'l', 'l' | rest] -> (Null, rest)
+    _ -> (Null, [])
+
+parse_bool(chars) = match chars
+    ['t', 'r', 'u', 'e' | rest] -> (Bool(true), rest)
+    ['f', 'a', 'l', 's', 'e' | rest] -> (Bool(false), rest)
+    _ -> (Bool(false), [])
+
+consume_digits(cs, acc) = match cs
+    [c | rest] -> if c >= '0' && c <= '9' then consume_digits(rest, acc ++ [c]) else (acc, cs)
+    [] -> (acc, [])
+
+parse_number(chars) = {
+    (digits, rest) = consume_digits(chars, [])
+    str = String.from_chars(digits)
+    (Number(String.to_int(str)), rest)
+}
+
+consume_string(cs, acc) = match cs
+    ['"' | rest] -> (acc, rest)
+    [c | rest] -> consume_string(rest, acc ++ [c])
+    [] -> (acc, [])
+
+parse_string(chars) = {
+    (content, rest) = consume_string(chars, [])
+    (String(String.from_chars(content)), rest)
+}
+
+parse_value(chars) = {
+    chars = skip_ws(chars)
+    match chars
+        ['"' | rest] -> parse_string(rest)
+        ['t' | _] -> parse_bool(chars)
+        ['f' | _] -> parse_bool(chars)
+        ['n' | _] -> parse_null(chars)
+        _ -> parse_number(chars)
+}
+
+parse(input) = {
+    chars = String.chars(input)
+    (val, _) = parse_value(chars)
+    val
+}

@@ -189,6 +189,13 @@ pub struct Compiler {
     loop_stack: Vec<LoopContext>,
     /// Line starts: byte offsets where each line begins (line 1 is at index 0)
     line_starts: Vec<usize>,
+    /// Pending functions to compile (second pass)
+    /// (AST, module_path, imports, line_starts, source, source_name)
+    pending_functions: Vec<(FnDef, Vec<String>, HashMap<String, String>, Vec<usize>, Arc<String>, String)>,
+    
+    // Current source context
+    current_source: Option<Arc<String>>,
+    current_source_name: Option<String>,
 }
 
 /// Context for a loop being compiled (for break/continue).
@@ -245,6 +252,89 @@ pub struct TraitImplInfo {
 }
 
 impl Compiler {
+    pub fn new_empty() -> Self {
+        Self {
+            chunk: Chunk::new(),
+            locals: HashMap::new(),
+            next_reg: 0,
+            capture_indices: HashMap::new(),
+            functions: HashMap::new(),
+            function_indices: HashMap::new(),
+            function_list: Vec::new(),
+            types: HashMap::new(),
+            scope_depth: 0,
+            module_path: Vec::new(),
+            imports: HashMap::new(),
+            function_visibility: HashMap::new(),
+            trait_defs: HashMap::new(),
+            trait_impls: HashMap::new(),
+            type_traits: HashMap::new(),
+            local_types: HashMap::new(),
+            param_types: HashMap::new(),
+            fn_asts: HashMap::new(),
+            polymorphic_fns: HashSet::new(),
+            current_function_name: None,
+            loop_stack: Vec::new(),
+            line_starts: vec![0],
+            pending_functions: Vec::new(),
+            current_source: None,
+            current_source_name: None,
+        }
+    }
+
+    /// Compile all pending functions.
+    pub fn compile_all(&mut self) -> Result<(), (CompileError, String, String)> {
+        let pending = std::mem::take(&mut self.pending_functions);
+
+        for (fn_def, module_path, imports, line_starts, source, source_name) in pending {
+            let saved_path = self.module_path.clone();
+            let saved_imports = self.imports.clone();
+            let saved_line_starts = self.line_starts.clone();
+            let saved_source = self.current_source.clone();
+            let saved_source_name = self.current_source_name.clone();
+
+            self.module_path = module_path;
+            self.imports = imports;
+            self.line_starts = line_starts;
+            self.current_source = Some(source.clone());
+            self.current_source_name = Some(source_name.clone());
+
+            self.compile_fn_def(&fn_def).map_err(|e| (e, source_name, source.to_string()))?;
+
+            self.module_path = saved_path;
+            self.imports = saved_imports;
+            self.line_starts = saved_line_starts;
+            self.current_source = saved_source;
+            self.current_source_name = saved_source_name;
+        }
+        Ok(())
+    }
+
+    /// Compile a module and add it to the current compilation context.
+    pub fn add_module(&mut self, module: &Module, module_path: Vec<String>, source: Arc<String>, source_name: String) -> Result<(), CompileError> {
+        // Update line_starts for this file
+        self.line_starts = vec![0];
+        for (i, c) in source.char_indices() {
+            if c == '\n' {
+                self.line_starts.push(i + 1);
+            }
+        }
+
+        self.current_source = Some(source);
+        self.current_source_name = Some(source_name.clone());
+
+        // Set module path
+        self.module_path = module_path;
+
+        // Compile items
+        self.compile_items(&module.items)?;
+
+        // Reset module path
+        self.module_path = Vec::new();
+
+        Ok(())
+    }
+
     pub fn new(source: &str) -> Self {
         // Compute line start offsets for source mapping
         let mut line_starts = vec![0]; // Line 1 starts at offset 0
@@ -277,6 +367,9 @@ impl Compiler {
             current_function_name: None,
             loop_stack: Vec::new(),
             line_starts,
+            pending_functions: Vec::new(),
+            current_source: Some(Arc::new(source.to_string())),
+            current_source_name: Some("unknown".to_string()),
         }
     }
 
@@ -1235,6 +1328,14 @@ impl Compiler {
                             let bytes_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::Utf8Decode(dst, bytes_reg), line);
+                            return Ok(dst);
+                        }
+                        // String functions
+                        "String.length" | "String.chars" | "String.from_chars" | "String.to_int" if args.len() == 1 => {
+                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
                             return Ok(dst);
                         }
                         // File handle operations
@@ -3692,6 +3793,7 @@ fn collect_pattern_vars(pat: &Pattern, vars: &mut std::collections::HashSet<Stri
 pub fn compile_module(module: &Module, source: &str) -> Result<Compiler, CompileError> {
     let mut compiler = Compiler::new(source);
     compiler.compile_items(&module.items)?;
+    compiler.compile_all().map_err(|(e, _, _)| e)?;
     Ok(compiler)
 }
 
@@ -3778,7 +3880,7 @@ impl Compiler {
             }
         }
 
-        // Fifth pass: compile functions with merged clauses
+        // Fifth pass: queue functions with merged clauses
         for name in &fn_order {
             let clauses = fn_clauses.get(name).unwrap();
             let span = fn_spans.get(name).copied().unwrap_or_default();
@@ -3795,7 +3897,14 @@ impl Compiler {
                 clauses: clauses.clone(),
                 span,
             };
-            self.compile_fn_def(&merged_fn)?;
+            self.pending_functions.push((
+                merged_fn,
+                self.module_path.clone(),
+                self.imports.clone(),
+                self.line_starts.clone(),
+                self.current_source.clone().expect("Source not set"),
+                self.current_source_name.clone().expect("Source name not set"),
+            ));
         }
 
         Ok(())

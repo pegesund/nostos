@@ -1,0 +1,12 @@
+use json.{parse}
+
+main() = {
+    j1 = parse("null")
+    println(show(j1))
+    
+    j2 = parse("123")
+    println(show(j2))
+    
+    j3 = parse("\"hello\"")
+    println(show(j3))
+}

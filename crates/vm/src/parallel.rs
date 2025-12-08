@@ -664,6 +664,85 @@ impl ParallelVM {
                 Ok(GcValue::Unit)
             }),
         }));
+
+        // String.length
+        self.register_native("String.length", Arc::new(GcNativeFn {
+            name: "String.length".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                             Ok(GcValue::Int64(str_val.data.chars().count() as i64))
+                        } else {
+                             Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // String.chars
+        self.register_native("String.chars", Arc::new(GcNativeFn {
+            name: "String.chars".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                             let chars: Vec<GcValue> = str_val.data.chars().map(GcValue::Char).collect();
+                             Ok(GcValue::List(heap.make_list(chars)))
+                        } else {
+                             Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // String.from_chars
+        self.register_native("String.from_chars", Arc::new(GcNativeFn {
+            name: "String.from_chars".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::List(list) => {
+                        let mut s = String::new();
+                        for item in list.items() {
+                            match item {
+                                GcValue::Char(c) => s.push(*c),
+                                _ => return Err(RuntimeError::TypeError { expected: "Char".to_string(), found: "other".to_string() })
+                            }
+                        }
+                        Ok(GcValue::String(heap.alloc_string(s)))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "List".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // String.to_int
+        self.register_native("String.to_int", Arc::new(GcNativeFn {
+            name: "String.to_int".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                             match str_val.data.parse::<i64>() {
+                                 Ok(n) => Ok(GcValue::Int64(n)),
+                                 Err(_) => Ok(GcValue::Unit)
+                             }
+                        } else {
+                             Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
     }
 
     /// Register a type.
@@ -2911,10 +2990,11 @@ impl ThreadWorker {
             }
 
             // === Function Calls ===
-            Call(dst, func_reg, args) => {
-                let func_val = reg!(*func_reg).clone();
+            Call(callee_reg, args) => {
+                let callee = reg!(*callee_reg).clone();
                 let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r).clone()).collect();
-                match func_val {
+                match callee {
+
                     GcValue::Function(func) => {
                         // Fast path: inline simple binary functions like (a, b) => a + b
                         if arg_values.len() == 2 {
