@@ -79,13 +79,14 @@ parse_object_items(chars) = {
                 [':' | rest3] -> {
                     (val, rest4) = parse_value(rest3)
                     rest5 = skip_ws(rest4)
-                    key_str = get_string(key_json)
                     match rest5
                         [',' | rest6] -> {
                             (tail, rest7) = parse_object_items(rest6)
+                            key_str = get_string(key_json)
                             ([(key_str, val) | tail], rest7)
                         }
                         ['}' | rest6] -> {
+                            key_str = get_string(key_json)
                             ([(key_str, val)], rest6)
                         }
                         _ -> ([], rest5)

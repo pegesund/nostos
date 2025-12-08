@@ -1,5 +1,6 @@
 use json.{jsonParse}
 
+# Note: Currently fails with runtime type error (Unit passed instead of String) due to known VM issue.
 main() = {
     println("Testing complex JSON...")
     
