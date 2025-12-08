@@ -9,7 +9,8 @@ report_counter(parent, current_counter) = {
 main() = {
     me = self()
     num_workers = 100000
-    var total_sum_of_counters = 0 # Variable to sum the counter values
+    total_sum_of_counters = 0
+    messages_received = 0
     
     for i = 0 to num_workers {
         spawn { 
@@ -20,11 +21,12 @@ main() = {
     println("All workers spawned! Collecting results...")
 
     # Collect and sum results from workers
-    for _ = 0 to num_workers { # Using _ because we don't need the loop counter here
+    for i = 0 to num_workers { # Changed _ to i to resolve syntax error
         # Receive the message and perform update within the clause
-        receive
-            Increase(counter_value) -> total_sum_of_counters = total_sum_of_counters + counter_value 
-            Nothing -> () # Handle 'Nothing' messages explicitly without updating the sum
+        total_sum_of_counters = receive # Rebind total_sum_of_counters
+            Increase(counter_value) -> {
+                total_sum_of_counters + counter_value 
+            }
         end
     }
 
