@@ -145,6 +145,74 @@ main() = {
 </code></pre>
                 </div>
 
+                <!-- Guard Fallthrough -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Guard Fallthrough</h2>
+                <p class="text-slate-400 mb-4">
+                    When a pattern matches but its guard fails, execution <strong>falls through</strong> to try the next arm.
+                    This is important when you have multiple arms with guards on the same pattern.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+size_category(n) = match n
+    x when x > 100 -> "huge"
+    x when x > 10 -> "big"
+    x when x > 0 -> "small"
+    _ -> "zero or negative"
+end
+
+main() = {
+    println(size_category(50))   # "big" - first guard fails, second matches
+    println(size_category(5))    # "small" - first two guards fail
+    println(size_category(-1))   # "zero or negative"
+}
+</code></pre>
+                </div>
+
+                <!-- Variable Constraints -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Variable Constraints in Patterns</h2>
+                <p class="text-slate-400 mb-4">
+                    When an <strong>existing immutable variable</strong> appears in a pattern, it acts as a <strong>constraint</strong>
+                    rather than creating a new binding. The pattern only matches if the value equals the variable's current value.
+                    This enables Erlang-style pattern matching.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+main() = {
+    expected = 5
+
+    # x acts as a constraint - must equal 5
+    result1 = match (5, 10)
+        (expected, y) -> y * 2   # Matches! expected == 5
+    end
+    println(result1)  # 20
+
+    # This won't match the first arm
+    result2 = match (3, 10)
+        (expected, y) -> y * 2   # Doesn't match! 3 != expected
+        (_, y) -> y + 1          # Falls through to this
+    end
+    println(result2)  # 11
+}
+</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">
+                    This is especially useful for matching on expected values like status codes or message types:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+handle_response(status, body) = {
+    ok_status = 200
+
+    match status
+        ok_status -> "Success: " ++ body    # Only if status == 200
+        404 -> "Not found"
+        s -> "Error: " ++ show(s)
+    end
+}
+</code></pre>
+                </div>
+
                 <!-- Destructuring Records and Variants -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Destructuring Records and Variants</h2>
                 <p class="text-slate-400 mb-4">You can destructure custom data types (records and variants) to extract their internal values.</p>

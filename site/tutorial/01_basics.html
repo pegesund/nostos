@@ -113,10 +113,42 @@ x = 10 # Comment at end of line
 </code></pre>
                 </div>
 
+                <!-- Bindings -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Bindings: Immutable & Mutable</h2>
+                <p class="text-slate-400 mb-4">
+                    By default, bindings in Nostos are <strong>immutable</strong>. Use <code class="text-blue-400">var</code> to create mutable bindings.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800">
+<pre><code class="language-nostos">
+# Immutable binding (default)
+x = 10
+x = 10      # OK: same value (acts as assertion)
+# x = 20    # ERROR: Assertion failed: 10 != 20
+
+# Mutable binding
+var count = 0
+count = count + 1   # OK
+count += 1          # OK (sugar)
+</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">
+                    <strong>Key insight:</strong> Rebinding an immutable variable to the <em>same</em> value succeeds (useful for assertions),
+                    but rebinding to a <em>different</em> value causes a runtime error. This is pattern matching semantics.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800">
+<pre><code class="language-nostos">
+# Mutable can shadow immutable
+x = 10              # immutable
+var x = 15          # new mutable binding shadows the old one
+x = 20              # OK, x is now mutable
+</code></pre>
+                </div>
+
                 <!-- Blocks -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Blocks & Expressions</h2>
                 <p class="text-slate-400 mb-4">
-                    Everything in Nostos is an expression. Blocks are defined with <code class="text-blue-400">{}</code>. 
+                    Everything in Nostos is an expression. Blocks are defined with <code class="text-blue-400">{}</code>.
                     The last expression in a block is the return value.
                 </p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800">
@@ -124,7 +156,7 @@ x = 10 # Comment at end of line
 main() = {
     x = 10
     y = 20
-    
+
     # The result of x + y is returned automatically
     x + y
 }

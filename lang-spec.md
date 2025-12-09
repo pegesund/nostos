@@ -449,26 +449,119 @@ if !done then continue()
 
 ### Bindings
 
+Nostos has two kinds of bindings: **immutable** (default) and **mutable** (with `var`).
+
+#### Immutable Bindings
+
+Immutable bindings cannot be reassigned. Attempting to rebind an immutable variable to a *different* value causes a runtime assertion error. However, rebinding to the *same* value succeeds (pattern matching semantics):
+
 ```
 # Immutable (default)
 x = 5
-x = 6                          # ERROR: x is immutable
+x = 5                          # OK: same value, acts as assertion
+x = 6                          # RUNTIME ERROR: Assertion failed: 5 != 6
 
+# Useful for asserting invariants
+result = compute()
+result = expected_value        # Fails if compute() returned something else
+```
+
+#### Mutable Bindings
+
+Use `var` to create a mutable binding that can be reassigned:
+
+```
 # Mutable
 var count = 0
 count = count + 1              # ok
 count += 1                     # ok (sugar)
 
-# Destructuring
+# Mutable can shadow immutable
+x = 10                         # immutable
+var x = 15                     # new mutable binding shadows the old one
+x = 20                         # ok, x is now mutable
+```
+
+#### Function Parameters
+
+Function parameters are immutable by default:
+
+```
+add_one(x) = {
+    x = x + 1                  # RUNTIME ERROR: x is immutable
+    x
+}
+```
+
+#### Pattern Matching with Existing Variables
+
+When an immutable variable appears in a pattern, it acts as a **constraint** rather than a new binding. The pattern only matches if the value equals the existing variable's value:
+
+```
+# Variable as constraint in match
+x = 5
+match (5, 10)
+    (x, y) -> y * 2            # Matches! x must equal 5, binds y to 10
+end
+# Result: 20
+
+match (3, 10)
+    (x, y) -> y * 2            # Doesn't match! 3 != x (which is 5)
+    _ -> 0
+end
+# Result: 0
+
+# This enables Erlang-style constraint matching
+expected = 200
+match response
+    {status: expected, body: b} -> process(b)  # Only if status == 200
+    {status: s, body: b} -> handle_error(s, b)
+end
+```
+
+#### Guard Fallthrough
+
+When a pattern matches but its guard fails, execution falls through to try the next arm:
+
+```
+classify(n) = match n
+    x when x > 10 -> "big"
+    x when x > 3 -> "medium"   # Tried if first guard fails
+    _ -> "small"
+end
+
+classify(5)   # "medium" - first pattern matches but guard fails, tries second
+classify(1)   # "small" - both guards fail, falls through to wildcard
+```
+
+#### Destructuring
+
+```
 (a, b) = getTuple()
 {x, y} = point                 # punning: {x, y} means {x: x, y: y}
 {name: n, age: a} = person
 [head | tail] = items
 Some(value) = maybeValue       # runtime error if None
+```
 
-# Pin operator (assert equality, don't bind)
+#### Pin Operator
+
+The pin operator `^` explicitly asserts equality with an existing variable in patterns (same as using an immutable variable directly):
+
+```
 expected = 200
 {status: ^expected, body: data} = response
+```
+
+#### Fresh Variables Per Match Arm
+
+Each match arm has its own scope for pattern-bound variables. Variables bound in one arm don't leak to other arms:
+
+```
+match value
+    x -> x * 2      # x bound here
+    y -> y + 1      # y is independent, x not visible
+end
 ```
 
 ### Functions and Pattern Matching
