@@ -294,7 +294,11 @@ impl Compiler {
             let saved_source_name = self.current_source_name.clone();
 
             self.module_path = module_path;
-            self.imports = imports;
+            // self.imports = imports;
+            // Merge imports instead of replacing, to be safe. 
+            // Also debug print to see what we are restoring.
+            // println!("DEBUG: Restoring {} imports for {}", imports.len(), fn_def.name.node);
+            self.imports.extend(imports);
             self.line_starts = line_starts;
             self.current_source = Some(source.clone());
             self.current_source_name = Some(source_name.clone());
