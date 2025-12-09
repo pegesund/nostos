@@ -407,18 +407,18 @@ impl Compiler {
         if let Some(qualified) = self.imports.get(name) {
             return qualified.clone();
         }
-        
+
         // If the name already contains '.', it's already qualified
         if name.contains('.') {
             return name.to_string();
         }
-        // Otherwise, check if it's a known function in the current module
+        // Otherwise, check if it's a known function or type in the current module
         let qualified = self.qualify_name(name);
-        if self.functions.contains_key(&qualified) {
+        if self.functions.contains_key(&qualified) || self.types.contains_key(&qualified) {
             return qualified;
         }
         // Check if it's in the global scope
-        if self.functions.contains_key(name) {
+        if self.functions.contains_key(name) || self.types.contains_key(name) {
             return name.to_string();
         }
         // Return the original name (will error later if not found)
