@@ -3352,8 +3352,10 @@ impl Compiler {
 
     /// Compile a let binding.
     fn compile_binding(&mut self, binding: &Binding) -> Result<Reg, CompileError> {
-        // Try to determine the type of the value before compiling
-        let value_type = self.expr_type_name(&binding.value);
+        // Determine type from explicit annotation or infer from value
+        let explicit_type = binding.ty.as_ref().map(|t| self.type_expr_name(t));
+        let inferred_type = self.expr_type_name(&binding.value);
+        let value_type = explicit_type.clone().or(inferred_type);
 
         let value_reg = self.compile_expr_tail(&binding.value, false)?;
 
@@ -3363,8 +3365,12 @@ impl Compiler {
             if let Some(existing_info) = self.locals.get(&ident.node).copied() {
                 if binding.mutable {
                     // New binding is mutable (var x = ...): create new mutable binding that shadows the old one
-                    let is_float = self.is_float_expr(&binding.value);
+                    let is_float = self.is_float_type(&value_type) || self.is_float_expr(&binding.value);
                     self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: true });
+                    // Record explicit type if provided
+                    if let Some(ty) = explicit_type {
+                        self.local_types.insert(ident.node.clone(), ty);
+                    }
                 } else if existing_info.mutable {
                     // Existing is mutable, new is immutable: allow reassignment
                     let existing_reg = existing_info.reg;
@@ -3377,10 +3383,10 @@ impl Compiler {
                     self.chunk.emit(Instruction::AssertEq(existing_info.reg, value_reg), binding.span.start);
                 }
             } else {
-                // New binding - track if value is float and mutability
-                let is_float = self.is_float_expr(&binding.value);
+                // New binding - determine if float from explicit type or value expression
+                let is_float = self.is_float_type(&value_type) || self.is_float_expr(&binding.value);
                 self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: binding.mutable });
-                // Record the type if we know it
+                // Record the type (explicit takes precedence over inferred)
                 if let Some(ty) = value_type {
                     self.local_types.insert(ident.node.clone(), ty);
                 }
@@ -3396,6 +3402,14 @@ impl Compiler {
         let dst = self.alloc_reg();
         self.chunk.emit(Instruction::LoadUnit(dst), 0);
         Ok(dst)
+    }
+
+    /// Check if a type name represents a float type
+    fn is_float_type(&self, type_name: &Option<String>) -> bool {
+        match type_name {
+            Some(ty) => ty == "Float" || ty == "Float32" || ty == "Float64" || ty == "f32" || ty == "f64",
+            None => false,
+        }
     }
 
     /// Compile an assignment.

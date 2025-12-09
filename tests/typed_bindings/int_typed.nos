@@ -1,0 +1,7 @@
+# expect: 42
+# Basic Int typed binding
+
+main() = {
+    Int x = 42
+    x
+}

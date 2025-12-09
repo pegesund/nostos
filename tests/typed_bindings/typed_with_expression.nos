@@ -1,0 +1,7 @@
+# expect: 100
+# Typed binding with complex expression
+
+main() = {
+    Int result = (5 + 5) * 10
+    result
+}

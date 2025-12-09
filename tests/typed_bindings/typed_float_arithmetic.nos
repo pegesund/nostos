@@ -1,0 +1,9 @@
+# expect: 7.5
+# Float typed binding with arithmetic
+
+main() = {
+    Float a = 2.5
+    Float b = 5.0
+    Float sum = a + b
+    sum
+}

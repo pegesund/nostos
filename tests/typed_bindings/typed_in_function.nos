@@ -1,0 +1,12 @@
+# expect: 15
+# Typed bindings inside functions
+
+compute(a, b) = {
+    Int sum = a + b
+    Int doubled = sum * 2
+    doubled - sum
+}
+
+main() = {
+    compute(5, 10)
+}

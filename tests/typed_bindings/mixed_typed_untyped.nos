@@ -1,0 +1,8 @@
+# expect: 30
+# Mixed typed and untyped bindings
+
+main() = {
+    Int a = 10
+    b = 20      # untyped, inferred
+    a + b
+}

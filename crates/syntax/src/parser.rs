@@ -611,7 +611,23 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         // correctly as a let binding.
 
         // Mutable let binding: var pattern = expr (explicit var keyword)
-        let mutable_binding = just(Token::Var)
+        // Also supports: var Type pattern = expr
+        let mutable_binding_typed = just(Token::Var)
+            .ignore_then(type_expr())
+            .then(pattern())
+            .then_ignore(just(Token::Eq))
+            .then(expr.clone())
+            .map(|((ty, pat), value)| {
+                Stmt::Let(Binding {
+                    mutable: true,
+                    pattern: pat,
+                    ty: Some(ty),
+                    value,
+                    span: Span::default(),
+                })
+            });
+
+        let mutable_binding_untyped = just(Token::Var)
             .ignore_then(pattern())
             .then_ignore(just(Token::Eq))
             .then(expr.clone())
@@ -620,6 +636,23 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                     mutable: true,
                     pattern: pat,
                     ty: None,
+                    value,
+                    span: Span::default(),
+                })
+            });
+
+        let mutable_binding = mutable_binding_typed.or(mutable_binding_untyped);
+
+        // Typed immutable binding: Type pattern = expr
+        let typed_immutable_binding = type_expr()
+            .then(pattern())
+            .then_ignore(just(Token::Eq))
+            .then(expr.clone())
+            .map(|((ty, pat), value)| {
+                Stmt::Let(Binding {
+                    mutable: false,
+                    pattern: pat,
+                    ty: Some(ty),
                     value,
                     span: Span::default(),
                 })
@@ -670,7 +703,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                 }
             });
 
-        let stmt = mutable_binding.or(expr_or_binding);
+        let stmt = mutable_binding.or(typed_immutable_binding).or(expr_or_binding);
 
         // Parse statements separated by newlines, commas, or colons
         // The separator can be any combination of these
@@ -1292,10 +1325,29 @@ fn type_def() -> impl Parser<Token, TypeDef, Error = Simple<Token>> + Clone {
 }
 
 /// Parser for a binding (top-level or local).
+/// Supports: `x = 5`, `Int x = 5`, `var x = 5`, `var Int x = 5`
 fn binding() -> impl Parser<Token, Binding, Error = Simple<Token>> + Clone {
     let mutable = just(Token::Var).or_not().map(|v| v.is_some());
 
-    mutable
+    // Try to parse optional type annotation (Java-style: Type name = value)
+    // We need to be careful: `Int x = 5` vs `x = 5`
+    // A type annotation is present if we see: TypeName identifier =
+    // Without type: identifier =
+    let typed_binding = mutable
+        .clone()
+        .then(type_expr())
+        .then(pattern())
+        .then_ignore(just(Token::Eq))
+        .then(expr())
+        .map_with_span(|(((mutable, ty), pattern), value), span| Binding {
+            mutable,
+            pattern,
+            ty: Some(ty),
+            value,
+            span: to_span(span),
+        });
+
+    let untyped_binding = mutable
         .then(pattern())
         .then_ignore(just(Token::Eq))
         .then(expr())
@@ -1305,7 +1357,10 @@ fn binding() -> impl Parser<Token, Binding, Error = Simple<Token>> + Clone {
             ty: None,
             value,
             span: to_span(span),
-        })
+        });
+
+    // Try typed first, fall back to untyped
+    typed_binding.or(untyped_binding)
 }
 
 /// Parser for method/operator names (identifiers or operators like ==, !=, <, etc.)
