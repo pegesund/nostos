@@ -1116,8 +1116,8 @@ impl Compiler {
             }
 
             // Match expression
-            Expr::Match(scrutinee, arms, _) => {
-                self.compile_match(scrutinee, arms, is_tail)
+            Expr::Match(scrutinee, arms, span) => {
+                self.compile_match(scrutinee, arms, is_tail, span.start)
             }
 
             // Block
@@ -2732,13 +2732,17 @@ impl Compiler {
     }
 
     /// Compile a match expression.
-    fn compile_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], is_tail: bool) -> Result<Reg, CompileError> {
+    fn compile_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], is_tail: bool, line: usize) -> Result<Reg, CompileError> {
         let scrut_reg = self.compile_expr_tail(scrutinee, false)?;
         let dst = self.alloc_reg();
         let mut end_jumps = Vec::new();
+        let mut last_arm_fail_jump: Option<usize> = None;
 
         for (i, arm) in arms.iter().enumerate() {
             let is_last = i == arms.len() - 1;
+
+            // Save locals before processing arm (pattern bindings should be scoped to this arm)
+            let saved_locals = self.locals.clone();
 
             // Try to match the pattern
             let (match_success, bindings) = self.compile_pattern_test(&arm.pattern, scrut_reg)?;
@@ -2746,7 +2750,9 @@ impl Compiler {
             let next_arm_jump = if !is_last {
                 Some(self.chunk.emit(Instruction::JumpIfFalse(match_success, 0), 0))
             } else {
-                None
+                // For the last arm, we still need to check if it matches
+                // If it fails, we'll panic with non-exhaustive match
+                Some(self.chunk.emit(Instruction::JumpIfFalse(match_success, 0), 0))
             };
 
             // Bind pattern variables with type info from pattern
@@ -2761,7 +2767,14 @@ impl Compiler {
                     self.chunk.patch_jump(jump, self.chunk.code.len());
                 }
                 let guard_jump = self.chunk.emit(Instruction::JumpIfFalse(guard_reg, 0), 0);
-                end_jumps.push(guard_jump);
+                if is_last {
+                    last_arm_fail_jump = Some(guard_jump);
+                } else {
+                    end_jumps.push(guard_jump);
+                }
+            } else if is_last {
+                // Save the last arm's fail jump for panic
+                last_arm_fail_jump = next_arm_jump;
             }
 
             // Compile arm body - pass is_tail for tail calls, but always move result
@@ -2770,15 +2783,30 @@ impl Compiler {
 
             if !is_last {
                 end_jumps.push(self.chunk.emit(Instruction::Jump(0), 0));
+            } else {
+                // Last arm succeeded, jump to end
+                end_jumps.push(self.chunk.emit(Instruction::Jump(0), 0));
             }
 
-            // Patch jump to next arm
+            // Patch jump to next arm (for non-last arms without guards)
             if let Some(jump) = next_arm_jump {
-                if arm.guard.is_none() {
+                if arm.guard.is_none() && !is_last {
                     let next_target = self.chunk.code.len();
                     self.chunk.patch_jump(jump, next_target);
                 }
             }
+
+            // Restore locals after arm (pattern bindings shouldn't leak to next arm)
+            self.locals = saved_locals;
+        }
+
+        // If last arm failed, emit panic for non-exhaustive match
+        if let Some(fail_jump) = last_arm_fail_jump {
+            self.chunk.patch_jump(fail_jump, self.chunk.code.len());
+            let msg_idx = self.chunk.add_constant(Value::String(Arc::new("Non-exhaustive match: no pattern matched".to_string())));
+            let msg_reg = self.alloc_reg();
+            self.chunk.emit(Instruction::LoadConst(msg_reg, msg_idx), line);
+            self.chunk.emit(Instruction::Panic(msg_reg), line);
         }
 
         // Patch all end jumps
@@ -2931,11 +2959,24 @@ impl Compiler {
                 self.chunk.emit(Instruction::LoadTrue(success_reg), 0);
             }
             Pattern::Var(ident) => {
-                self.chunk.emit(Instruction::LoadTrue(success_reg), 0);
-                let var_reg = self.alloc_reg();
-                self.chunk.emit(Instruction::Move(var_reg, scrut_reg), 0);
-                // Type unknown for plain var pattern, will be updated by variant context
-                bindings.push((ident.node.clone(), var_reg, false));
+                // Check if variable already exists as immutable binding
+                if let Some(existing_info) = self.locals.get(&ident.node).copied() {
+                    if !existing_info.mutable {
+                        // Immutable variable: use as constraint (test equality)
+                        self.chunk.emit(Instruction::Eq(success_reg, scrut_reg, existing_info.reg), 0);
+                    } else {
+                        // Mutable variable: rebind it
+                        self.chunk.emit(Instruction::LoadTrue(success_reg), 0);
+                        self.chunk.emit(Instruction::Move(existing_info.reg, scrut_reg), 0);
+                    }
+                } else {
+                    // New variable: create binding
+                    self.chunk.emit(Instruction::LoadTrue(success_reg), 0);
+                    let var_reg = self.alloc_reg();
+                    self.chunk.emit(Instruction::Move(var_reg, scrut_reg), 0);
+                    // Type unknown for plain var pattern, will be updated by variant context
+                    bindings.push((ident.node.clone(), var_reg, false));
+                }
             }
             Pattern::Unit(_) => {
                 self.chunk.emit(Instruction::TestUnit(success_reg, scrut_reg), 0);
