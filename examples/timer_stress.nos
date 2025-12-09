@@ -115,7 +115,7 @@ test_interleaved() = {
     spawn { interleaved_worker(me) }
 
     # Receive with short timeout - might miss some
-    r1 = receive n -> n after 30 -> 0 end
+    r1 = receive n1 -> n1 after 30 -> 0 end
     println("First receive (30ms timeout):")
     println(r1)
 
@@ -123,17 +123,17 @@ test_interleaved() = {
     sleep(100)
 
     # Now there should be messages waiting
-    r2 = receive n -> n after 10 -> 0 end
+    r2 = receive n2 -> n2 after 10 -> 0 end
     println("Second receive (after 100ms sleep):")
     println(r2)
 
-    r3 = receive n -> n after 10 -> 0 end
+    r3 = receive n3 -> n3 after 10 -> 0 end
     println("Third receive:")
     println(r3)
 
     # Wait for any remaining
     sleep(100)
-    r4 = receive n -> n after 10 -> 0 end
+    r4 = receive n4 -> n4 after 10 -> 0 end
     println("Fourth receive:")
     println(r4)
 
@@ -183,11 +183,11 @@ test_sleep_ordering() = {
     spawn { sleeper(me, 1, 50) }
 
     # Receive in order - shorter sleeps should arrive first
-    first = receive n -> n after 1000 -> 0 end
-    second = receive n -> n after 1000 -> 0 end
-    third = receive n -> n after 1000 -> 0 end
-    fourth = receive n -> n after 1000 -> 0 end
-    fifth = receive n -> n after 1000 -> 0 end
+    first = receive v1 -> v1 after 1000 -> 0 end
+    second = receive v2 -> v2 after 1000 -> 0 end
+    third = receive v3 -> v3 after 1000 -> 0 end
+    fourth = receive v4 -> v4 after 1000 -> 0 end
+    fifth = receive v5 -> v5 after 1000 -> 0 end
 
     println("Order received (should be 1,2,3,4,5):")
     println(first)

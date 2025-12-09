@@ -1,0 +1,11 @@
+# expect: 20
+# Mutable var shadows immutable in inner scope
+# (Note: Nostos doesn't have block scoping, this tests overwriting)
+
+main() = {
+    x = 10
+    # Can use var to make it mutable
+    var x = 15
+    x = 20
+    x
+}

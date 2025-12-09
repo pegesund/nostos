@@ -1,0 +1,14 @@
+# expect: 42
+# Variables in nested match with different names
+
+main() = {
+    outer = match 1
+        x -> {
+            inner = match 2
+                y -> y * 21   # y is fresh binding
+            end
+            inner
+        }
+    end
+    outer
+}

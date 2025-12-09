@@ -1,0 +1,10 @@
+# expect: 7
+# Constraint in list pattern that matches
+
+main() = {
+    x = 1
+    match [1, 2, 3]
+        [x, y, z] -> x + y + z + 1   # x=1 matches head
+        _ -> 999
+    end
+}

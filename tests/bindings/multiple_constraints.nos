@@ -1,0 +1,11 @@
+# expect: 6
+# Multiple constraints in pattern
+
+main() = {
+    x = 1
+    y = 2
+    match (1, 2, 3)
+        (x, y, z) -> x + y + z   # Both x and y are constraints
+        _ -> 999
+    end
+}

@@ -1,0 +1,10 @@
+# expect: "matched"
+# Constraint with string value
+
+main() = {
+    name = "alice"
+    match ("alice", 42)
+        (name, age) -> "matched"
+        _ -> "not matched"
+    end
+}

@@ -115,15 +115,15 @@ parse_object_entry(chars) = {
     key = extract_string(key_json)
     after_colon = skip_ws(after_key)
     match after_colon
-        [':' | rest] -> {
-            (value, after_value) = parse_value(rest)
+        [':' | rest1] -> {
+            (value, after_value) = parse_value(rest1)
             after_ws = skip_ws(after_value)
             match after_ws
-                [',' | rest] -> {
-                    (more, final) = parse_object_items(rest)
+                [',' | rest2] -> {
+                    (more, final) = parse_object_items(rest2)
                     ([(key, value) | more], final)
                 }
-                ['}' | rest] -> ([(key, value)], rest)
+                ['}' | rest3] -> ([(key, value)], rest3)
                 _ -> ([(key, value)], after_ws)
         }
         _ -> ([], after_colon)

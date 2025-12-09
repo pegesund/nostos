@@ -1,0 +1,11 @@
+# expect: "small"
+# Guard failure falls through until it reaches wildcard
+
+main() = {
+    x = 1
+    match x
+        n when n > 10 -> "big"
+        n when n > 3 -> "medium"
+        _ -> "small"
+    end
+}

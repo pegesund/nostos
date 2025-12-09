@@ -1,0 +1,11 @@
+# expect_error: Assertion failed
+# Function parameters are immutable by default
+
+add_one(x) = {
+    x = x + 1   # Should fail - x is immutable parameter
+    x
+}
+
+main() = {
+    add_one(5)
+}

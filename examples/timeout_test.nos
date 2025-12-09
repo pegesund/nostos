@@ -103,7 +103,7 @@ test_zero_timeout() = {
     me = self()
 
     # No messages in queue - should immediately timeout
-    r1 = receive msg -> msg after 0 -> "empty" end
+    r1 = receive msg1 -> msg1 after 0 -> "empty" end
     println(r1)
     assert(r1 == "empty")
 
@@ -111,7 +111,7 @@ test_zero_timeout() = {
     me <- "direct"
 
     # Now zero timeout should find the message
-    r2 = receive msg -> msg after 0 -> "empty" end
+    r2 = receive msg2 -> msg2 after 0 -> "empty" end
     println(r2)
     assert(r2 == "direct")
 

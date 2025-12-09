@@ -1,0 +1,10 @@
+# expect: 15
+# Constraint combined with guard
+
+main() = {
+    x = 5
+    match (5, 10)
+        (x, y) when y > 5 -> x + y   # x constraint passes, guard passes
+        _ -> 999
+    end
+}

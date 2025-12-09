@@ -1,0 +1,11 @@
+# expect: "medium"
+# Guard failure should fall through to next arm
+
+main() = {
+    x = 5
+    match x
+        n when n > 10 -> "big"
+        n when n > 3 -> "medium"
+        _ -> "small"
+    end
+}

@@ -1663,6 +1663,9 @@ impl Compiler {
                 for (i, arm) in arms.iter().enumerate() {
                     let is_last = i == arms.len() - 1;
 
+                    // Save locals before processing arm (pattern bindings should be scoped to this arm)
+                    let saved_locals = self.locals.clone();
+
                     // Try to match the pattern against the message
                     let (match_success, bindings) = self.compile_pattern_test(&arm.pattern, msg_reg)?;
 
@@ -1706,6 +1709,9 @@ impl Compiler {
                     if let Some(jump_idx) = next_arm_jump {
                         self.chunk.patch_jump(jump_idx, self.chunk.code.len());
                     }
+
+                    // Restore locals after arm (pattern bindings shouldn't leak to next arm)
+                    self.locals = saved_locals;
                 }
 
                 // Handle timeout body if present
@@ -2737,9 +2743,17 @@ impl Compiler {
         let dst = self.alloc_reg();
         let mut end_jumps = Vec::new();
         let mut last_arm_fail_jump: Option<usize> = None;
+        // Jumps that need to go to the next arm (pattern fail or guard fail)
+        let mut jumps_to_next_arm: Vec<usize> = Vec::new();
 
         for (i, arm) in arms.iter().enumerate() {
             let is_last = i == arms.len() - 1;
+
+            // Patch any jumps from previous arm that should go to this arm
+            let arm_start = self.chunk.code.len();
+            for jump in jumps_to_next_arm.drain(..) {
+                self.chunk.patch_jump(jump, arm_start);
+            }
 
             // Save locals before processing arm (pattern bindings should be scoped to this arm)
             let saved_locals = self.locals.clone();
@@ -2747,13 +2761,8 @@ impl Compiler {
             // Try to match the pattern
             let (match_success, bindings) = self.compile_pattern_test(&arm.pattern, scrut_reg)?;
 
-            let next_arm_jump = if !is_last {
-                Some(self.chunk.emit(Instruction::JumpIfFalse(match_success, 0), 0))
-            } else {
-                // For the last arm, we still need to check if it matches
-                // If it fails, we'll panic with non-exhaustive match
-                Some(self.chunk.emit(Instruction::JumpIfFalse(match_success, 0), 0))
-            };
+            // If pattern fails, jump to next arm (or panic if last)
+            let pattern_fail_jump = self.chunk.emit(Instruction::JumpIfFalse(match_success, 0), 0);
 
             // Bind pattern variables with type info from pattern
             for (name, reg, is_float) in bindings {
@@ -2761,43 +2770,45 @@ impl Compiler {
             }
 
             // Compile guard if present
-            if let Some(guard) = &arm.guard {
+            let guard_fail_jump = if let Some(guard) = &arm.guard {
                 let guard_reg = self.compile_expr_tail(guard, false)?;
-                if let Some(jump) = next_arm_jump {
-                    self.chunk.patch_jump(jump, self.chunk.code.len());
-                }
-                let guard_jump = self.chunk.emit(Instruction::JumpIfFalse(guard_reg, 0), 0);
-                if is_last {
-                    last_arm_fail_jump = Some(guard_jump);
-                } else {
-                    end_jumps.push(guard_jump);
-                }
-            } else if is_last {
-                // Save the last arm's fail jump for panic
-                last_arm_fail_jump = next_arm_jump;
-            }
+                Some(self.chunk.emit(Instruction::JumpIfFalse(guard_reg, 0), 0))
+            } else {
+                None
+            };
 
             // Compile arm body - pass is_tail for tail calls, but always move result
             let body_reg = self.compile_expr_tail(&arm.body, is_tail)?;
             self.chunk.emit(Instruction::Move(dst, body_reg), 0);
 
-            if !is_last {
-                end_jumps.push(self.chunk.emit(Instruction::Jump(0), 0));
-            } else {
-                // Last arm succeeded, jump to end
-                end_jumps.push(self.chunk.emit(Instruction::Jump(0), 0));
-            }
+            // After body, jump to end of match
+            end_jumps.push(self.chunk.emit(Instruction::Jump(0), 0));
 
-            // Patch jump to next arm (for non-last arms without guards)
-            if let Some(jump) = next_arm_jump {
-                if arm.guard.is_none() && !is_last {
-                    let next_target = self.chunk.code.len();
-                    self.chunk.patch_jump(jump, next_target);
+            // Handle jumps to next arm
+            if is_last {
+                // Last arm: pattern fail or guard fail should panic
+                last_arm_fail_jump = Some(pattern_fail_jump);
+                if let Some(guard_jump) = guard_fail_jump {
+                    // For last arm with guard, need to also jump to panic on guard fail
+                    // Patch pattern fail to same location as guard fail
+                    jumps_to_next_arm.push(guard_jump);
+                }
+            } else {
+                // Not last arm: pattern fail or guard fail should try next arm
+                jumps_to_next_arm.push(pattern_fail_jump);
+                if let Some(guard_jump) = guard_fail_jump {
+                    jumps_to_next_arm.push(guard_jump);
                 }
             }
 
             // Restore locals after arm (pattern bindings shouldn't leak to next arm)
             self.locals = saved_locals;
+        }
+
+        // Patch remaining jumps (from last arm failures) to panic location
+        let panic_location = self.chunk.code.len();
+        for jump in jumps_to_next_arm.drain(..) {
+            self.chunk.patch_jump(jump, panic_location);
         }
 
         // If last arm failed, emit panic for non-exhaustive match
@@ -3340,14 +3351,18 @@ impl Compiler {
         if let Pattern::Var(ident) = &binding.pattern {
             // If the variable already exists, check mutability
             if let Some(existing_info) = self.locals.get(&ident.node).copied() {
-                if existing_info.mutable {
-                    // Mutable variable: allow reassignment
+                if binding.mutable {
+                    // New binding is mutable (var x = ...): create new mutable binding that shadows the old one
+                    let is_float = self.is_float_expr(&binding.value);
+                    self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: true });
+                } else if existing_info.mutable {
+                    // Existing is mutable, new is immutable: allow reassignment
                     let existing_reg = existing_info.reg;
                     if existing_reg != value_reg {
                         self.chunk.emit(Instruction::Move(existing_reg, value_reg), 0);
                     }
                 } else {
-                    // Immutable variable: treat as pattern match (assert equality)
+                    // Both are immutable: treat as pattern match (assert equality)
                     // Emit AssertEq to check that the new value matches the existing one
                     self.chunk.emit(Instruction::AssertEq(existing_info.reg, value_reg), binding.span.start);
                 }

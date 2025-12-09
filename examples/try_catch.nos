@@ -70,7 +70,7 @@ main() = {
     assert_eq(3, safe_divide(9, 3))
 
     # Division by zero is caught gracefully
-    div_result = try safe_divide(10, 0) catch e -> e end
+    div_result = try safe_divide(10, 0) catch e1 -> e1 end
     assert_eq("division by zero", div_result)
 
     # === Factorial with validation ===
@@ -79,7 +79,7 @@ main() = {
     assert_eq(120, factorial(5))
 
     # Negative input throws an exception
-    neg_result = try factorial(-5) catch e -> e end
+    neg_result = try factorial(-5) catch e2 -> e2 end
     assert_eq("negative number not allowed", neg_result)
 
     # === Safe operations with defaults ===

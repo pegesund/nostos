@@ -31,21 +31,21 @@ start_counter(initial) = spawn { counter_loop(initial) }
 increment(counter) = {
     counter <- Inc(self())
     receive
-        Ok(n) -> n
+        Ok(val) -> val
     end
 }
 
 decrement(counter) = {
     counter <- Dec(self())
     receive
-        Ok(n) -> n
+        Ok(val) -> val
     end
 }
 
 get_value(counter) = {
     counter <- Get(self())
     receive
-        Value(n) -> n
+        Value(val) -> val
     end
 }
 

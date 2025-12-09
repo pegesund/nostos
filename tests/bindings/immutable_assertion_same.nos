@@ -1,0 +1,9 @@
+# expect: 1
+# Rebinding immutable to same value acts as assertion
+
+main() = {
+    x = 1
+    x = 1
+    x = 1
+    x
+}

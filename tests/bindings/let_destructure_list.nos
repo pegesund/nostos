@@ -1,0 +1,7 @@
+# expect: 6
+# Let binding with list destructuring
+
+main() = {
+    [a, b, c] = [1, 2, 3]
+    a + b + c
+}

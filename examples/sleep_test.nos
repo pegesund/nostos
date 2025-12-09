@@ -30,15 +30,15 @@ main() = {
     println("All workers spawned, collecting results...")
 
     # Collect results - should come in order: 3, 2, 1 (shortest to longest sleep)
-    first = receive id -> id end
+    first = receive id1 -> id1 end
     println("First to wake up:")
     println(first)
 
-    second = receive id -> id end
+    second = receive id2 -> id2 end
     println("Second to wake up:")
     println(second)
 
-    third = receive id -> id end
+    third = receive id3 -> id3 end
     println("Third to wake up:")
     println(third)
 

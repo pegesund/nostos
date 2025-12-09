@@ -129,7 +129,7 @@ sleepVsTimeout() = {
 
   # Timeout before worker finishes (100ms < 300ms)
   result = receive
-    msg -> ("got", msg)
+    msg1 -> ("got", msg1)
   after 100 ->
     "timeout"
   end
@@ -138,7 +138,7 @@ sleepVsTimeout() = {
 
   # Now wait longer - should get message
   result2 = receive
-    msg -> ("got", msg)
+    msg2 -> ("got", msg2)
   after 1000 ->
     "timeout"
   end

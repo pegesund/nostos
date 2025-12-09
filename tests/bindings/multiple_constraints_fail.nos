@@ -1,0 +1,11 @@
+# expect: 999
+# Multiple constraints - one fails
+
+main() = {
+    x = 1
+    y = 5
+    match (1, 2, 3)
+        (x, y, z) -> x + y + z   # x matches but y doesn't
+        _ -> 999
+    end
+}

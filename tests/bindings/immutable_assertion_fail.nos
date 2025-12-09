@@ -1,0 +1,8 @@
+# expect_error: Assertion failed
+# Rebinding immutable to different value fails
+
+main() = {
+    x = 1
+    x = 2
+    x
+}

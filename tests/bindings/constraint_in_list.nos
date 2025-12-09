@@ -1,0 +1,10 @@
+# expect: 999
+# Constraint in list pattern
+
+main() = {
+    x = 1
+    match [2, 3, 4]
+        [x | rest] -> x   # x must equal 1, but head is 2
+        _ -> 999
+    end
+}

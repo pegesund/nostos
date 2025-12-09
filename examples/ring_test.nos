@@ -90,19 +90,19 @@ test_multi_round_ring() = {
 
     # Send 5 messages into the ring
     node3 <- 0
-    r1 = receive n -> n after 5000 -> -1 end
+    r1 = receive n1 -> n1 after 5000 -> -1 end
 
     node3 <- 10
-    r2 = receive n -> n after 5000 -> -1 end
+    r2 = receive n2 -> n2 after 5000 -> -1 end
 
     node3 <- 20
-    r3 = receive n -> n after 5000 -> -1 end
+    r3 = receive n3 -> n3 after 5000 -> -1 end
 
     node3 <- 30
-    r4 = receive n -> n after 5000 -> -1 end
+    r4 = receive n4 -> n4 after 5000 -> -1 end
 
     node3 <- 40
-    r5 = receive n -> n after 5000 -> -1 end
+    r5 = receive n5 -> n5 after 5000 -> -1 end
 
     println("Results (expect 3, 13, 23, 33, 43):")
     println(r1)

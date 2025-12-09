@@ -48,7 +48,7 @@ main() = {
 
     # Wait for result
     result = receive
-        Result(r) -> r
+        Result(r1) -> r1
     end
 
     # fib(10) = 55
@@ -58,7 +58,7 @@ main() = {
     submit_task(workers, me, compute_fact)
 
     result2 = receive
-        Result(r) -> r
+        Result(r2) -> r2
     end
 
     # fact(5) = 120
