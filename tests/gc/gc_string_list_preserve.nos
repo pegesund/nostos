@@ -1,0 +1,19 @@
+# expect: ()
+# GC preserves list of strings
+
+build_string_list(0, acc) = acc
+build_string_list(n, acc) = {
+    garbage1 = "garbage string one"
+    garbage2 = "garbage string two"
+    s = "keep"
+    build_string_list(n - 1, [s | acc])
+}
+
+count_list([]) = 0
+count_list([_ | t]) = 1 + count_list(t)
+
+main() = {
+    strings = build_string_list(500, [])
+    result = count_list(strings)
+    assert_eq(500, result)
+}

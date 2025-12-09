@@ -1,0 +1,26 @@
+# expect: ()
+# GC preserves tuples containing lists
+
+build_tuple_lists(0, acc) = acc
+build_tuple_lists(n, acc) = {
+    garbage = ([0], [0, 0], [0, 0, 0])
+    t = ([n], [n, n * 2], [n, n * 2, n * 3])
+    build_tuple_lists(n - 1, [t | acc])
+}
+
+sum_list([]) = 0
+sum_list([h | t]) = h + sum_list(t)
+
+sum_all([]) = 0
+sum_all([(a, b, c) | rest]) = {
+    garbage = ([], [], [])
+    sum_list(a) + sum_list(b) + sum_list(c) + sum_all(rest)
+}
+
+main() = {
+    tuples = build_tuple_lists(30, [])
+    result = sum_all(tuples)
+    # Each tuple: n + (n + 2n) + (n + 2n + 3n) = n + 3n + 6n = 10n
+    # Sum = 10 * (1+2+...+30) = 10 * 465 = 4650
+    assert_eq(4650, result)
+}

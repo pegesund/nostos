@@ -1,0 +1,29 @@
+# expect: ()
+# GC handles mixed record and variant structures
+
+type Data = NumData(Int) | StrData(String) | RecData(Info)
+type Info = { value: Int, label: String }
+
+build_mixed(0, acc) = acc
+build_mixed(n, acc) = {
+    garbage = RecData(Info(0, "garbage"))
+    item = if n % 3 == 0 then NumData(n)
+           else if n % 3 == 1 then StrData("value")
+           else RecData(Info(n, "info"))
+    build_mixed(n - 1, [item | acc])
+}
+
+sum_mixed([]) = 0
+sum_mixed([NumData(x) | rest]) = x + sum_mixed(rest)
+sum_mixed([StrData(_) | rest]) = 1 + sum_mixed(rest)
+sum_mixed([RecData(info) | rest]) = info.value + sum_mixed(rest)
+
+main() = {
+    mixed = build_mixed(30, [])
+    result = sum_mixed(mixed)
+    # NumData: 3+6+9+12+15+18+21+24+27+30 = 165
+    # StrData: 10 items = 10
+    # RecData: 2+5+8+11+14+17+20+23+26+29 = 155
+    # Total = 165 + 10 + 155 = 330
+    assert_eq(330, result)
+}

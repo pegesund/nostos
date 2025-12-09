@@ -1,0 +1,30 @@
+# expect: ()
+# GC preserves variant types (Option, Either)
+
+type Option[T] = Some(T) | None
+type Either[L, R] = Left(L) | Right(R)
+
+wrap_values(0, acc) = acc
+wrap_values(n, acc) = {
+    garbage = Some(["garbage", "list"])
+    val = if n % 2 == 0 then Left(n) else Right(n * 2)
+    wrap_values(n - 1, [val | acc])
+}
+
+sum_either([]) = 0
+sum_either([Left(x) | rest]) = {
+    junk = Right("discard")
+    x + sum_either(rest)
+}
+sum_either([Right(x) | rest]) = {
+    junk = Left(0)
+    x + sum_either(rest)
+}
+
+main() = {
+    values = wrap_values(20, [])
+    total = sum_either(values)
+    # Even: 2+4+6+8+10+12+14+16+18+20 = 110
+    # Odd doubled: 2+6+10+14+18+22+26+30+34+38 = 200
+    assert_eq(310, total)
+}

@@ -1,0 +1,27 @@
+# expect: ()
+# GC preserves closures with captured variables
+
+make_adder(n) = {
+    garbage = x => x * 999
+    x => x + n
+}
+
+make_adders(0, acc) = acc
+make_adders(n, acc) = {
+    garbage = x => x
+    adder = make_adder(n)
+    make_adders(n - 1, [adder | acc])
+}
+
+apply_all([], val) = val
+apply_all([f | rest], val) = {
+    garbage = x => x
+    apply_all(rest, f(val))
+}
+
+main() = {
+    adders = make_adders(10, [])
+    result = apply_all(adders, 0)
+    # 0 + 1 + 2 + ... + 10 = 55
+    assert_eq(55, result)
+}

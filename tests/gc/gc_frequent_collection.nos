@@ -1,0 +1,18 @@
+# expect: ()
+# GC handles frequent collections in tight loop
+
+tight_loop(0, acc) = acc
+tight_loop(n, acc) = {
+    # Create lots of garbage to trigger frequent GC
+    g1 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    g2 = [11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    g3 = ["a", "b", "c", "d", "e"]
+    g4 = (1, 2, 3, 4, 5)
+    g5 = %{"x": 1, "y": 2}
+    tight_loop(n - 1, acc + 1)
+}
+
+main() = {
+    result = tight_loop(2000, 0)
+    assert_eq(2000, result)
+}

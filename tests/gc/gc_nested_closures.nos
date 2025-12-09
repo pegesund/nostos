@@ -1,0 +1,34 @@
+# expect: ()
+# GC preserves nested closures with captured variables
+
+make_nested_closure(n) = {
+    garbage = x => x * 999
+    outer = n
+    x => {
+        inner = outer + x
+        y => inner + y + outer
+    }
+}
+
+build_closures(0, acc) = acc
+build_closures(n, acc) = {
+    garbage = x => y => 0
+    f = make_nested_closure(n)
+    build_closures(n - 1, [f | acc])
+}
+
+apply_nested([]) = 0
+apply_nested([f | rest]) = {
+    garbage = x => x
+    inner = f(10)
+    result = inner(5)
+    result + apply_nested(rest)
+}
+
+main() = {
+    closures = build_closures(20, [])
+    result = apply_nested(closures)
+    # Each closure: (n + 10) + 5 + n = 2n + 15
+    # Sum for n=1..20: 2*(1+2+...+20) + 20*15 = 2*210 + 300 = 720
+    assert_eq(720, result)
+}

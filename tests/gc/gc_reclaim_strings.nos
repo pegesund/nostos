@@ -1,0 +1,20 @@
+# expect: ()
+# GC reclaims unreferenced strings
+
+discard_strings(0, count) = count
+discard_strings(n, count) = {
+    # Create strings that become garbage immediately
+    s1 = "string one"
+    s2 = "string two"
+    s3 = "string three"
+    s4 = "string four"
+    s5 = "string five"
+    # Don't use them, just count
+    discard_strings(n - 1, count + 1)
+}
+
+main() = {
+    # 5000 iterations * 5 strings = 25000 garbage strings
+    result = discard_strings(5000, 0)
+    assert_eq(5000, result)
+}

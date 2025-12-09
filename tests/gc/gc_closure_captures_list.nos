@@ -1,0 +1,32 @@
+# expect: ()
+# GC preserves lists captured by closures
+
+sum_list([]) = 0
+sum_list([h | t]) = h + sum_list(t)
+
+make_summer(lst) = {
+    garbage = [99, 88, 77]
+    () => sum_list(lst)
+}
+
+build_summers(0, acc) = acc
+build_summers(n, acc) = {
+    garbage_fn = make_summer([0])
+    lst = [n, n * 2, n * 3]
+    f = make_summer(lst)
+    build_summers(n - 1, [f | acc])
+}
+
+apply_summers([]) = 0
+apply_summers([f | rest]) = {
+    garbage = () => 0
+    f() + apply_summers(rest)
+}
+
+main() = {
+    summers = build_summers(50, [])
+    result = apply_summers(summers)
+    # Each closure returns n + 2n + 3n = 6n
+    # Sum = 6 * (1+2+...+50) = 6 * 1275 = 7650
+    assert_eq(7650, result)
+}

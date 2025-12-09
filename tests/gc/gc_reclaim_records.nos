@@ -1,0 +1,18 @@
+# expect: ()
+# GC reclaims unreferenced records
+
+type Point = { x: Int, y: Int }
+type Rect = { tl: Point, br: Point }
+
+discard_records(0, count) = count
+discard_records(n, count) = {
+    p1 = Point(n, n * 2)
+    p2 = Point(n * 3, n * 4)
+    r = Rect(p1, p2)
+    discard_records(n - 1, count + 1)
+}
+
+main() = {
+    result = discard_records(5000, 0)
+    assert_eq(5000, result)
+}

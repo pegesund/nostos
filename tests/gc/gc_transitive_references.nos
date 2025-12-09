@@ -1,0 +1,33 @@
+# expect: ()
+# GC follows transitive references through multiple levels
+
+type Node = { value: Int, children: List }
+
+build_tree(0) = Node(0, [])
+build_tree(n) = {
+    garbage = Node(999, [Node(888, [])])
+    left = build_tree(n - 1)
+    right = build_tree(n - 1)
+    Node(n, [left, right])
+}
+
+sum_tree(node) = {
+    garbage = Node(0, [])
+    node.value + sum_children(node.children)
+}
+
+sum_children([]) = 0
+sum_children([child | rest]) = sum_tree(child) + sum_children(rest)
+
+main() = {
+    tree = build_tree(5)
+    total = sum_tree(tree)
+    # Level 5: 1 node * 5 = 5
+    # Level 4: 2 nodes * 4 = 8
+    # Level 3: 4 nodes * 3 = 12
+    # Level 2: 8 nodes * 2 = 16
+    # Level 1: 16 nodes * 1 = 16
+    # Level 0: 32 nodes * 0 = 0
+    # Total = 5 + 8 + 12 + 16 + 16 + 0 = 57
+    assert_eq(57, total)
+}

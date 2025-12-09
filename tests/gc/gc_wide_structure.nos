@@ -1,0 +1,18 @@
+# expect: ()
+# GC handles wide structures (many siblings at same level)
+
+build_wide(0, acc) = acc
+build_wide(n, acc) = {
+    garbage = [0, 0, 0, 0, 0]
+    build_wide(n - 1, [n | acc])
+}
+
+sum_list([]) = 0
+sum_list([h | t]) = h + sum_list(t)
+
+main() = {
+    wide = build_wide(200, [])
+    result = sum_list(wide)
+    # Sum of 1..200 = 20100
+    assert_eq(20100, result)
+}
