@@ -403,6 +403,7 @@ impl Compiler {
         if let Some(qualified) = self.imports.get(name) {
             return qualified.clone();
         }
+        
         // If the name already contains '.', it's already qualified
         if name.contains('.') {
             return name.to_string();
@@ -1182,15 +1183,15 @@ impl Compiler {
 
             // Record construction
             Expr::Record(type_name, fields, _) => {
-                // Qualify type name with module path
-                let qualified_type = self.qualify_name(&type_name.node);
+                // Resolve type name (check imports)
+                let qualified_type = self.resolve_name(&type_name.node);
                 self.compile_record(&qualified_type, fields)
             }
 
             // Record update
             Expr::RecordUpdate(type_name, base, fields, _) => {
-                // Qualify type name with module path
-                let qualified_type = self.qualify_name(&type_name.node);
+                // Resolve type name (check imports)
+                let qualified_type = self.resolve_name(&type_name.node);
                 self.compile_record_update(&qualified_type, base, fields)
             }
 
