@@ -1,0 +1,16 @@
+# expect: 3
+# Nested receive expressions
+
+worker(parent) = {
+    parent <- 1
+    parent <- 2
+}
+
+main() = {
+    me = self()
+    spawn { worker(me) }
+
+    first = receive x -> x end
+    second = receive x -> x end
+    first + second
+}

@@ -1,0 +1,16 @@
+# expect: ()
+# Empty string operations
+
+main() = {
+    empty = ""
+
+    # Empty string equality
+    assert_eq("", empty)
+
+    # Concatenation with empty
+    assert_eq("hello", "hello" ++ empty)
+    assert_eq("hello", empty ++ "hello")
+
+    # Empty ++ empty
+    assert_eq("", empty ++ empty)
+}

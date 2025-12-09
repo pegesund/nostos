@@ -1,0 +1,9 @@
+# expect: "done"
+# Spawn process that exits immediately
+
+worker() = ()
+
+main() = {
+    spawn { worker() }
+    "done"
+}

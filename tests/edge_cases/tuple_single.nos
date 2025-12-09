@@ -1,0 +1,9 @@
+# expect: 42
+# Single element tuple (if supported) or unit operations
+
+main() = {
+    # Just return a value - testing basic tuple handling
+    x = (42, 1)
+    (a, _) = x
+    a
+}

@@ -1,0 +1,10 @@
+# expect: "timeout"
+# Receive with zero timeout (immediate)
+
+main() = {
+    receive
+        msg -> "got message"
+    after 0 ->
+        "timeout"
+    end
+}

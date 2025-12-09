@@ -1,0 +1,10 @@
+# expect: 2
+# Map with duplicate key (last wins)
+
+main() = {
+    m = %{"a": 1, "a": 2}
+    match m
+        %{"a": v} -> v
+        _ -> 0
+    end
+}

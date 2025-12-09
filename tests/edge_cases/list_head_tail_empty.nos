@@ -1,0 +1,12 @@
+# expect: "caught"
+# Head/tail on empty list should be caught
+
+safe_head(list) =
+    match list
+        [x | _] -> x
+        [] -> throw("empty list")
+    end
+
+main() = {
+    try safe_head([]) catch _ -> "caught" end
+}

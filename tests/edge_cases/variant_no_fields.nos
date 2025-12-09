@@ -1,0 +1,12 @@
+# expect: "none"
+# Variant with no fields
+
+type MyOption = MySome(Int) | MyNone
+
+describe(opt) =
+    match opt
+        MySome(x) -> "some"
+        MyNone -> "none"
+    end
+
+main() = describe(MyNone)

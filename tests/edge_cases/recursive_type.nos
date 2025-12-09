@@ -1,0 +1,15 @@
+# expect: 6
+# Recursive type (linked list) operations
+
+type MyList = Nil | Cons(Int, MyList)
+
+list_length(list) =
+    match list
+        Nil -> 0
+        Cons(_, rest) -> 1 + list_length(rest)
+    end
+
+main() = {
+    list = Cons(1, Cons(2, Cons(3, Cons(4, Cons(5, Cons(6, Nil))))))
+    list_length(list)
+}

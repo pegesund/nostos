@@ -1,0 +1,8 @@
+# expect: 42
+# Process sends message to itself
+
+main() = {
+    me = self()
+    me <- 42
+    receive msg -> msg end
+}

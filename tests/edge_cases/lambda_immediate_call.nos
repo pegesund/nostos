@@ -1,0 +1,4 @@
+# expect: 15
+# Lambda immediately called
+
+main() = ((x, y) => x + y)(5, 10)

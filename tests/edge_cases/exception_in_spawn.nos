@@ -1,0 +1,14 @@
+# expect: "main alive"
+# Exception in spawned process doesn't crash main
+
+worker() = {
+    throw("worker error")
+}
+
+main() = {
+    spawn { worker() }
+    # Small delay to let worker run
+    _ = 1 + 1
+    _ = 2 + 2
+    "main alive"
+}

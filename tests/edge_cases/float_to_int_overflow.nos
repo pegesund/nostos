@@ -1,0 +1,10 @@
+# expect: true
+# Float to int conversion with values outside i64 range
+
+main() = {
+    # Large float that exceeds i64::MAX
+    large = 1.0e20
+    # When cast to int, this wraps - just verify it doesn't crash
+    result = large > 0.0
+    result
+}

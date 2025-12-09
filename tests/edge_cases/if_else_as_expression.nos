@@ -1,0 +1,6 @@
+# expect: 20
+# If-else as expression returning value
+
+abs(n) = if n < 0 then -n else n
+
+main() = abs(-20)

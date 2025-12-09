@@ -1,0 +1,16 @@
+# expect: 30
+# Closure capturing values passed to spawn
+
+main() = {
+    me = self()
+    x = 10
+    y = 20
+
+    # Spawn with closure that captures x and y
+    spawn {
+        result = x + y
+        me <- result
+    }
+
+    receive msg -> msg end
+}

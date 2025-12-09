@@ -1,0 +1,9 @@
+# expect: false
+# NaN propagates through arithmetic
+
+main() = {
+    nan = 0.0 / 0.0
+    result = nan + 1.0
+    # NaN + anything = NaN, and NaN == NaN is false
+    result == result
+}

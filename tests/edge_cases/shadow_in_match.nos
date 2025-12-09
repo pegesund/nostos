@@ -1,0 +1,10 @@
+# expect: 20
+# Variable shadowing in match arms
+
+main() = {
+    x = 10
+    result = match x
+        x -> x * 2
+    end
+    result
+}

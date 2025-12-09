@@ -1,0 +1,18 @@
+# expect: ()
+# Operations involving zero
+
+main() = {
+    # Zero multiplication
+    assert_eq(0, 0 * 1000000)
+    assert_eq(0, 1000000 * 0)
+
+    # Zero addition/subtraction
+    assert_eq(42, 42 + 0)
+    assert_eq(42, 42 - 0)
+    assert_eq(-42, 0 - 42)
+
+    # Negative zero for floats
+    neg_zero = -0.0
+    pos_zero = 0.0
+    assert_eq(true, neg_zero == pos_zero)
+}

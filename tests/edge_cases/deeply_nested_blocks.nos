@@ -1,0 +1,17 @@
+# expect: 10
+# Deeply nested block expressions
+
+main() = {
+    {
+        {
+            {
+                {
+                    {
+                        x = 10
+                        x
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,10 @@
+# expect: "not found"
+# Empty map operations
+
+main() = {
+    empty = %{}
+    match empty
+        %{"key": v} -> "found"
+        _ -> "not found"
+    end
+}

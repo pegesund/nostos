@@ -1,0 +1,14 @@
+# expect: ()
+# Boolean short-circuit evaluation
+
+throws_error() = throw("should not be called")
+
+main() = {
+    # && short-circuits: false && X doesn't evaluate X
+    result1 = false && throws_error()
+    assert_eq(false, result1)
+
+    # || short-circuits: true || X doesn't evaluate X
+    result2 = true || throws_error()
+    assert_eq(true, result2)
+}

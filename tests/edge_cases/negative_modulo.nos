@@ -1,0 +1,13 @@
+# expect: ()
+# Negative modulo behavior (Rust semantics: result has same sign as dividend)
+
+main() = {
+    # -5 % 3 = -2 in Rust (not 1)
+    assert_eq(-2, -5 % 3)
+
+    # 5 % -3 = 2 in Rust
+    assert_eq(2, 5 % -3)
+
+    # -5 % -3 = -2 in Rust
+    assert_eq(-2, -5 % -3)
+}

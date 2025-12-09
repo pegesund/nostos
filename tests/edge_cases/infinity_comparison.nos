@@ -1,0 +1,19 @@
+# expect: ()
+# Infinity comparison behaviors
+
+main() = {
+    inf = 1.0 / 0.0
+    neg_inf = -1.0 / 0.0
+
+    # Infinity equals itself
+    assert_eq(true, inf == inf)
+
+    # Positive infinity > negative infinity
+    assert_eq(true, inf > neg_inf)
+
+    # Infinity > any finite number
+    assert_eq(true, inf > 999999999.0)
+
+    # Negative infinity < any finite number
+    assert_eq(true, neg_inf < -999999999.0)
+}
