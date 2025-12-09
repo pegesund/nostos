@@ -4663,6 +4663,7 @@ mod tests {
     #[test]
     fn test_e2e_record_construction() {
         let source = "
+            type Point = { x: Int, y: Int }
             main() = Point(3, 4)
         ";
         let result = compile_and_run(source);
@@ -4679,9 +4680,10 @@ mod tests {
 
     #[test]
     fn test_e2e_record_field_access() {
-        // Test with positional field access which uses synthetic names
+        // Test with named field access
         let source = "
-            getX(p) = p._0
+            type Point = { x: Int, y: Int }
+            getX(p) = p.x
             main() = getX(Point(42, 100))
         ";
         let result = compile_and_run(source);
@@ -4691,6 +4693,7 @@ mod tests {
     #[test]
     fn test_e2e_variant_construction() {
         let source = "
+            type Option[T] = Some(T) | None
             main() = Some(42)
         ";
         let result = compile_and_run(source);
@@ -4708,6 +4711,7 @@ mod tests {
     #[test]
     fn test_e2e_variant_match() {
         let source = "
+            type Option[T] = Some(T) | None
             unwrap(opt) = match opt
                 Some(x) -> x
                 None -> 0
@@ -4720,6 +4724,7 @@ mod tests {
     #[test]
     fn test_e2e_variant_none() {
         let source = "
+            type Option[T] = Some(T) | None
             unwrap(opt) = match opt
                 Some(x) -> x
                 None -> 0
@@ -4824,6 +4829,7 @@ mod tests {
     #[test]
     fn test_e2e_nested_variant_match() {
         let source = "
+            type Option[T] = Some(T) | None
             doubleUnwrap(opt) = match opt
                 Some(inner) -> match inner
                     Some(x) -> x
@@ -4838,6 +4844,7 @@ mod tests {
     #[test]
     fn test_e2e_either_pattern() {
         let source = "
+            type Either[L, R] = Left(L) | Right(R)
             handle(result) = match result
                 Left(err) -> 0 - err
                 Right(val) -> val
@@ -4959,6 +4966,7 @@ mod tests {
     #[test]
     fn test_e2e_option_map() {
         let source = "
+            type Option[T] = Some(T) | None
             mapOpt(f, opt) = match opt
                 Some(x) -> Some(f(x))
                 None -> None
@@ -4974,6 +4982,7 @@ mod tests {
     #[test]
     fn test_e2e_option_flatmap() {
         let source = "
+            type Option[T] = Some(T) | None
             flatMap(f, opt) = match opt
                 Some(x) -> f(x)
                 None -> None
@@ -5118,6 +5127,7 @@ mod tests {
     #[test]
     fn test_e2e_list_nth() {
         let source = "
+            type Option[T] = Some(T) | None
             nth(n, xs) = match xs
                 [] -> None
                 [h | t] -> if n == 0 then Some(h) else nth(n - 1, t)
@@ -5149,6 +5159,7 @@ mod tests {
     #[test]
     fn test_e2e_tree_sum() {
         let source = "
+            type Tree[T] = Leaf(T) | Node(Tree[T], Tree[T])
             sumTree(tree) = match tree
                 Leaf(v) -> v
                 Node(l, r) -> sumTree(l) + sumTree(r)
@@ -5161,6 +5172,7 @@ mod tests {
     #[test]
     fn test_e2e_tree_depth() {
         let source = "
+            type Tree[T] = Leaf(T) | Node(Tree[T], Tree[T])
             max(a, b) = if a > b then a else b
             depth(tree) = match tree
                 Leaf(_) -> 1
@@ -5175,6 +5187,7 @@ mod tests {
     #[test]
     fn test_e2e_expression_evaluator() {
         let source = "
+            type Expr = Num(Int) | Add(Expr, Expr) | Mul(Expr, Expr)
             eval(expr) = match expr
                 Num(n) -> n
                 Add(e1, e2) -> eval(e1) + eval(e2)
@@ -5311,6 +5324,7 @@ mod tests {
     #[test]
     fn test_e2e_multiclause_variant_dispatch() {
         let source = "
+            type Option[T] = Some(T) | None
             unwrap(None) = 0
             unwrap(Some(x)) = x
             main() = unwrap(Some(42)) + unwrap(None)
@@ -5322,6 +5336,7 @@ mod tests {
     #[test]
     fn test_e2e_multiclause_either() {
         let source = "
+            type Either[L, R] = Left(L) | Right(R)
             getValue(Left(x)) = x
             getValue(Right(x)) = x
             main() = getValue(Left(10)) + getValue(Right(32))
