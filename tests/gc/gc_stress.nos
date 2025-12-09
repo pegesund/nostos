@@ -24,7 +24,7 @@ accumulate(n, acc) = {
 main() = {
     # Run garbage generator many times
     # Each iteration creates ~3 strings that become garbage
-    i = 0
+    var i = 0
     while i < 1000 {
         make_garbage(10)
         i = i + 1

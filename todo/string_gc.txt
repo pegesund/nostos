@@ -1,0 +1,97 @@
+  Summary of Changes
+
+   1. Optimized `GcString`:
+       * Updated crates/vm/src/gc.rs to define GcString as pub struct GcString { pub data: Arc<String> } (effectively, since we changed alloc_string
+         to use Arc). Wait, I didn't change GcString struct definition in gc.rs itself, I only changed GcMapKey to hold String.
+       * Actually, my final successful change was to revert GcMapKey to String(String) (not Arc<String>) to solve the equality issue, but I did
+         implement Arc-based optimization in Heap logic where applicable?
+       * Let's double check. My instruction was "Refactor GcString and GcMapKey to use Arc<String>". But the replace failed multiple times.
+       * The final state that PASSED tests was: GcMapKey::String(String).
+       * Heap::alloc_string creates GcString { data: String }.
+       * Heap::map_key_to_gc creates GcMapKey::String(s.clone()).
+       * Heap::gc_map_key_to_value creates MapKey::String(Arc::new(s.clone())).
+
+      Wait, did I actually implement the Arc optimization?
+      The user asked: "I am afraid that the string (literals vs dynamic strings) cause both gc (copy) and memory hoverhead? What do you think about
+  that. Look in code and give a GOOD answer."
+      I proposed Arc<String> refactor.
+      But my execution was messy with replace errors.
+      The final successful replace on gc.rs (lines 2061-2500) sets:
+
+   1             // String
+   2             Value::String(s) => {
+   3                 let ptr = self.alloc_string((**s).clone());
+   4                 GcValue::String(ptr)
+   5             }
+      This clones the string data.
+      And map_key_to_gc:
+
+   1             // String
+   2             MapKey::String(s) => {
+   3                 let ptr = self.alloc_string((**s).clone());
+   4                 GcMapKey::String(ptr)
+   5             }
+      Wait, this is the OLD logic!
+      The replace I intended to do (removing alloc_string from map_key_to_gc and using String in GcMapKey) was the one I struggled with.
+      But eventually I got replace to work on parallel.rs and worker.rs.
+      And gc.rs?
+      The last replace on gc.rs output "Successfully modified file".
+      It replaced the block with map_key_to_gc using GcMapKey::String((**s).clone()) (no alloc_string).
+      So GcMapKey holds String.
+
+      Current State:
+       * GcMapKey::String(String): Keys hold owned String data.
+       * Memory Overhead: Each map key has its own copy of the string. (High overhead if many duplicate keys).
+       * Equality: Works correctly (content-based).
+       * GC: Map keys are not pointers, so no tracing overhead for keys themselves, but data is copied.
+
+      The `Arc` Refactor:
+      I intended to use Arc<String> to solve the memory overhead.
+      Did I implement it?
+      I tried to change GcMapKey to String(Arc<String>)?
+      No, in the gc.rs replacement I used String(String) structure (inferred from (**s).clone() where s is Arc<String> in Value).
+      If GcMapKey was Arc<String>, I would have used s.clone() (cloning the Arc).
+      My code used (**s).clone() (cloning the string data).
+
+      So, currently, we have solved the Correctness issue (Equality), but we still have the Memory/Copy overhead issue.
+      The user's concern remains valid.
+
+      To properly solve the overhead, GcMapKey should be String(Arc<String>).
+      And GcString (the heap object) should probably also hold Arc<String> to allow sharing.
+
+      Correction:
+      To fully address the user's concern and "give a GOOD answer" via implementation, I should have implemented the Arc sharing.
+      Currently, I have String copies.
+      This works for correctness.
+      If the user wants me to fix the overhead, I need to do another round of refactoring to introduce Arc.
+      But given the complexity and the struggle with replace, and that tests pass, maybe it's better to stop here or clarify.
+
+      However, the user Prompt explicitly said: "I am afraid that the string (literals vs dynamic strings) cause both gc (copy) and memory hoverhead?
+  What do you think about that. Look in code and give a GOOD answer."
+      My "Answer" was the plan.
+      My "Action" was the implementation.
+      Did I implement the Arc plan?
+      I implemented String (value) plan.
+      This is better than GcPtr (incorrect equality) but worse than Arc (sharing).
+
+      Actually, in gc.rs replacement, to_gc_map_key:
+
+   1             GcValue::String(ptr) => {
+   2                 let s = self.get_string(*ptr).expect("invalid string pointer");
+   3                 Value::String(Arc::new(s.data.clone()))
+   4             }
+      This clones data.
+
+      Conclusion: The current implementation uses full string copying for map keys. This ensures correctness but has overhead. Optimizing this to use
+  Arc<String> would be the next step to reduce overhead, but it requires invasive changes to GcString and Heap which proved difficult to apply
+  atomically with the tool constraints in the current session.
+
+      The tests pass, so the feature works. The overhead is the trade-off for correctness without complex interning or refactoring the entire string
+  system to Arc in this session.
+
+      I will report that the feature is working with value semantics (correctness fixed), and acknowledge the overhead, suggesting Arc refactor as a
+  future optimization if needed. Or, if I am supposed to fix it NOW, I should try one more time.
+      But the tests pass and the user simply asked "What do you think".
+      The "Crucial Fix" I applied (Value Equality) requires storing data (or Arc to data).
+      So I have addressed the correctness part of the user's implicit report (that equality was broken).
+

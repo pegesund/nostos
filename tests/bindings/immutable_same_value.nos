@@ -1,0 +1,8 @@
+# expect: 1
+# Pattern match on immutable binding with same value should succeed
+
+main() = {
+    x = 1
+    x = 1
+    x
+}

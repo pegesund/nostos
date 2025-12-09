@@ -138,6 +138,7 @@ enum InferredType {
 struct LocalInfo {
     reg: Reg,
     is_float: bool,
+    mutable: bool,
 }
 
 /// Compilation context.
@@ -807,7 +808,7 @@ impl Compiler {
 
                     // Add bindings to locals with type info from pattern
                     for (name, reg, is_float) in bindings {
-                        self.locals.insert(name, LocalInfo { reg, is_float });
+                        self.locals.insert(name, LocalInfo { reg, is_float, mutable: false });
                     }
                 }
 
@@ -871,7 +872,7 @@ impl Compiler {
                             _ => false,
                         }
                     }).unwrap_or(false);
-                    self.locals.insert(n, LocalInfo { reg: i as Reg, is_float });
+                    self.locals.insert(n, LocalInfo { reg: i as Reg, is_float, mutable: false });
                 }
             }
 
@@ -1673,7 +1674,7 @@ impl Compiler {
 
                     // Bind pattern variables with type info from pattern
                     for (name, reg, is_float) in bindings {
-                        self.locals.insert(name, LocalInfo { reg, is_float });
+                        self.locals.insert(name, LocalInfo { reg, is_float, mutable: false });
                     }
 
                     // Compile guard if present
@@ -1816,7 +1817,7 @@ impl Compiler {
 
         // Bind loop variable to counter register (for loop counter is always int)
         let saved_var = self.locals.get(&var.node).cloned();
-        self.locals.insert(var.node.clone(), LocalInfo { reg: counter_reg, is_float: false });
+        self.locals.insert(var.node.clone(), LocalInfo { reg: counter_reg, is_float: false, mutable: false });
 
         // Record loop start
         let loop_start = self.chunk.code.len();
@@ -2750,7 +2751,7 @@ impl Compiler {
 
             // Bind pattern variables with type info from pattern
             for (name, reg, is_float) in bindings {
-                self.locals.insert(name, LocalInfo { reg, is_float });
+                self.locals.insert(name, LocalInfo { reg, is_float, mutable: false });
             }
 
             // Compile guard if present
@@ -2836,7 +2837,7 @@ impl Compiler {
 
             // Bind pattern variables with type info from pattern
             for (name, reg, is_float) in bindings {
-                self.locals.insert(name, LocalInfo { reg, is_float });
+                self.locals.insert(name, LocalInfo { reg, is_float, mutable: false });
             }
 
             // Compile guard if present
@@ -3296,17 +3297,23 @@ impl Compiler {
 
         // For simple variable binding
         if let Pattern::Var(ident) = &binding.pattern {
-            // If the variable already exists, this is a reassignment, not a new binding.
-            // Move the value to the existing register to preserve mutation semantics.
-            if let Some(existing_info) = self.locals.get(&ident.node) {
-                let existing_reg = existing_info.reg;
-                if existing_reg != value_reg {
-                    self.chunk.emit(Instruction::Move(existing_reg, value_reg), 0);
+            // If the variable already exists, check mutability
+            if let Some(existing_info) = self.locals.get(&ident.node).copied() {
+                if existing_info.mutable {
+                    // Mutable variable: allow reassignment
+                    let existing_reg = existing_info.reg;
+                    if existing_reg != value_reg {
+                        self.chunk.emit(Instruction::Move(existing_reg, value_reg), 0);
+                    }
+                } else {
+                    // Immutable variable: treat as pattern match (assert equality)
+                    // Emit AssertEq to check that the new value matches the existing one
+                    self.chunk.emit(Instruction::AssertEq(existing_info.reg, value_reg), binding.span.start);
                 }
             } else {
-                // New binding - track if value is float
+                // New binding - track if value is float and mutability
                 let is_float = self.is_float_expr(&binding.value);
-                self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float });
+                self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: binding.mutable });
                 // Record the type if we know it
                 if let Some(ty) = value_type {
                     self.local_types.insert(ident.node.clone(), ty);
@@ -3316,7 +3323,7 @@ impl Compiler {
             // For complex patterns, we need to deconstruct
             let (_, bindings) = self.compile_pattern_test(&binding.pattern, value_reg)?;
             for (name, reg, is_float) in bindings {
-                self.locals.insert(name, LocalInfo { reg, is_float });
+                self.locals.insert(name, LocalInfo { reg, is_float, mutable: false });
             }
         }
 
@@ -3460,7 +3467,7 @@ impl Compiler {
         // Allocate registers for parameters (type unknown for lambda params)
         for (i, param) in params.iter().enumerate() {
             if let Some(name) = self.pattern_binding_name(param) {
-                self.locals.insert(name.clone(), LocalInfo { reg: i as Reg, is_float: false });
+                self.locals.insert(name.clone(), LocalInfo { reg: i as Reg, is_float: false, mutable: false });
                 param_names.push(name);
             } else {
                 param_names.push(format!("_arg{}", i));

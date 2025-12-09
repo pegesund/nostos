@@ -30,7 +30,7 @@ main() = {
     println("Collecting and verifying responses...")
 
     # Collect all responses and count correct ones
-    correct = 0
+    var correct = 0
     for i = 0 to n {
         correct = receive
             value -> if value == secret then correct + 1 else correct

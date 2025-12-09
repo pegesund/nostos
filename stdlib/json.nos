@@ -77,10 +77,10 @@ extract_string(json) = match json
 # --- Array parsing ---
 
 parse_array_items(chars) = {
-    chars = skip_ws(chars)
-    match chars
+    trimmed = skip_ws(chars)
+    match trimmed
         [']' | rest] -> ([], rest)
-        _ -> parse_array_item(chars)
+        _ -> parse_array_item(trimmed)
 }
 
 parse_array_item(chars) = {
@@ -104,10 +104,10 @@ parse_array(chars) = {
 # --- Object parsing ---
 
 parse_object_items(chars) = {
-    chars = skip_ws(chars)
-    match chars
+    trimmed = skip_ws(chars)
+    match trimmed
         ['}' | rest] -> ([], rest)
-        _ -> parse_object_entry(chars)
+        _ -> parse_object_entry(trimmed)
 }
 
 parse_object_entry(chars) = {
@@ -138,15 +138,15 @@ parse_object(chars) = {
 # --- Main value parser ---
 
 parse_value(chars) = {
-    chars = skip_ws(chars)
-    match chars
+    trimmed = skip_ws(chars)
+    match trimmed
         ['{' | rest] -> parse_object(rest)
         ['[' | rest] -> parse_array(rest)
         ['"' | rest] -> parse_string(rest)
-        ['t' | _]    -> parse_true(chars)
-        ['f' | _]    -> parse_false(chars)
-        ['n' | _]    -> parse_null(chars)
-        _            -> parse_number(chars)
+        ['t' | _]    -> parse_true(trimmed)
+        ['f' | _]    -> parse_false(trimmed)
+        ['n' | _]    -> parse_null(trimmed)
+        _            -> parse_number(trimmed)
 }
 
 

@@ -1,0 +1,8 @@
+# expect_error: Assertion failed: 1 != 2
+# Pattern match on immutable binding with different value should fail
+
+main() = {
+    x = 1
+    x = 2
+    x
+}

@@ -1,0 +1,8 @@
+# expect: 2
+# Mutable bindings can be reassigned
+
+main() = {
+    var x = 1
+    x = 2
+    x
+}
