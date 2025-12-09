@@ -22,6 +22,19 @@ fn parse_expected(source: &str) -> Option<String> {
     None
 }
 
+/// Parse all expected error strings from test file comments.
+/// Looks for all `# expect_error: <value>` lines.
+fn parse_expected_errors(source: &str) -> Vec<String> {
+    let mut errors = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("# expect_error:") {
+            errors.push(trimmed["# expect_error:".len()..].trim().to_string());
+        }
+    }
+    errors
+}
+
 /// Convert Value to string for comparison.
 fn value_to_string(value: &Value) -> String {
     match value {
@@ -156,8 +169,38 @@ fn run_test_file(path: &Path) -> Result<(), String> {
     let source = fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
 
+    // Check if this is an error test (uses # expect_error:)
+    let expected_errors = parse_expected_errors(&source);
+    if !expected_errors.is_empty() {
+        // This test expects an error
+        match run_nos_source(&source) {
+            Ok(result) => {
+                return Err(format!(
+                    "{}: Expected error containing {:?}, but got success: {}",
+                    path.display(),
+                    expected_errors,
+                    value_to_string(&result)
+                ));
+            }
+            Err(error_msg) => {
+                // Check that all expected strings are in the error
+                for expected in &expected_errors {
+                    if !error_msg.contains(expected) {
+                        return Err(format!(
+                            "{}: Error missing expected string '{}'. Got: {}",
+                            path.display(),
+                            expected,
+                            error_msg
+                        ));
+                    }
+                }
+                return Ok(());
+            }
+        }
+    }
+
     let expected = parse_expected(&source)
-        .ok_or_else(|| format!("{}: Missing '# expect:' comment", path.display()))?;
+        .ok_or_else(|| format!("{}: Missing '# expect:' or '# expect_error:' comment", path.display()))?;
 
     let result = run_nos_source(&source)
         .map_err(|e| format!("{}: {}", path.display(), e))?;
