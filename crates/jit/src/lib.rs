@@ -745,7 +745,7 @@ impl JitCompiler {
                     Instruction::LoadTrue(dst) => {
                         // Bools are represented as 0/1 in the numeric type
                         let v = if num_type.is_float() {
-                            builder.ins().f64const(1.0)
+                            if cl_type == F32 { builder.ins().f32const(1.0) } else { builder.ins().f64const(1.0) }
                         } else {
                             builder.ins().iconst(cl_type, 1)
                         };
@@ -754,7 +754,7 @@ impl JitCompiler {
 
                     Instruction::LoadFalse(dst) => {
                         let v = if num_type.is_float() {
-                            builder.ins().f64const(0.0)
+                            if cl_type == F32 { builder.ins().f32const(0.0) } else { builder.ins().f64const(0.0) }
                         } else {
                             builder.ins().iconst(cl_type, 0)
                         };
@@ -764,7 +764,7 @@ impl JitCompiler {
                     // LoadUnit - used by loops, treat as 0
                     Instruction::LoadUnit(dst) => {
                         let v = if num_type.is_float() {
-                            builder.ins().f64const(0.0)
+                            if cl_type == F32 { builder.ins().f32const(0.0) } else { builder.ins().f64const(0.0) }
                         } else {
                             builder.ins().iconst(cl_type, 0)
                         };
