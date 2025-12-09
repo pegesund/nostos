@@ -8,6 +8,8 @@
 # 
 # Shows spawn, self(), send (<-), and receive patterns.
 
+type Message = Ping(Pid, Int) | Pong(Int) | Done(Int) | Stop
+
 # Ping process: sends Ping, waits for Pong, counts down
 ping(pong_pid, 0, parent) = {
     parent <- Done(0)

@@ -1,0 +1,6 @@
+# expect_error: unknown type
+# This should FAIL because `UnknownType` is not declared
+main() = {
+    x = UnknownType(1)
+    0
+}

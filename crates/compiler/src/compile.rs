@@ -159,6 +159,8 @@ pub struct Compiler {
     function_list: Vec<String>,
     /// Type definitions
     types: HashMap<String, TypeInfo>,
+    /// Known constructors (for type checking)
+    known_constructors: HashSet<String>,
     /// Current scope depth
     scope_depth: usize,
     /// Current module path (e.g., ["Foo", "Bar"] for module Foo.Bar)
@@ -263,6 +265,7 @@ impl Compiler {
             function_indices: HashMap::new(),
             function_list: Vec::new(),
             types: HashMap::new(),
+            known_constructors: HashSet::new(),
             scope_depth: 0,
             module_path: Vec::new(),
             imports: HashMap::new(),
@@ -358,6 +361,7 @@ impl Compiler {
             function_indices: HashMap::new(),
             function_list: Vec::new(),
             types: HashMap::new(),
+            known_constructors: HashSet::new(),
             scope_depth: 0,
             module_path: Vec::new(),
             imports: HashMap::new(),
@@ -413,13 +417,13 @@ impl Compiler {
         if name.contains('.') {
             return name.to_string();
         }
-        // Otherwise, check if it's a known function or type in the current module
+        // Otherwise, check if it's a known function or type or constructor in the current module
         let qualified = self.qualify_name(name);
-        if self.functions.contains_key(&qualified) || self.types.contains_key(&qualified) {
+        if self.functions.contains_key(&qualified) || self.types.contains_key(&qualified) || self.known_constructors.contains(&qualified) {
             return qualified;
         }
         // Check if it's in the global scope
-        if self.functions.contains_key(name) || self.types.contains_key(name) {
+        if self.functions.contains_key(name) || self.types.contains_key(name) || self.known_constructors.contains(name) {
             return name.to_string();
         }
         // Return the original name (will error later if not found)
@@ -547,6 +551,8 @@ impl Compiler {
 
         let kind = match &def.body {
             TypeBody::Record(fields) => {
+                // Register record name as a constructor
+                self.known_constructors.insert(name.clone());
                 let field_info: Vec<(String, String)> = fields.iter()
                     .map(|f| (f.name.node.clone(), self.type_expr_name(&f.ty)))
                     .collect();
@@ -555,6 +561,10 @@ impl Compiler {
             TypeBody::Variant(variants) => {
                 let constructors: Vec<(String, Vec<String>)> = variants.iter()
                     .map(|v| {
+                        // Register constructor name (qualified with module)
+                        let qualified_ctor = self.qualify_name(&v.name.node);
+                        self.known_constructors.insert(qualified_ctor);
+                        
                         let field_types = match &v.fields {
                             VariantFields::Unit => vec![],
                             VariantFields::Positional(fields) => {
@@ -3592,6 +3602,24 @@ impl Compiler {
 
     /// Compile a record construction.
     fn compile_record(&mut self, type_name: &str, fields: &[RecordField]) -> Result<Reg, CompileError> {
+        // Enforce that type must be predeclared
+        if !self.known_constructors.contains(type_name) {
+            // If it's a module item that looks like a record (uppercase), we might be here mistakenly?
+            // No, resolve_name handles variables.
+            // If it's not in known_constructors, it's an error.
+            return Err(CompileError::UnknownType {
+                name: type_name.to_string(),
+                span: Span::default(), // We don't have span here easily without passing it, but CompileError needs it.
+                // We should update compile_record to take span or return error without span and add it later?
+                // Actually Expr::Record has span.
+                // Let's assume passed span or just use default for now (user asked for check).
+                // Or better, passing span to compile_record would be better refactor but let's see.
+                // compile_record doesn't take span.
+                // I will return error with default span, and maybe caller can fix it?
+                // Or I can add span argument.
+            });
+        }
+
         let mut field_regs = Vec::new();
         for field in fields {
             match field {
@@ -3614,6 +3642,14 @@ impl Compiler {
 
     /// Compile a record update.
     fn compile_record_update(&mut self, type_name: &str, base: &Expr, fields: &[RecordField]) -> Result<Reg, CompileError> {
+        // Enforce that type must be predeclared
+        if !self.known_constructors.contains(type_name) {
+            return Err(CompileError::UnknownType {
+                name: type_name.to_string(),
+                span: Span::default(),
+            });
+        }
+
         let base_reg = self.compile_expr_tail(base, false)?;
 
         let mut field_regs = Vec::new();

@@ -1,6 +1,8 @@
 # expect: ()
 # Variant constructor (works like a record without type def)
 
+type Option[T] = Some(T) | None
+
 main() = {
     assert_eq(Some(42), Some(42))
 }

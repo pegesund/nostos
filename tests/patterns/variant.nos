@@ -1,6 +1,8 @@
 # expect: ()
 # Variant pattern matching
 
+type Option[T] = Some(T) | None
+
 unwrap(Some(x)) = x
 unwrap(None) = 0
 
