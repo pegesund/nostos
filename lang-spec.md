@@ -482,6 +482,42 @@ var x = 15                     # new mutable binding shadows the old one
 x = 20                         # ok, x is now mutable
 ```
 
+#### Typed Bindings
+
+Nostos supports optional type annotations using Java-style syntax, where the type comes before the variable name:
+
+```
+# Immutable typed bindings
+Int x = 5
+Float pi = 3.14159
+String name = "Alice"
+Bool active = true
+
+# Mutable typed bindings
+var Int counter = 0
+var Float temperature = 20.5
+
+# Generic types
+List[Int] numbers = [1, 2, 3]
+Map[String, Int] ages = %{"alice" => 30, "bob" => 25}
+
+# Custom types
+type Point = { x: Int, y: Int }
+Point origin = Point(0, 0)
+
+# Variant types
+type Option[T] = Some(T) | None
+Option[Int] maybe = Some(42)
+```
+
+Type annotations are optional - the compiler infers types when not specified:
+
+```
+x = 5              # inferred as Int
+pi = 3.14          # inferred as Float
+nums = [1, 2, 3]   # inferred as List[Int]
+```
+
 #### Function Parameters
 
 Function parameters are immutable by default:

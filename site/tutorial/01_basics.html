@@ -145,6 +145,32 @@ x = 20              # OK, x is now mutable
 </code></pre>
                 </div>
 
+                <!-- Typed Bindings -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Typed Bindings</h2>
+                <p class="text-slate-400 mb-4">
+                    Nostos supports optional type annotations using Java-style syntax, where the type comes before the variable name.
+                    Types are inferred when not specified.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800">
+<pre><code class="language-nostos">
+# With explicit types
+Int x = 42
+Float pi = 3.14159
+String name = "Alice"
+
+# Mutable with type
+var Int counter = 0
+counter = counter + 1
+
+# Generic types
+List[Int] numbers = [1, 2, 3]
+
+# Without types (inferred)
+y = 100             # inferred as Int
+greeting = "Hello"  # inferred as String
+</code></pre>
+                </div>
+
                 <!-- Blocks -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Blocks & Expressions</h2>
                 <p class="text-slate-400 mb-4">
