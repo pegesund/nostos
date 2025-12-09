@@ -1,0 +1,13 @@
+# expect: 1
+# List head with typed binding
+
+head(xs) = match xs
+    [h | _] -> h
+    [] -> 0
+end
+
+main() = {
+    List[Int] nums = [1, 2, 3]
+    Int first = head(nums)
+    first
+}

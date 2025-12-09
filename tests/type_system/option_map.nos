@@ -1,0 +1,20 @@
+# expect: 84
+# Option map with typed result
+
+type Option[T] = Some(T) | None
+
+mapOpt(f, opt) = match opt
+    Some(x) -> Some(f(x))
+    None -> None
+end
+
+unwrap(opt) = match opt
+    Some(x) -> x
+    None -> 0
+end
+
+main() = {
+    Option[Int] maybe = Some(42)
+    Option[Int] doubled = mapOpt(x => x * 2, maybe)
+    unwrap(doubled)
+}

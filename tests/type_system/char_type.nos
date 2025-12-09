@@ -1,0 +1,7 @@
+# expect: 'a'
+# Char type
+
+main() = {
+    Char c = 'a'
+    c
+}

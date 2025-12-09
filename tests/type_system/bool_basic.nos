@@ -1,0 +1,7 @@
+# expect: true
+# Basic Bool type
+
+main() = {
+    Bool x = true
+    x
+}

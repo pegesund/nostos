@@ -1,0 +1,14 @@
+# expect: 0
+# Option variant - None case
+
+type Option[T] = Some(T) | None
+
+unwrap(opt) = match opt
+    Some(x) -> x
+    None -> 0
+end
+
+main() = {
+    Option[Int] maybe = None
+    unwrap(maybe)
+}

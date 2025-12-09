@@ -1,0 +1,7 @@
+# expect: ["a", "b", "c"]
+# List[String] type
+
+main() = {
+    List[String] strs = ["a", "b", "c"]
+    strs
+}

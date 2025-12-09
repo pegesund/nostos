@@ -1,0 +1,7 @@
+# expect: [1, 2, 3]
+# Type inference for List
+
+main() = {
+    nums = [1, 2, 3]
+    nums
+}

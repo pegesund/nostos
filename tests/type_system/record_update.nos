@@ -1,0 +1,11 @@
+# expect: 25
+# Record with mutable field access
+
+type Counter = { value: Int }
+
+main() = {
+    var counter = Counter(0)
+    counter = Counter(counter.value + 10)
+    counter = Counter(counter.value + 15)
+    counter.value
+}

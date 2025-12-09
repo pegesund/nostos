@@ -1,0 +1,7 @@
+# expect: [1, 2, 3]
+# List[Int] type
+
+main() = {
+    List[Int] nums = [1, 2, 3]
+    nums
+}

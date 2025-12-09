@@ -1,0 +1,9 @@
+# expect: ()
+# Unit type
+
+doNothing() = ()
+
+main() = {
+    () result = doNothing()
+    result
+}

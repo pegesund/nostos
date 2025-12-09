@@ -1,0 +1,7 @@
+# expect: (1, "hello", true)
+# Type inference for Tuple
+
+main() = {
+    data = (1, "hello", true)
+    data
+}

@@ -1,0 +1,8 @@
+# expect: "world"
+# Mutable String type
+
+main() = {
+    var String s = "hello"
+    s = "world"
+    s
+}

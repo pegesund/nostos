@@ -1,0 +1,13 @@
+# expect: [2, 4]
+# List filter with typed result
+
+filter(p, xs) = match xs
+    [] -> []
+    [h | t] -> if p(h) then [h | filter(p, t)] else filter(p, t)
+end
+
+main() = {
+    List[Int] nums = [1, 2, 3, 4, 5]
+    List[Int] evens = filter(x => x % 2 == 0, nums)
+    evens
+}

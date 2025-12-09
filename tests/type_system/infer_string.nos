@@ -1,0 +1,7 @@
+# expect: "hello"
+# Type inference for String
+
+main() = {
+    x = "hello"
+    x
+}

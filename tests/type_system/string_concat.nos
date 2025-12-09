@@ -1,0 +1,9 @@
+# expect: "hello world"
+# String concatenation with typed bindings
+
+main() = {
+    String a = "hello"
+    String b = " world"
+    String result = a ++ b
+    result
+}

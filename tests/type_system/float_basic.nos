@@ -1,0 +1,7 @@
+# expect: 3.14
+# Basic Float type
+
+main() = {
+    Float x = 3.14
+    x
+}

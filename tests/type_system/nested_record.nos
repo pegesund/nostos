@@ -1,0 +1,14 @@
+# expect: 30
+# Nested record types
+
+type Point = { x: Int, y: Int }
+type Rectangle = { topLeft: Point, bottomRight: Point }
+
+width(rect) = rect.bottomRight.x - rect.topLeft.x
+
+main() = {
+    Point p1 = Point(0, 0)
+    Point p2 = Point(30, 20)
+    Rectangle rect = Rectangle(p1, p2)
+    width(rect)
+}

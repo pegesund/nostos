@@ -1,0 +1,9 @@
+# expect: true
+# Int comparison with typed result
+
+main() = {
+    Int a = 10
+    Int b = 20
+    Bool result = a < b
+    result
+}

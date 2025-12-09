@@ -1,0 +1,13 @@
+# expect: [2, 4, 6]
+# List map with typed result
+
+map(f, xs) = match xs
+    [] -> []
+    [h | t] -> [f(h) | map(f, t)]
+end
+
+main() = {
+    List[Int] nums = [1, 2, 3]
+    List[Int] doubled = map(x => x * 2, nums)
+    doubled
+}

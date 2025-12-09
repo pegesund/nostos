@@ -1,0 +1,10 @@
+# expect: 10
+# Type inference from match expression
+
+main() = {
+    result = match 5
+        x when x > 3 -> x * 2
+        _ -> 0
+    end
+    result
+}

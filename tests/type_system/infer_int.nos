@@ -1,0 +1,7 @@
+# expect: 42
+# Type inference for Int
+
+main() = {
+    x = 42
+    x
+}

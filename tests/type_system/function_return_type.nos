@@ -1,0 +1,8 @@
+# expect: 100
+# Function with return type annotation
+
+square(x: Int) -> Int = x * x
+
+main() = {
+    square(10)
+}

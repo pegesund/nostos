@@ -1,0 +1,16 @@
+# expect: 17
+# Expression evaluator with typed AST
+
+type Expr = Num(Int) | Add(Expr, Expr) | Mul(Expr, Expr)
+
+eval(expr) = match expr
+    Num(n) -> n
+    Add(e1, e2) -> eval(e1) + eval(e2)
+    Mul(e1, e2) -> eval(e1) * eval(e2)
+end
+
+main() = {
+    Expr e = Add(Mul(Num(3), Num(4)), Num(5))
+    Int result = eval(e)
+    result
+}

@@ -1,0 +1,15 @@
+# expect: 15
+# Either variant type
+
+type Either[L, R] = Left(L) | Right(R)
+
+getValue(e) = match e
+    Left(x) -> x
+    Right(x) -> x
+end
+
+main() = {
+    Either[Int, Int] left = Left(5)
+    Either[Int, Int] right = Right(10)
+    getValue(left) + getValue(right)
+}

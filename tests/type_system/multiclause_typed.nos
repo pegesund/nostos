@@ -1,0 +1,10 @@
+# expect: 120
+# Multiclause function with typed usage
+
+factorial(0) = 1
+factorial(n) = n * factorial(n - 1)
+
+main() = {
+    Int result = factorial(5)
+    result
+}

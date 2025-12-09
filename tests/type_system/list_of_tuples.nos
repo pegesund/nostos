@@ -1,0 +1,7 @@
+# expect: [(1, "a"), (2, "b")]
+# List of tuples
+
+main() = {
+    List[(Int, String)] pairs = [(1, "a"), (2, "b")]
+    pairs
+}

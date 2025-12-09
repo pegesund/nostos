@@ -1,0 +1,7 @@
+# expect: (1, 2, 3)
+# Triple tuple
+
+main() = {
+    (Int, Int, Int) triple = (1, 2, 3)
+    triple
+}

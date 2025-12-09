@@ -1,0 +1,13 @@
+# expect: "medium"
+# Guards with typed result
+
+classify(n) = match n
+    x when x > 100 -> "large"
+    x when x > 10 -> "medium"
+    _ -> "small"
+end
+
+main() = {
+    String result = classify(50)
+    result
+}

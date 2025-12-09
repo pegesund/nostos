@@ -1,0 +1,8 @@
+# expect: 30
+# Tuple destructuring with typed bindings
+
+main() = {
+    (Int, Int) pair = (10, 20)
+    Int sum = pair.0 + pair.1
+    sum
+}

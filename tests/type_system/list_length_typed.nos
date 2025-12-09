@@ -1,0 +1,13 @@
+# expect: 5
+# List length with typed result
+
+len(xs) = match xs
+    [] -> 0
+    [_ | t] -> 1 + len(t)
+end
+
+main() = {
+    List[Int] nums = [1, 2, 3, 4, 5]
+    Int length = len(nums)
+    length
+}

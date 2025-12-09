@@ -1,0 +1,8 @@
+# expect: 15
+# Lambda with typed result binding
+
+main() = {
+    f = x => x + 5
+    Int result = f(10)
+    result
+}

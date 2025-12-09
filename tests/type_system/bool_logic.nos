@@ -1,0 +1,9 @@
+# expect: true
+# Bool logic with typed bindings
+
+main() = {
+    Bool a = true
+    Bool b = false
+    Bool result = a && !b
+    result
+}

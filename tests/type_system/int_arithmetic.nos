@@ -1,0 +1,9 @@
+# expect: 25
+# Int arithmetic with typed bindings
+
+main() = {
+    Int a = 10
+    Int b = 15
+    Int sum = a + b
+    sum
+}

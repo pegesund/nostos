@@ -1,0 +1,14 @@
+# expect: 100
+# Result variant type
+
+type Result[T, E] = Ok(T) | Err(E)
+
+unwrapOr(res, default) = match res
+    Ok(x) -> x
+    Err(_) -> default
+end
+
+main() = {
+    Result[Int, String] success = Ok(100)
+    unwrapOr(success, 0)
+}

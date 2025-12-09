@@ -1,0 +1,7 @@
+# expect: "hello"
+# Basic String type
+
+main() = {
+    String s = "hello"
+    s
+}

@@ -1,0 +1,7 @@
+# expect: 42
+# Basic Int type
+
+main() = {
+    Int x = 42
+    x
+}

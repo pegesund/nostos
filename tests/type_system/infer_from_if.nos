@@ -1,0 +1,7 @@
+# expect: 20
+# Type inference from if expression
+
+main() = {
+    result = if true then 20 else 10
+    result
+}

@@ -1,0 +1,7 @@
+# expect: 3.14
+# Type inference for Float
+
+main() = {
+    x = 3.14
+    x
+}

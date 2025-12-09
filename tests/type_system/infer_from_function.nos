@@ -1,0 +1,9 @@
+# expect: 25
+# Type inference from function return
+
+square(x) = x * x
+
+main() = {
+    result = square(5)
+    result
+}

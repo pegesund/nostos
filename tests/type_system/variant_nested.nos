@@ -1,0 +1,18 @@
+# expect: 42
+# Nested variant matching
+
+type Option[T] = Some(T) | None
+
+doubleUnwrap(opt) = match opt
+    Some(inner) -> match inner
+        Some(x) -> x
+        None -> 0
+    end
+    None -> 0
+end
+
+main() = {
+    Option[Option[Int]] nested = Some(Some(42))
+    Int result = doubleUnwrap(nested)
+    result
+}

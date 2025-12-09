@@ -1,0 +1,9 @@
+# expect: 42
+# Generic function with typed result
+
+identity(x) = x
+
+main() = {
+    Int result = identity(42)
+    result
+}

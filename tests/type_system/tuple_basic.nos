@@ -1,0 +1,7 @@
+# expect: (1, "hello")
+# Tuple type
+
+main() = {
+    (Int, String) pair = (1, "hello")
+    pair
+}

@@ -1,0 +1,10 @@
+# expect: 45
+# Typed binding in loop
+
+main() = {
+    var Int sum = 0
+    for i = 1 to 10 {
+        sum = sum + i
+    }
+    sum
+}

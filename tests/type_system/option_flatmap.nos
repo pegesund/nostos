@@ -1,0 +1,22 @@
+# expect: 5
+# Option flatMap with typed result
+
+type Option[T] = Some(T) | None
+
+flatMap(f, opt) = match opt
+    Some(x) -> f(x)
+    None -> None
+end
+
+safeDiv(a, b) = if b == 0 then None else Some(a / b)
+
+unwrap(opt) = match opt
+    Some(x) -> x
+    None -> 0
+end
+
+main() = {
+    Option[Int] maybe = Some(10)
+    Option[Int] result = flatMap(x => safeDiv(x, 2), maybe)
+    unwrap(result)
+}

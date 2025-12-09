@@ -1,0 +1,9 @@
+# expect: 200
+# Typed shadowing
+
+main() = {
+    Int x = 100
+    var Int x = 150
+    x = 200
+    x
+}

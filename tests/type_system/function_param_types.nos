@@ -1,0 +1,9 @@
+# expect: 30
+# Function with typed parameters
+
+add(x: Int, y: Int) -> Int = x + y
+
+main() = {
+    Int result = add(10, 20)
+    result
+}
