@@ -1,0 +1,42 @@
+# expect: ()
+# GC handles nested spawns (workers spawning workers)
+
+leaf_worker(parent, n) = {
+    garbage = [n, n * 2]
+    parent <- n * n
+}
+
+inner_worker(parent, n) = {
+    me = self()
+    garbage = [n, n * 3]
+
+    # Spawn two leaf workers
+    spawn { leaf_worker(me, n) }
+    spawn { leaf_worker(me, n + 1) }
+
+    # Collect their results
+    r1 = receive x -> x end
+    r2 = receive y -> y end
+
+    parent <- r1 + r2
+}
+
+main() = {
+    me = self()
+
+    # Spawn inner workers that spawn leaf workers
+    spawn { inner_worker(me, 1) }   # 1 + 4 = 5
+    spawn { inner_worker(me, 3) }   # 9 + 16 = 25
+    spawn { inner_worker(me, 5) }   # 25 + 36 = 61
+
+    # Collect results
+    var total = 0
+    for i = 0 to 3 {
+        total = receive
+            r -> total + r
+        end
+    }
+
+    # 5 + 25 + 61 = 91
+    assert_eq(91, total)
+}

@@ -1,0 +1,41 @@
+# expect: ()
+# GC handles string-heavy operations across processes
+
+string_len([]) = 0
+string_len([_ | t]) = 1 + string_len(t)
+
+worker(parent, s) = {
+    # Create string garbage
+    g1 = "garbage string one"
+    g2 = "garbage string two"
+    g3 = "garbage string three"
+    g4 = s ++ " processed"
+
+    # Just return a constant based on input
+    result = if s == "hello" then 5
+             else if s == "world" then 5
+             else if s == "test" then 4
+             else 0
+    parent <- result
+}
+
+main() = {
+    me = self()
+
+    spawn { worker(me, "hello") }
+    spawn { worker(me, "world") }
+    spawn { worker(me, "test") }
+    spawn { worker(me, "hello") }
+    spawn { worker(me, "world") }
+
+    # Collect results
+    var total = 0
+    for i = 0 to 5 {
+        total = receive
+            r -> total + r
+        end
+    }
+
+    # 5 + 5 + 4 + 5 + 5 = 24
+    assert_eq(24, total)
+}

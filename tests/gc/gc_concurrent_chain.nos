@@ -1,0 +1,41 @@
+# expect: ()
+# GC handles chain of processes passing data with garbage
+
+chain_node(next, is_last, parent) = {
+    msg = receive
+        n -> n
+    end
+
+    # Create garbage
+    garbage = [msg, msg * 2, msg * 3]
+
+    # Increment and pass on
+    result = msg + 1
+
+    if is_last then {
+        parent <- result
+    } else {
+        next <- result
+    }
+}
+
+main() = {
+    me = self()
+
+    # Create chain: node5 -> node4 -> node3 -> node2 -> node1 -> me
+    node1 = spawn { chain_node(me, true, me) }
+    node2 = spawn { chain_node(node1, false, me) }
+    node3 = spawn { chain_node(node2, false, me) }
+    node4 = spawn { chain_node(node3, false, me) }
+    node5 = spawn { chain_node(node4, false, me) }
+
+    # Start with 10
+    node5 <- 10
+
+    # Should get 10 + 5 = 15
+    result = receive
+        r -> r
+    end
+
+    assert_eq(15, result)
+}

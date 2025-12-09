@@ -1,0 +1,35 @@
+# expect: ()
+# GC handles maps passed between processes
+
+worker(parent, m) = {
+    garbage = %{"garbage": 0}
+    result = match m
+        %{"value": v} -> v
+        _ -> 0
+    end
+    parent <- result
+}
+
+main() = {
+    me = self()
+
+    # Create maps and pass to workers
+    m1 = %{"value": 100, "extra": 1}
+    m2 = %{"value": 200}
+    m3 = %{"value": 300, "a": 1, "b": 2}
+
+    spawn { worker(me, m1) }
+    spawn { worker(me, m2) }
+    spawn { worker(me, m3) }
+
+    # Collect results
+    var total = 0
+    for i = 0 to 3 {
+        total = receive
+            r -> total + r
+        end
+    }
+
+    # 100 + 200 + 300 = 600
+    assert_eq(600, total)
+}

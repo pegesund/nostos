@@ -1,0 +1,34 @@
+# expect: ()
+# GC handles garbage created by many spawned processes
+
+worker(parent, n) = {
+    # Create garbage in the worker
+    garbage1 = [n, n * 2, n * 3, n * 4, n * 5]
+    garbage2 = "worker garbage string"
+    garbage3 = (n, n + 1, n + 2)
+
+    # Compute result
+    result = n * n
+    parent <- result
+}
+
+main() = {
+    me = self()
+    count = 100
+
+    # Spawn many workers, each creates garbage
+    for i = 1 to count + 1 {
+        spawn { worker(me, i) }
+    }
+
+    # Collect all results
+    var total = 0
+    for i = 1 to count + 1 {
+        total = receive
+            r -> total + r
+        end
+    }
+
+    # Sum of 1^2 + 2^2 + ... + 100^2 = 338350
+    assert_eq(338350, total)
+}

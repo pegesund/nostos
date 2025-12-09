@@ -1,0 +1,28 @@
+# expect: ()
+# GC handles many small workers each creating some garbage
+
+tiny_worker(parent, id) = {
+    garbage = [id]
+    parent <- id
+}
+
+main() = {
+    me = self()
+    count = 500
+
+    # Spawn many small workers
+    for i = 1 to count + 1 {
+        spawn { tiny_worker(me, i) }
+    }
+
+    # Collect all results
+    var total = 0
+    for i = 1 to count + 1 {
+        total = receive
+            r -> total + r
+        end
+    }
+
+    # Sum of 1..500 = 125250
+    assert_eq(125250, total)
+}

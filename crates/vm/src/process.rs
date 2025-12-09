@@ -16,7 +16,7 @@ use std::time::Instant;
 use tokio::sync::oneshot;
 use crossbeam_channel; // Added
 
-use crate::gc::{GcConfig, GcValue, Heap, RawGcPtr, InlineOp, GcNativeFn};
+use crate::gc::{GcConfig, GcValue, Heap, RawGcPtr, InlineOp, GcNativeFn, GcMapKey};
 use crate::io_runtime::IoResult;
 use crate::value::{FunctionValue, Pid, RefId, Reg};
 
@@ -235,6 +235,23 @@ pub enum ExitReason {
     Shutdown,
 }
 
+/// Thread-safe map key for cross-thread communication.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ThreadSafeMapKey {
+    Unit,
+    Bool(bool),
+    Char(char),
+    Int8(i8),
+    Int16(i16),
+    Int32(i32),
+    Int64(i64),
+    UInt8(u8),
+    UInt16(u16),
+    UInt32(u32),
+    UInt64(u64),
+    String(String),
+}
+
 /// Thread-safe message value for cross-thread communication.
 /// This is a subset of values that can be serialized and sent between threads.
 #[derive(Debug, Clone)]
@@ -270,6 +287,48 @@ pub enum ThreadSafeValue {
     Function(Arc<FunctionValue>),
     /// A native function (already thread-safe via Arc)
     NativeFunction(Arc<GcNativeFn>),
+    /// A map with key-value pairs
+    Map(Vec<(ThreadSafeMapKey, ThreadSafeValue)>),
+    /// A set of keys
+    Set(Vec<ThreadSafeMapKey>),
+}
+
+impl ThreadSafeMapKey {
+    /// Convert a GcMapKey to a thread-safe map key.
+    pub fn from_gc_map_key(key: &GcMapKey) -> Self {
+        match key {
+            GcMapKey::Unit => ThreadSafeMapKey::Unit,
+            GcMapKey::Bool(b) => ThreadSafeMapKey::Bool(*b),
+            GcMapKey::Char(c) => ThreadSafeMapKey::Char(*c),
+            GcMapKey::Int8(i) => ThreadSafeMapKey::Int8(*i),
+            GcMapKey::Int16(i) => ThreadSafeMapKey::Int16(*i),
+            GcMapKey::Int32(i) => ThreadSafeMapKey::Int32(*i),
+            GcMapKey::Int64(i) => ThreadSafeMapKey::Int64(*i),
+            GcMapKey::UInt8(i) => ThreadSafeMapKey::UInt8(*i),
+            GcMapKey::UInt16(i) => ThreadSafeMapKey::UInt16(*i),
+            GcMapKey::UInt32(i) => ThreadSafeMapKey::UInt32(*i),
+            GcMapKey::UInt64(i) => ThreadSafeMapKey::UInt64(*i),
+            GcMapKey::String(s) => ThreadSafeMapKey::String(s.clone()),
+        }
+    }
+
+    /// Convert back to GcMapKey.
+    pub fn to_gc_map_key(&self) -> GcMapKey {
+        match self {
+            ThreadSafeMapKey::Unit => GcMapKey::Unit,
+            ThreadSafeMapKey::Bool(b) => GcMapKey::Bool(*b),
+            ThreadSafeMapKey::Char(c) => GcMapKey::Char(*c),
+            ThreadSafeMapKey::Int8(i) => GcMapKey::Int8(*i),
+            ThreadSafeMapKey::Int16(i) => GcMapKey::Int16(*i),
+            ThreadSafeMapKey::Int32(i) => GcMapKey::Int32(*i),
+            ThreadSafeMapKey::Int64(i) => GcMapKey::Int64(*i),
+            ThreadSafeMapKey::UInt8(i) => GcMapKey::UInt8(*i),
+            ThreadSafeMapKey::UInt16(i) => GcMapKey::UInt16(*i),
+            ThreadSafeMapKey::UInt32(i) => GcMapKey::UInt32(*i),
+            ThreadSafeMapKey::UInt64(i) => GcMapKey::UInt64(*i),
+            ThreadSafeMapKey::String(s) => GcMapKey::String(s.clone()),
+        }
+    }
 }
 
 impl ThreadSafeValue {
@@ -337,6 +396,26 @@ impl ThreadSafeValue {
             // Functions are already thread-safe (Arc<FunctionValue>)
             GcValue::Function(func) => ThreadSafeValue::Function(func.clone()),
             GcValue::NativeFunction(func) => ThreadSafeValue::NativeFunction(func.clone()),
+            // Maps
+            GcValue::Map(ptr) => {
+                let map = heap.get_map(*ptr)?;
+                let entries: Option<Vec<_>> = map.entries.iter()
+                    .map(|(k, v)| {
+                        let safe_key = ThreadSafeMapKey::from_gc_map_key(k);
+                        let safe_value = ThreadSafeValue::from_gc_value(v, heap)?;
+                        Some((safe_key, safe_value))
+                    })
+                    .collect();
+                ThreadSafeValue::Map(entries?)
+            }
+            // Sets
+            GcValue::Set(ptr) => {
+                let set = heap.get_set(*ptr)?;
+                let items: Vec<_> = set.items.iter()
+                    .map(|k| ThreadSafeMapKey::from_gc_map_key(k))
+                    .collect();
+                ThreadSafeValue::Set(items)
+            }
             // Other values cannot be sent safely
             _ => return None,
         })
@@ -407,6 +486,20 @@ impl ThreadSafeValue {
             }
             ThreadSafeValue::Function(func) => GcValue::Function(func.clone()),
             ThreadSafeValue::NativeFunction(func) => GcValue::NativeFunction(func.clone()),
+            ThreadSafeValue::Map(entries) => {
+                let gc_entries: HashMap<GcMapKey, GcValue> = entries.iter()
+                    .map(|(k, v)| (k.to_gc_map_key(), v.to_gc_value(heap)))
+                    .collect();
+                let ptr = heap.alloc_map(gc_entries);
+                GcValue::Map(ptr)
+            }
+            ThreadSafeValue::Set(items) => {
+                let gc_items: std::collections::HashSet<GcMapKey> = items.iter()
+                    .map(|k| k.to_gc_map_key())
+                    .collect();
+                let ptr = heap.alloc_set(gc_items);
+                GcValue::Set(ptr)
+            }
         }
     }
 }
