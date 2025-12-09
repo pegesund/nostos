@@ -1,0 +1,54 @@
+# expect: true
+
+# Function taking a map pattern
+get_name(%{"name": n}) = n
+get_name(_) = "unknown"
+
+# Function taking a set pattern
+is_admin(#{"admin"}) = true
+is_admin(_) = false
+
+# Function taking nested map/set
+check_config(%{"roles": #{"root"}}) = "root_access"
+check_config(_) = "user_access"
+
+# Function with partial map match in args
+get_id(%{"id": id}) = id
+
+main() = {
+    # Test map pattern in arg
+    user = %{"name": "Alice", "age": 30}
+    n = get_name(user)
+    if n != "Alice" then throw("get_name failed") else {}
+
+    empty_user = %{}
+    if get_name(empty_user) != "unknown" then throw("get_name fallback failed") else {}
+
+    # Test set pattern in arg
+    roles1 = #{"admin", "editor"}
+    # Note: Set pattern #{"admin"} matches if "admin" is PRESENT.
+    # It does NOT require the set to be EXACTLY {"admin"} (unless exact match logic is used, but current impl is partial/contains check)
+    # Wait, compile_pattern_test for Set does:
+    # for elem_pat in elements { check exists }
+    # It does NOT check if the set has NO OTHER elements.
+    # So #{"admin"} pattern matches ANY set containing "admin".
+    
+    if is_admin(roles1) != true then throw("is_admin failed for superset") else {}
+    
+    roles2 = #{"guest"}
+    if is_admin(roles2) != false then throw("is_admin failed for non-admin") else {}
+
+    # Test nested
+    conf1 = %{"roles": #{"root", "other"}}
+    if check_config(conf1) != "root_access" then throw("check_config failed") else {}
+
+    conf2 = %{"roles": #{"user"}}
+    if check_config(conf2) != "user_access" then throw("check_config fallback failed") else {}
+
+    # Test partial extraction
+    data = %{"id": 123, "data": "..."}
+    if get_id(data) != 123 then throw("get_id failed") else {}
+
+    println("Function argument patterns passed!")
+    true
+}

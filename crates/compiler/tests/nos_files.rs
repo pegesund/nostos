@@ -511,6 +511,9 @@ mod patterns {
 
     #[test]
     fn map_advanced() { run_category_test("map_advanced"); }
+
+    #[test]
+    fn function_args_map_set() { run_category_test("function_args_map_set"); }
 }
 
 mod traits {
