@@ -2884,11 +2884,11 @@ mod tests {
     fn test_gc_map_with_string_keys() {
         let mut heap = Heap::new();
 
-        let key = heap.alloc_string("my_key".to_string());
         let value = heap.alloc_string("my_value".to_string());
 
         let mut entries = HashMap::new();
-        entries.insert(GcMapKey::String(key), GcValue::String(value));
+        // GcMapKey::String stores inline String for proper hashing
+        entries.insert(GcMapKey::String("my_key".to_string()), GcValue::String(value));
         entries.insert(GcMapKey::Int64(42), GcValue::Bool(true));
 
         let map = heap.alloc_map(entries);
@@ -2898,7 +2898,7 @@ mod tests {
         heap.add_root(map.as_raw());
         heap.collect();
 
-        assert_eq!(heap.live_objects(), 3); // map + key + value
+        assert_eq!(heap.live_objects(), 2); // map + value string
     }
 
     // ============================================================
