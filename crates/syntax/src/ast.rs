@@ -264,6 +264,10 @@ pub enum Pattern {
     List(ListPattern, Span),
     /// Record pattern: `{x, y}`, `{name: n}`
     Record(Vec<RecordPatternField>, Span),
+    /// Map pattern: `%{"key": pat, "k2": p2}`
+    Map(Vec<(Expr, Pattern)>, Span),
+    /// Set pattern: `#{1, 2, x}`
+    Set(Vec<Pattern>, Span),
     /// Variant pattern: `Some(x)`, `None`, `Circle{radius: r}`
     Variant(Ident, VariantPatternFields, Span),
     /// Pin pattern: `^expected`
@@ -297,6 +301,8 @@ impl Pattern {
             Pattern::Tuple(_, s) => *s,
             Pattern::List(_, s) => *s,
             Pattern::Record(_, s) => *s,
+            Pattern::Map(_, s) => *s,
+            Pattern::Set(_, s) => *s,
             Pattern::Variant(_, _, s) => *s,
             Pattern::Pin(_, s) => *s,
             Pattern::Or(_, s) => *s,

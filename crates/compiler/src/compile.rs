@@ -3140,6 +3140,103 @@ impl Compiler {
                     bindings.append(&mut sub_bindings);
                 }
             }
+            Pattern::Map(entries, _) => {
+                // 1. Check if it is a map
+                self.chunk.emit(Instruction::IsMap(success_reg, scrut_reg), 0);
+                
+                // Jump to end if not a map
+                let type_fail_jump = self.chunk.emit(Instruction::JumpIfFalse(success_reg, 0), 0);
+                
+                for (key_expr, val_pat) in entries {
+                    // Compile key expression to a register
+                    let key_reg = self.compile_expr_tail(key_expr, false)?;
+                    
+                    // Check if key exists
+                    let exists_reg = self.alloc_reg();
+                    self.chunk.emit(Instruction::MapContainsKey(exists_reg, scrut_reg, key_reg), 0);
+                    
+                    // Update success_reg
+                    self.chunk.emit(Instruction::And(success_reg, success_reg, exists_reg), 0);
+                    
+                    // Guard: if key doesn't exist, skip value check (to avoid panic in MapGet)
+                    let skip_val_jump = self.chunk.emit(Instruction::JumpIfFalse(exists_reg, 0), 0);
+                    
+                    // Get value
+                    let val_reg = self.alloc_reg();
+                    self.chunk.emit(Instruction::MapGet(val_reg, scrut_reg, key_reg), 0);
+                    
+                    // Match value against pattern
+                    let (sub_success, mut sub_bindings) = self.compile_pattern_test(val_pat, val_reg)?;
+                    self.chunk.emit(Instruction::And(success_reg, success_reg, sub_success), 0);
+                    bindings.append(&mut sub_bindings);
+                    
+                    // Patch skip val jump
+                    let after_val = self.chunk.code.len();
+                    self.chunk.patch_jump(skip_val_jump, after_val);
+                }
+                
+                // Patch type check jump
+                let after_checks = self.chunk.code.len();
+                self.chunk.patch_jump(type_fail_jump, after_checks);
+            }
+            Pattern::Set(elements, span) => {
+                // 1. Check if it is a set
+                self.chunk.emit(Instruction::IsSet(success_reg, scrut_reg), 0);
+                
+                // Jump to end if not a set
+                let type_fail_jump = self.chunk.emit(Instruction::JumpIfFalse(success_reg, 0), 0);
+                
+                for elem_pat in elements {
+                    // We need to compile the pattern to a value to check existence
+                    // Only support literals and pinned variables for now
+                    let val_reg = match elem_pat {
+                        Pattern::Int(n, _) => {
+                            let r = self.alloc_reg();
+                            let idx = self.chunk.add_constant(Value::Int64(*n));
+                            self.chunk.emit(Instruction::LoadConst(r, idx), 0);
+                            r
+                        }
+                        Pattern::String(s, _) => {
+                            let r = self.alloc_reg();
+                            let idx = self.chunk.add_constant(Value::String(Arc::new(s.clone())));
+                            self.chunk.emit(Instruction::LoadConst(r, idx), 0);
+                            r
+                        }
+                        Pattern::Bool(b, _) => {
+                            let r = self.alloc_reg();
+                            if *b { self.chunk.emit(Instruction::LoadTrue(r), 0); }
+                            else { self.chunk.emit(Instruction::LoadFalse(r), 0); }
+                            r
+                        }
+                        Pattern::Char(c, _) => {
+                            let r = self.alloc_reg();
+                            let idx = self.chunk.add_constant(Value::Char(*c));
+                            self.chunk.emit(Instruction::LoadConst(r, idx), 0);
+                            r
+                        }
+                        Pattern::Pin(expr, _) => {
+                            self.compile_expr_tail(expr, false)?
+                        }
+                        _ => {
+                            return Err(CompileError::InvalidPattern {
+                                span: *span,
+                                context: "Set patterns only support literals and pinned variables".to_string(),
+                            });
+                        }
+                    };
+                    
+                    // Check if value exists in set
+                    let exists_reg = self.alloc_reg();
+                    self.chunk.emit(Instruction::SetContains(exists_reg, scrut_reg, val_reg), 0);
+                    
+                    // Update success_reg
+                    self.chunk.emit(Instruction::And(success_reg, success_reg, exists_reg), 0);
+                }
+                
+                // Patch type check jump
+                let after_checks = self.chunk.code.len();
+                self.chunk.patch_jump(type_fail_jump, after_checks);
+            }
             _ => {
                 return Err(CompileError::NotImplemented {
                     feature: format!("pattern: {:?}", pattern),

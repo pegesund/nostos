@@ -303,7 +303,7 @@ impl SendableValue {
         }
     }
 
-    fn gc_map_key_to_sendable(key: &crate::gc::GcMapKey, heap: &Heap) -> Option<SendableMapKey> {
+    fn gc_map_key_to_sendable(key: &crate::gc::GcMapKey, _heap: &Heap) -> Option<SendableMapKey> {
         use crate::gc::GcMapKey;
         match key {
             GcMapKey::Unit => Some(SendableMapKey::Unit),
@@ -317,9 +317,7 @@ impl SendableValue {
             GcMapKey::UInt16(i) => Some(SendableMapKey::Int64(*i as i64)),
             GcMapKey::UInt32(i) => Some(SendableMapKey::Int64(*i as i64)),
             GcMapKey::UInt64(i) => Some(SendableMapKey::Int64(*i as i64)),
-            GcMapKey::String(ptr) => {
-                heap.get_string(*ptr).map(|s| SendableMapKey::String(s.data.clone()))
-            }
+            GcMapKey::String(s) => Some(SendableMapKey::String(s.clone())),
         }
     }
 
@@ -5599,46 +5597,369 @@ impl ThreadWorker {
                 set_reg!(*dst, exception);
             }
 
-            // === Collection literals ===
-            MakeSet(dst, ref elements) => {
-                let mut items = std::collections::HashSet::new();
-                for &r in elements.iter() {
-                    let val = reg!(r).clone();
-                    if let Some(key) = val.to_gc_map_key() {
-                        items.insert(key);
-                    } else {
-                        return Err(RuntimeError::TypeError {
-                            expected: "hashable type".to_string(),
-                            found: format!("{:?}", val),
-                        });
-                    }
-                }
-                let proc = self.get_process_mut(local_id).unwrap();
-                let ptr = proc.heap.alloc_set(items);
-                set_reg!(*dst, GcValue::Set(ptr));
-            }
+                        // === Collection literals ===
 
-            MakeMap(dst, ref entries) => {
-                let mut map = std::collections::HashMap::new();
-                for (key_reg, val_reg) in entries.iter() {
-                    let key_val = reg!(*key_reg).clone();
-                    let val = reg!(*val_reg).clone();
-                    if let Some(key) = key_val.to_gc_map_key() {
-                        map.insert(key, val);
-                    } else {
-                        return Err(RuntimeError::TypeError {
-                            expected: "hashable type".to_string(),
-                            found: format!("{:?}", key_val),
-                        });
-                    }
-                }
-                let proc = self.get_process_mut(local_id).unwrap();
-                let ptr = proc.heap.alloc_map(map);
-                set_reg!(*dst, GcValue::Map(ptr));
-            }
+                        MakeSet(dst, ref elements) => {
 
-            // Unimplemented
-            other => {
+                            let mut items = std::collections::HashSet::new();
+
+                            for &r in elements.iter() {
+
+                                let val = reg!(r).clone();
+
+                                let proc = self.get_process(local_id).unwrap();
+
+                                if let Some(key) = val.to_gc_map_key(&proc.heap) {
+
+                                    items.insert(key);
+
+                                } else {
+
+                                    return Err(RuntimeError::TypeError {
+
+                                        expected: "hashable type".to_string(),
+
+                                        found: format!("{:?}", val),
+
+                                    });
+
+                                }
+
+                            }
+
+                            let proc = self.get_process_mut(local_id).unwrap();
+
+                            let ptr = proc.heap.alloc_set(items);
+
+                            set_reg!(*dst, GcValue::Set(ptr));
+
+                        }
+
+            
+
+                        MakeMap(dst, ref entries) => {
+
+                            let mut map = std::collections::HashMap::new();
+
+                            for (key_reg, val_reg) in entries.iter() {
+
+                                let key_val = reg!(*key_reg).clone();
+
+                                let val = reg!(*val_reg).clone();
+
+                                let proc = self.get_process(local_id).unwrap();
+
+                                if let Some(key) = key_val.to_gc_map_key(&proc.heap) {
+
+                                    map.insert(key, val);
+
+                                } else {
+
+                                    return Err(RuntimeError::TypeError {
+
+                                        expected: "hashable type".to_string(),
+
+                                        found: format!("{:?}", key_val),
+
+                                    });
+
+                                }
+
+                            }
+
+                            let proc = self.get_process_mut(local_id).unwrap();
+
+                            let ptr = proc.heap.alloc_map(map);
+
+                            set_reg!(*dst, GcValue::Map(ptr));
+
+                        }
+
+            
+
+                        Decons(head, tail, list) => {
+
+                            let list_val = reg!(*list).clone();
+
+                            if let GcValue::List(l) = list_val {
+
+                                if let Some(h) = l.head() {
+
+                                    let t = l.tail();
+
+                                    // set_reg! macro might not handle multiple sets?
+
+                                    // set_reg! uses self.get_process_mut(local_id).unwrap()
+
+                                    // calling it twice is fine (scopes are separate statements)
+
+                                    set_reg!(*head, h.clone());
+
+                                    set_reg!(*tail, GcValue::List(t));
+
+                                } else {
+
+                                    return Err(RuntimeError::Panic("Cannot decons empty list".to_string()));
+
+                                }
+
+                            } else {
+
+                                let proc = self.get_process(local_id).unwrap();
+
+                                return Err(RuntimeError::TypeError {
+
+                                    expected: "List".to_string(),
+
+                                    found: list_val.type_name(&proc.heap).to_string(),
+
+                                });
+
+                            }
+
+                        }
+
+            
+
+                        IsMap(dst, src) => {
+
+                            let val = reg!(*src).clone();
+
+                            let is_map = matches!(val, GcValue::Map(_));
+
+                            set_reg!(*dst, GcValue::Bool(is_map));
+
+                        }
+
+            
+
+                        IsSet(dst, src) => {
+
+                            let val = reg!(*src).clone();
+
+                            let is_set = matches!(val, GcValue::Set(_));
+
+                            set_reg!(*dst, GcValue::Bool(is_set));
+
+                        }
+
+            
+
+                        MapContainsKey(dst, map_reg, key_reg) => {
+
+                            let map_val = reg!(*map_reg).clone();
+
+                            let key_val = reg!(*key_reg).clone();
+
+                            
+
+                            let result = {
+
+                                let proc = self.get_process(local_id).unwrap();
+
+                                if let GcValue::Map(ptr) = &map_val {
+
+                                    if let Some(map) = proc.heap.get_map(*ptr) {
+
+                                        if let Some(key) = key_val.to_gc_map_key(&proc.heap) {
+
+                                            map.entries.contains_key(&key)
+
+                                        } else {
+
+                                            false
+
+                                        }
+
+                                    } else {
+
+                                        false
+
+                                    }
+
+                                }
+
+                                else {
+
+                                    false
+
+                                }
+
+                            };
+
+                            
+
+                            if let GcValue::Map(_) = map_val {
+
+                                set_reg!(*dst, GcValue::Bool(result));
+
+                            } else {
+
+                                let proc = self.get_process(local_id).unwrap();
+
+                                return Err(RuntimeError::TypeError {
+
+                                    expected: "Map".to_string(),
+
+                                    found: map_val.type_name(&proc.heap).to_string(),
+
+                                });
+
+                            }
+
+                        }
+
+            
+
+                        MapGet(dst, map_reg, key_reg) => {
+
+                            let map_val = reg!(*map_reg).clone();
+
+                            let key_val = reg!(*key_reg).clone();
+
+                            
+
+                            let result = {
+
+                                let proc = self.get_process(local_id).unwrap();
+
+                                if let GcValue::Map(ptr) = &map_val {
+
+                                    if let Some(map) = proc.heap.get_map(*ptr) {
+
+                                        if let Some(key) = key_val.to_gc_map_key(&proc.heap) {
+
+                                            map.entries.get(&key).cloned()
+
+                                        } else {
+
+                                            None
+
+                                        }
+
+                                    }
+
+                                    else {
+
+                                        None
+
+                                    }
+
+                                }
+
+                                else {
+
+                                    None
+
+                                }
+
+                            };
+
+                            
+
+                            if let GcValue::Map(_) = map_val {
+
+                                match result {
+
+                                    Some(val) => set_reg!(*dst, val),
+
+                                    None => return Err(RuntimeError::Panic("Key not found in map".to_string())),
+
+                                }
+
+                            } else {
+
+                                let proc = self.get_process(local_id).unwrap();
+
+                                return Err(RuntimeError::TypeError {
+
+                                    expected: "Map".to_string(),
+
+                                    found: map_val.type_name(&proc.heap).to_string(),
+
+                                });
+
+                            }
+
+                        }
+
+            
+
+                        SetContains(dst, set_reg, val_reg) => {
+
+                            let set_val = reg!(*set_reg).clone();
+
+                            let elem_val = reg!(*val_reg).clone();
+
+                            
+
+                            let result = {
+
+                                let proc = self.get_process(local_id).unwrap();
+
+                                if let GcValue::Set(ptr) = &set_val {
+
+                                    if let Some(set) = proc.heap.get_set(*ptr) {
+
+                                        if let Some(key) = elem_val.to_gc_map_key(&proc.heap) {
+
+                                            set.items.contains(&key)
+
+                                        }
+
+                                        else {
+
+                                            false
+
+                                        }
+
+                                    }
+
+                                    else {
+
+                                        false
+
+                                    }
+
+                                }
+
+                                else {
+
+                                    false
+
+                                }
+
+                            };
+
+                            
+
+                            if let GcValue::Set(_) = set_val {
+
+                                set_reg!(*dst, GcValue::Bool(result));
+
+                            } else {
+
+                                let proc = self.get_process(local_id).unwrap();
+
+                                return Err(RuntimeError::TypeError {
+
+                                    expected: "Set".to_string(),
+
+                                    found: set_val.type_name(&proc.heap).to_string(),
+
+                                });
+
+                            }
+
+                        }
+
+            
+
+                        // Unimplemented
+
+                        other => {
+
+            
                 return Err(RuntimeError::Panic(format!(
                     "Instruction {:?} not yet implemented in ParallelVM",
                     other

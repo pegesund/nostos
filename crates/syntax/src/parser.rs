@@ -369,9 +369,46 @@ fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
+        // Map pattern: %{key: pat, ...}
+        // Keys must be literals or pinned variables
+        let map_key = choice((
+            filter_map(|span, tok| match tok {
+                Token::Int(n) => Ok(Expr::Int(n, to_span(span))),
+                Token::String(s) => Ok(Expr::String(StringLit::Plain(s), to_span(span))),
+                Token::True => Ok(Expr::Bool(true, to_span(span))),
+                Token::False => Ok(Expr::Bool(false, to_span(span))),
+                Token::Char(c) => Ok(Expr::Char(c, to_span(span))),
+                _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+            }),
+            just(Token::Caret).ignore_then(ident()).map(Expr::Var),
+        ));
+
+        let map_entry = map_key
+            .then_ignore(just(Token::Colon))
+            .then(pat.clone());
+
+        let map_pat = just(Token::Percent)
+            .ignore_then(
+                map_entry
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            )
+            .map_with_span(|entries, span| Pattern::Map(entries, to_span(span)));
+
+        // Set pattern: #{pat, ...}
+        let set_pat = just(Token::Hash)
+            .ignore_then(
+                pat.clone()
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            )
+            .map_with_span(|elems, span| Pattern::Set(elems, to_span(span)));
+
         // Base patterns (without or and without list) - used for list element patterns
         let literals = choice((wildcard.clone(), bool_pat.clone(), int.clone(), float.clone(), string.clone(), char_pat.clone())).boxed();
-        let base_containers = choice((unit.clone(), tuple.clone(), grouped.clone(), record.clone())).boxed();
+        let base_containers = choice((unit.clone(), tuple.clone(), grouped.clone(), record.clone(), map_pat.clone(), set_pat.clone())).boxed();
         let variants_box = choice((pin.clone(), variant_positional.clone(), variant_named.clone(), variant_unit.clone(), var.clone())).boxed();
         let base_no_list = choice((literals.clone(), base_containers, variants_box.clone()));
 
@@ -392,7 +429,7 @@ fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
             });
 
         // Full containers including list patterns
-        let containers = choice((unit, list_empty, list_cons, tuple, grouped, record)).boxed();
+        let containers = choice((unit, list_empty, list_cons, tuple, grouped, record, map_pat, set_pat)).boxed();
         let variants_final = choice((pin, variant_positional, variant_named, variant_unit, var)).boxed();
         let base = choice((literals, containers, variants_final));
 

@@ -920,13 +920,138 @@ impl Worker {
                     proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::List(list);
                 }
 
-                Instruction::MakeTuple(dst, elements) => {
+                Instruction::MakeTuple(dst, ref elements) => {
                     let items: Vec<GcValue> = {
                         let frame = proc.frames.last().unwrap();
                         elements.iter().map(|&r| frame.registers[r as usize].clone()).collect()
                     };
                     let ptr = proc.heap.alloc_tuple(items);
                     proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::Tuple(ptr);
+                }
+
+                Instruction::MakeMap(dst, ref pairs) => {
+                    let mut pairs_vec = Vec::with_capacity(pairs.len());
+                    {
+                        let frame = proc.frames.last().unwrap();
+                        for (k_reg, v_reg) in pairs.iter() {
+                            let k = frame.registers[*k_reg as usize].clone();
+                            let v = frame.registers[*v_reg as usize].clone();
+                            pairs_vec.push((k, v));
+                        }
+                    }
+                    
+                    let mut entries = std::collections::HashMap::new();
+                    for (k, v) in pairs_vec {
+                        if let Some(key) = k.to_gc_map_key(&proc.heap) {
+                            entries.insert(key, v);
+                        } else {
+                            return Err(RuntimeError::TypeError {
+                                expected: "hashable (int, float, string, char, bool)".to_string(),
+                                found: k.type_name(&proc.heap).to_string(),
+                            });
+                        }
+                    }
+                    let ptr = proc.heap.alloc_map(entries);
+                    proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::Map(ptr);
+                }
+
+                Instruction::MakeSet(dst, ref elements) => {
+                    let items: Vec<GcValue> = {
+                        let frame = proc.frames.last().unwrap();
+                        elements.iter().map(|&r| frame.registers[r as usize].clone()).collect()
+                    };
+                    
+                    let mut entries = std::collections::HashSet::new();
+                    for item in items {
+                        if let Some(key) = item.to_gc_map_key(&proc.heap) {
+                            entries.insert(key);
+                        } else {
+                            return Err(RuntimeError::TypeError {
+                                expected: "hashable".to_string(),
+                                found: item.type_name(&proc.heap).to_string(),
+                            });
+                        }
+                    }
+                    let ptr = proc.heap.alloc_set(entries);
+                    proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::Set(ptr);
+                }
+
+                Instruction::MapContainsKey(dst, map_reg, key_reg) => {
+                    let frame = proc.frames.last().unwrap();
+                    let map_val = &frame.registers[*map_reg as usize];
+                    let key_val = &frame.registers[*key_reg as usize];
+                    
+                    let result = if let GcValue::Map(ptr) = map_val {
+                        if let Some(map) = proc.heap.get_map(*ptr) {
+                            if let Some(key) = key_val.to_gc_map_key(&proc.heap) {
+                                map.entries.contains_key(&key)
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Map".to_string(),
+                            found: map_val.type_name(&proc.heap).to_string(),
+                        });
+                    };
+                    proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::Bool(result);
+                }
+
+                Instruction::MapGet(dst, map_reg, key_reg) => {
+                    let result = {
+                        let frame = proc.frames.last().unwrap();
+                        let map_val = &frame.registers[*map_reg as usize];
+                        let key_val = &frame.registers[*key_reg as usize];
+                        
+                        if let GcValue::Map(ptr) = map_val {
+                            if let Some(map) = proc.heap.get_map(*ptr) {
+                                if let Some(key) = key_val.to_gc_map_key(&proc.heap) {
+                                    map.entries.get(&key).cloned()
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            return Err(RuntimeError::TypeError {
+                                expected: "Map".to_string(),
+                                found: map_val.type_name(&proc.heap).to_string(),
+                            });
+                        }
+                    };
+                    
+                    match result {
+                        Some(val) => proc.frames.last_mut().unwrap().registers[*dst as usize] = val,
+                        None => return Err(RuntimeError::Panic("Key not found in map".to_string())),
+                    }
+                }
+
+                Instruction::SetContains(dst, set_reg, val_reg) => {
+                    let frame = proc.frames.last().unwrap();
+                    let set_val = &frame.registers[*set_reg as usize];
+                    let elem_val = &frame.registers[*val_reg as usize];
+                    
+                    let result = if let GcValue::Set(ptr) = set_val {
+                        if let Some(set) = proc.heap.get_set(*ptr) {
+                            if let Some(key) = elem_val.to_gc_map_key(&proc.heap) {
+                                set.items.contains(&key)
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Set".to_string(),
+                            found: set_val.type_name(&proc.heap).to_string(),
+                        });
+                    };
+                    proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::Bool(result);
                 }
 
                 // === Typed Arrays (fast path) ===
@@ -1019,6 +1144,39 @@ impl Worker {
                         }
                         _ => {}
                     }
+                }
+
+                Instruction::Decons(head, tail, list) => {
+                    let frame = proc.frames.last_mut().unwrap();
+                    let list_val = frame.registers[*list as usize].clone();
+                    if let GcValue::List(l) = list_val {
+                        if let Some(h) = l.head() {
+                            frame.registers[*head as usize] = h.clone();
+                            frame.registers[*tail as usize] = GcValue::List(l.tail());
+                        } else {
+                            // Should have been guarded by TestNil
+                            return Err(RuntimeError::Panic("Cannot decons empty list".to_string()));
+                        }
+                    } else {
+                        return Err(RuntimeError::TypeError {
+                            expected: "List".to_string(),
+                            found: list_val.type_name(&proc.heap).to_string(),
+                        });
+                    }
+                }
+
+                Instruction::IsMap(dst, src) => {
+                    let frame = proc.frames.last_mut().unwrap();
+                    let val = &frame.registers[*src as usize];
+                    let is_map = matches!(val, GcValue::Map(_));
+                    frame.registers[*dst as usize] = GcValue::Bool(is_map);
+                }
+
+                Instruction::IsSet(dst, src) => {
+                    let frame = proc.frames.last_mut().unwrap();
+                    let val = &frame.registers[*src as usize];
+                    let is_set = matches!(val, GcValue::Set(_));
+                    frame.registers[*dst as usize] = GcValue::Bool(is_set);
                 }
 
                 // === Instructions that need scheduler access ===

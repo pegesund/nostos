@@ -1081,8 +1081,31 @@ impl<'a> InferCtx<'a> {
             }
 
             Pattern::Pin(expr, _) => {
-                let expr_ty = self.infer_expr(expr)?;
-                self.unify(expected.clone(), expr_ty);
+                let pin_ty = self.infer_expr(expr)?;
+                self.unify(expected.clone(), pin_ty);
+                Ok(())
+            }
+
+            Pattern::Map(entries, _) => {
+                let key_ty = self.fresh();
+                let val_ty = self.fresh();
+                self.unify(expected.clone(), Type::Map(Box::new(key_ty.clone()), Box::new(val_ty.clone())));
+
+                for (key_expr, val_pat) in entries {
+                    let k_ty = self.infer_expr(key_expr)?;
+                    self.unify(k_ty, key_ty.clone());
+                    self.infer_pattern(val_pat, &val_ty)?;
+                }
+                Ok(())
+            }
+
+            Pattern::Set(elements, _) => {
+                let elem_ty = self.fresh();
+                self.unify(expected.clone(), Type::Set(Box::new(elem_ty.clone())));
+
+                for elem_pat in elements {
+                    self.infer_pattern(elem_pat, &elem_ty)?;
+                }
                 Ok(())
             }
         }

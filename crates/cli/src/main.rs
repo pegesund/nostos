@@ -288,16 +288,45 @@ fn main() -> ExitCode {
     let mut compiler = Compiler::new_empty();
 
     // Load stdlib
-    let stdlib_path = std::path::Path::new("stdlib");
-    if stdlib_path.is_dir() {
+    let stdlib_candidates = vec![
+        std::path::PathBuf::from("stdlib"),
+        std::path::PathBuf::from("../stdlib"),
+    ];
+    
+    let mut stdlib_path = std::path::PathBuf::from("stdlib");
+    let mut found_stdlib = false;
+    
+    for path in stdlib_candidates {
+        if path.is_dir() {
+            stdlib_path = path;
+            found_stdlib = true;
+            break;
+        }
+    }
+    
+    if !found_stdlib {
+        // Try relative to executable
+        if let Ok(mut p) = std::env::current_exe() {
+             p.pop(); // remove binary name
+             p.pop(); // remove release/debug
+             p.pop(); // remove target
+             p.push("stdlib");
+             if p.is_dir() {
+                 stdlib_path = p;
+                 found_stdlib = true;
+             }
+        }
+    }
+
+    if found_stdlib {
         let mut stdlib_files = Vec::new();
-        visit_dirs(stdlib_path, &mut stdlib_files).ok();
+        visit_dirs(&stdlib_path, &mut stdlib_files).ok();
 
         for path in &stdlib_files {
              let source = fs::read_to_string(path).expect("Failed to read stdlib file");
              let (module_opt, _) = parse(&source);
              if let Some(module) = module_opt {
-                 let relative = path.strip_prefix(stdlib_path).unwrap();
+                 let relative = path.strip_prefix(&stdlib_path).unwrap();
                  let mut components: Vec<String> = relative.components()
                     .map(|c| c.as_os_str().to_string_lossy().to_string())
                     .collect();

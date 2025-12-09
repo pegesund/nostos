@@ -242,8 +242,8 @@ pub enum GcMapKey {
     UInt16(u16),
     UInt32(u32),
     UInt64(u64),
-    // String
-    String(GcPtr<GcString>),
+    // String - stored inline for proper equality/hashing
+    String(String),
 }
 
 /// A GC-managed record.
@@ -629,13 +629,16 @@ impl GcValue {
     }
 
     /// Convert to a GC map key if possible (for GcMap/GcSet).
-    pub fn to_gc_map_key(&self) -> Option<GcMapKey> {
+    pub fn to_gc_map_key(&self, heap: &Heap) -> Option<GcMapKey> {
         match self {
             GcValue::Unit => Some(GcMapKey::Unit),
             GcValue::Bool(b) => Some(GcMapKey::Bool(*b)),
             GcValue::Int64(i) => Some(GcMapKey::Int64(*i)),
             GcValue::Char(c) => Some(GcMapKey::Char(*c)),
-            GcValue::String(ptr) => Some(GcMapKey::String(*ptr)),
+            GcValue::String(ptr) => {
+                heap.get_string(*ptr)
+                    .map(|s| GcMapKey::String(s.data.clone()))
+            },
             _ => None,
         }
     }
@@ -725,25 +728,16 @@ impl HeapData {
                 .collect(),
             HeapData::Map(map) => {
                 let mut ptrs = Vec::new();
-                for (k, v) in &map.entries {
-                    if let GcMapKey::String(ptr) = k {
-                        ptrs.push(ptr.as_raw());
-                    }
+                for (_, v) in &map.entries {
+                    // Keys are now inline values (String), no pointers
                     ptrs.extend(v.gc_pointers());
                 }
                 ptrs
             }
-            HeapData::Set(set) => set
-                .items
-                .iter()
-                .filter_map(|k| {
-                    if let GcMapKey::String(ptr) = k {
-                        Some(ptr.as_raw())
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
+            HeapData::Set(set) => {
+                // Keys are inline, no pointers
+                vec![]
+            }
             HeapData::Record(rec) => rec
                 .fields
                 .iter()
@@ -784,9 +778,12 @@ impl HeapData {
             HeapData::Map(m) => {
                 std::mem::size_of::<GcMap>()
                     + m.entries.len() * (std::mem::size_of::<GcMapKey>() + std::mem::size_of::<GcValue>())
+                    + m.entries.keys().map(|k| match k { GcMapKey::String(s) => s.len(), _ => 0 }).sum::<usize>()
             }
             HeapData::Set(s) => {
-                std::mem::size_of::<GcSet>() + s.items.len() * std::mem::size_of::<GcMapKey>()
+                std::mem::size_of::<GcSet>()
+                    + s.items.len() * std::mem::size_of::<GcMapKey>()
+                    + s.items.iter().map(|k| match k { GcMapKey::String(s) => s.len(), _ => 0 }).sum::<usize>()
             }
             HeapData::Record(r) => {
                 std::mem::size_of::<GcRecord>()
@@ -1863,13 +1860,7 @@ impl Heap {
             GcMapKey::UInt32(i) => GcMapKey::UInt32(*i),
             GcMapKey::UInt64(i) => GcMapKey::UInt64(*i),
             // String
-            GcMapKey::String(ptr) => {
-                if let Some(s) = source.get_string(*ptr) {
-                    GcMapKey::String(self.alloc_string(s.data.clone()))
-                } else {
-                    GcMapKey::Unit
-                }
-            }
+            GcMapKey::String(s) => GcMapKey::String(s.clone()),
         }
     }
 
@@ -2041,14 +2032,7 @@ impl Heap {
             GcMapKey::UInt32(i) => GcMapKey::UInt32(*i),
             GcMapKey::UInt64(i) => GcMapKey::UInt64(*i),
             // String
-            GcMapKey::String(ptr) => {
-                let data = self.get_string(*ptr).map(|s| s.data.clone());
-                if let Some(data) = data {
-                    GcMapKey::String(self.alloc_string(data))
-                } else {
-                    GcMapKey::Unit
-                }
-            }
+            GcMapKey::String(s) => GcMapKey::String(s.clone()),
         }
     }
 }
@@ -2224,8 +2208,7 @@ impl Heap {
             MapKey::UInt64(i) => GcMapKey::UInt64(*i),
             // String
             MapKey::String(s) => {
-                let ptr = self.alloc_string((**s).clone());
-                GcMapKey::String(ptr)
+                GcMapKey::String((**s).clone())
             }
         }
     }
@@ -2390,9 +2373,8 @@ impl Heap {
             GcMapKey::UInt32(i) => MapKey::UInt32(*i),
             GcMapKey::UInt64(i) => MapKey::UInt64(*i),
             // String
-            GcMapKey::String(ptr) => {
-                let s = self.get_string(*ptr).expect("invalid string pointer in map key");
-                MapKey::String(Arc::new(s.data.clone()))
+            GcMapKey::String(s) => {
+                MapKey::String(Arc::new(s.clone()))
             }
         }
     }

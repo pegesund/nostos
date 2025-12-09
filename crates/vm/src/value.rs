@@ -494,6 +494,12 @@ pub enum Instruction {
     MakeMap(Reg, Arc<[(Reg, Reg)]>),
     /// Create set: dst = #{regs...}
     MakeSet(Reg, RegList),
+    /// Check if map contains key: dst = map.contains_key(key)
+    MapContainsKey(Reg, Reg, Reg),
+    /// Get value from map: dst = map[key] (panics if not found)
+    MapGet(Reg, Reg, Reg),
+    /// Check if set contains value: dst = set.contains(value)
+    SetContains(Reg, Reg, Reg),
     /// List cons: dst = [head | tail]
     Cons(Reg, Reg, Reg),
     /// List concat: dst = a ++ b
@@ -583,6 +589,10 @@ pub enum Instruction {
     TestNil(Reg, Reg),
     /// Deconstruct list: head, tail = list (fails if empty)
     Decons(Reg, Reg, Reg),
+    /// Test if value is a Map: dst = is_map(val)
+    IsMap(Reg, Reg),
+    /// Test if value is a Set: dst = is_set(val)
+    IsSet(Reg, Reg),
 
     // === Concurrency ===
     /// Spawn process: dst = spawn(func, args)

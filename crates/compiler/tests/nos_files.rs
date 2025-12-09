@@ -462,6 +462,9 @@ mod patterns {
 
     #[test]
     fn list_recursive() { run_category_test("list_recursive"); }
+
+    #[test]
+    fn comprehensive_map_set() { run_category_test("comprehensive_map_set"); }
 }
 
 mod traits {
