@@ -1,0 +1,69 @@
+# expect: true
+
+
+
+main() = {
+    # 1. Integer Keys
+    m_int = %{1: "one", 2: "two", 100: "hundred"}
+    
+    match m_int
+        %{1: "one", 100: h} -> assert(h == "hundred")
+        _ -> throw("Integer key match failed")
+    end
+
+    # 2. Boolean Keys
+    m_bool = %{true: "yes", false: "no"}
+    
+    match m_bool
+        %{true: "yes"} -> true
+        _ -> throw("Boolean key match failed")
+    end
+
+    # 3. Char Keys
+    m_char = %{'a': 1, 'z': 26}
+    
+    match m_char
+        %{'z': 26} -> true
+        _ -> throw("Char key match failed")
+    end
+
+    # 4. Pinned Keys (Dynamic)
+    target_key = "dynamic"
+    m_dyn = %{"static": 1, "dynamic": 999}
+    
+    match m_dyn
+        %{^target_key: val} -> assert(val == 999)
+        _ -> throw("Pinned key match failed")
+    end
+
+    # 5. Deep Nesting
+    # Map -> List -> Map -> Tuple
+    deep = %{
+        "users": [
+            %{"id": 1, "info": ("Alice", "Admin")},
+            %{"id": 2, "info": ("Bob", "User")}
+        ]
+    }
+
+    match deep
+        %{"users": [_, %{"info": (_, role)}]} -> assert(role == "User")
+        _ -> throw("Deep nesting match failed")
+    end
+
+    # 6. Partial Match Logic
+    # Should match even if map has extra keys
+    big_map = %{"a": 1, "b": 2, "c": 3, "d": 4}
+    match big_map
+        %{"a": 1, "c": 3} -> true
+        _ -> throw("Partial match failed")
+    end
+
+    # 7. Pattern Binding in Values
+    # Extract value and check it
+    match big_map
+        %{"b": val} -> assert(val == 2)
+        _ -> throw("Binding failed")
+    end
+
+    true
+}

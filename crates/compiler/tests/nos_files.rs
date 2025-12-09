@@ -508,6 +508,9 @@ mod patterns {
 
     #[test]
     fn comprehensive_map_set() { run_category_test("comprehensive_map_set"); }
+
+    #[test]
+    fn map_advanced() { run_category_test("map_advanced"); }
 }
 
 mod traits {

@@ -241,6 +241,42 @@ main() = {
 </code></pre>
                 </div>
 
+                <!-- Maps and Sets -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Maps and Sets</h2>
+                <p class="text-slate-400 mb-4">
+                    Nostos supports pattern matching on Maps and Sets, allowing you to check for the presence of keys or elements and extract values.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# Matching on a Map
+check_config(config) = match config
+    # Matches if key "debug" is true. Binds "level" value to `lvl`.
+    # Ignores other keys.
+    %{"debug": true, "level": lvl} -> "Debug mode level " ++ show(lvl)
+    %{"debug": false} -> "Production mode"
+    _ -> "Unknown config"
+end
+
+# Matching on a Set
+check_access(roles) = match roles
+    # Matches if set contains "admin"
+    # Set patterns match if *all* specified elements are present.
+    # Other elements in the set are ignored.
+    #{"admin"} -> "Access granted"
+    #{"editor", "viewer"} -> "Partial access"
+    _ -> "Access denied"
+end
+
+main() = {
+    conf = %{"debug": true, "level": 3, "other": "ignored"}
+    println(check_config(conf))  # "Debug mode level 3"
+
+    user_roles = #{"user", "admin", "guest"}
+    println(check_access(user_roles)) # "Access granted"
+}
+</code></pre>
+                </div>
+
                 <!-- The Pin Operator -->
                 <h2 class="text-2xl font-semibold text-white mb-4">The Pin Operator (<code>^</code>)</h2>
                 <p class="text-slate-400 mb-4">The pin operator <code>^</code> in a pattern asserts that a value must match an *existing* variable's value, rather than binding to a new variable.</p>
