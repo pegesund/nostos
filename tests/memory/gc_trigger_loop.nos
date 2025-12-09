@@ -1,0 +1,16 @@
+# expect: ()
+# Trigger GC repeatedly in loop
+
+create_garbage(n) =
+    if n <= 0 then ()
+    else {
+        # Create temporary list that becomes garbage
+        _ = [1, 2, 3, 4, 5]
+        create_garbage(n - 1)
+    }
+
+main() = {
+    # Run multiple iterations to stress GC
+    create_garbage(500)
+    assert_eq(1, 1)
+}

@@ -1,0 +1,8 @@
+# expect: false
+# NaN comparisons are always false
+
+main() = {
+    nan = 0.0 / 0.0
+    # NaN != NaN (NaN is not equal to anything, including itself)
+    nan == nan
+}

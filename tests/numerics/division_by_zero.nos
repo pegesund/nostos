@@ -1,0 +1,4 @@
+# expect_error: Division by zero
+# Division by zero should throw error
+
+main() = 10 / 0

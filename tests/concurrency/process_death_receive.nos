@@ -1,0 +1,22 @@
+# expect: ()
+# Test: Parent process handles child death gracefully while waiting
+
+worker_that_dies(parent) = {
+    parent <- "started"
+    # Simulate work then die without sending completion
+    garbage = [1, 2, 3, 4, 5]
+}
+
+main() = {
+    me = self()
+
+    # Spawn a worker that will die
+    spawn { worker_that_dies(me) }
+
+    # Should receive the started message
+    msg = receive m -> m end
+    assert_eq("started", msg)
+
+    # The worker dies, we should not hang forever
+    # This tests that there's no deadlock when sender dies
+}

@@ -1,0 +1,13 @@
+# expect: 168
+# Allocate many tuples
+
+make_tuples(n, acc) =
+    if n <= 0 then acc
+    else {
+        tup = (n, n * 2, n * 3)
+        (a, b, c) = tup
+        make_tuples(n - 1, acc + a + b + c)
+    }
+
+# Sum of (n + 2n + 3n) for n=1..7 = 6*(1+2+3+4+5+6+7) = 6*28 = 168
+main() = make_tuples(7, 0)

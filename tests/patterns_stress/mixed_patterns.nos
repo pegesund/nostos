@@ -1,0 +1,13 @@
+# expect: 20
+# Mixed patterns - tuple, list, variant
+
+type Maybe = Just(Int) | Nothing
+
+process(data) =
+    match data
+        (Just(x), [a, b | _], z) -> x + a + b + z
+        (Nothing, _, _) -> 0
+        _ -> -1
+    end
+
+main() = process((Just(5), [3, 7, 100], 5))

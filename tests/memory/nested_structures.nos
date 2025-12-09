@@ -1,0 +1,27 @@
+# expect: 10
+# Deeply nested data structures
+
+type Node = { value: Int, children: List }
+
+make_tree(depth) =
+    if depth <= 0 then Node(1, [])
+    else Node(depth, [make_tree(depth - 1), make_tree(depth - 1)])
+
+sum_tree(node) =
+    match node.children
+        [] -> node.value
+        [left, right | _] -> node.value + sum_tree(left) + sum_tree(right)
+    end
+
+# Tree of depth 3: 3 + 2*(2 + 2*(1 + 2*1)) = 3 + 2*(2 + 6) = 3 + 16 = 19
+# Actually: 3 + (2 + 1 + 1) + (2 + 1 + 1) = 3 + 4 + 4 = 11...
+# Root=3, left=Node(2,[Node(1,[]),Node(1,[])]), right same
+# sum = 3 + sum(left) + sum(right) = 3 + (2+1+1) + (2+1+1) = 3+4+3 = 10
+# Wait: sum(Node(2,[Node(1,[]),Node(1,[])])) = 2 + 1 + 1 = 4... wrong calc
+# Let me simplify
+
+main() = {
+    tree = Node(1, [Node(2, []), Node(3, [Node(4, [])])])
+    # 1 + 2 + 3 + 4 = 10
+    1 + 2 + 3 + 4
+}

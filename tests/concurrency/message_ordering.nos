@@ -1,0 +1,32 @@
+# expect: ()
+# Test: Messages from same sender arrive in order
+
+sender(target, count) = {
+    if count > 0 then {
+        target <- count
+        sender(target, count - 1)
+    }
+}
+
+receive_all(expected, acc) = {
+    if expected == 0 then acc
+    else {
+        n = receive x -> x end
+        # Messages should arrive in reverse order (10, 9, 8, ... 1)
+        receive_all(expected - 1, [n | acc])
+    }
+}
+
+main() = {
+    me = self()
+
+    # Send 10 messages
+    spawn { sender(me, 10) }
+
+    # Receive all and check order
+    results = receive_all(10, [])
+
+    # Results should be [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    # (received 10 first, pushed to front, then 9, etc.)
+    assert_eq([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], results)
+}

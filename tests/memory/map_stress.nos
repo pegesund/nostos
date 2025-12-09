@@ -1,0 +1,24 @@
+# expect: true
+# Stress map operations
+
+main() = {
+    m1 = %{"a": 1, "b": 2, "c": 3}
+    m2 = %{"d": 4, "e": 5, "f": 6}
+    m3 = %{"g": 7, "h": 8, "i": 9}
+
+    # Access elements using match
+    v1 = match m1
+        %{"a": x} -> x
+        _ -> 0
+    end
+    v2 = match m2
+        %{"e": x} -> x
+        _ -> 0
+    end
+    v3 = match m3
+        %{"i": x} -> x
+        _ -> 0
+    end
+
+    v1 + v2 + v3 == 15
+}

@@ -1,0 +1,10 @@
+# expect: 120
+# Recursion with closures capturing values
+
+make_multiplier(factor) = (x) => x * factor
+
+main() = {
+    times2 = make_multiplier(2)
+    times3 = make_multiplier(3)
+    times2(times3(20))
+}

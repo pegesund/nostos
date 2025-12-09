@@ -1,0 +1,11 @@
+# expect: ()
+# Decimal type maintains precision
+
+main() = {
+    # Decimal avoids floating point precision issues
+    a = 0.1d
+    b = 0.2d
+    c = 0.3d
+    sum = a + b
+    assert_eq(c, sum)
+}

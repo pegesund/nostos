@@ -1,0 +1,9 @@
+# expect: 3
+# Wildcards in various positions
+
+main() = {
+    data = (1, 2, 3, 4, 5)
+    match data
+        (_, _, x, _, _) -> x
+    end
+}
