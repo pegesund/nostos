@@ -1,3 +1,8 @@
+# JSON Parser for Nostos
+#
+# Parses JSON strings into a Json variant type.
+# Usage: jsonParse("{\"key\": 123}")
+
 type Json =
     | Null
     | Bool(Bool)
@@ -6,57 +11,88 @@ type Json =
     | Array(List[Json])
     | Object(List[(String, Json)])
 
+
+# --- Character classification helpers ---
+
+is_whitespace(c) = c == ' ' || c == '\n' || c == '\t' || c == '\r'
+
+is_digit(c) = c >= '0' && c <= '9'
+
+
+# --- Whitespace handling ---
+
 skip_ws(chars) = match chars
-    [' ' | rest] -> skip_ws(rest)
-    ['\n' | rest] -> skip_ws(rest)
-    ['\t' | rest] -> skip_ws(rest)
-    ['\r' | rest] -> skip_ws(rest)
-    _ -> chars
+    [c | rest] -> if is_whitespace(c) then skip_ws(rest) else chars
+    [] -> []
+
+
+# --- Primitive parsers ---
 
 parse_null(chars) = match chars
     ['n', 'u', 'l', 'l' | rest] -> (Null, rest)
-    _ -> (Null, [])
+    _ -> (Null, chars)
 
-parse_bool(chars) = match chars
+parse_true(chars) = match chars
     ['t', 'r', 'u', 'e' | rest] -> (Bool(true), rest)
-    ['f', 'a', 'l', 's', 'e' | rest] -> (Bool(false), rest)
-    _ -> (Bool(false), [])
+    _ -> (Bool(false), chars)
 
-consume_digits(cs, acc) = match cs
-    [c | rest] -> if c >= '0' && c <= '9' then consume_digits(rest, acc ++ [c]) else (acc, cs)
+parse_false(chars) = match chars
+    ['f', 'a', 'l', 's', 'e' | rest] -> (Bool(false), rest)
+    _ -> (Bool(false), chars)
+
+
+# --- Number parsing ---
+
+collect_digits(chars, acc) = match chars
+    [c | rest] -> if is_digit(c)
+                  then collect_digits(rest, acc ++ [c])
+                  else (acc, chars)
     [] -> (acc, [])
 
 parse_number(chars) = {
-    (digits, rest) = consume_digits(chars, [])
-    str = String.from_chars(digits)
-    (Number(String.to_int(str)), rest)
+    (digits, rest) = collect_digits(chars, [])
+    num = String.to_int(String.from_chars(digits))
+    (Number(num), rest)
 }
 
-consume_string(cs, acc) = match cs
-    ['"' | rest] -> (acc, rest)
-    [c | rest] -> consume_string(rest, acc ++ [c])
-    [] -> (acc, [])
+
+# --- String parsing ---
+
+collect_string_chars(chars, acc) = match chars
+    ['"' | rest]  -> (acc, rest)
+    ['\\', c | rest] -> collect_string_chars(rest, acc ++ [c])
+    [c | rest]    -> collect_string_chars(rest, acc ++ [c])
+    []            -> (acc, [])
 
 parse_string(chars) = {
-    (content, rest) = consume_string(chars, [])
+    (content, rest) = collect_string_chars(chars, [])
     (String(String.from_chars(content)), rest)
 }
+
+extract_string(json) = match json
+    String(s) -> s
+    _ -> ""
+
+
+# --- Array parsing ---
 
 parse_array_items(chars) = {
     chars = skip_ws(chars)
     match chars
         [']' | rest] -> ([], rest)
-        _ -> {
-            (val, rest1) = parse_value(chars)
-            rest2 = skip_ws(rest1)
-            match rest2
-                [',' | rest3] -> {
-                    (tail, rest4) = parse_array_items(rest3)
-                    ([val | tail], rest4)
-                }
-                [']' | rest3] -> ([val], rest3)
-                _ -> ([], rest2)
+        _ -> parse_array_item(chars)
+}
+
+parse_array_item(chars) = {
+    (value, after_value) = parse_value(chars)
+    after_ws = skip_ws(after_value)
+    match after_ws
+        [',' | rest] -> {
+            (more, final) = parse_array_items(rest)
+            ([value | more], final)
         }
+        [']' | rest] -> ([value], rest)
+        _ -> ([value], after_ws)
 }
 
 parse_array(chars) = {
@@ -64,35 +100,33 @@ parse_array(chars) = {
     (Array(items), rest)
 }
 
-get_string(json) = match json
-    String(s) -> s
-    _ -> ""
+
+# --- Object parsing ---
 
 parse_object_items(chars) = {
     chars = skip_ws(chars)
     match chars
         ['}' | rest] -> ([], rest)
-        _ -> {
-            (key_json, rest1) = parse_value(chars)
-            rest2 = skip_ws(rest1)
-            match rest2
-                [':' | rest3] -> {
-                    (val, rest4) = parse_value(rest3)
-                    rest5 = skip_ws(rest4)
-                    match rest5
-                        [',' | rest6] -> {
-                            (tail, rest7) = parse_object_items(rest6)
-                            key_str = get_string(key_json)
-                            ([(key_str, val) | tail], rest7)
-                        }
-                        ['}' | rest6] -> {
-                            key_str = get_string(key_json)
-                            ([(key_str, val)], rest6)
-                        }
-                        _ -> ([], rest5)
+        _ -> parse_object_entry(chars)
+}
+
+parse_object_entry(chars) = {
+    (key_json, after_key) = parse_value(chars)
+    key = extract_string(key_json)
+    after_colon = skip_ws(after_key)
+    match after_colon
+        [':' | rest] -> {
+            (value, after_value) = parse_value(rest)
+            after_ws = skip_ws(after_value)
+            match after_ws
+                [',' | rest] -> {
+                    (more, final) = parse_object_items(rest)
+                    ([(key, value) | more], final)
                 }
-                _ -> ([], rest2)
+                ['}' | rest] -> ([(key, value)], rest)
+                _ -> ([(key, value)], after_ws)
         }
+        _ -> ([], after_colon)
 }
 
 parse_object(chars) = {
@@ -100,20 +134,26 @@ parse_object(chars) = {
     (Object(items), rest)
 }
 
+
+# --- Main value parser ---
+
 parse_value(chars) = {
     chars = skip_ws(chars)
     match chars
         ['{' | rest] -> parse_object(rest)
         ['[' | rest] -> parse_array(rest)
         ['"' | rest] -> parse_string(rest)
-        ['t' | _] -> parse_bool(chars)
-        ['f' | _] -> parse_bool(chars)
-        ['n' | _] -> parse_null(chars)
-        _ -> parse_number(chars)
+        ['t' | _]    -> parse_true(chars)
+        ['f' | _]    -> parse_false(chars)
+        ['n' | _]    -> parse_null(chars)
+        _            -> parse_number(chars)
 }
+
+
+# --- Public API ---
 
 jsonParse(input) = {
     chars = String.chars(input)
-    (val, _) = parse_value(chars)
-    val
+    (value, _) = parse_value(chars)
+    value
 }
