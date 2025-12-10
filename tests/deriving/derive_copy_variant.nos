@@ -1,0 +1,12 @@
+# expect: "passed"
+type Result = Ok(Int) | Err(String) deriving (Copy, Eq)
+
+main() = {
+    ok = Ok(42)
+    err = Err("fail")
+    ok_copy = copy(ok)
+    err_copy = copy(err)
+    assert(ok == ok_copy)
+    assert(err == err_copy)
+    "passed"
+}

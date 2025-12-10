@@ -1,0 +1,15 @@
+# expect: "passed"
+type Weekday = Mon | Tue | Wed | Thu | Fri | Sat | Sun deriving (Hash, Eq, Show)
+
+main() = {
+    d1 = Mon
+    d2 = Mon
+    d3 = Fri
+    assert(d1 == d2)
+    assert(d1 != d3)
+    assert(hash(d1) == hash(d2))
+    assert(hash(d1) != hash(d3))
+    assert(show(Mon) == "Mon")
+    assert(show(Sun) == "Sun")
+    "passed"
+}

@@ -1,0 +1,12 @@
+# expect: "passed"
+type Status = Active | Inactive | Pending deriving Eq
+
+main() = {
+    a1 = Active
+    a2 = Active
+    i = Inactive
+    assert(a1 == a2)
+    assert(a1 != i)
+    assert(Inactive != Pending)
+    "passed"
+}

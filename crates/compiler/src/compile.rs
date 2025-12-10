@@ -52,6 +52,12 @@ pub enum CompileError {
 
     #[error("cannot resolve trait method `{method}` without type information")]
     UnresolvedTraitMethod { method: String, span: Span },
+
+    #[error("cannot derive `{trait_name}` for `{ty}`: {reason}")]
+    CannotDerive { trait_name: String, ty: String, reason: String, span: Span },
+
+    #[error("type `{type_name}` does not implement trait `{trait_name}`")]
+    TraitBoundNotSatisfied { type_name: String, trait_name: String, span: Span },
 }
 
 impl CompileError {
@@ -70,6 +76,8 @@ impl CompileError {
             CompileError::TraitNotImplemented { span, .. } => *span,
             CompileError::ArityMismatch { span, .. } => *span,
             CompileError::UnresolvedTraitMethod { span, .. } => *span,
+            CompileError::CannotDerive { span, .. } => *span,
+            CompileError::TraitBoundNotSatisfied { span, .. } => *span,
         }
     }
 
@@ -118,6 +126,18 @@ impl CompileError {
             CompileError::UnresolvedTraitMethod { method, .. } => {
                 SourceError::compile(
                     format!("cannot resolve trait method `{}` without type information", method),
+                    span,
+                )
+            }
+            CompileError::CannotDerive { trait_name, ty, reason, .. } => {
+                SourceError::compile(
+                    format!("cannot derive `{}` for `{}`: {}", trait_name, ty, reason),
+                    span,
+                )
+            }
+            CompileError::TraitBoundNotSatisfied { type_name, trait_name, .. } => {
+                SourceError::compile(
+                    format!("type `{}` does not implement trait `{}`", type_name, trait_name),
                     span,
                 )
             }
@@ -183,6 +203,9 @@ pub struct Compiler {
     /// Function ASTs for monomorphization: function name -> FnDef
     /// Used to recompile functions with different type contexts
     fn_asts: HashMap<String, FnDef>,
+    /// Function type parameters with bounds: function name -> type parameters
+    /// Used to check trait bounds at call sites
+    fn_type_params: HashMap<String, Vec<TypeParam>>,
     /// Functions that need monomorphization (have untyped parameters calling trait methods)
     /// These functions are not compiled normally; specialized variants are compiled at call sites
     polymorphic_fns: HashSet<String>,
@@ -276,6 +299,7 @@ impl Compiler {
             local_types: HashMap::new(),
             param_types: HashMap::new(),
             fn_asts: HashMap::new(),
+            fn_type_params: HashMap::new(),
             polymorphic_fns: HashSet::new(),
             current_function_name: None,
             loop_stack: Vec::new(),
@@ -372,6 +396,7 @@ impl Compiler {
             local_types: HashMap::new(),
             param_types: HashMap::new(),
             fn_asts: HashMap::new(),
+            fn_type_params: HashMap::new(),
             polymorphic_fns: HashSet::new(),
             current_function_name: None,
             loop_stack: Vec::new(),
@@ -589,8 +614,594 @@ impl Compiler {
             }
         };
 
-        self.types.insert(name.clone(), TypeInfo { name, kind });
+        self.types.insert(name.clone(), TypeInfo { name: name.clone(), kind });
+
+        // Handle deriving - generate synthetic trait implementations
+        for trait_ident in &def.deriving {
+            let trait_name = &trait_ident.node;
+            self.derive_trait_for_type(&name, trait_name, def)?;
+        }
+
         Ok(())
+    }
+
+    /// Generate a derived trait implementation for a type.
+    /// Instead of generating bytecode directly, we synthesize AST and compile it.
+    fn derive_trait_for_type(
+        &mut self,
+        type_name: &str,
+        trait_name: &str,
+        def: &TypeDef,
+    ) -> Result<(), CompileError> {
+        // Only support deriving Hash, Show, Copy, and Eq for now
+        let trait_impl = match trait_name {
+            "Hash" => self.synthesize_hash_impl(type_name, def)?,
+            "Show" => self.synthesize_show_impl(type_name, def)?,
+            "Copy" => self.synthesize_copy_impl(type_name, def)?,
+            "Eq" => self.synthesize_eq_impl(type_name, def)?,
+            _ => return Err(CompileError::CannotDerive {
+                trait_name: trait_name.to_string(),
+                ty: type_name.to_string(),
+                reason: "only Hash, Show, Copy, and Eq can be derived".to_string(),
+                span: def.name.span,
+            }),
+        };
+
+        // Compile the synthesized trait implementation
+        self.compile_trait_impl(&trait_impl)
+    }
+
+    /// Helper to create a Spanned node with a dummy span
+    fn spanned<T>(&self, node: T) -> Spanned<T> {
+        Spanned::new(node, Span { start: 0, end: 0 })
+    }
+
+    /// Helper to create an Ident with a dummy span
+    fn ident(&self, name: &str) -> Ident {
+        self.spanned(name.to_string())
+    }
+
+    /// Dummy span for synthesized AST nodes
+    fn span(&self) -> Span {
+        Span { start: 0, end: 0 }
+    }
+
+    /// Synthesize a Hash trait implementation for a type.
+    fn synthesize_hash_impl(&self, type_name: &str, def: &TypeDef) -> Result<TraitImpl, CompileError> {
+        let base_name = type_name.split("::").last().unwrap_or(type_name);
+
+        // Build the body expression based on type structure
+        let body = match &def.body {
+            TypeBody::Record(fields) => {
+                // hash(self) = hash(self.f1) * 31 + hash(self.f2) * 31 + ...
+                if fields.is_empty() {
+                    Expr::Int(0, self.span())
+                } else {
+                    let mut expr = self.make_hash_field_expr("self", &fields[0].name.node);
+                    for field in fields.iter().skip(1) {
+                        let hash_field = self.make_hash_field_expr("self", &field.name.node);
+                        // result * 31 + hash(field)
+                        let mul = Expr::BinOp(
+                            Box::new(expr),
+                            BinOp::Mul,
+                            Box::new(Expr::Int(31, self.span())),
+                            self.span(),
+                        );
+                        expr = Expr::BinOp(
+                            Box::new(mul),
+                            BinOp::Add,
+                            Box::new(hash_field),
+                            self.span(),
+                        );
+                    }
+                    expr
+                }
+            }
+            TypeBody::Variant(variants) => {
+                // Build a match expression that hashes each variant
+                let arms: Vec<MatchArm> = variants.iter().enumerate().map(|(idx, variant)| {
+                    let (pattern, body) = match &variant.fields {
+                        VariantFields::Unit => {
+                            // Pattern: VariantName
+                            let pattern = Pattern::Variant(
+                                self.ident(&variant.name.node),
+                                VariantPatternFields::Unit,
+                                self.span(),
+                            );
+                            // Body: idx (just return discriminant hash)
+                            let body = Expr::Int(idx as i64, self.span());
+                            (pattern, body)
+                        }
+                        VariantFields::Positional(field_types) => {
+                            // Pattern: VariantName(a, b, ...)
+                            let var_names: Vec<String> = (0..field_types.len())
+                                .map(|i| format!("__f{}", i))
+                                .collect();
+                            let patterns: Vec<Pattern> = var_names.iter()
+                                .map(|name| Pattern::Var(self.ident(name)))
+                                .collect();
+                            let pattern = Pattern::Variant(
+                                self.ident(&variant.name.node),
+                                VariantPatternFields::Positional(patterns),
+                                self.span(),
+                            );
+
+                            // Body: idx * 31^n + hash(a) * 31^(n-1) + ... + hash(z)
+                            let mut body = Expr::Int(idx as i64, self.span());
+                            for var_name in &var_names {
+                                let hash_call = self.make_hash_var_expr(var_name);
+                                let mul = Expr::BinOp(
+                                    Box::new(body),
+                                    BinOp::Mul,
+                                    Box::new(Expr::Int(31, self.span())),
+                                    self.span(),
+                                );
+                                body = Expr::BinOp(
+                                    Box::new(mul),
+                                    BinOp::Add,
+                                    Box::new(hash_call),
+                                    self.span(),
+                                );
+                            }
+                            (pattern, body)
+                        }
+                        VariantFields::Named(fields) => {
+                            // For named fields, we treat them like positional
+                            let var_names: Vec<String> = fields.iter()
+                                .map(|f| f.name.node.clone())
+                                .collect();
+                            let patterns: Vec<Pattern> = var_names.iter()
+                                .map(|name| Pattern::Var(self.ident(name)))
+                                .collect();
+                            let pattern = Pattern::Variant(
+                                self.ident(&variant.name.node),
+                                VariantPatternFields::Positional(patterns),
+                                self.span(),
+                            );
+
+                            let mut body = Expr::Int(idx as i64, self.span());
+                            for var_name in &var_names {
+                                let hash_call = self.make_hash_var_expr(var_name);
+                                let mul = Expr::BinOp(
+                                    Box::new(body),
+                                    BinOp::Mul,
+                                    Box::new(Expr::Int(31, self.span())),
+                                    self.span(),
+                                );
+                                body = Expr::BinOp(
+                                    Box::new(mul),
+                                    BinOp::Add,
+                                    Box::new(hash_call),
+                                    self.span(),
+                                );
+                            }
+                            (pattern, body)
+                        }
+                    };
+                    MatchArm {
+                        pattern,
+                        guard: None,
+                        body,
+                        span: self.span(),
+                    }
+                }).collect();
+
+                Expr::Match(
+                    Box::new(Expr::Var(self.ident("self"))),
+                    arms,
+                    self.span(),
+                )
+            }
+            _ => return Err(CompileError::CannotDerive {
+                trait_name: "Hash".to_string(),
+                ty: type_name.to_string(),
+                reason: "can only derive Hash for record and variant types".to_string(),
+                span: def.name.span,
+            }),
+        };
+
+        // Create the trait impl
+        Ok(TraitImpl {
+            ty: TypeExpr::Name(self.ident(base_name)),
+            trait_name: self.ident("Hash"),
+            when_clause: vec![],
+            methods: vec![FnDef {
+                visibility: Visibility::Public,
+                doc: None,
+                name: self.ident("hash"),
+                type_params: vec![],
+                clauses: vec![FnClause {
+                    params: vec![FnParam {
+                        pattern: Pattern::Var(self.ident("self")),
+                        ty: None,
+                    }],
+                    guard: None,
+                    return_type: Some(TypeExpr::Name(self.ident("Int"))),
+                    body,
+                    span: self.span(),
+                }],
+                span: self.span(),
+            }],
+            span: self.span(),
+        })
+    }
+
+    /// Helper: make hash(self.field) expression
+    fn make_hash_field_expr(&self, obj: &str, field: &str) -> Expr {
+        let field_access = Expr::FieldAccess(
+            Box::new(Expr::Var(self.ident(obj))),
+            self.ident(field),
+            self.span(),
+        );
+        Expr::Call(
+            Box::new(Expr::Var(self.ident("hash"))),
+            vec![field_access],
+            self.span(),
+        )
+    }
+
+    /// Helper: make hash(var) expression
+    fn make_hash_var_expr(&self, var: &str) -> Expr {
+        Expr::Call(
+            Box::new(Expr::Var(self.ident("hash"))),
+            vec![Expr::Var(self.ident(var))],
+            self.span(),
+        )
+    }
+
+    /// Synthesize a Show trait implementation for a type.
+    fn synthesize_show_impl(&self, type_name: &str, def: &TypeDef) -> Result<TraitImpl, CompileError> {
+        let base_name = type_name.split("::").last().unwrap_or(type_name);
+
+        let body = match &def.body {
+            TypeBody::Record(fields) => {
+                // show(self) = "TypeName { f1: " ++ show(self.f1) ++ ", f2: " ++ show(self.f2) ++ " }"
+                if fields.is_empty() {
+                    Expr::String(StringLit::Plain(format!("{} {{}}", base_name)), self.span())
+                } else {
+                    let mut expr = Expr::String(
+                        StringLit::Plain(format!("{} {{ {}: ", base_name, fields[0].name.node)),
+                        self.span(),
+                    );
+                    expr = self.concat_show_field(expr, "self", &fields[0].name.node);
+
+                    for field in fields.iter().skip(1) {
+                        expr = Expr::BinOp(
+                            Box::new(expr),
+                            BinOp::Concat,
+                            Box::new(Expr::String(
+                                StringLit::Plain(format!(", {}: ", field.name.node)),
+                                self.span(),
+                            )),
+                            self.span(),
+                        );
+                        expr = self.concat_show_field(expr, "self", &field.name.node);
+                    }
+
+                    Expr::BinOp(
+                        Box::new(expr),
+                        BinOp::Concat,
+                        Box::new(Expr::String(StringLit::Plain(" }".to_string()), self.span())),
+                        self.span(),
+                    )
+                }
+            }
+            TypeBody::Variant(variants) => {
+                // Build a match expression that shows each variant
+                let arms: Vec<MatchArm> = variants.iter().map(|variant| {
+                    let (pattern, body) = match &variant.fields {
+                        VariantFields::Unit => {
+                            let pattern = Pattern::Variant(
+                                self.ident(&variant.name.node),
+                                VariantPatternFields::Unit,
+                                self.span(),
+                            );
+                            let body = Expr::String(
+                                StringLit::Plain(variant.name.node.clone()),
+                                self.span(),
+                            );
+                            (pattern, body)
+                        }
+                        VariantFields::Positional(field_types) => {
+                            let var_names: Vec<String> = (0..field_types.len())
+                                .map(|i| format!("__f{}", i))
+                                .collect();
+                            let patterns: Vec<Pattern> = var_names.iter()
+                                .map(|name| Pattern::Var(self.ident(name)))
+                                .collect();
+                            let pattern = Pattern::Variant(
+                                self.ident(&variant.name.node),
+                                VariantPatternFields::Positional(patterns),
+                                self.span(),
+                            );
+
+                            // "VariantName(" ++ show(a) ++ ", " ++ show(b) ++ ")"
+                            let mut body = Expr::String(
+                                StringLit::Plain(format!("{}(", variant.name.node)),
+                                self.span(),
+                            );
+                            for (i, var_name) in var_names.iter().enumerate() {
+                                if i > 0 {
+                                    body = Expr::BinOp(
+                                        Box::new(body),
+                                        BinOp::Concat,
+                                        Box::new(Expr::String(
+                                            StringLit::Plain(", ".to_string()),
+                                            self.span(),
+                                        )),
+                                        self.span(),
+                                    );
+                                }
+                                body = Expr::BinOp(
+                                    Box::new(body),
+                                    BinOp::Concat,
+                                    Box::new(self.make_show_var_expr(var_name)),
+                                    self.span(),
+                                );
+                            }
+                            body = Expr::BinOp(
+                                Box::new(body),
+                                BinOp::Concat,
+                                Box::new(Expr::String(StringLit::Plain(")".to_string()), self.span())),
+                                self.span(),
+                            );
+                            (pattern, body)
+                        }
+                        VariantFields::Named(fields) => {
+                            let var_names: Vec<String> = fields.iter()
+                                .map(|f| f.name.node.clone())
+                                .collect();
+                            let patterns: Vec<Pattern> = var_names.iter()
+                                .map(|name| Pattern::Var(self.ident(name)))
+                                .collect();
+                            let pattern = Pattern::Variant(
+                                self.ident(&variant.name.node),
+                                VariantPatternFields::Positional(patterns),
+                                self.span(),
+                            );
+
+                            let mut body = Expr::String(
+                                StringLit::Plain(format!("{}(", variant.name.node)),
+                                self.span(),
+                            );
+                            for (i, var_name) in var_names.iter().enumerate() {
+                                if i > 0 {
+                                    body = Expr::BinOp(
+                                        Box::new(body),
+                                        BinOp::Concat,
+                                        Box::new(Expr::String(
+                                            StringLit::Plain(", ".to_string()),
+                                            self.span(),
+                                        )),
+                                        self.span(),
+                                    );
+                                }
+                                body = Expr::BinOp(
+                                    Box::new(body),
+                                    BinOp::Concat,
+                                    Box::new(self.make_show_var_expr(var_name)),
+                                    self.span(),
+                                );
+                            }
+                            body = Expr::BinOp(
+                                Box::new(body),
+                                BinOp::Concat,
+                                Box::new(Expr::String(StringLit::Plain(")".to_string()), self.span())),
+                                self.span(),
+                            );
+                            (pattern, body)
+                        }
+                    };
+                    MatchArm {
+                        pattern,
+                        guard: None,
+                        body,
+                        span: self.span(),
+                    }
+                }).collect();
+
+                Expr::Match(
+                    Box::new(Expr::Var(self.ident("self"))),
+                    arms,
+                    self.span(),
+                )
+            }
+            _ => return Err(CompileError::CannotDerive {
+                trait_name: "Show".to_string(),
+                ty: type_name.to_string(),
+                reason: "can only derive Show for record and variant types".to_string(),
+                span: def.name.span,
+            }),
+        };
+
+        Ok(TraitImpl {
+            ty: TypeExpr::Name(self.ident(base_name)),
+            trait_name: self.ident("Show"),
+            when_clause: vec![],
+            methods: vec![FnDef {
+                visibility: Visibility::Public,
+                doc: None,
+                name: self.ident("show"),
+                type_params: vec![],
+                clauses: vec![FnClause {
+                    params: vec![FnParam {
+                        pattern: Pattern::Var(self.ident("self")),
+                        ty: None,
+                    }],
+                    guard: None,
+                    return_type: Some(TypeExpr::Name(self.ident("String"))),
+                    body,
+                    span: self.span(),
+                }],
+                span: self.span(),
+            }],
+            span: self.span(),
+        })
+    }
+
+    /// Helper: concatenate expr with show(self.field)
+    fn concat_show_field(&self, expr: Expr, obj: &str, field: &str) -> Expr {
+        let field_access = Expr::FieldAccess(
+            Box::new(Expr::Var(self.ident(obj))),
+            self.ident(field),
+            self.span(),
+        );
+        let show_call = Expr::Call(
+            Box::new(Expr::Var(self.ident("show"))),
+            vec![field_access],
+            self.span(),
+        );
+        Expr::BinOp(
+            Box::new(expr),
+            BinOp::Concat,
+            Box::new(show_call),
+            self.span(),
+        )
+    }
+
+    /// Helper: make show(var) expression
+    fn make_show_var_expr(&self, var: &str) -> Expr {
+        Expr::Call(
+            Box::new(Expr::Var(self.ident("show"))),
+            vec![Expr::Var(self.ident(var))],
+            self.span(),
+        )
+    }
+
+    /// Synthesize a Copy trait implementation for a type.
+    /// Copy simply returns self - the VM handles value copying semantically.
+    fn synthesize_copy_impl(&self, type_name: &str, def: &TypeDef) -> Result<TraitImpl, CompileError> {
+        let base_name = type_name.split("::").last().unwrap_or(type_name);
+
+        // Verify the type can be derived
+        let body = match &def.body {
+            TypeBody::Record(_) | TypeBody::Variant(_) => {
+                // For all copyable types, just return self
+                // The VM will handle the actual copy semantics
+                Expr::Var(self.ident("self"))
+            }
+            _ => return Err(CompileError::CannotDerive {
+                trait_name: "Copy".to_string(),
+                ty: type_name.to_string(),
+                reason: "can only derive Copy for record and variant types".to_string(),
+                span: def.name.span,
+            }),
+        };
+
+        Ok(TraitImpl {
+            ty: TypeExpr::Name(self.ident(base_name)),
+            trait_name: self.ident("Copy"),
+            when_clause: vec![],
+            methods: vec![FnDef {
+                visibility: Visibility::Public,
+                doc: None,
+                name: self.ident("copy"),
+                type_params: vec![],
+                clauses: vec![FnClause {
+                    params: vec![FnParam {
+                        pattern: Pattern::Var(self.ident("self")),
+                        ty: None,
+                    }],
+                    guard: None,
+                    return_type: None,
+                    body,
+                    span: self.span(),
+                }],
+                span: self.span(),
+            }],
+            span: self.span(),
+        })
+    }
+
+    /// Synthesize an Eq trait implementation for a type.
+    fn synthesize_eq_impl(&self, type_name: &str, def: &TypeDef) -> Result<TraitImpl, CompileError> {
+        let base_name = type_name.split("::").last().unwrap_or(type_name);
+
+        let body = match &def.body {
+            TypeBody::Record(fields) => {
+                // self.f1 == other.f1 && self.f2 == other.f2 && ...
+                if fields.is_empty() {
+                    Expr::Bool(true, self.span())
+                } else {
+                    let mut expr = self.make_field_eq_expr("self", "other", &fields[0].name.node);
+                    for field in fields.iter().skip(1) {
+                        let field_eq = self.make_field_eq_expr("self", "other", &field.name.node);
+                        expr = Expr::BinOp(
+                            Box::new(expr),
+                            BinOp::And,
+                            Box::new(field_eq),
+                            self.span(),
+                        );
+                    }
+                    expr
+                }
+            }
+            TypeBody::Variant(_) => {
+                // For variants, use built-in equality which handles discriminants and fields
+                Expr::BinOp(
+                    Box::new(Expr::Var(self.ident("self"))),
+                    BinOp::Eq,
+                    Box::new(Expr::Var(self.ident("other"))),
+                    self.span(),
+                )
+            }
+            _ => return Err(CompileError::CannotDerive {
+                trait_name: "Eq".to_string(),
+                ty: type_name.to_string(),
+                reason: "can only derive Eq for record and variant types".to_string(),
+                span: def.name.span,
+            }),
+        };
+
+        Ok(TraitImpl {
+            ty: TypeExpr::Name(self.ident(base_name)),
+            trait_name: self.ident("Eq"),
+            when_clause: vec![],
+            methods: vec![FnDef {
+                visibility: Visibility::Public,
+                doc: None,
+                name: self.ident("=="),
+                type_params: vec![],
+                clauses: vec![FnClause {
+                    params: vec![
+                        FnParam {
+                            pattern: Pattern::Var(self.ident("self")),
+                            ty: None,
+                        },
+                        FnParam {
+                            pattern: Pattern::Var(self.ident("other")),
+                            ty: None,
+                        },
+                    ],
+                    guard: None,
+                    return_type: Some(TypeExpr::Name(self.ident("Bool"))),
+                    body,
+                    span: self.span(),
+                }],
+                span: self.span(),
+            }],
+            span: self.span(),
+        })
+    }
+
+    /// Helper: make self.field == other.field expression
+    fn make_field_eq_expr(&self, obj1: &str, obj2: &str, field: &str) -> Expr {
+        let field1 = Expr::FieldAccess(
+            Box::new(Expr::Var(self.ident(obj1))),
+            self.ident(field),
+            self.span(),
+        );
+        let field2 = Expr::FieldAccess(
+            Box::new(Expr::Var(self.ident(obj2))),
+            self.ident(field),
+            self.span(),
+        );
+        Expr::BinOp(
+            Box::new(field1),
+            BinOp::Eq,
+            Box::new(field2),
+            self.span(),
+        )
     }
 
     /// Compile a trait definition.
@@ -620,14 +1231,19 @@ impl Compiler {
         Ok(())
     }
 
+    /// Check if a trait is a built-in derivable trait.
+    fn is_builtin_derivable_trait(&self, name: &str) -> bool {
+        matches!(name, "Hash" | "Show" | "Copy" | "Eq")
+    }
+
     /// Compile a trait implementation.
     fn compile_trait_impl(&mut self, impl_def: &TraitImpl) -> Result<(), CompileError> {
         // Get the type name from the type expression
         let type_name = self.type_expr_to_string(&impl_def.ty);
         let trait_name = impl_def.trait_name.node.clone();
 
-        // Check that the trait exists
-        if !self.trait_defs.contains_key(&trait_name) {
+        // Check that the trait exists (unless it's a built-in derivable trait)
+        if !self.trait_defs.contains_key(&trait_name) && !self.is_builtin_derivable_trait(&trait_name) {
             return Err(CompileError::UnknownTrait {
                 name: trait_name,
                 span: impl_def.trait_name.span,
@@ -727,11 +1343,24 @@ impl Compiler {
         if let Some(traits) = self.type_traits.get(type_name) {
             for trait_name in traits {
                 // Check if this trait has the method
-                if let Some(trait_info) = self.trait_defs.get(trait_name) {
-                    if trait_info.methods.iter().any(|m| m.name == method_name) {
-                        // Return the qualified function name
-                        return Some(format!("{}.{}.{}", type_name, trait_name, method_name));
+                // For built-in derivable traits, we know the method names
+                let has_method = if self.is_builtin_derivable_trait(trait_name) {
+                    match (trait_name.as_str(), method_name) {
+                        ("Show", "show") => true,
+                        ("Hash", "hash") => true,
+                        ("Copy", "copy") => true,
+                        ("Eq", "==") => true,
+                        _ => false,
                     }
+                } else if let Some(trait_info) = self.trait_defs.get(trait_name) {
+                    trait_info.methods.iter().any(|m| m.name == method_name)
+                } else {
+                    false
+                };
+
+                if has_method {
+                    // Return the qualified function name
+                    return Some(format!("{}.{}.{}", type_name, trait_name, method_name));
                 }
             }
         }
@@ -747,6 +1376,111 @@ impl Compiler {
             }
         }
         false
+    }
+
+    /// Check if a type implements a specific trait.
+    fn type_implements_trait(&self, type_name: &str, trait_name: &str) -> bool {
+        // Check if this is a primitive type with built-in trait support
+        let is_primitive_hashable = matches!(
+            type_name,
+            "Int" | "Float" | "Bool" | "String" | "Char" | "Atom"
+        );
+
+        if is_primitive_hashable && trait_name == "Hash" {
+            return true;
+        }
+
+        // Check primitive Show support (all types have native show)
+        if trait_name == "Show" {
+            return true; // All types can be shown (fall back to native)
+        }
+
+        // Check primitive Eq support
+        let is_primitive_eq = matches!(
+            type_name,
+            "Int" | "Float" | "Bool" | "String" | "Char" | "Atom"
+        );
+        if is_primitive_eq && trait_name == "Eq" {
+            return true;
+        }
+
+        // Check if the type has an explicit trait implementation
+        if let Some(traits) = self.type_traits.get(type_name) {
+            if traits.contains(&trait_name.to_string()) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Check trait bounds for a function call.
+    /// Returns an error if any type parameter's trait bounds are not satisfied.
+    fn check_trait_bounds(
+        &self,
+        fn_name: &str,
+        type_params: &[TypeParam],
+        arg_types: &[Option<String>],
+        span: Span,
+    ) -> Result<(), CompileError> {
+        // Get the function's parameter patterns to map args to type params
+        let fn_def = match self.fn_asts.get(fn_name) {
+            Some(def) => def,
+            None => return Ok(()), // Can't check if we don't have the AST
+        };
+
+        if fn_def.clauses.is_empty() {
+            return Ok(());
+        }
+
+        let params = &fn_def.clauses[0].params;
+
+        // Build a map from type param name to the concrete type it's bound to
+        let mut type_bindings: HashMap<String, String> = HashMap::new();
+
+        for (i, param) in params.iter().enumerate() {
+            if let Some(ref type_expr) = param.ty {
+                // If the parameter has a type annotation like `x: T`, extract the type param name
+                if let TypeExpr::Name(ident) = type_expr {
+                    let type_param_name = &ident.node;
+                    // Check if this is one of our type parameters
+                    if type_params.iter().any(|tp| &tp.name.node == type_param_name) {
+                        // We found a type parameter - map it to the concrete arg type
+                        if i < arg_types.len() {
+                            if let Some(ref concrete_type) = arg_types[i] {
+                                type_bindings.insert(type_param_name.clone(), concrete_type.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Now check that each type parameter's bounds are satisfied
+        for type_param in type_params {
+            let type_param_name = &type_param.name.node;
+
+            // Get the concrete type bound to this type parameter
+            let concrete_type = match type_bindings.get(type_param_name) {
+                Some(t) => t,
+                None => continue, // Type not used or not known, skip checking
+            };
+
+            // Check each constraint (trait bound)
+            for constraint in &type_param.constraints {
+                let trait_name = &constraint.node;
+
+                if !self.type_implements_trait(concrete_type, trait_name) {
+                    return Err(CompileError::TraitBoundNotSatisfied {
+                        type_name: concrete_type.clone(),
+                        trait_name: trait_name.clone(),
+                        span,
+                    });
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Compile a function definition.
@@ -773,6 +1507,11 @@ impl Compiler {
 
         // Store AST for potential monomorphization
         self.fn_asts.insert(name.clone(), def.clone());
+
+        // Store type parameters with bounds for trait bound checking at call sites
+        if !def.type_params.is_empty() {
+            self.fn_type_params.insert(name.clone(), def.type_params.clone());
+        }
 
         // Check if we need pattern matching dispatch
         let needs_dispatch = def.clauses.len() > 1 || def.clauses.iter().any(|clause| {
@@ -2309,8 +3048,27 @@ impl Compiler {
                         self.chunk.emit(Instruction::MakeFloat64Array(dst, arg_regs[0]), 0);
                         return Ok(dst);
                     }
-                    // === Dynamic builtins (trait-based, keep CallNative for now) ===
-                    "show" | "copy" | "hash" => {
+                    // === Trait-based builtins (show, copy, hash) ===
+                    // First try trait dispatch, then fall back to native
+                    "show" | "copy" | "hash" if arg_regs.len() == 1 => {
+                        // Try to dispatch to trait method if type is known
+                        if let Some(arg_type) = self.expr_type_name(&args[0]) {
+                            if let Some(qualified_method) = self.find_trait_method(&arg_type, &qualified_name) {
+                                if self.functions.contains_key(&qualified_method) {
+                                    let dst = self.alloc_reg();
+                                    let func_idx = *self.function_indices.get(&qualified_method)
+                                        .expect("Function should have been assigned an index");
+                                    if is_tail {
+                                        self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
+                                        return Ok(0);
+                                    } else {
+                                        self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
+                                        return Ok(dst);
+                                    }
+                                }
+                            }
+                        }
+                        // Fall back to native call
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
                         self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
@@ -2341,10 +3099,22 @@ impl Compiler {
                     }
                     _ => {} // Fall through to normal function lookup
                 }
+
             }
 
             // Resolve the name (handles imports and module path)
             let resolved_name = self.resolve_name(&qualified_name);
+
+            // Check trait bounds if the function has type parameters with constraints
+            if let Some(type_params) = self.fn_type_params.get(&resolved_name).cloned() {
+                if !type_params.is_empty() {
+                    // Get argument types for bound checking
+                    let arg_types: Vec<Option<String>> = args.iter()
+                        .map(|arg| self.expr_type_name(arg))
+                        .collect();
+                    self.check_trait_bounds(&resolved_name, &type_params, &arg_types, func.span())?;
+                }
+            }
 
             // Try monomorphization: if we know argument types, compile specialized variant
             let call_name = if self.fn_asts.contains_key(&resolved_name) && !args.is_empty() {
@@ -2455,8 +3225,25 @@ impl Compiler {
     /// This is used for trait method dispatch.
     fn expr_type_name(&self, expr: &Expr) -> Option<String> {
         match expr {
-            // Record construction: Point{x: 1, y: 2}
-            Expr::Record(type_name, _, _) => Some(type_name.node.clone()),
+            // Record/variant construction: Point(1, 2) or Point{x: 1, y: 2}
+            // Note: The parser treats uppercase calls like Foo(42) as Record expressions
+            Expr::Record(type_name, _, _) => {
+                let name = &type_name.node;
+                // First check if it's directly a type name (for records and single-constructor variants)
+                if self.types.contains_key(name) {
+                    return Some(name.clone());
+                }
+                // Otherwise check if it's a variant constructor
+                for (ty_name, info) in &self.types {
+                    if let TypeInfoKind::Variant { constructors } = &info.kind {
+                        if constructors.iter().any(|(ctor_name, _)| ctor_name == name) {
+                            return Some(ty_name.clone());
+                        }
+                    }
+                }
+                // Fall back to the given name (might be an unknown type, will error later)
+                Some(name.clone())
+            }
             // Tuple
             Expr::Tuple(_, _) => Some("Tuple".to_string()),
             // List
@@ -4096,6 +4883,7 @@ impl Compiler {
         let mut fn_order: Vec<String> = Vec::new();
         let mut fn_spans: std::collections::HashMap<String, Span> = std::collections::HashMap::new();
         let mut fn_visibility: std::collections::HashMap<String, Visibility> = std::collections::HashMap::new();
+        let mut fn_type_params_map: std::collections::HashMap<String, Vec<TypeParam>> = std::collections::HashMap::new();
 
         for item in items {
             if let Item::FnDef(fn_def) = item {
@@ -4103,8 +4891,9 @@ impl Compiler {
                 if !fn_clauses.contains_key(&qualified_name) {
                     fn_order.push(qualified_name.clone());
                     fn_spans.insert(qualified_name.clone(), fn_def.span);
-                    // Use visibility from first definition
+                    // Use visibility and type_params from first definition
                     fn_visibility.insert(qualified_name.clone(), fn_def.visibility);
+                    fn_type_params_map.insert(qualified_name.clone(), fn_def.type_params.clone());
                 }
                 fn_clauses.entry(qualified_name).or_default().extend(fn_def.clauses.iter().cloned());
             }
@@ -4150,6 +4939,7 @@ impl Compiler {
                 visibility: *fn_visibility.get(name).unwrap_or(&Visibility::Private),
                 doc: None,
                 name: Spanned::new(local_name.to_string(), span),
+                type_params: fn_type_params_map.get(name).cloned().unwrap_or_default(),
                 clauses: clauses.clone(),
                 span,
             };

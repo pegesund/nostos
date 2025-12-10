@@ -1,0 +1,12 @@
+# expect: "passed"
+type Empty = {} deriving Hash
+
+main() = {
+    e1 = Empty()
+    e2 = Empty()
+    h1 = hash(e1)
+    h2 = hash(e2)
+    assert(h1 == h2)
+    assert(h1 == 0)
+    "passed"
+}

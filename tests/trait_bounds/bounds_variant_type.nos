@@ -1,0 +1,16 @@
+# expect: "passed"
+type Result = Ok(Int) | Err(String) deriving (Hash, Eq)
+
+hashable[T: Hash](x: T) -> Int = hash(x)
+equal[T: Eq](x: T, y: T) -> Bool = x == y
+
+main() = {
+    ok = Ok(42)
+    err = Err("error")
+    h1 = hashable(ok)
+    h2 = hashable(err)
+    assert(h1 != h2)
+    assert(equal(ok, Ok(42)) == true)
+    assert(equal(ok, err) == false)
+    "passed"
+}

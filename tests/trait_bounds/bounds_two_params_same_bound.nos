@@ -1,0 +1,13 @@
+# expect: "passed"
+type A = A(Int) deriving Hash
+type B = B(Int) deriving Hash
+
+hash_both[T: Hash, U: Hash](x: T, y: U) -> Int = hash(x) + hash(y)
+
+main() = {
+    a = A(1)
+    b = B(2)
+    result = hash_both(a, b)
+    assert(result != 0)
+    "passed"
+}

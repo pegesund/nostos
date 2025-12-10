@@ -1,0 +1,19 @@
+# expect: "passed"
+# Test deriving Copy for a type
+type Point = Point(Int, Int) deriving Copy
+main() = {
+    p1 = Point(3, 4)
+    p2 = copy(p1)
+    # Copy should create an equal value - use pattern matching to extract values
+    match p1
+        Point(x1, y1) -> {
+            match p2
+                Point(x2, y2) -> {
+                    assert_eq(x1, x2)
+                    assert_eq(y1, y2)
+                    "passed"
+                }
+            end
+        }
+    end
+}

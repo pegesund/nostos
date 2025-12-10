@@ -1,0 +1,16 @@
+# expect_error: does not implement trait
+type OnlyHash = OnlyHash(Int) deriving Hash
+
+all_traits[T: Hash + Eq + Show](x: T, y: T) -> Bool = {
+    h = hash(x)
+    s = show(x)
+    eq = x == y
+    true
+}
+
+main() = {
+    a1 = OnlyHash(42)
+    a2 = OnlyHash(42)
+    result = all_traits(a1, a2)
+    result
+}

@@ -1,0 +1,15 @@
+# expect: "passed"
+type Val = Val(Int) deriving (Hash, Eq)
+
+hashable[T: Hash](x: T) -> Int = hash(x)
+equal[T: Eq](x: T, y: T) -> Bool = x == y
+
+main() = {
+    v1 = Val(42)
+    v2 = Val(42)
+    h = hashable(v1)
+    eq = equal(v1, v2)
+    assert(h != 0)
+    assert(eq == true)
+    "passed"
+}

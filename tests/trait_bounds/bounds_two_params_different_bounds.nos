@@ -1,0 +1,18 @@
+# expect: "passed"
+type H = H(Int) deriving Hash
+type E = E(Int) deriving Eq
+
+mixed[T: Hash, U: Eq](x: T, y: U, z: U) -> Int = {
+    h = hash(x)
+    eq = if y == z then 1 else 0
+    h + eq
+}
+
+main() = {
+    h = H(42)
+    e1 = E(1)
+    e2 = E(1)
+    result = mixed(h, e1, e2)
+    assert(result != 0)
+    "passed"
+}

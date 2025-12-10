@@ -1,0 +1,21 @@
+# expect: "passed"
+# Test derived Hash/Eq record type for lookup
+type Point = { x: Int, y: Int } deriving (Hash, Eq)
+type Option = Some(String) | NotFound deriving Eq
+
+find_point([], _) = NotFound
+find_point([(k, v) | rest], target) = if k == target then Some(v) else find_point(rest, target)
+
+main() = {
+    p1 = Point(0, 0)
+    p2 = Point(1, 1)
+    p3 = Point(0, 0)
+
+    pairs = [(p1, "origin"), (p2, "diagonal")]
+    v = find_point(pairs, p3)
+
+    assert(v == Some("origin"))
+    assert(hash(p1) == hash(p3))
+    assert(p1 == p3)
+    "passed"
+}

@@ -1,0 +1,11 @@
+# expect: "passed"
+type Wrapper = { value: Int } deriving Hash
+
+main() = {
+    w1 = Wrapper(42)
+    w2 = Wrapper(42)
+    w3 = Wrapper(100)
+    assert(hash(w1) == hash(w2))
+    assert(hash(w1) != hash(w3))
+    "passed"
+}

@@ -1,0 +1,13 @@
+# expect: "passed"
+# Type parameters without constraints should work with any type
+identity[T](x: T) -> T = x
+
+main() = {
+    a = identity(42)
+    b = identity("hello")
+    c = identity(true)
+    assert(a == 42)
+    assert(b == "hello")
+    assert(c == true)
+    "passed"
+}

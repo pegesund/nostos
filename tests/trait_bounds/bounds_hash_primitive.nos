@@ -1,0 +1,10 @@
+hashable[T: Hash](x: T) -> Int = hash(x)
+
+main() = {
+    h1 = hashable(42)
+    h2 = hashable("hello")
+    h3 = hashable(true)
+    assert(h1 != 0)
+    assert(h2 != 0)
+    "passed"
+}

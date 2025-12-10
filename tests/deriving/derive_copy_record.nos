@@ -1,0 +1,9 @@
+# expect: "passed"
+type Point = { x: Int, y: Int } deriving (Copy, Eq)
+
+main() = {
+    p1 = Point(10, 20)
+    p2 = copy(p1)
+    assert(p1 == p2)
+    "passed"
+}

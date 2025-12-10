@@ -1,0 +1,10 @@
+type Point = Point(Int, Int) deriving Hash
+
+hashable[T: Hash](x: T) -> Int = hash(x)
+
+main() = {
+    p = Point(3, 4)
+    h = hashable(p)
+    assert(h != 0)
+    "passed"
+}

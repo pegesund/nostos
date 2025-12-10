@@ -1,0 +1,9 @@
+# expect: "passed"
+type Empty = {} deriving Eq
+
+main() = {
+    e1 = Empty()
+    e2 = Empty()
+    assert(e1 == e2)
+    "passed"
+}

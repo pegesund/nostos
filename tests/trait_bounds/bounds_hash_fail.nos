@@ -1,0 +1,10 @@
+# expect_error: does not implement trait `Hash`
+type NotHashable = NotHashable(Int, Int)
+
+hashable[T: Hash](x: T) -> Int = hash(x)
+
+main() = {
+    p = NotHashable(3, 4)
+    h = hashable(p)
+    h
+}

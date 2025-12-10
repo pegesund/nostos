@@ -1,0 +1,11 @@
+# expect: "passed"
+type Wrapped = Value(Int) deriving Eq
+
+main() = {
+    v1 = Value(42)
+    v2 = Value(42)
+    v3 = Value(100)
+    assert(v1 == v2)
+    assert(v1 != v3)
+    "passed"
+}

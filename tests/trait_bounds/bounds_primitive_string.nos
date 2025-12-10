@@ -1,0 +1,8 @@
+# expect: "passed"
+hashable[T: Hash](x: T) -> Int = hash(x)
+
+main() = {
+    h = hashable("hello")
+    assert(h != 0)
+    "passed"
+}

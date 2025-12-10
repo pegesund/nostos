@@ -1,0 +1,12 @@
+# expect: "passed"
+showable[T: Show](x: T) -> String = show(x)
+
+main() = {
+    s1 = showable(42)
+    s2 = showable("hello")
+    s3 = showable(true)
+    assert(s1 == "42")
+    assert(s2 == "hello")
+    assert(s3 == "true")
+    "passed"
+}

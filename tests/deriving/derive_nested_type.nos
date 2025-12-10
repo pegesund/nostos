@@ -1,0 +1,25 @@
+# expect: "passed"
+type Inner = Inner(Int) deriving (Hash, Eq)
+type Outer = Outer(Inner) deriving (Hash, Eq)
+
+main() = {
+    i1 = Inner(42)
+    i2 = Inner(42)
+    i3 = Inner(100)
+
+    o1 = Outer(i1)
+    o2 = Outer(i2)
+    o3 = Outer(i3)
+
+    # Inner type works
+    assert(hash(i1) == hash(i2))
+    assert(i1 == i2)
+    assert(i1 != i3)
+
+    # Outer type works with nested inner
+    assert(hash(o1) == hash(o2))
+    assert(o1 == o2)
+    assert(o1 != o3)
+
+    "passed"
+}

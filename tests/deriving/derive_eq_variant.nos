@@ -1,0 +1,16 @@
+# expect: "passed"
+# Test deriving Eq for a variant type
+trait Eq
+    ==(self, other) -> Bool
+end
+type Color = Red | Green | Blue deriving Eq
+main() = {
+    c1 = Red
+    c2 = Red
+    c3 = Green
+    # Same variants should be equal
+    assert(c1 == c2)
+    # Different variants should not be equal
+    assert(!(c1 == c3))
+    "passed"
+}

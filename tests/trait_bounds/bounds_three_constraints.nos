@@ -1,0 +1,17 @@
+# expect: "passed"
+type All = All(Int) deriving (Hash, Eq, Show)
+
+all_traits[T: Hash + Eq + Show](x: T, y: T) -> Bool = {
+    h = hash(x)
+    s = show(x)
+    eq = x == y
+    h != 0 && length(s) > 0 && eq
+}
+
+main() = {
+    a1 = All(42)
+    a2 = All(42)
+    result = all_traits(a1, a2)
+    assert(result == true)
+    "passed"
+}

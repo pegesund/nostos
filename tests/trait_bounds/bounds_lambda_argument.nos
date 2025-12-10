@@ -1,0 +1,14 @@
+# expect: "passed"
+# Test bounds checking with lambda-like function
+type Val = Val(Int) deriving Hash
+
+hash_it(x: Val) -> Int = hash(x)
+
+apply[T: Hash](f: (T) -> Int, x: T) -> Int = f(x)
+
+main() = {
+    v = Val(42)
+    result = apply(hash_it, v)
+    assert(result != 0)
+    "passed"
+}

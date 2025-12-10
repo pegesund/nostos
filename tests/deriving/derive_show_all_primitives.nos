@@ -1,0 +1,9 @@
+# expect: "passed"
+type AllTypes = { int_val: Int, bool_val: Bool, str_val: String } deriving Show
+
+main() = {
+    t = AllTypes(42, true, "test")
+    s = show(t)
+    assert(s == "AllTypes { int_val: 42, bool_val: true, str_val: test }")
+    "passed"
+}

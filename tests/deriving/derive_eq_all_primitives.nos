@@ -1,0 +1,11 @@
+# expect: "passed"
+type AllTypes = { int_val: Int, bool_val: Bool, str_val: String } deriving Eq
+
+main() = {
+    t1 = AllTypes(42, true, "test")
+    t2 = AllTypes(42, true, "test")
+    t3 = AllTypes(42, false, "test")
+    assert(t1 == t2)
+    assert(t1 != t3)
+    "passed"
+}

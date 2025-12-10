@@ -1,0 +1,14 @@
+# expect: "passed"
+type Signed = { value: Int } deriving Eq
+
+main() = {
+    pos = Signed(42)
+    neg = Signed(-42)
+    zero = Signed(0)
+    assert(pos != neg)
+    assert(pos != zero)
+    assert(neg != zero)
+    neg2 = Signed(-42)
+    assert(neg == neg2)
+    "passed"
+}

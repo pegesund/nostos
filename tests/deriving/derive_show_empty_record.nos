@@ -1,0 +1,9 @@
+# expect: "passed"
+type Empty = {} deriving Show
+
+main() = {
+    e = Empty()
+    s = show(e)
+    assert(s == "Empty {}")
+    "passed"
+}

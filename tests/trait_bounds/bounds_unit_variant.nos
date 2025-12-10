@@ -1,0 +1,13 @@
+# expect: "passed"
+type Color = Red | Green | Blue deriving (Hash, Eq)
+
+hashable[T: Hash](x: T) -> Int = hash(x)
+
+main() = {
+    r = Red
+    g = Green
+    hr = hashable(r)
+    hg = hashable(g)
+    assert(hr != hg)
+    "passed"
+}

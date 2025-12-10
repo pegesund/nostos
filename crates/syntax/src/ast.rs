@@ -123,6 +123,8 @@ pub struct TypeDef {
     pub name: Ident,
     pub type_params: Vec<TypeParam>,
     pub body: TypeBody,
+    /// Traits to automatically derive: `deriving (Hash, Show, Copy)`
+    pub deriving: Vec<Ident>,
     pub span: Span,
 }
 
@@ -200,6 +202,8 @@ pub struct FnDef {
     pub visibility: Visibility,
     pub doc: Option<String>,
     pub name: Ident,
+    /// Type parameters with optional trait bounds: `[T: Hash, U]`
+    pub type_params: Vec<TypeParam>,
     pub clauses: Vec<FnClause>,
     pub span: Span,
 }

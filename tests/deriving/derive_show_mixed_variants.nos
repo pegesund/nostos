@@ -1,0 +1,9 @@
+# expect: "passed"
+type Result = Ok(Int) | Err(String) | Empty deriving Show
+
+main() = {
+    assert(show(Ok(42)) == "Ok(42)")
+    assert(show(Err("failed")) == "Err(failed)")
+    assert(show(Empty) == "Empty")
+    "passed"
+}

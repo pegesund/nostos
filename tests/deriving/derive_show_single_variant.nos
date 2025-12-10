@@ -1,0 +1,9 @@
+# expect: "passed"
+type Wrapped = Value(Int) deriving Show
+
+main() = {
+    v = Value(42)
+    s = show(v)
+    assert(s == "Value(42)")
+    "passed"
+}

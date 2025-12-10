@@ -1,0 +1,16 @@
+# expect: "passed"
+type Num = Num(Int) deriving Hash
+
+hashable[T: Hash](x: T) -> Int = hash(x)
+
+double_hash[T: Hash](x: T) -> Int = {
+    h1 = hashable(x)
+    h1 * 2
+}
+
+main() = {
+    n = Num(42)
+    result = double_hash(n)
+    assert(result != 0)
+    "passed"
+}

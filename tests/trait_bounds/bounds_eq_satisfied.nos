@@ -1,0 +1,12 @@
+type Point = Point(Int, Int) deriving Eq
+
+comparable[T: Eq](x: T, y: T) -> Bool = x == y
+
+main() = {
+    p1 = Point(3, 4)
+    p2 = Point(3, 4)
+    p3 = Point(1, 2)
+    assert(comparable(p1, p2))
+    assert(comparable(p1, p3) == false)
+    "passed"
+}

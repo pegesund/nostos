@@ -1,0 +1,13 @@
+# expect: "passed"
+type Point = Point2D(Int, Int) | Point3D(Int, Int, Int) deriving Eq
+
+main() = {
+    p1 = Point2D(1, 2)
+    p2 = Point2D(1, 2)
+    p3 = Point2D(2, 1)
+    p4 = Point3D(1, 2, 3)
+    assert(p1 == p2)
+    assert(p1 != p3)
+    assert(p1 != p4)
+    "passed"
+}

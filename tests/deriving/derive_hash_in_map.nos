@@ -1,0 +1,22 @@
+# expect: "passed"
+# Test that derived Hash/Eq type can be used in a simple lookup scenario
+type Key = Key(Int) deriving (Hash, Eq)
+type Option = Some(String) | NotFound deriving Eq
+
+find_key([], _) = NotFound
+find_key([(k, v) | rest], target) = if k == target then Some(v) else find_key(rest, target)
+
+main() = {
+    k1 = Key(1)
+    k2 = Key(2)
+    k3 = Key(1)
+
+    pairs = [(k1, "one"), (k2, "two")]
+    v = find_key(pairs, k3)
+    assert(v == Some("one"))
+
+    # Verify hash works for these keys
+    assert(hash(k1) == hash(k3))
+    assert(hash(k1) != hash(k2))
+    "passed"
+}

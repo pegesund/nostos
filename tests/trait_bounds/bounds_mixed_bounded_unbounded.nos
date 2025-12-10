@@ -1,0 +1,13 @@
+# expect: "passed"
+type Hashable = Hashable(Int) deriving Hash
+type NotBounded = NotBounded(Int)
+
+mixed[T: Hash, U](x: T, y: U) -> Int = hash(x)
+
+main() = {
+    h = Hashable(42)
+    n = NotBounded(100)
+    result = mixed(h, n)
+    assert(result != 0)
+    "passed"
+}

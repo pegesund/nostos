@@ -1204,6 +1204,7 @@ fn fn_param() -> impl Parser<Token, FnParam, Error = Simple<Token>> + Clone {
 fn fn_def() -> impl Parser<Token, FnDef, Error = Simple<Token>> + Clone {
     visibility()
         .then(ident())
+        .then(type_params())  // Optional type parameters: [T: Hash, U]
         .then(
             fn_param()
                 .separated_by(just(Token::Comma))
@@ -1213,7 +1214,7 @@ fn fn_def() -> impl Parser<Token, FnDef, Error = Simple<Token>> + Clone {
         .then(just(Token::RightArrow).ignore_then(type_expr()).or_not())
         .then_ignore(just(Token::Eq))
         .then(expr())
-        .map_with_span(|(((((vis, name), params), guard), return_type), body), span| {
+        .map_with_span(|((((((vis, name), type_params), params), guard), return_type), body), span| {
             let clause = FnClause {
                 params,
                 guard,
@@ -1226,6 +1227,7 @@ fn fn_def() -> impl Parser<Token, FnDef, Error = Simple<Token>> + Clone {
                 doc: None,
                 span: to_span(span),
                 name,
+                type_params,
                 clauses: vec![clause],
             }
         })
@@ -1303,6 +1305,20 @@ fn type_body() -> impl Parser<Token, TypeBody, Error = Simple<Token>> + Clone {
     choice((record, variant, alias))
 }
 
+/// Parser for deriving clause: `deriving (Hash, Show, Copy)` or `deriving Hash`
+fn deriving_clause() -> impl Parser<Token, Vec<Ident>, Error = Simple<Token>> + Clone {
+    let single_trait = type_name().map(|t| vec![t]);
+    let multi_traits = type_name()
+        .separated_by(just(Token::Comma))
+        .at_least(1)
+        .delimited_by(just(Token::LParen), just(Token::RParen));
+
+    just(Token::Deriving)
+        .ignore_then(multi_traits.or(single_trait))
+        .or_not()
+        .map(|traits| traits.unwrap_or_default())
+}
+
 /// Parser for type definition.
 fn type_def() -> impl Parser<Token, TypeDef, Error = Simple<Token>> + Clone {
     let mutable = just(Token::Var).or_not().map(|v| v.is_some());
@@ -1313,13 +1329,15 @@ fn type_def() -> impl Parser<Token, TypeDef, Error = Simple<Token>> + Clone {
         .then(type_name())
         .then(type_params())
         .then(just(Token::Eq).ignore_then(type_body()).or_not())
-        .map_with_span(|((((vis, mutable), name), type_params), body), span| TypeDef {
+        .then(deriving_clause())
+        .map_with_span(|(((((vis, mutable), name), type_params), body), deriving), span| TypeDef {
             visibility: vis,
             doc: None,
             mutable,
             name,
             type_params,
             body: body.unwrap_or(TypeBody::Empty),
+            deriving,
             span: to_span(span),
         })
 }

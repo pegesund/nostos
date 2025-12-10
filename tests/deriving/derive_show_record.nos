@@ -1,0 +1,10 @@
+# expect: "passed"
+# Test deriving Show for a variant type
+type Point = Point(Int, Int) deriving Show
+main() = {
+    p = Point(3, 4)
+    s = show(p)
+    # Show should produce a readable string representation
+    assert_eq(s, "Point(3, 4)")
+    "passed"
+}

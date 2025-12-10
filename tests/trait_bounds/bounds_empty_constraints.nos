@@ -1,0 +1,9 @@
+# expect: "passed"
+# Empty type params brackets should work
+identity[](x: Int) -> Int = x
+
+main() = {
+    result = identity(42)
+    assert(result == 42)
+    "passed"
+}

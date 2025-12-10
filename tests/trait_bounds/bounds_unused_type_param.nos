@@ -1,0 +1,9 @@
+# expect: "passed"
+# Type param with bound but not used in function
+ignore[T: Hash](x: Int) -> Int = x * 2
+
+main() = {
+    result = ignore(21)
+    assert(result == 42)
+    "passed"
+}

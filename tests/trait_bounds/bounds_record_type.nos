@@ -1,0 +1,17 @@
+# expect: "passed"
+type Point = { x: Int, y: Int } deriving (Hash, Eq)
+
+hashable[T: Hash](x: T) -> Int = hash(x)
+equal[T: Eq](x: T, y: T) -> Bool = x == y
+
+main() = {
+    p1 = Point(10, 20)
+    p2 = Point(10, 20)
+    p3 = Point(30, 40)
+    h1 = hashable(p1)
+    h2 = hashable(p2)
+    assert(h1 == h2)
+    assert(equal(p1, p2) == true)
+    assert(equal(p1, p3) == false)
+    "passed"
+}

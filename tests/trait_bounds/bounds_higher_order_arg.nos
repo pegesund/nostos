@@ -1,0 +1,14 @@
+# expect: "passed"
+# Test bounds checking when function takes another function
+type Val = Val(Int) deriving Hash
+
+hashable[T: Hash](x: T) -> Int = hash(x)
+
+apply_hash[T: Hash](f: (T) -> Int, x: T) -> Int = f(x)
+
+main() = {
+    v = Val(42)
+    result = apply_hash(hashable, v)
+    assert(result != 0)
+    "passed"
+}

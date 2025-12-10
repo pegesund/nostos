@@ -1,0 +1,11 @@
+# expect: "passed"
+type Copyable = Copyable(Int) deriving (Copy, Eq)
+
+duplicate[T: Copy](x: T) -> T = copy(x)
+
+main() = {
+    c = Copyable(42)
+    c2 = duplicate(c)
+    assert(c == c2)
+    "passed"
+}

@@ -1,0 +1,10 @@
+# expect_error: NotImplemented
+type NotImplemented = NotImplemented(Int)
+
+needs_hash[T: Hash](x: T) -> Int = hash(x)
+
+main() = {
+    n = NotImplemented(42)
+    result = needs_hash(n)
+    result
+}

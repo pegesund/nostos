@@ -1,0 +1,10 @@
+# expect: "passed"
+hashable[T: Hash](x: T) -> Int = hash(x)
+
+main() = {
+    h1 = hashable(true)
+    h2 = hashable(false)
+    # true and false should have different hashes
+    assert(h1 != h2)
+    "passed"
+}

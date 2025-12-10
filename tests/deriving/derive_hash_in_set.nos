@@ -1,0 +1,28 @@
+# expect: "passed"
+# Test derived Hash/Eq for set-like deduplication
+type Tag = Tag(String) deriving (Hash, Eq)
+
+contains([], _) = false
+contains([x | rest], target) = if x == target then true else contains(rest, target)
+
+add_unique(list, item) = if contains(list, item) then list else [item | list]
+
+length([]) = 0
+length([_ | rest]) = 1 + length(rest)
+
+main() = {
+    t1 = Tag("foo")
+    t2 = Tag("bar")
+    t3 = Tag("foo")
+
+    s = []
+    s2 = add_unique(s, t1)
+    s3 = add_unique(s2, t2)
+    s4 = add_unique(s3, t3)
+
+    assert(length(s4) == 2)
+    assert(contains(s4, t1))
+    assert(contains(s4, t3))
+    assert(hash(t1) == hash(t3))
+    "passed"
+}

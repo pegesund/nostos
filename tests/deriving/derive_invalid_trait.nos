@@ -1,0 +1,7 @@
+# expect_error: cannot derive
+type Point = Point(Int, Int) deriving Unknown
+
+main() = {
+    p = Point(1, 2)
+    "should not compile"
+}

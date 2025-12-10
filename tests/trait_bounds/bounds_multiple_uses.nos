@@ -1,0 +1,18 @@
+# expect: "passed"
+# Same bounded function used multiple times with different types
+type A = A(Int) deriving Hash
+type B = B(String) deriving Hash
+
+hashable[T: Hash](x: T) -> Int = hash(x)
+
+main() = {
+    a = A(42)
+    b = B("hello")
+    ha = hashable(a)
+    hb = hashable(b)
+    hi = hashable(100)
+    assert(ha != 0)
+    assert(hb != 0)
+    assert(hi != 0)
+    "passed"
+}

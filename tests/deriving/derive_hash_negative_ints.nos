@@ -1,0 +1,14 @@
+# expect: "passed"
+type Signed = { value: Int } deriving Hash
+
+main() = {
+    pos = Signed(42)
+    neg = Signed(-42)
+    zero = Signed(0)
+    assert(hash(pos) != hash(neg))
+    assert(hash(pos) != hash(zero))
+    assert(hash(neg) != hash(zero))
+    neg2 = Signed(-42)
+    assert(hash(neg) == hash(neg2))
+    "passed"
+}

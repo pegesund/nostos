@@ -1,0 +1,10 @@
+type A = A(Int) deriving Hash
+type B = B(String) deriving Hash
+
+both_hashable[T: Hash, U: Hash](x: T, y: U) -> Int = hash(x) + hash(y)
+
+main() = {
+    result = both_hashable(A(1), B("hello"))
+    assert(result != 0)
+    "passed"
+}

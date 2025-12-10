@@ -1,0 +1,12 @@
+# expect: "passed"
+type Direction = North | South | East | West deriving Hash
+
+main() = {
+    n1 = North
+    n2 = North
+    s = South
+    assert(hash(n1) == hash(n2))
+    assert(hash(n1) != hash(s))
+    assert(hash(East) != hash(West))
+    "passed"
+}

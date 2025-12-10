@@ -1,0 +1,15 @@
+type Point = Point(Int, Int) deriving (Hash, Eq)
+
+compare_and_hash[T: Hash + Eq](x: T, y: T) -> Bool = {
+    h1 = hash(x)
+    h2 = hash(y)
+    eq = x == y
+    eq
+}
+
+main() = {
+    p1 = Point(3, 4)
+    p2 = Point(3, 4)
+    assert(compare_and_hash(p1, p2))
+    "passed"
+}

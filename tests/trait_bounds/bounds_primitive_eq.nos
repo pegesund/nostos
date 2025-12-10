@@ -1,0 +1,10 @@
+# expect: "passed"
+equal[T: Eq](x: T, y: T) -> Bool = x == y
+
+main() = {
+    assert(equal(42, 42) == true)
+    assert(equal(42, 0) == false)
+    assert(equal("a", "a") == true)
+    assert(equal(true, false) == false)
+    "passed"
+}

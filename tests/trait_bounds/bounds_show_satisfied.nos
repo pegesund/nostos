@@ -1,0 +1,11 @@
+# expect: "passed"
+type Display = Display(Int) deriving Show
+
+showable[T: Show](x: T) -> String = show(x)
+
+main() = {
+    d = Display(42)
+    s = showable(d)
+    assert(s == "Display(42)")
+    "passed"
+}

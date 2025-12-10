@@ -1,0 +1,10 @@
+# expect_error: does not implement trait `Copy`
+type NotCopyable = NotCopyable(Int)
+
+duplicate[T: Copy](x: T) -> T = copy(x)
+
+main() = {
+    nc = NotCopyable(42)
+    result = duplicate(nc)
+    result
+}
