@@ -1,0 +1,37 @@
+# expect: "passed"
+# Test Hash trait implementation for custom types
+
+type Point = Point(Int, Int)
+
+trait Hash
+    hash(self) -> Int
+end
+
+Point: Hash
+    hash(self) = {
+        match self
+            Point(x, y) -> x * 31 + y
+        end
+    }
+end
+
+main() = {
+    p1 = Point(3, 4)
+    p2 = Point(3, 4)
+    p3 = Point(5, 6)
+    
+    h1 = hash(p1)
+    h2 = hash(p2)
+    h3 = hash(p3)
+    
+    # Same points have same hash
+    assert_eq(h1, h2)
+    
+    # Different points have different hash
+    assert(h1 != h3)
+    
+    # Verify the calculation
+    assert_eq(h1, 3 * 31 + 4)
+    
+    "passed"
+}

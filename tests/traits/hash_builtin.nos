@@ -1,0 +1,30 @@
+# expect: "passed"
+# Test built-in hash function for primitive types
+
+main() = {
+    # Same value produces same hash
+    h1 = hash(42)
+    h2 = hash(42)
+    assert_eq(h1, h2)
+    
+    # Different values produce different hashes
+    h3 = hash(43)
+    assert(h1 != h3)
+    
+    # Boolean hashing
+    h_true = hash(true)
+    h_false = hash(false)
+    assert_eq(h_true, 1)
+    assert_eq(h_false, 0)
+    
+    # String hashing
+    h_str1 = hash("hello")
+    h_str2 = hash("hello")
+    assert_eq(h_str1, h_str2)
+    
+    # Unit hash
+    h_unit = hash(())
+    assert_eq(h_unit, 0)
+    
+    "passed"
+}

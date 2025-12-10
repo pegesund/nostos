@@ -2310,7 +2310,7 @@ impl Compiler {
                         return Ok(dst);
                     }
                     // === Dynamic builtins (trait-based, keep CallNative for now) ===
-                    "show" | "copy" => {
+                    "show" | "copy" | "hash" => {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
                         self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);

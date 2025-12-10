@@ -741,6 +741,51 @@ impl ParallelVM {
                 }
             }),
         }));
+
+        // Hash - compute hash value for a value (FNV-1a algorithm)
+        self.register_native("hash", Arc::new(GcNativeFn {
+            name: "hash".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                fn fnv1a_hash(bytes: &[u8]) -> i64 {
+                    let mut hash: u64 = 14695981039346656037; // FNV offset basis
+                    for byte in bytes {
+                        hash ^= *byte as u64;
+                        hash = hash.wrapping_mul(1099511628211); // FNV prime
+                    }
+                    hash as i64
+                }
+
+                let hash_val = match &args[0] {
+                    GcValue::Unit => 0i64,
+                    GcValue::Bool(b) => if *b { 1 } else { 0 },
+                    GcValue::Char(c) => fnv1a_hash(&(*c as u32).to_le_bytes()),
+                    GcValue::Int8(n) => fnv1a_hash(&n.to_le_bytes()),
+                    GcValue::Int16(n) => fnv1a_hash(&n.to_le_bytes()),
+                    GcValue::Int32(n) => fnv1a_hash(&n.to_le_bytes()),
+                    GcValue::Int64(n) => fnv1a_hash(&n.to_le_bytes()),
+                    GcValue::UInt8(n) => fnv1a_hash(&n.to_le_bytes()),
+                    GcValue::UInt16(n) => fnv1a_hash(&n.to_le_bytes()),
+                    GcValue::UInt32(n) => fnv1a_hash(&n.to_le_bytes()),
+                    GcValue::UInt64(n) => fnv1a_hash(&n.to_le_bytes()),
+                    GcValue::Float32(f) => fnv1a_hash(&f.to_le_bytes()),
+                    GcValue::Float64(f) => fnv1a_hash(&f.to_le_bytes()),
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                            fnv1a_hash(str_val.data.as_bytes())
+                        } else {
+                            return Err(RuntimeError::Panic("Invalid string pointer".to_string()));
+                        }
+                    }
+                    // For complex types, return an error - user should implement Hash trait
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "hashable type (primitive or String)".to_string(),
+                        found: "complex type - implement Hash trait".to_string()
+                    }),
+                };
+                Ok(GcValue::Int64(hash_val))
+            }),
+        }));
     }
 
     /// Register a type.
@@ -3289,9 +3334,14 @@ impl ThreadWorker {
                 };
                 let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r).clone()).collect();
 
-                // Check for trait overrides for "show" and "copy"
-                let trait_method = if !arg_values.is_empty() && (name == "show" || name == "copy") {
-                    let trait_name = if name == "show" { "Show" } else { "Copy" };
+                // Check for trait overrides for "show", "copy", and "hash"
+                let trait_method = if !arg_values.is_empty() && (name == "show" || name == "copy" || name == "hash") {
+                    let trait_name = match name.as_str() {
+                        "show" => "Show",
+                        "copy" => "Copy",
+                        "hash" => "Hash",
+                        _ => unreachable!(),
+                    };
                     let proc = self.get_process(local_id).unwrap();
                     let type_name = arg_values[0].type_name(&proc.heap).to_string();
                     let qualified_name = format!("{}.{}.{}", type_name, trait_name, name);
