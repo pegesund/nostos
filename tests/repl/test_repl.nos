@@ -1,0 +1,27 @@
+# Test script for REPL piped input
+# Run with: nostos repl < tests/repl/test_repl.nos
+
+# Define a factorial function
+fact(n) = if n <= 1 then 1 else n * fact(n - 1)
+
+# Test it
+fact(5)
+fact(10)
+
+# Define a typed function
+add(x: Int, y: Int) -> Int = x + y
+add(100, 200)
+
+# List and tuple expressions
+[1, 2, 3]
+(1, "hello", true)
+
+# Show info about our functions
+:info fact
+:info add
+
+# View source
+:view fact
+:view add
+
+:quit

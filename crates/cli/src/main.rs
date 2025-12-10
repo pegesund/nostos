@@ -1,5 +1,7 @@
 //! Nostos CLI - Command-line interface for running Nostos programs.
 
+mod repl;
+
 use nostos_compiler::compile::{compile_module, Compiler};
 use nostos_jit::{JitCompiler, JitConfig};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
@@ -8,6 +10,8 @@ use nostos_vm::value::RuntimeError;
 use std::env;
 use std::fs;
 use std::process::ExitCode;
+
+use repl::{Repl, ReplConfig};
 
 /// Recursively visit directories and find .nos files
 fn visit_dirs(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
@@ -177,18 +181,79 @@ fn json_string(s: &str) -> String {
     result
 }
 
+/// Run the REPL with optional initial files
+fn run_repl(args: &[String]) -> ExitCode {
+    let mut config = ReplConfig::default();
+    let mut files_to_load = Vec::new();
+
+    // Parse repl-specific options
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--no-jit" {
+            config.enable_jit = false;
+            i += 1;
+        } else if arg == "--threads" && i + 1 < args.len() {
+            if let Ok(n) = args[i + 1].parse::<usize>() {
+                config.num_threads = n;
+            }
+            i += 2;
+        } else if arg.starts_with("-") {
+            eprintln!("Unknown option: {}", arg);
+            i += 1;
+        } else {
+            // Treat as file to load
+            files_to_load.push(arg.clone());
+            i += 1;
+        }
+    }
+
+    let mut repl = Repl::new(config);
+
+    // Load stdlib
+    if let Err(e) = repl.load_stdlib() {
+        eprintln!("Warning: Failed to load stdlib: {}", e);
+    }
+
+    // Load any specified files
+    for file in files_to_load {
+        if let Err(e) = repl.load_file(&file) {
+            eprintln!("Error loading {}: {}", file, e);
+            return ExitCode::FAILURE;
+        }
+        println!("Loaded {}", file);
+    }
+
+    // Run the REPL
+    match repl.run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("REPL error: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: nostos [options] <file.nos> [args...]");
+        eprintln!("Usage: nostos [options] <command|file.nos> [args...]");
         eprintln!();
-        eprintln!("Run a Nostos program file.");
+        eprintln!("Commands:");
+        eprintln!("  repl       Start the interactive REPL");
+        eprintln!();
+        eprintln!("Run a Nostos program file or start the REPL.");
         eprintln!();
         eprintln!("Options:");
         eprintln!("  --help     Show this help message");
         eprintln!("  --version  Show version information");
         return ExitCode::FAILURE;
+    }
+
+    // Check for repl subcommand
+    if args.len() >= 2 && args[1] == "repl" {
+        return run_repl(&args[2..]);
     }
 
     // Parse options
@@ -203,9 +268,12 @@ fn main() -> ExitCode {
         let arg = &args[i];
         if arg.starts_with("--") || arg.starts_with("-") {
             if arg == "--help" || arg == "-h" {
-                println!("Usage: nostos [options] <file.nos> [args...]");
+                println!("Usage: nostos [options] <command|file.nos> [args...]");
                 println!();
-                println!("Run a Nostos program file.");
+                println!("Commands:");
+                println!("  repl           Start the interactive REPL");
+                println!();
+                println!("Run a Nostos program file or start the REPL.");
                 println!();
                 println!("Options:");
                 println!("  --help           Show this help message");
@@ -214,6 +282,11 @@ fn main() -> ExitCode {
                 println!("  --debug          Show local variable values in stack traces");
                 println!("  --json-errors    Output errors as JSON (for debugger integration)");
                 println!("  --threads N      Use N worker threads (default: all CPUs)");
+                println!();
+                println!("REPL usage:");
+                println!("  nostos repl              Start interactive REPL");
+                println!("  nostos repl file.nos     Load file and start REPL");
+                println!("  nostos repl < script.nos Run script non-interactively");
                 return ExitCode::SUCCESS;
             }
             if arg == "--version" || arg == "-v" {
@@ -256,6 +329,7 @@ fn main() -> ExitCode {
 
     if file_idx >= args.len() {
         eprintln!("Error: No input file specified");
+        eprintln!("Use 'nostos repl' to start the interactive REPL");
         return ExitCode::FAILURE;
     }
 

@@ -840,6 +840,10 @@ impl ParallelVM {
     /// Run the VM with the given main function.
     /// Returns the result of the main process.
     pub fn run(&mut self, main_func: Arc<FunctionValue>) -> Result<Option<SendableValue>, RuntimeError> {
+        // Clear previous run state
+        self.thread_senders.clear();
+        self.shared.shutdown.store(false, Ordering::SeqCst);
+
         // Create channels for each thread
         let mut receivers = Vec::with_capacity(self.num_threads);
         for _ in 0..self.num_threads {
