@@ -2464,6 +2464,46 @@ impl ThreadWorker {
                     fast_set!(*dst, result);
                     return Ok(StepResult::Continue);
                 }
+                ToBigInt(dst, src) => {
+                    let result = match fast_reg!(*src) {
+                        GcValue::Int64(v) => {
+                            let bi = num_bigint::BigInt::from(*v);
+                            GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                        }
+                        GcValue::Int32(v) => {
+                            let bi = num_bigint::BigInt::from(*v);
+                            GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                        }
+                        GcValue::Int16(v) => {
+                            let bi = num_bigint::BigInt::from(*v);
+                            GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                        }
+                        GcValue::Int8(v) => {
+                            let bi = num_bigint::BigInt::from(*v);
+                            GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                        }
+                        GcValue::UInt64(v) => {
+                            let bi = num_bigint::BigInt::from(*v);
+                            GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                        }
+                        GcValue::UInt32(v) => {
+                            let bi = num_bigint::BigInt::from(*v);
+                            GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                        }
+                        GcValue::UInt16(v) => {
+                            let bi = num_bigint::BigInt::from(*v);
+                            GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                        }
+                        GcValue::UInt8(v) => {
+                            let bi = num_bigint::BigInt::from(*v);
+                            GcValue::BigInt(proc.heap.alloc_bigint(bi))
+                        }
+                        GcValue::BigInt(v) => GcValue::BigInt(*v), // Already BigInt
+                        _ => return Err(RuntimeError::TypeError { expected: "integer".into(), found: "other".into() }),
+                    };
+                    fast_set!(*dst, result);
+                    return Ok(StepResult::Continue);
+                }
                 LtInt(dst, l, r) => {
                     let result = match (fast_reg!(*l), fast_reg!(*r)) {
                         (GcValue::Int64(a), GcValue::Int64(b)) => a < b,
@@ -2854,6 +2894,21 @@ impl ThreadWorker {
                     (GcValue::Int64(x), GcValue::Int64(y)) => {
                         if *y == 0 { return Err(RuntimeError::DivisionByZero); }
                         GcValue::Int64(x / y)
+                    }
+                    (GcValue::Int32(x), GcValue::Int32(y)) => {
+                        if *y == 0 { return Err(RuntimeError::DivisionByZero); }
+                        GcValue::Int32(x / y)
+                    }
+                    (GcValue::BigInt(x), GcValue::BigInt(y)) => {
+                        let proc = self.get_process(local_id).unwrap();
+                        let x_val = proc.heap.get_bigint(*x).unwrap();
+                        let y_val = proc.heap.get_bigint(*y).unwrap();
+                        if y_val.value == num_bigint::BigInt::from(0) {
+                            return Err(RuntimeError::DivisionByZero);
+                        }
+                        let result = &x_val.value / &y_val.value;
+                        let proc_mut = self.get_process_mut(local_id).unwrap();
+                        GcValue::BigInt(proc_mut.heap.alloc_bigint(result))
                     }
                     (GcValue::Float64(x), GcValue::Float64(y)) => {
                         if *y == 0.0 { return Err(RuntimeError::DivisionByZero); }
@@ -5676,8 +5731,19 @@ impl ThreadWorker {
                 let val = reg!(*src).clone();
                 match val {
                     GcValue::Int64(i) => set_reg!(*dst, GcValue::Int64(-i)),
+                    GcValue::Int32(i) => set_reg!(*dst, GcValue::Int32(-i)),
+                    GcValue::Int16(i) => set_reg!(*dst, GcValue::Int16(-i)),
+                    GcValue::Int8(i) => set_reg!(*dst, GcValue::Int8(-i)),
+                    GcValue::BigInt(bi) => {
+                        let proc = self.get_process(local_id).unwrap();
+                        let bi_val = proc.heap.get_bigint(bi).unwrap();
+                        let result = -&bi_val.value;
+                        let proc_mut = self.get_process_mut(local_id).unwrap();
+                        let result_ptr = proc_mut.heap.alloc_bigint(result);
+                        set_reg!(*dst, GcValue::BigInt(result_ptr));
+                    }
                     _ => return Err(RuntimeError::TypeError {
-                        expected: "Int64".to_string(),
+                        expected: "integer".to_string(),
                         found: format!("{:?}", val),
                     }),
                 }

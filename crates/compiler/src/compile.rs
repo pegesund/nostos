@@ -472,9 +472,19 @@ impl Compiler {
         matches!(ty, "Float" | "Float32" | "Float64")
     }
 
-    /// Check if a type name refers to an integer type.
+    /// Check if a type name refers to a BigInt type.
+    fn is_bigint_type_name(ty: &str) -> bool {
+        ty == "BigInt"
+    }
+
+    /// Check if a type name refers to a small integer type (not BigInt).
+    fn is_small_int_type_name(ty: &str) -> bool {
+        matches!(ty, "Int" | "Int8" | "Int16" | "Int32" | "Int64" | "UInt8" | "UInt16" | "UInt32" | "UInt64")
+    }
+
+    /// Check if a type name refers to an integer type (including BigInt).
     fn is_int_type_name(ty: &str) -> bool {
-        matches!(ty, "Int" | "Int8" | "Int16" | "Int32" | "Int64" | "UInt8" | "UInt16" | "UInt32" | "UInt64" | "BigInt")
+        Self::is_small_int_type_name(ty) || Self::is_bigint_type_name(ty)
     }
 
     fn is_float_expr(&self, expr: &Expr) -> bool {
@@ -607,6 +617,96 @@ impl Compiler {
             }
             // Function calls: assume non-int by default
             Expr::Call(_, _, _) => false,
+            _ => false,
+        }
+    }
+
+    /// Check if an expression is known to be a BigInt at compile time.
+    fn is_bigint_expr(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::BigInt(_, _) => true,
+            Expr::Int(_, _) | Expr::Int8(_, _) | Expr::Int16(_, _) | Expr::Int32(_, _)
+            | Expr::UInt8(_, _) | Expr::UInt16(_, _) | Expr::UInt32(_, _) | Expr::UInt64(_, _)
+            | Expr::Float(_, _) | Expr::Float32(_, _) | Expr::Decimal(_, _) => false,
+            // Check if variable is known to be BigInt
+            Expr::Var(ident) => {
+                // Check local_types
+                if let Some(ty) = self.local_types.get(&ident.node) {
+                    return Self::is_bigint_type_name(ty);
+                }
+                // Check param_types
+                if let Some(ty) = self.param_types.get(&ident.node) {
+                    return Self::is_bigint_type_name(ty);
+                }
+                false
+            }
+            // Field access: look up the field's type
+            Expr::FieldAccess(obj, field, _) => {
+                if let Some(obj_type) = self.expr_type_name(obj) {
+                    if let Some(type_info) = self.types.get(&obj_type) {
+                        if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
+                            for (fname, ftype) in fields {
+                                if fname == &field.node {
+                                    return Self::is_bigint_type_name(ftype);
+                                }
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            Expr::BinOp(left, op, right, _) => {
+                match op {
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                        self.is_bigint_expr(left) || self.is_bigint_expr(right)
+                    }
+                    _ => false,
+                }
+            }
+            Expr::UnaryOp(UnaryOp::Neg, operand, _) => self.is_bigint_expr(operand),
+            Expr::If(_, then_branch, else_branch, _) => {
+                self.is_bigint_expr(then_branch) || self.is_bigint_expr(else_branch)
+            }
+            Expr::Block(stmts, _) => {
+                stmts.last().map(|s| match s {
+                    Stmt::Expr(e) => self.is_bigint_expr(e),
+                    _ => false,
+                }).unwrap_or(false)
+            }
+            Expr::Call(_, _, _) => false,
+            _ => false,
+        }
+    }
+
+    /// Check if an expression is a small int (not BigInt) at compile time.
+    fn is_small_int_expr(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Int(_, _) | Expr::Int8(_, _) | Expr::Int16(_, _) | Expr::Int32(_, _)
+            | Expr::UInt8(_, _) | Expr::UInt16(_, _) | Expr::UInt32(_, _) | Expr::UInt64(_, _) => true,
+            Expr::BigInt(_, _) | Expr::Float(_, _) | Expr::Float32(_, _) | Expr::Decimal(_, _) => false,
+            Expr::Var(ident) => {
+                if let Some(ty) = self.local_types.get(&ident.node) {
+                    return Self::is_small_int_type_name(ty);
+                }
+                if let Some(ty) = self.param_types.get(&ident.node) {
+                    return Self::is_small_int_type_name(ty);
+                }
+                false
+            }
+            Expr::FieldAccess(obj, field, _) => {
+                if let Some(obj_type) = self.expr_type_name(obj) {
+                    if let Some(type_info) = self.types.get(&obj_type) {
+                        if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
+                            for (fname, ftype) in fields {
+                                if fname == &field.node {
+                                    return Self::is_small_int_type_name(ftype);
+                                }
+                            }
+                        }
+                    }
+                }
+                false
+            }
             _ => false,
         }
     }
@@ -2900,16 +3000,21 @@ impl Compiler {
             _ => {}
         }
 
-        // Check if we should use float operations
+        // Check numeric types for coercion
         let left_is_float = self.is_float_expr(left);
         let right_is_float = self.is_float_expr(right);
+        let left_is_bigint = self.is_bigint_expr(left);
+        let right_is_bigint = self.is_bigint_expr(right);
         let is_float = left_is_float || right_is_float;
+        let is_bigint = left_is_bigint || right_is_bigint;
 
         let mut left_reg = self.compile_expr_tail(left, false)?;
         let mut right_reg = self.compile_expr_tail(right, false)?;
 
-        // Emit int->float coercion if needed (when mixing int and float)
+        // Emit type coercion if needed
+        // Priority: Float > BigInt > small ints
         if is_float {
+            // Float coercion: convert non-floats to float
             if !left_is_float && self.is_int_expr(left) {
                 let coerced = self.alloc_reg();
                 self.chunk.emit(Instruction::IntToFloat(coerced, left_reg), self.span_line(left.span()));
@@ -2918,6 +3023,18 @@ impl Compiler {
             if !right_is_float && self.is_int_expr(right) {
                 let coerced = self.alloc_reg();
                 self.chunk.emit(Instruction::IntToFloat(coerced, right_reg), self.span_line(right.span()));
+                right_reg = coerced;
+            }
+        } else if is_bigint {
+            // BigInt coercion: convert small ints to BigInt
+            if !left_is_bigint && self.is_small_int_expr(left) {
+                let coerced = self.alloc_reg();
+                self.chunk.emit(Instruction::ToBigInt(coerced, left_reg), self.span_line(left.span()));
+                left_reg = coerced;
+            }
+            if !right_is_bigint && self.is_small_int_expr(right) {
+                let coerced = self.alloc_reg();
+                self.chunk.emit(Instruction::ToBigInt(coerced, right_reg), self.span_line(right.span()));
                 right_reg = coerced;
             }
         }
