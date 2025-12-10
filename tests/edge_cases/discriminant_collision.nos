@@ -1,0 +1,22 @@
+# expect: "passed"
+# Test that variant pattern matching uses exact constructor name comparison,
+# not just discriminant hash. "Full" and "Wb" have the same FNV-1a hash
+# truncated to u16, which was causing incorrect pattern matching.
+
+type Container = Full(Int) | Wb(Int)
+
+check(c) =
+    match c
+        Full(x) -> "full: " ++ show(x)
+        Wb(x) -> "wb: " ++ show(x)
+    end
+
+main() = {
+    a = Full(1)
+    b = Wb(2)
+    result_a = check(a)
+    result_b = check(b)
+    assert_eq(result_a, "full: 1")
+    assert_eq(result_b, "wb: 2")
+    "passed"
+}

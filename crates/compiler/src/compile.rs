@@ -3077,11 +3077,11 @@ impl Compiler {
                 self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
             }
             Pattern::Variant(ctor, fields, _) => {
-                // Compute discriminant at compile time for fast runtime matching
+                // Store constructor name in constants for exact string matching
                 // Qualify the constructor name with module path to match how variants are created
                 let qualified_ctor = self.qualify_name(&ctor.node);
-                let discriminant = constructor_discriminant(&qualified_ctor);
-                self.chunk.emit(Instruction::TestTag(success_reg, scrut_reg, discriminant), 0);
+                let ctor_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_ctor.clone())));
+                self.chunk.emit(Instruction::TestTag(success_reg, scrut_reg, ctor_idx), 0);
 
                 // Look up field types for this constructor
                 let field_types = self.get_constructor_field_types(&qualified_ctor);
@@ -3745,6 +3745,9 @@ impl Compiler {
     /// Allocate a new register.
     fn alloc_reg(&mut self) -> Reg {
         let reg = self.next_reg;
+        if reg == 255 {
+            panic!("Register limit exceeded: function has too many local variables (max ~120). Consider breaking into smaller functions.");
+        }
         self.next_reg += 1;
         reg
     }

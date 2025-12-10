@@ -22,7 +22,7 @@ use crossbeam::channel::{self, Sender, Receiver, TryRecvError};
 
 use tokio::sync::mpsc as tokio_mpsc;
 
-use crate::gc::{constructor_discriminant, GcConfig, GcList, GcMapKey, GcNativeFn, GcValue, Heap, InlineOp};
+use crate::gc::{GcConfig, GcList, GcMapKey, GcNativeFn, GcValue, Heap, InlineOp};
 use crate::io_runtime::{IoRequest, IoRuntime};
 use crate::process::{CallFrame, IoResponseValue, Process, ProcessState, ThreadSafeValue};
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, TypeValue, Value};
@@ -5081,18 +5081,22 @@ impl ThreadWorker {
                 set_reg!(*dst, GcValue::Bool(result));
             }
 
-            TestTag(dst, value, discriminant) => {
-                // Discriminant is computed at compile time - just compare u16 directly!
+            TestTag(dst, value, ctor_idx) => {
+                // Compare constructor name exactly (stored in constants)
+                let expected_ctor = match &constants[*ctor_idx as usize] {
+                    Value::String(s) => s.as_str(),
+                    _ => return Err(RuntimeError::Panic("TestTag: expected string constant".to_string())),
+                };
                 let value_clone = reg!(*value).clone();
                 let result = match &value_clone {
                     GcValue::Variant(ptr) => {
                         let proc = self.get_process(local_id).unwrap();
-                        proc.heap.get_variant(*ptr).map(|v| v.discriminant == *discriminant).unwrap_or(false)
+                        proc.heap.get_variant(*ptr).map(|v| v.constructor.as_str() == expected_ctor).unwrap_or(false)
                     }
                     GcValue::Record(ptr) => {
-                        // Records: compute discriminant of type_name at runtime
+                        // Records: compare type_name directly
                         let proc = self.get_process(local_id).unwrap();
-                        proc.heap.get_record(*ptr).map(|r| constructor_discriminant(&r.type_name) == *discriminant).unwrap_or(false)
+                        proc.heap.get_record(*ptr).map(|r| r.type_name.as_str() == expected_ctor).unwrap_or(false)
                     }
                     _ => false,
                 };
