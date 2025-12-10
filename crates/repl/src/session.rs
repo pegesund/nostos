@@ -610,6 +610,7 @@ mod tests {
             visibility: Visibility::Public,
             doc: None,
             name: Spanned::new(name.to_string(), Span::default()),
+            type_params: vec![],
             clauses: vec![FnClause {
                 params: vec![],
                 guard: None,

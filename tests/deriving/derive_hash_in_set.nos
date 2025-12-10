@@ -1,6 +1,6 @@
 # expect: "passed"
 # Test derived Hash/Eq for set-like deduplication
-type Tag = Tag(String) deriving (Hash, Eq)
+type Tag = Tag(String) deriving (Hash + Eq)
 
 contains([], _) = false
 contains([x | rest], target) = if x == target then true else contains(rest, target)

@@ -159,6 +159,14 @@ pub struct SendableRecord {
     pub fields: Vec<SendableValue>,
 }
 
+/// Thread-safe variant value.
+#[derive(Clone, Debug)]
+pub struct SendableVariant {
+    pub type_name: String,
+    pub constructor: String,
+    pub fields: Vec<SendableValue>,
+}
+
 /// Thread-safe sendable map key.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SendableMapKey {
@@ -197,6 +205,7 @@ pub enum SendableValue {
     List(Vec<SendableValue>),
     Tuple(Vec<SendableValue>),
     Record(SendableRecord),
+    Variant(SendableVariant),
     Map(std::collections::HashMap<SendableMapKey, SendableValue>),
     Set(std::collections::HashSet<SendableMapKey>),
     Error(String),
@@ -271,6 +280,21 @@ impl SendableValue {
                     })
                 } else {
                     SendableValue::String("<record>".to_string())
+                }
+            }
+            GcValue::Variant(ptr) => {
+                if let Some(variant) = heap.get_variant(*ptr) {
+                    let fields: Vec<SendableValue> = variant.fields
+                        .iter()
+                        .map(|v| SendableValue::from_gc_value(v, heap))
+                        .collect();
+                    SendableValue::Variant(SendableVariant {
+                        type_name: variant.type_name.to_string(),
+                        constructor: variant.constructor.to_string(),
+                        fields,
+                    })
+                } else {
+                    SendableValue::String("<variant>".to_string())
                 }
             }
             GcValue::Set(ptr) => {
@@ -390,6 +414,14 @@ impl SendableValue {
                 format!("%{{...{} entries}}", entries.len())
             }
             SendableValue::Error(e) => format!("Error: {}", e),
+            SendableValue::Variant(v) => {
+                if v.fields.is_empty() {
+                    v.constructor.clone()
+                } else {
+                    let fields_str: Vec<String> = v.fields.iter().map(|f| f.display()).collect();
+                    format!("{}({})", v.constructor, fields_str.join(", "))
+                }
+            }
         }
     }
 
@@ -433,6 +465,15 @@ impl SendableValue {
                     field_names: r.field_names.clone(),
                     fields,
                     mutable_fields: vec![false; r.fields.len()],
+                }))
+            }
+            SendableValue::Variant(v) => {
+                let fields: Vec<Value> = v.fields.iter().map(|f| f.to_value()).collect();
+                Value::Variant(Arc::new(crate::value::VariantValue {
+                    type_name: Arc::new(v.type_name.clone()),
+                    constructor: Arc::new(v.constructor.clone()),
+                    fields,
+                    named_fields: None,
                 }))
             }
             SendableValue::Set(items) => {

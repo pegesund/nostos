@@ -1,4 +1,4 @@
-# expect_error: does not implement trait `Copy`
+# expect_error: TraitBoundNotSatisfied
 type NotCopyable = NotCopyable(Int)
 
 duplicate[T: Copy](x: T) -> T = copy(x)

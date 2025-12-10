@@ -1,6 +1,6 @@
 # expect: "passed"
 # Test deriving multiple traits at once
-type Vec2 = Vec2(Int, Int) deriving (Hash, Show, Eq)
+type Vec2 = Vec2(Int, Int) deriving (Hash + Show + Eq)
 main() = {
     v1 = Vec2(10, 20)
     v2 = Vec2(10, 20)

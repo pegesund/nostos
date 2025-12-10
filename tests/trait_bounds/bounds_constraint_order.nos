@@ -1,6 +1,6 @@
 # expect: "passed"
 # Order of constraints shouldn't matter
-type Val = Val(Int) deriving (Hash, Eq, Show)
+type Val = Val(Int) deriving (Hash + Eq + Show)
 
 forward[T: Hash + Eq](x: T, y: T) -> Bool = x == y
 reverse[T: Eq + Hash](x: T, y: T) -> Bool = x == y

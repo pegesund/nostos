@@ -1,5 +1,5 @@
 # expect: "passed"
-type Option = Some(Int) | None deriving (Hash, Show, Copy, Eq)
+type Option = Some(Int) | None deriving (Hash + Show + Copy + Eq)
 
 main() = {
     s1 = Some(42)

@@ -1,6 +1,6 @@
 # expect: "passed"
 # Test that derived Hash/Eq type can be used in a simple lookup scenario
-type Key = Key(Int) deriving (Hash, Eq)
+type Key = Key(Int) deriving (Hash + Eq)
 type Option = Some(String) | NotFound deriving Eq
 
 find_key([], _) = NotFound

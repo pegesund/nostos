@@ -960,35 +960,47 @@ impl Compiler {
                                 self.span(),
                             );
 
-                            let mut body = Expr::String(
-                                StringLit::Plain(format!("{}(", variant.name.node)),
-                                self.span(),
-                            );
-                            for (i, var_name) in var_names.iter().enumerate() {
-                                if i > 0 {
+                            // "VariantName { field1: " ++ show(field1) ++ ", field2: " ++ show(field2) ++ " }"
+                            let body = if var_names.is_empty() {
+                                Expr::String(
+                                    StringLit::Plain(format!("{} {{}}", variant.name.node)),
+                                    self.span(),
+                                )
+                            } else {
+                                let mut body = Expr::String(
+                                    StringLit::Plain(format!("{} {{ {}: ", variant.name.node, var_names[0])),
+                                    self.span(),
+                                );
+                                body = Expr::BinOp(
+                                    Box::new(body),
+                                    BinOp::Concat,
+                                    Box::new(self.make_show_var_expr(&var_names[0])),
+                                    self.span(),
+                                );
+                                for var_name in var_names.iter().skip(1) {
                                     body = Expr::BinOp(
                                         Box::new(body),
                                         BinOp::Concat,
                                         Box::new(Expr::String(
-                                            StringLit::Plain(", ".to_string()),
+                                            StringLit::Plain(format!(", {}: ", var_name)),
                                             self.span(),
                                         )),
                                         self.span(),
                                     );
+                                    body = Expr::BinOp(
+                                        Box::new(body),
+                                        BinOp::Concat,
+                                        Box::new(self.make_show_var_expr(var_name)),
+                                        self.span(),
+                                    );
                                 }
-                                body = Expr::BinOp(
+                                Expr::BinOp(
                                     Box::new(body),
                                     BinOp::Concat,
-                                    Box::new(self.make_show_var_expr(var_name)),
+                                    Box::new(Expr::String(StringLit::Plain(" }".to_string()), self.span())),
                                     self.span(),
-                                );
-                            }
-                            body = Expr::BinOp(
-                                Box::new(body),
-                                BinOp::Concat,
-                                Box::new(Expr::String(StringLit::Plain(")".to_string()), self.span())),
-                                self.span(),
-                            );
+                                )
+                            };
                             (pattern, body)
                         }
                     };
@@ -4446,8 +4458,31 @@ impl Compiler {
         }
 
         let dst = self.alloc_reg();
-        let type_idx = self.chunk.add_constant(Value::String(Arc::new(type_name.to_string())));
-        self.chunk.emit(Instruction::MakeRecord(dst, type_idx, field_regs.into()), 0);
+
+        // Check if this is a variant constructor (not a record type)
+        // If type_name matches a variant constructor, emit MakeVariant instead of MakeRecord
+        let mut is_variant_ctor = false;
+        let mut parent_type_name: Option<String> = None;
+
+        for (ty_name, info) in &self.types {
+            if let TypeInfoKind::Variant { constructors } = &info.kind {
+                if constructors.iter().any(|(ctor_name, _)| ctor_name == type_name) {
+                    is_variant_ctor = true;
+                    parent_type_name = Some(ty_name.clone());
+                    break;
+                }
+            }
+        }
+
+        if is_variant_ctor {
+            let parent_type = parent_type_name.unwrap();
+            let type_idx = self.chunk.add_constant(Value::String(Arc::new(parent_type)));
+            let ctor_idx = self.chunk.add_constant(Value::String(Arc::new(type_name.to_string())));
+            self.chunk.emit(Instruction::MakeVariant(dst, type_idx, ctor_idx, field_regs.into()), 0);
+        } else {
+            let type_idx = self.chunk.add_constant(Value::String(Arc::new(type_name.to_string())));
+            self.chunk.emit(Instruction::MakeRecord(dst, type_idx, field_regs.into()), 0);
+        }
         Ok(dst)
     }
 
@@ -5500,14 +5535,14 @@ mod tests {
             main() = Some(42)
         ";
         let result = compile_and_run(source);
-        // Note: Currently variants are compiled as Records until we have full type info
+        // Variants are now properly compiled as Variants
         match result {
-            Ok(Value::Record(r)) => {
-                assert_eq!(r.type_name, "Some");
-                assert_eq!(r.fields.len(), 1);
-                assert_eq!(r.fields[0], Value::Int64(42));
+            Ok(Value::Variant(v)) => {
+                assert_eq!(v.constructor.as_str(), "Some");
+                assert_eq!(v.fields.len(), 1);
+                assert_eq!(v.fields[0], Value::Int64(42));
             }
-            other => panic!("Expected record, got {:?}", other),
+            other => panic!("Expected variant, got {:?}", other),
         }
     }
 

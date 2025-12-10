@@ -1,4 +1,4 @@
-# expect_error: does not implement trait `Eq`
+# expect_error: TraitBoundNotSatisfied
 type NotEq = NotEq(Int)
 
 equal[T: Eq](x: T, y: T) -> Bool = x == y

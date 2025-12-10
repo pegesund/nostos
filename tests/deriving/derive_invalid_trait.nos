@@ -1,4 +1,4 @@
-# expect_error: cannot derive
+# expect_error: CannotDerive
 type Point = Point(Int, Int) deriving Unknown
 
 main() = {

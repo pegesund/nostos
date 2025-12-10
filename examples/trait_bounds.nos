@@ -1,0 +1,157 @@
+# Trait Bounds
+#
+# Demonstrates compile-time trait bounds - a way to constrain generic
+# type parameters to only accept types that implement certain traits.
+#
+# This enables you to write generic functions that work with any type,
+# as long as that type has the required capabilities.
+#
+# Syntax:
+#   function_name[T: TraitName](x: T) -> ReturnType
+#   function_name[T: Trait1 + Trait2](x: T) -> ReturnType
+#   function_name[T: Trait1, U: Trait2](x: T, y: U) -> ReturnType
+#
+# Benefits:
+#   - Errors are caught at compile time, not runtime
+#   - Clear error messages show which trait is missing
+#   - Documents what capabilities a function requires
+
+# ========== Types with Derived Traits ==========
+
+type Point = Point(Int, Int) deriving (Hash + Eq + Show)
+type Color = Red | Green | Blue deriving (Hash + Eq + Show)
+type Person = { name: String, age: Int } deriving (Hash + Eq + Show + Copy)
+
+# Type WITHOUT any derived traits (used to demonstrate errors)
+type NoTraits = NoTraits(Int)
+
+# ========== Generic Functions with Bounds ==========
+
+# A function that requires the type to be hashable
+hashable[T: Hash](x: T) -> Int = hash(x)
+
+# A function that requires equality comparison
+are_equal[T: Eq](x: T, y: T) -> Bool = x == y
+
+# A function that requires string representation
+stringify[T: Show](x: T) -> String = show(x)
+
+# A function requiring multiple traits
+hash_and_show[T: Hash + Show](x: T) -> String = {
+    h = hash(x)
+    s = show(x)
+    "hash=" ++ show(h) ++ ", show=" ++ s
+}
+
+# A function with multiple type parameters, each with bounds
+compare_hashes[T: Hash, U: Hash](x: T, y: U) -> Bool = {
+    hash(x) == hash(y)
+}
+
+# Unconstrained type parameter - accepts any type
+identity[T](x: T) -> T = x
+
+# ========== Higher-Order Functions with Bounds ==========
+
+# Apply a function to a hashable value
+apply_to_hashable[T: Hash](f: (T) -> Int, x: T) -> Int = f(x)
+
+# ========== Practical Example: Generic Container ==========
+
+type Box = Box(Int) deriving (Hash + Eq + Show)
+
+# A function that works with any Eq type
+find_in_list[T: Eq](list: List, target: T) -> Bool = {
+    match list
+        [] -> false
+        [x | rest] -> if x == target then true else find_in_list(rest, target)
+    end
+}
+
+# ========== Main Demo ==========
+
+main() = {
+    println("=== Trait Bounds Demo ===")
+    println("")
+
+    # ----- Basic Bounded Functions -----
+    println("--- Basic Bounded Functions ---")
+
+    p = Point(3, 4)
+    c = Red
+    person = Person("Alice", 30)
+
+    # Using hashable[T: Hash]
+    println("hash of Point(3,4): " ++ show(hashable(p)))
+    println("hash of Red: " ++ show(hashable(c)))
+    println("hash of Person: " ++ show(hashable(person)))
+
+    # Primitives also work (Int, String, Bool have Hash)
+    println("hash of 42: " ++ show(hashable(42)))
+    println("hash of \"hello\": " ++ show(hashable("hello")))
+    println("")
+
+    # ----- Equality with Bounds -----
+    println("--- Equality Bounds ---")
+
+    p2 = Point(3, 4)
+    p3 = Point(5, 6)
+
+    println("Point(3,4) == Point(3,4): " ++ show(are_equal(p, p2)))
+    println("Point(3,4) == Point(5,6): " ++ show(are_equal(p, p3)))
+    println("Red == Red: " ++ show(are_equal(Red, Red)))
+    println("Red == Blue: " ++ show(are_equal(Red, Blue)))
+    println("")
+
+    # ----- Show with Bounds -----
+    println("--- Show Bounds ---")
+
+    println("stringify Point: " ++ stringify(p))
+    println("stringify Color: " ++ stringify(Green))
+    println("stringify Int: " ++ stringify(42))
+    println("")
+
+    # ----- Multiple Constraints -----
+    println("--- Multiple Constraints (Hash + Show) ---")
+
+    println("hash_and_show Point: " ++ hash_and_show(p))
+    println("hash_and_show Color: " ++ hash_and_show(Blue))
+    println("")
+
+    # ----- Multiple Type Parameters -----
+    println("--- Multiple Type Parameters ---")
+
+    b1 = Box(42)
+    b2 = Box(42)
+
+    println("Do Box(42) and Point(42,0) have same hash? " ++
+            show(compare_hashes(b1, Point(42, 0))))
+    println("")
+
+    # ----- Unconstrained vs Constrained -----
+    println("--- Unconstrained Type Parameter ---")
+
+    # identity[T] works with ANY type, even those without traits
+    nt = NoTraits(100)
+    result = identity(nt)
+    println("identity works with NoTraits type")
+    println("")
+
+    # ----- Practical: Generic Search -----
+    println("--- Practical: Generic Search ---")
+
+    points = [Point(1,1), Point(2,2), Point(3,3)]
+    println("Is Point(2,2) in list? " ++ show(find_in_list(points, Point(2,2))))
+    println("Is Point(9,9) in list? " ++ show(find_in_list(points, Point(9,9))))
+
+    colors = [Red, Green, Blue]
+    println("Is Green in colors? " ++ show(find_in_list(colors, Green)))
+    println("")
+
+    println("=== All demos completed! ===")
+
+    # Note: If you try to call hashable(NoTraits(1)), you'll get a compile error:
+    # "type `NoTraits` does not implement trait `Hash`"
+
+    0
+}

@@ -1,3 +1,4 @@
+# expect: "passed"
 type A = A(Int) deriving Hash
 type B = B(String) deriving Hash
 

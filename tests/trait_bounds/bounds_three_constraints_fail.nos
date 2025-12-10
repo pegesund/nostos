@@ -1,4 +1,4 @@
-# expect_error: does not implement trait
+# expect_error: TraitBoundNotSatisfied
 type OnlyHash = OnlyHash(Int) deriving Hash
 
 all_traits[T: Hash + Eq + Show](x: T, y: T) -> Bool = {

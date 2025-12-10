@@ -1305,11 +1305,11 @@ fn type_body() -> impl Parser<Token, TypeBody, Error = Simple<Token>> + Clone {
     choice((record, variant, alias))
 }
 
-/// Parser for deriving clause: `deriving (Hash, Show, Copy)` or `deriving Hash`
+/// Parser for deriving clause: `deriving (Hash + Show + Copy)` or `deriving Hash`
 fn deriving_clause() -> impl Parser<Token, Vec<Ident>, Error = Simple<Token>> + Clone {
     let single_trait = type_name().map(|t| vec![t]);
     let multi_traits = type_name()
-        .separated_by(just(Token::Comma))
+        .separated_by(just(Token::Plus))
         .at_least(1)
         .delimited_by(just(Token::LParen), just(Token::RParen));
 
