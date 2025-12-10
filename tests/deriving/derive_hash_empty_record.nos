@@ -1,12 +1,16 @@
 # expect: "passed"
 type Empty = {} deriving Hash
+type AnotherEmpty = {} deriving Hash
 
 main() = {
     e1 = Empty()
     e2 = Empty()
     h1 = hash(e1)
     h2 = hash(e2)
+    # Same type, same values should hash the same
     assert(h1 == h2)
-    assert(h1 == 0)
+    # Different empty types should have different hashes (type name is included)
+    ae = AnotherEmpty()
+    assert(hash(e1) != hash(ae))
     "passed"
 }

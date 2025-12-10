@@ -667,38 +667,45 @@ impl Compiler {
     }
 
     /// Synthesize a Hash trait implementation for a type.
+    /// Uses a proper hash combining algorithm that includes the type name
+    /// to avoid collisions between different types with the same structure.
     fn synthesize_hash_impl(&self, type_name: &str, def: &TypeDef) -> Result<TraitImpl, CompileError> {
         let base_name = type_name.split("::").last().unwrap_or(type_name);
+
+        // Helper to create: hash("type_name") as the base hash
+        let type_name_hash = Expr::Call(
+            Box::new(Expr::Var(self.ident("hash"))),
+            vec![Expr::String(StringLit::Plain(base_name.to_string()), self.span())],
+            self.span(),
+        );
 
         // Build the body expression based on type structure
         let body = match &def.body {
             TypeBody::Record(fields) => {
-                // hash(self) = hash(self.f1) * 31 + hash(self.f2) * 31 + ...
-                if fields.is_empty() {
-                    Expr::Int(0, self.span())
-                } else {
-                    let mut expr = self.make_hash_field_expr("self", &fields[0].name.node);
-                    for field in fields.iter().skip(1) {
-                        let hash_field = self.make_hash_field_expr("self", &field.name.node);
-                        // result * 31 + hash(field)
-                        let mul = Expr::BinOp(
-                            Box::new(expr),
-                            BinOp::Mul,
-                            Box::new(Expr::Int(31, self.span())),
-                            self.span(),
-                        );
-                        expr = Expr::BinOp(
-                            Box::new(mul),
-                            BinOp::Add,
-                            Box::new(hash_field),
-                            self.span(),
-                        );
-                    }
-                    expr
+                // hash(self) = hash("TypeName") * 31 + hash(self.f1) * 31 + hash(self.f2) ...
+                // Start with type name hash to differentiate types with same structure
+                let mut expr = type_name_hash.clone();
+                for field in fields.iter() {
+                    let hash_field = self.make_hash_field_expr("self", &field.name.node);
+                    // result * 31 + hash(field)
+                    let mul = Expr::BinOp(
+                        Box::new(expr),
+                        BinOp::Mul,
+                        Box::new(Expr::Int(31, self.span())),
+                        self.span(),
+                    );
+                    expr = Expr::BinOp(
+                        Box::new(mul),
+                        BinOp::Add,
+                        Box::new(hash_field),
+                        self.span(),
+                    );
                 }
+                expr
             }
             TypeBody::Variant(variants) => {
                 // Build a match expression that hashes each variant
+                // Each variant starts with hash("TypeName") * 31 + discriminant
                 let arms: Vec<MatchArm> = variants.iter().enumerate().map(|(idx, variant)| {
                     let (pattern, body) = match &variant.fields {
                         VariantFields::Unit => {
@@ -708,8 +715,19 @@ impl Compiler {
                                 VariantPatternFields::Unit,
                                 self.span(),
                             );
-                            // Body: idx (just return discriminant hash)
-                            let body = Expr::Int(idx as i64, self.span());
+                            // Body: hash("TypeName") * 31 + idx
+                            let mul = Expr::BinOp(
+                                Box::new(type_name_hash.clone()),
+                                BinOp::Mul,
+                                Box::new(Expr::Int(31, self.span())),
+                                self.span(),
+                            );
+                            let body = Expr::BinOp(
+                                Box::new(mul),
+                                BinOp::Add,
+                                Box::new(Expr::Int(idx as i64, self.span())),
+                                self.span(),
+                            );
                             (pattern, body)
                         }
                         VariantFields::Positional(field_types) => {
@@ -726,8 +744,19 @@ impl Compiler {
                                 self.span(),
                             );
 
-                            // Body: idx * 31^n + hash(a) * 31^(n-1) + ... + hash(z)
-                            let mut body = Expr::Int(idx as i64, self.span());
+                            // Body: hash("TypeName") * 31 + idx, then * 31 + hash(field) for each field
+                            let mul = Expr::BinOp(
+                                Box::new(type_name_hash.clone()),
+                                BinOp::Mul,
+                                Box::new(Expr::Int(31, self.span())),
+                                self.span(),
+                            );
+                            let mut body = Expr::BinOp(
+                                Box::new(mul),
+                                BinOp::Add,
+                                Box::new(Expr::Int(idx as i64, self.span())),
+                                self.span(),
+                            );
                             for var_name in &var_names {
                                 let hash_call = self.make_hash_var_expr(var_name);
                                 let mul = Expr::BinOp(
@@ -759,7 +788,19 @@ impl Compiler {
                                 self.span(),
                             );
 
-                            let mut body = Expr::Int(idx as i64, self.span());
+                            // Body: hash("TypeName") * 31 + idx, then * 31 + hash(field) for each field
+                            let mul = Expr::BinOp(
+                                Box::new(type_name_hash.clone()),
+                                BinOp::Mul,
+                                Box::new(Expr::Int(31, self.span())),
+                                self.span(),
+                            );
+                            let mut body = Expr::BinOp(
+                                Box::new(mul),
+                                BinOp::Add,
+                                Box::new(Expr::Int(idx as i64, self.span())),
+                                self.span(),
+                            );
                             for var_name in &var_names {
                                 let hash_call = self.make_hash_var_expr(var_name);
                                 let mul = Expr::BinOp(
