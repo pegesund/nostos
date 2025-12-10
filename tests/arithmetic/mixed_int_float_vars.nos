@@ -1,0 +1,31 @@
+# expect: ()
+# Test int-to-float coercion with variables
+
+main() = {
+    # Variable with inferred float type from literal
+    x = 2.5
+    assert_eq(25.0, 10 * x)
+    assert_eq(25.0, x * 10)
+
+    # Variable with inferred float type from expression
+    y = 3.14
+    assert_eq(6.28, 2 * y)
+    assert_eq(6.28, y * 2)
+
+    # Integer variable with float literal
+    n = 5
+    assert_eq(7.5, n + 2.5)
+    assert_eq(7.5, 2.5 + n)
+
+    # Both variables, different types
+    a = 10
+    b = 0.5
+    assert_eq(5.0, a * b)
+    assert_eq(10.5, a + b)
+
+    # Function with typed params
+    result = compute(4, 2.5)
+    assert_eq(10.0, result)
+}
+
+compute(n: Int, f: Float) -> Float = n * f

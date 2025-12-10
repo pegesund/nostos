@@ -463,19 +463,35 @@ impl Compiler {
     /// Check if an expression is float-typed (for type-directed operator selection).
     /// This is a simple heuristic: true if the expression is a float literal or
     /// a binary operation on floats.
+    /// Check if a type name refers to a float type.
+    fn is_float_type_name(ty: &str) -> bool {
+        matches!(ty, "Float" | "Float32" | "Float64")
+    }
+
+    /// Check if a type name refers to an integer type.
+    fn is_int_type_name(ty: &str) -> bool {
+        matches!(ty, "Int" | "Int8" | "Int16" | "Int32" | "Int64" | "UInt8" | "UInt16" | "UInt32" | "UInt64" | "BigInt")
+    }
+
     fn is_float_expr(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Float(_, _) | Expr::Float32(_, _) => true,
-            Expr::Int(_, _) => false,
+            Expr::Int(_, _) | Expr::Int8(_, _) | Expr::Int16(_, _) | Expr::Int32(_, _)
+            | Expr::UInt8(_, _) | Expr::UInt16(_, _) | Expr::UInt32(_, _) | Expr::UInt64(_, _)
+            | Expr::BigInt(_, _) | Expr::Decimal(_, _) => false,
             // Check if variable is known to be float
             Expr::Var(ident) => {
                 // Check locals.is_float first
                 if self.locals.get(&ident.node).map(|info| info.is_float).unwrap_or(false) {
                     return true;
                 }
-                // Also check local_types for "Float" or "Float32" or "Float64"
+                // Check local_types for float types
                 if let Some(ty) = self.local_types.get(&ident.node) {
-                    return ty == "Float" || ty == "Float32" || ty == "Float64";
+                    return Self::is_float_type_name(ty);
+                }
+                // Check param_types for function parameters
+                if let Some(ty) = self.param_types.get(&ident.node) {
+                    return Self::is_float_type_name(ty);
                 }
                 false
             }
@@ -486,7 +502,7 @@ impl Compiler {
                         if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
                             for (fname, ftype) in fields {
                                 if fname == &field.node {
-                                    return ftype == "Float" || ftype == "Float32" || ftype == "Float64";
+                                    return Self::is_float_type_name(ftype);
                                 }
                             }
                         }
@@ -520,6 +536,74 @@ impl Compiler {
             // and assuming float based on arguments is incorrect (e.g., show(3.14) returns String).
             Expr::Call(_, _, _) => false,
             _ => false, // Assume non-float by default for other expressions
+        }
+    }
+
+    /// Check if an expression is known to be an integer at compile time.
+    fn is_int_expr(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Int(_, _) | Expr::Int8(_, _) | Expr::Int16(_, _) | Expr::Int32(_, _)
+            | Expr::UInt8(_, _) | Expr::UInt16(_, _) | Expr::UInt32(_, _) | Expr::UInt64(_, _)
+            | Expr::BigInt(_, _) => true,
+            Expr::Float(_, _) | Expr::Float32(_, _) | Expr::Decimal(_, _) => false,
+            // Check if variable is known to be int
+            Expr::Var(ident) => {
+                // Check locals - if it's float, return false
+                if self.locals.get(&ident.node).map(|info| info.is_float).unwrap_or(false) {
+                    return false;
+                }
+                // Check local_types for int types
+                if let Some(ty) = self.local_types.get(&ident.node) {
+                    return Self::is_int_type_name(ty);
+                }
+                // Check param_types for function parameters
+                if let Some(ty) = self.param_types.get(&ident.node) {
+                    return Self::is_int_type_name(ty);
+                }
+                // If type is unknown, we can't safely assume it's an int
+                // (it could be float from pattern matching, etc.)
+                false
+            }
+            // Field access: look up the field's type from the record definition
+            Expr::FieldAccess(obj, field, _) => {
+                if let Some(obj_type) = self.expr_type_name(obj) {
+                    if let Some(type_info) = self.types.get(&obj_type) {
+                        if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
+                            for (fname, ftype) in fields {
+                                if fname == &field.node {
+                                    return Self::is_int_type_name(ftype);
+                                }
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            Expr::BinOp(left, op, right, _) => {
+                // Arithmetic operators: int if both sides are int
+                match op {
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                        self.is_int_expr(left) && self.is_int_expr(right) && !self.is_float_expr(left) && !self.is_float_expr(right)
+                    }
+                    // Comparison operators return bool
+                    _ => false,
+                }
+            }
+            Expr::UnaryOp(UnaryOp::Neg, operand, _) => self.is_int_expr(operand) && !self.is_float_expr(operand),
+            Expr::If(_, then_branch, else_branch, _) => {
+                self.is_int_expr(then_branch) && self.is_int_expr(else_branch)
+                    && !self.is_float_expr(then_branch) && !self.is_float_expr(else_branch)
+            }
+            Expr::Block(stmts, _) => {
+                // Check if the last statement is an expression that is int-typed
+                stmts.last().map(|s| match s {
+                    Stmt::Expr(e) => self.is_int_expr(e) && !self.is_float_expr(e),
+                    _ => false,
+                }).unwrap_or(false)
+            }
+            // Function calls: assume non-int by default
+            Expr::Call(_, _, _) => false,
+            _ => false,
         }
     }
 
@@ -1592,6 +1676,19 @@ impl Compiler {
             }
         }
 
+        // Save and set up param_types for typed parameters (for compile-time type coercion)
+        // Note: We clone instead of take to preserve any pre-set entries (e.g., self -> TypeName from trait impls)
+        let saved_param_types = self.param_types.clone();
+        for param in def.clauses[0].params.iter() {
+            if let Some(param_name) = self.pattern_binding_name(&param.pattern) {
+                if let Some(ty) = &param.ty {
+                    let type_name = self.type_expr_to_string(ty);
+                    // Only insert if not already set (preserve trait impl's self -> TypeName)
+                    self.param_types.entry(param_name).or_insert(type_name);
+                }
+            }
+        }
+
         // Allocate registers for parameters (0..arity)
         self.next_reg = arity as Reg;
 
@@ -1641,6 +1738,7 @@ impl Compiler {
                         self.locals = saved_locals;
                         self.next_reg = saved_next_reg;
                         self.current_function_name = saved_function_name;
+                        self.param_types = saved_param_types;
                         return Ok(());
                     }
                     Err(e) => return Err(e),
@@ -1697,6 +1795,7 @@ impl Compiler {
                     self.locals = saved_locals;
                     self.next_reg = saved_next_reg;
                     self.current_function_name = saved_function_name;
+                    self.param_types = saved_param_types;
                     return Ok(());
                 }
                 Err(e) => return Err(e),
@@ -1758,6 +1857,7 @@ impl Compiler {
         self.locals = saved_locals;
         self.next_reg = saved_next_reg;
         self.current_function_name = saved_function_name;
+        self.param_types = saved_param_types;
 
         Ok(())
     }
@@ -2778,10 +2878,27 @@ impl Compiler {
         }
 
         // Check if we should use float operations
-        let is_float = self.is_float_expr(left) || self.is_float_expr(right);
+        let left_is_float = self.is_float_expr(left);
+        let right_is_float = self.is_float_expr(right);
+        let is_float = left_is_float || right_is_float;
 
-        let left_reg = self.compile_expr_tail(left, false)?;
-        let right_reg = self.compile_expr_tail(right, false)?;
+        let mut left_reg = self.compile_expr_tail(left, false)?;
+        let mut right_reg = self.compile_expr_tail(right, false)?;
+
+        // Emit int->float coercion if needed (when mixing int and float)
+        if is_float {
+            if !left_is_float && self.is_int_expr(left) {
+                let coerced = self.alloc_reg();
+                self.chunk.emit(Instruction::IntToFloat(coerced, left_reg), self.span_line(left.span()));
+                left_reg = coerced;
+            }
+            if !right_is_float && self.is_int_expr(right) {
+                let coerced = self.alloc_reg();
+                self.chunk.emit(Instruction::IntToFloat(coerced, right_reg), self.span_line(right.span()));
+                right_reg = coerced;
+            }
+        }
+
         let dst = self.alloc_reg();
 
         let instr = match op {
@@ -4288,7 +4405,7 @@ impl Compiler {
     /// Check if a type name represents a float type
     fn is_float_type(&self, type_name: &Option<String>) -> bool {
         match type_name {
-            Some(ty) => ty == "Float" || ty == "Float32" || ty == "Float64" || ty == "f32" || ty == "f64",
+            Some(ty) => Self::is_float_type_name(ty) || ty == "f32" || ty == "f64",
             None => false,
         }
     }
