@@ -2092,6 +2092,12 @@ mod tests {
             jit_code: None,
             call_count: AtomicU32::new(0),
             debug_symbols: vec![],
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
         }
     }
 
@@ -2117,6 +2123,12 @@ mod tests {
             jit_code: None,
             call_count: AtomicU32::new(0),
             debug_symbols: vec![],
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
         }
     }
 
@@ -2202,6 +2214,12 @@ mod tests {
             jit_code: None,
             call_count: AtomicU32::new(0),
             debug_symbols: vec![],
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
         }
     }
 
@@ -2297,6 +2315,12 @@ mod tests {
             jit_code: None,
             call_count: AtomicU32::new(0),
             debug_symbols: vec![],
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
         }
     }
 
@@ -2404,6 +2428,12 @@ mod tests {
             jit_code: None,
             call_count: AtomicU32::new(0),
             debug_symbols: vec![],
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
         }
     }
 
@@ -2483,6 +2513,12 @@ mod tests {
             jit_code: None,
             call_count: AtomicU32::new(0),
             debug_symbols: vec![],
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
         }
     }
 
@@ -2588,6 +2624,12 @@ mod tests {
             jit_code: None,
             call_count: AtomicU32::new(0),
             debug_symbols: vec![],
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
         }
     }
 

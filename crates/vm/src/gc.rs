@@ -2547,6 +2547,12 @@ mod tests {
             jit_code: None,
             call_count: std::sync::atomic::AtomicU32::new(0),
             debug_symbols: vec![],
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
         });
 
         let ptr = heap.alloc_closure(
@@ -2862,6 +2868,12 @@ mod tests {
             jit_code: None,
             call_count: std::sync::atomic::AtomicU32::new(0),
             debug_symbols: vec![],
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
         });
 
         let x = heap.alloc_string("captured x".to_string());
@@ -3113,6 +3125,12 @@ mod tests {
             jit_code: None,
             call_count: std::sync::atomic::AtomicU32::new(0),
             debug_symbols: vec![],
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
         });
 
         let captured = heap1.alloc_string("captured_value".to_string());

@@ -222,6 +222,9 @@ pub struct Compiler {
     // Current source context
     current_source: Option<Arc<String>>,
     current_source_name: Option<String>,
+
+    /// Type definition ASTs for REPL introspection: type name -> TypeDef
+    type_defs: HashMap<String, TypeDef>,
 }
 
 /// Context for a loop being compiled (for break/continue).
@@ -307,6 +310,7 @@ impl Compiler {
             pending_functions: Vec::new(),
             current_source: None,
             current_source_name: None,
+            type_defs: HashMap::new(),
         }
     }
 
@@ -404,6 +408,7 @@ impl Compiler {
             pending_functions: Vec::new(),
             current_source: Some(Arc::new(source.to_string())),
             current_source_name: Some("unknown".to_string()),
+            type_defs: HashMap::new(),
         }
     }
 
@@ -615,6 +620,9 @@ impl Compiler {
         };
 
         self.types.insert(name.clone(), TypeInfo { name: name.clone(), kind });
+
+        // Store the TypeDef AST for REPL introspection
+        self.type_defs.insert(name.clone(), def.clone());
 
         // Handle deriving - generate synthetic trait implementations
         for trait_ident in &def.deriving {
@@ -1708,16 +1716,32 @@ impl Compiler {
             })
             .collect();
 
+        // Extract source code for this function from the source
+        let source_code = self.current_source.as_ref().and_then(|src| {
+            if def.span.start < src.len() && def.span.end <= src.len() {
+                Some(Arc::new(src[def.span.start..def.span.end].to_string()))
+            } else {
+                None
+            }
+        });
+
         let func = FunctionValue {
             name: name.clone(),
             arity,
             param_names,
             code: Arc::new(std::mem::take(&mut self.chunk)),
-            module: None,
-            source_span: None,
+            module: if self.module_path.is_empty() { None } else { Some(self.module_path.join(".")) },
+            source_span: Some((def.span.start, def.span.end)),
             jit_code: None,
             call_count: AtomicU32::new(0),
             debug_symbols,
+            // REPL introspection fields
+            source_code,
+            source_file: self.current_source_name.clone(),
+            doc: def.doc.clone(),
+            signature: Some(def.signature()),
+            param_types: def.param_type_strings(),
+            return_type: def.return_type_string(),
         };
 
         // Assign function index if not already indexed (for trait methods and late-compiled functions)
@@ -3436,6 +3460,13 @@ impl Compiler {
             jit_code: None,
             call_count: AtomicU32::new(0),
             debug_symbols: vec![],
+            // REPL introspection fields - will be populated when compiled
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
         };
         self.functions.insert(mangled_name.clone(), Arc::new(placeholder));
 
@@ -4446,6 +4477,13 @@ impl Compiler {
             jit_code: None,
             call_count: AtomicU32::new(0),
             debug_symbols,
+            // REPL introspection fields - lambdas don't have these
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
         };
 
         let dst = self.alloc_reg();
@@ -4639,6 +4677,9 @@ impl Compiler {
 
         let mut vm_types = HashMap::new();
         for (name, type_info) in &self.types {
+            // Get the TypeDef AST for introspection fields
+            let type_def = self.type_defs.get(name);
+
             let type_value = match &type_info.kind {
                 TypeInfoKind::Record { fields, mutable } => {
                     let field_infos: Vec<FieldInfo> = fields.iter()
@@ -4654,7 +4695,12 @@ impl Compiler {
                         kind: TypeKind::Record { mutable: *mutable },
                         fields: field_infos,
                         constructors: vec![],
-                        traits: vec![],
+                        traits: self.type_traits.get(name).cloned().unwrap_or_default(),
+                        // REPL introspection fields
+                        source_code: type_def.map(|d| d.body_string()),
+                        source_file: self.current_source_name.clone(),
+                        doc: type_def.and_then(|d| d.doc.clone()),
+                        type_params: type_def.map(|d| d.type_param_names()).unwrap_or_default(),
                     }
                 }
                 TypeInfoKind::Variant { constructors } => {
@@ -4673,13 +4719,77 @@ impl Compiler {
                                 }).collect(),
                             })
                             .collect(),
-                        traits: vec![],
+                        traits: self.type_traits.get(name).cloned().unwrap_or_default(),
+                        // REPL introspection fields
+                        source_code: type_def.map(|d| d.body_string()),
+                        source_file: self.current_source_name.clone(),
+                        doc: type_def.and_then(|d| d.doc.clone()),
+                        type_params: type_def.map(|d| d.type_param_names()).unwrap_or_default(),
                     }
                 }
             };
             vm_types.insert(name.clone(), Arc::new(type_value));
         }
         vm_types
+    }
+
+    // =========================================================================
+    // REPL Introspection Query Methods
+    // =========================================================================
+
+    /// Get all function names in the compiler.
+    pub fn get_function_names(&self) -> Vec<&str> {
+        self.functions.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Get all type names in the compiler.
+    pub fn get_type_names(&self) -> Vec<&str> {
+        self.types.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Get all trait names in the compiler.
+    pub fn get_trait_names(&self) -> Vec<&str> {
+        self.trait_defs.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Get a function's signature as a displayable string.
+    pub fn get_function_signature(&self, name: &str) -> Option<String> {
+        self.functions.get(name).and_then(|f| f.signature.clone())
+    }
+
+    /// Get a function's source code.
+    pub fn get_function_source(&self, name: &str) -> Option<String> {
+        self.functions.get(name)
+            .and_then(|f| f.source_code.as_ref())
+            .map(|s| s.to_string())
+    }
+
+    /// Get a function's doc comment.
+    pub fn get_function_doc(&self, name: &str) -> Option<String> {
+        self.functions.get(name).and_then(|f| f.doc.clone())
+    }
+
+    /// Get all traits implemented by a type.
+    pub fn get_type_traits(&self, type_name: &str) -> Vec<String> {
+        self.type_traits.get(type_name).cloned().unwrap_or_default()
+    }
+
+    /// Get all types implementing a trait.
+    pub fn get_trait_implementors(&self, trait_name: &str) -> Vec<String> {
+        self.trait_impls.iter()
+            .filter(|((_, t), _)| t == trait_name)
+            .map(|((ty, _), _)| ty.clone())
+            .collect()
+    }
+
+    /// Get a TypeDef AST for a type (for introspection).
+    pub fn get_type_def(&self, name: &str) -> Option<&TypeDef> {
+        self.type_defs.get(name)
+    }
+
+    /// Get a FnDef AST for a function (for introspection).
+    pub fn get_fn_def(&self, name: &str) -> Option<&FnDef> {
+        self.fn_asts.get(name)
     }
 }
 
@@ -4990,6 +5100,13 @@ impl Compiler {
                 jit_code: None,
                 call_count: AtomicU32::new(0),
                 debug_symbols: vec![],
+                // REPL introspection fields - will be populated when compiled
+                source_code: None,
+                source_file: None,
+                doc: None,
+                signature: None,
+                param_types: vec![],
+                return_type: None,
             };
             self.functions.insert(name.clone(), Arc::new(placeholder));
 

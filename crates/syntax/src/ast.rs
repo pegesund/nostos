@@ -739,3 +739,177 @@ pub enum ExternKind {
     /// Extern type
     Type { name: Ident },
 }
+
+// =============================================================================
+// REPL Introspection Utilities
+// =============================================================================
+
+impl TypeExpr {
+    /// Convert a type expression to a displayable string.
+    ///
+    /// Examples:
+    /// - `Int` -> "Int"
+    /// - `Option[T]` -> "Option[T]"
+    /// - `(Int, Int) -> Bool` -> "(Int, Int) -> Bool"
+    pub fn to_string_pretty(&self) -> String {
+        match self {
+            TypeExpr::Name(ident) => ident.node.clone(),
+            TypeExpr::Generic(name, args) => {
+                let args_str = args.iter()
+                    .map(|t| t.to_string_pretty())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}[{}]", name.node, args_str)
+            }
+            TypeExpr::Function(params, ret) => {
+                let params_str = if params.len() == 1 {
+                    params[0].to_string_pretty()
+                } else {
+                    let ps = params.iter()
+                        .map(|t| t.to_string_pretty())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("({})", ps)
+                };
+                format!("{} -> {}", params_str, ret.to_string_pretty())
+            }
+            TypeExpr::Record(fields) => {
+                let fields_str = fields.iter()
+                    .map(|(name, ty)| format!("{}: {}", name.node, ty.to_string_pretty()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{ {} }}", fields_str)
+            }
+            TypeExpr::Tuple(elems) => {
+                let elems_str = elems.iter()
+                    .map(|t| t.to_string_pretty())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({})", elems_str)
+            }
+            TypeExpr::Unit => "()".to_string(),
+        }
+    }
+}
+
+impl FnDef {
+    /// Generate a type signature string for this function.
+    ///
+    /// Examples:
+    /// - `add(x: Int, y: Int) -> Int` -> "Int -> Int -> Int"
+    /// - `identity(x)` -> "? -> ?"
+    /// - `constant() -> Int` -> "Int"
+    pub fn signature(&self) -> String {
+        // Use the first clause for signature (multi-clause functions have same signature)
+        let clause = &self.clauses[0];
+
+        let param_types: Vec<String> = clause.params.iter()
+            .map(|p| p.ty.as_ref()
+                .map(|t| t.to_string_pretty())
+                .unwrap_or_else(|| "?".to_string()))
+            .collect();
+
+        let ret_type = clause.return_type.as_ref()
+            .map(|t| t.to_string_pretty())
+            .unwrap_or_else(|| "?".to_string());
+
+        if param_types.is_empty() {
+            ret_type
+        } else {
+            format!("{} -> {}", param_types.join(" -> "), ret_type)
+        }
+    }
+
+    /// Get parameter types as a list of strings.
+    pub fn param_type_strings(&self) -> Vec<String> {
+        let clause = &self.clauses[0];
+        clause.params.iter()
+            .map(|p| p.ty.as_ref()
+                .map(|t| t.to_string_pretty())
+                .unwrap_or_else(|| "?".to_string()))
+            .collect()
+    }
+
+    /// Get return type as a string.
+    pub fn return_type_string(&self) -> Option<String> {
+        let clause = &self.clauses[0];
+        clause.return_type.as_ref().map(|t| t.to_string_pretty())
+    }
+}
+
+impl TypeDef {
+    /// Generate a displayable string for this type definition.
+    ///
+    /// Examples:
+    /// - `type Point = Point(Int, Int)` -> "Point(Int, Int)"
+    /// - `type Option[T] = Some(T) | None` -> "Some(T) | None"
+    /// - `type Config = { port: Int, host: String }` -> "{ port: Int, host: String }"
+    pub fn body_string(&self) -> String {
+        match &self.body {
+            TypeBody::Record(fields) => {
+                let fields_str = fields.iter()
+                    .map(|f| {
+                        let ty_str = f.ty.to_string_pretty();
+                        // Mutability is at the type level (self.mutable), not per-field
+                        format!("{}: {}", f.name.node, ty_str)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if self.mutable {
+                    format!("var {{ {} }}", fields_str)
+                } else {
+                    format!("{{ {} }}", fields_str)
+                }
+            }
+            TypeBody::Variant(variants) => {
+                variants.iter()
+                    .map(|v| {
+                        match &v.fields {
+                            VariantFields::Unit => v.name.node.clone(),
+                            VariantFields::Positional(types) => {
+                                let ts = types.iter()
+                                    .map(|t| t.to_string_pretty())
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                format!("{}({})", v.name.node, ts)
+                            }
+                            VariantFields::Named(fields) => {
+                                let fs = fields.iter()
+                                    .map(|f| format!("{}: {}", f.name.node, f.ty.to_string_pretty()))
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                format!("{} {{ {} }}", v.name.node, fs)
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            }
+            TypeBody::Alias(ty) => ty.to_string_pretty(),
+            TypeBody::Empty => "!".to_string(),
+        }
+    }
+
+    /// Get type parameter names as strings.
+    pub fn type_param_names(&self) -> Vec<String> {
+        self.type_params.iter().map(|p| p.name.node.clone()).collect()
+    }
+
+    /// Get the full type signature including parameters.
+    ///
+    /// Examples:
+    /// - `type Point = ...` -> "Point"
+    /// - `type Option[T] = ...` -> "Option[T]"
+    /// - `type Result[T, E] = ...` -> "Result[T, E]"
+    pub fn full_name(&self) -> String {
+        if self.type_params.is_empty() {
+            self.name.node.clone()
+        } else {
+            let params = self.type_params.iter()
+                .map(|p| p.name.node.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}[{}]", self.name.node, params)
+        }
+    }
+}

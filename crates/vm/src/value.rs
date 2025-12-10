@@ -159,6 +159,46 @@ pub struct FunctionValue {
     pub call_count: AtomicU32,
     /// Debug symbols: local variable names and their registers
     pub debug_symbols: Vec<LocalVarSymbol>,
+
+    // === REPL Introspection Fields ===
+
+    /// Original source code of this function
+    pub source_code: Option<Arc<String>>,
+    /// Path to source file (or "<repl>" for REPL definitions)
+    pub source_file: Option<String>,
+    /// Doc comment from source
+    pub doc: Option<String>,
+    /// Type signature as displayable string (e.g., "Int -> Int -> Bool")
+    pub signature: Option<String>,
+    /// Parameter types as strings (e.g., ["Int", "String"])
+    pub param_types: Vec<String>,
+    /// Return type as string
+    pub return_type: Option<String>,
+}
+
+impl FunctionValue {
+    /// Create a simple function value for testing.
+    /// REPL introspection fields are set to defaults.
+    pub fn new_simple(name: String, arity: usize, param_names: Vec<String>, code: Arc<Chunk>) -> Self {
+        Self {
+            name,
+            arity,
+            param_names,
+            code,
+            module: None,
+            source_span: None,
+            jit_code: None,
+            call_count: AtomicU32::new(0),
+            debug_symbols: vec![],
+            // REPL introspection fields - default to None/empty for simple construction
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
+        }
+    }
 }
 
 impl Clone for FunctionValue {
@@ -173,6 +213,13 @@ impl Clone for FunctionValue {
             jit_code: self.jit_code.clone(),
             call_count: AtomicU32::new(self.call_count.load(std::sync::atomic::Ordering::Relaxed)),
             debug_symbols: self.debug_symbols.clone(),
+            // REPL introspection fields
+            source_code: self.source_code.clone(),
+            source_file: self.source_file.clone(),
+            doc: self.doc.clone(),
+            signature: self.signature.clone(),
+            param_types: self.param_types.clone(),
+            return_type: self.return_type.clone(),
         }
     }
 }
@@ -223,7 +270,19 @@ pub struct TypeValue {
     pub kind: TypeKind,
     pub fields: Vec<FieldInfo>,
     pub constructors: Vec<ConstructorInfo>,
+    /// Derived traits (e.g., ["Hash", "Eq", "Show"])
     pub traits: Vec<String>,
+
+    // === REPL Introspection Fields ===
+
+    /// Original source code of this type definition
+    pub source_code: Option<String>,
+    /// Path to source file (or "<repl>" for REPL definitions)
+    pub source_file: Option<String>,
+    /// Doc comment from source
+    pub doc: Option<String>,
+    /// Type parameters (e.g., ["T", "E"] for Result[T, E])
+    pub type_params: Vec<String>,
 }
 
 #[derive(Clone)]

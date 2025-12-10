@@ -1301,6 +1301,12 @@ mod tests {
             jit_code: None,
             call_count: std::sync::atomic::AtomicU32::new(0),
             debug_symbols: vec![],
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
         }));
 
         // Make function hot
@@ -1334,6 +1340,12 @@ mod tests {
             jit_code: None,
             call_count: std::sync::atomic::AtomicU32::new(0),
             debug_symbols: vec![],
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
         };
 
         // NoJitBackend should never compile
