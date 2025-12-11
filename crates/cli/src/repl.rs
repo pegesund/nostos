@@ -13,16 +13,141 @@
 //! - `:rdeps <name>` - Show what depends on a function
 
 use std::fs;
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::borrow::Cow;
 
 use nostos_compiler::compile::Compiler;
 use nostos_jit::{JitCompiler, JitConfig};
 use nostos_repl::CallGraph;
 use nostos_syntax::ast::Item;
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
+use nostos_syntax::lexer::{Token, lex};
 use nostos_vm::parallel::{ParallelVM, ParallelConfig};
+
+use reedline::{
+    Reedline, Signal, FileBackedHistory, Highlighter, StyledText, 
+    Prompt, PromptEditMode, PromptHistorySearch
+};
+use nu_ansi_term::{Color, Style};
+
+/// Syntax highlighter for Nostos
+pub struct NostosHighlighter;
+
+impl Highlighter for NostosHighlighter {
+    fn highlight(&self, line: &str, _cursor: usize) -> StyledText {
+        let mut styled = StyledText::new();
+        let mut last_idx = 0;
+
+        for (token, span) in lex(line) {
+            // Add whitespace/skipped text before token
+            if span.start > last_idx {
+                styled.push((Style::new(), line[last_idx..span.start].to_string()));
+            }
+
+            let style = match token {
+                // Keywords
+                Token::Type | Token::Var | Token::If | Token::Then | Token::Else |
+                Token::Match | Token::When | Token::Trait | Token::Module | Token::End |
+                Token::Use | Token::Private | Token::Pub | Token::SelfKw | Token::SelfType |
+                Token::Try | Token::Catch | Token::Finally | Token::Do |
+                Token::While | Token::For | Token::To | Token::Break | Token::Continue |
+                Token::Spawn | Token::SpawnLink | Token::SpawnMonitor | Token::Receive | Token::After |
+                Token::Panic | Token::Extern | Token::From | Token::Test | Token::Deriving | Token::Quote => 
+                    Style::new().fg(Color::Magenta).bold(),
+
+                // Boolean literals
+                Token::True | Token::False => Style::new().fg(Color::Yellow).bold(),
+
+                // Numeric literals
+                Token::Int(_) | Token::HexInt(_) | Token::BinInt(_) | 
+                Token::Int8(_) | Token::Int16(_) | Token::Int32(_) |
+                Token::UInt8(_) | Token::UInt16(_) | Token::UInt32(_) | Token::UInt64(_) |
+                Token::BigInt(_) | Token::Float(_) | Token::Float32(_) | Token::Decimal(_) => 
+                    Style::new().fg(Color::Yellow),
+
+                // String/Char literals
+                Token::String(_) | Token::Char(_) => Style::new().fg(Color::Green),
+
+                // Comments (Hash is start of set literal or comment? Lexer handles comments separately in logos skip)
+                // Wait, logos skips comments, so `lex` iterator won't yield them as tokens?
+                // `nostos_syntax::lexer::lex` filters `tok.ok()`.
+                // If logos skips, they are not yielded.
+                // We need to handle gaps as potential comments or whitespace.
+                // But we don't know if it's a comment or whitespace from `lex`.
+                // However, highlighting comments is nice.
+                // If `lex` skips comments, we can't style them easily unless we scan gaps.
+                // For now, gaps are unstyled (default).
+                
+                // Operators
+                Token::Plus | Token::Minus | Token::Star | Token::Slash | Token::Percent | Token::StarStar |
+                Token::EqEq | Token::NotEq | Token::Lt | Token::Gt | Token::LtEq | Token::GtEq |
+                Token::AndAnd | Token::OrOr | Token::Bang | Token::PlusPlus | Token::PipeRight |
+                Token::Eq | Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq |
+                Token::LeftArrow | Token::RightArrow | Token::FatArrow | Token::Caret | Token::Dollar | Token::Question =>
+                    Style::new().fg(Color::Cyan),
+
+                // Delimiters
+                Token::LParen | Token::RParen | Token::LBracket | Token::RBracket | 
+                Token::LBrace | Token::RBrace | Token::Comma | Token::Colon | Token::Dot | 
+                Token::Pipe | Token::Hash => 
+                    Style::new().fg(Color::White),
+
+                // Identifiers
+                Token::UpperIdent(_) => Style::new().fg(Color::Yellow), // Types/Constructors
+                Token::LowerIdent(_) => Style::new().fg(Color::White),  // Variables/Functions
+                
+                Token::Underscore => Style::new().fg(Color::DarkGray),
+                Token::Newline => Style::new(),
+            };
+
+            styled.push((style, line[span.clone()].to_string()));
+            last_idx = span.end;
+        }
+
+        // Add remaining text
+        if last_idx < line.len() {
+            styled.push((Style::new(), line[last_idx..].to_string()));
+        }
+
+        styled
+    }
+}
+
+#[derive(Clone)]
+struct NostosPrompt {
+    left: String,
+}
+
+impl NostosPrompt {
+    fn new(left: String) -> Self {
+        Self { left }
+    }
+}
+
+impl Prompt for NostosPrompt {
+    fn render_prompt_left(&self) -> Cow<str> {
+        Cow::Borrowed(&self.left)
+    }
+
+    fn render_prompt_right(&self) -> Cow<str> {
+        Cow::Borrowed("")
+    }
+
+    fn render_prompt_indicator(&self, _prompt_mode: PromptEditMode) -> Cow<str> {
+        Cow::Borrowed("")
+    }
+
+    fn render_prompt_multiline_indicator(&self) -> Cow<str> {
+        Cow::Borrowed(".. ")
+    }
+
+    fn render_prompt_history_search_indicator(&self, _history_search: PromptHistorySearch) -> Cow<str> {
+        Cow::Borrowed("(reverse-search) ")
+    }
+}
+
 
 /// REPL configuration
 pub struct ReplConfig {
@@ -132,91 +257,90 @@ impl Repl {
 
     /// Run the main REPL loop
     pub fn run(&mut self) -> io::Result<()> {
-        let stdin = io::stdin();
-        let mut stdout = io::stdout();
-        let is_interactive = stdin.is_terminal();
+        println!("Nostos REPL v{}", env!("CARGO_PKG_VERSION"));
+        println!("Type :help for available commands, :quit to exit");
+        println!();
 
-        if is_interactive {
-            println!("Nostos REPL v{}", env!("CARGO_PKG_VERSION"));
-            println!("Type :help for available commands, :quit to exit");
-            println!();
-        }
+        // Setup history
+        let history = Box::new(
+            FileBackedHistory::with_file(1000, ".nostos_history".into())
+                .unwrap_or_else(|_| FileBackedHistory::new(1000).expect("Error creating history"))
+        );
+
+        // Create Reedline instance with highlighter and history
+        let mut line_editor = Reedline::create()
+            .with_history(history)
+            .with_highlighter(Box::new(NostosHighlighter));
 
         // Buffer for multi-line input
         let mut input_buffer = String::new();
         let mut in_multiline = false;
 
         loop {
-            // Print prompt
-            if is_interactive {
-                if in_multiline {
-                    print!("... ");
-                } else {
-                    print!("nos> ");
-                }
-                stdout.flush()?;
-            }
+            // Set prompt based on state
+            let p: Box<dyn Prompt> = if in_multiline {
+                Box::new(NostosPrompt::new("... ".to_string()))
+            } else {
+                Box::new(NostosPrompt::new("nos> ".to_string()))
+            };
 
-            // Read line
-            let mut line = String::new();
-            match stdin.lock().read_line(&mut line) {
-                Ok(0) => {
-                    // EOF
-                    if is_interactive {
-                        println!();
+            let sig = line_editor.read_line(&*p);
+
+            match sig {
+                Ok(Signal::Success(line)) => {
+                    let line = line.trim_end();
+
+                    // Handle multi-line input
+                    if in_multiline {
+                        if line.is_empty() {
+                            // Empty line ends multi-line input
+                            in_multiline = false;
+                            let input = std::mem::take(&mut input_buffer);
+                            self.process_input(&input);
+                        } else {
+                            input_buffer.push_str(line);
+                            input_buffer.push('\n');
+                        }
+                        continue;
                     }
+
+                    // Check for commands
+                    if line.starts_with(':') {
+                        match self.handle_command(line) {
+                            CommandResult::Continue => continue,
+                            CommandResult::Quit => break,
+                            CommandResult::Error(msg) => {
+                                eprintln!("{}", msg);
+                                continue;
+                            }
+                        }
+                    }
+
+                    // Check if line ends with backslash (multi-line continuation)
+                    if line.ends_with('\\') {
+                        in_multiline = true;
+                        input_buffer = line[..line.len()-1].to_string();
+                        input_buffer.push('\n');
+                        continue;
+                    }
+
+                    // Skip comments and empty lines
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
+
+                    // Process input (expression or definition)
+                    self.process_input(line);
+                }
+                Ok(Signal::CtrlD) | Ok(Signal::CtrlC) => {
+                    println!("Bye!");
                     break;
                 }
-                Ok(_) => {}
                 Err(e) => {
                     eprintln!("Error reading input: {}", e);
                     break;
                 }
             }
-
-            let line = line.trim_end();
-
-            // Handle multi-line input
-            if in_multiline {
-                if line.is_empty() {
-                    // Empty line ends multi-line input
-                    in_multiline = false;
-                    let input = std::mem::take(&mut input_buffer);
-                    self.process_input(&input);
-                } else {
-                    input_buffer.push_str(line);
-                    input_buffer.push('\n');
-                }
-                continue;
-            }
-
-            // Check for commands
-            if line.starts_with(':') {
-                match self.handle_command(line) {
-                    CommandResult::Continue => continue,
-                    CommandResult::Quit => break,
-                    CommandResult::Error(msg) => {
-                        eprintln!("{}", msg);
-                        continue;
-                    }
-                }
-            }
-
-            // Check if line ends with backslash (multi-line continuation)
-            if line.ends_with('\\') {
-                in_multiline = true;
-                input_buffer = line[..line.len()-1].to_string();
-                input_buffer.push('\n');
-                continue;
-            }
-
-            // Skip comments and empty lines
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-
-            // Process input (expression or definition)
-            self.process_input(line);
         }
 
         Ok(())
