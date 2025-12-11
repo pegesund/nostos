@@ -18,3 +18,6 @@ nostos-jit = { path = "../jit" }
 nostos-repl = { path = "../repl" }
 reedline = "0.38.0"
 nu-ansi-term = "0.50"
+cursive = { version = "0.20", default-features = false, features = ["crossterm-backend"] }
+crossbeam-channel = "0.5"
+crossterm = "0.27"
