@@ -688,3 +688,114 @@ mod integration {
         parse_ok(src);
     }
 }
+
+// =============================================================================
+// Signature Tests
+// =============================================================================
+
+mod signatures {
+    use super::*;
+    use nostos_syntax::ast::Item;
+
+    fn get_fn_signature(source: &str) -> String {
+        let module = parse_ok(source);
+        match &module.items[0] {
+            Item::FnDef(fn_def) => fn_def.signature(),
+            _ => panic!("Expected function definition"),
+        }
+    }
+
+    #[test]
+    fn test_untyped_single_param() {
+        // Single untyped param should get type variable 'a', return 'a' (identity)
+        let sig = get_fn_signature("identity(x) = x");
+        assert_eq!(sig, "a -> a");
+    }
+
+    #[test]
+    fn test_untyped_two_params_unified() {
+        // Two params used in arithmetic should be unified to same type variable
+        let sig = get_fn_signature("add(x, y) = x + y");
+        assert_eq!(sig, "a -> a -> a");
+    }
+
+    #[test]
+    fn test_typed_params() {
+        // Typed params should show their types
+        let sig = get_fn_signature("add(x: Int, y: Int) -> Int = x + y");
+        assert_eq!(sig, "Int -> Int -> Int");
+    }
+
+    #[test]
+    fn test_mixed_typed_untyped() {
+        // Mix of typed and untyped - untyped param unified with return through +
+        let sig = get_fn_signature("foo(x: Int, y) = x + y");
+        assert_eq!(sig, "Int -> a -> a");
+    }
+
+    #[test]
+    fn test_no_params() {
+        // No params, just return type variable
+        let sig = get_fn_signature("constant() = 42");
+        assert_eq!(sig, "a");
+    }
+
+    #[test]
+    fn test_no_params_with_return_type() {
+        // No params with explicit return type
+        let sig = get_fn_signature("constant() -> Int = 42");
+        assert_eq!(sig, "Int");
+    }
+
+    #[test]
+    fn test_three_params_unified() {
+        // Three params all used in arithmetic chain
+        let sig = get_fn_signature("sum3(x, y, z) = x + y + z");
+        assert_eq!(sig, "a -> a -> a -> a");
+    }
+
+    #[test]
+    fn test_params_not_unified() {
+        // Two params NOT used together - should get different type variables
+        let sig = get_fn_signature("first(x, y) = x");
+        assert_eq!(sig, "a -> b -> a");
+    }
+
+    #[test]
+    fn test_comparison_unifies() {
+        // Comparison also unifies types
+        let sig = get_fn_signature("max(x, y) = if x > y then x else y");
+        assert_eq!(sig, "a -> a -> a");
+    }
+
+    #[test]
+    fn test_multiplication() {
+        // Multiplication should also unify
+        let sig = get_fn_signature("mul(x, y) = x * y");
+        assert_eq!(sig, "a -> a -> a");
+    }
+
+    #[test]
+    fn test_custom_type_no_inference() {
+        // Custom type - without type annotations, we can't infer the type
+        // Field access doesn't tell us the type, so params stay separate
+        let sig = get_fn_signature("swap(p) = Point(p.1, p.0)");
+        // p is used but not in arithmetic with other params, so just 'a -> b'
+        assert_eq!(sig, "a -> b");
+    }
+
+    #[test]
+    fn test_custom_type_with_annotation() {
+        // With type annotation, we get the concrete type
+        let sig = get_fn_signature("swap(p: Point) -> Point = Point(p.1, p.0)");
+        assert_eq!(sig, "Point -> Point");
+    }
+
+    #[test]
+    fn test_two_params_field_access() {
+        // Two params with field access used in arithmetic - should unify
+        let sig = get_fn_signature("addX(p1, p2) = p1.x + p2.x");
+        // p1 and p2 are used together in +, so they should unify
+        assert_eq!(sig, "a -> a -> a");
+    }
+}

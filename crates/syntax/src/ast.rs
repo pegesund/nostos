@@ -312,6 +312,15 @@ impl Pattern {
             Pattern::Or(_, s) => *s,
         }
     }
+
+    /// Get a simple variable name if this pattern is a simple variable binding.
+    /// Returns None for complex patterns like tuples, wildcards, etc.
+    pub fn simple_name(&self) -> Option<String> {
+        match self {
+            Pattern::Var(ident) => Some(ident.node.clone()),
+            _ => None,
+        }
+    }
 }
 
 /// Fields in a variant pattern.
@@ -795,23 +804,221 @@ impl TypeExpr {
 impl FnDef {
     /// Generate a type signature string for this function.
     ///
+    /// Uses simple constraint analysis to unify type variables for parameters
+    /// that must have the same type (e.g., operands of arithmetic operations).
+    ///
     /// Examples:
     /// - `add(x: Int, y: Int) -> Int` -> "Int -> Int -> Int"
-    /// - `identity(x)` -> "? -> ?"
+    /// - `add(x, y) = x + y` -> "a -> a -> a" (x and y unified by +)
+    /// - `identity(x) = x` -> "a -> a"
     /// - `constant() -> Int` -> "Int"
     pub fn signature(&self) -> String {
+        use std::collections::{HashMap, HashSet};
+
         // Use the first clause for signature (multi-clause functions have same signature)
         let clause = &self.clauses[0];
 
-        let param_types: Vec<String> = clause.params.iter()
-            .map(|p| p.ty.as_ref()
-                .map(|t| t.to_string_pretty())
-                .unwrap_or_else(|| "?".to_string()))
+        // Collect parameter names (only simple variable patterns)
+        let param_names: Vec<Option<String>> = clause.params.iter()
+            .map(|p| p.pattern.simple_name())
             .collect();
 
+        // Build equivalence classes using union-find for parameters that must have same type
+        // Key insight: in `x + y`, both x and y must have the same numeric type
+        let mut parent: HashMap<String, String> = HashMap::new();
+
+        // Initialize each param as its own parent
+        for name in param_names.iter().flatten() {
+            parent.insert(name.clone(), name.clone());
+        }
+
+        // Find with path compression
+        fn find(parent: &mut HashMap<String, String>, x: &str) -> String {
+            if !parent.contains_key(x) {
+                return x.to_string();
+            }
+            let p = parent.get(x).unwrap().clone();
+            if p != x {
+                let root = find(parent, &p);
+                parent.insert(x.to_string(), root.clone());
+                root
+            } else {
+                x.to_string()
+            }
+        }
+
+        // Union two variables (they must have the same type)
+        fn union(parent: &mut HashMap<String, String>, x: &str, y: &str) {
+            let rx = find(parent, x);
+            let ry = find(parent, y);
+            if rx != ry {
+                parent.insert(rx, ry);
+            }
+        }
+
+        // Analyze the function body for type constraints
+        fn collect_constraints(expr: &Expr, parent: &mut HashMap<String, String>) {
+            match expr {
+                Expr::BinOp(left, op, right, _) => {
+                    // For arithmetic/comparison ops, operands should have same type
+                    match op {
+                        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div |
+                        BinOp::Mod | BinOp::Pow | BinOp::Eq | BinOp::NotEq |
+                        BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
+                            // Get variable names from both sides
+                            let left_vars = collect_vars(left);
+                            let right_vars = collect_vars(right);
+
+                            // Unify all variables used in this operation
+                            let all_vars: Vec<_> = left_vars.iter().chain(right_vars.iter()).collect();
+                            for i in 1..all_vars.len() {
+                                union(parent, all_vars[0], all_vars[i]);
+                            }
+                        }
+                        _ => {}
+                    }
+                    // Recurse into subexpressions
+                    collect_constraints(left, parent);
+                    collect_constraints(right, parent);
+                }
+                Expr::If(cond, then_branch, else_branch, _) => {
+                    collect_constraints(cond, parent);
+                    collect_constraints(then_branch, parent);
+                    collect_constraints(else_branch, parent);
+                }
+                Expr::Block(stmts, _) => {
+                    for stmt in stmts {
+                        match stmt {
+                            Stmt::Expr(e) => collect_constraints(e, parent),
+                            Stmt::Let(binding) => collect_constraints(&binding.value, parent),
+                            Stmt::Assign(_, e, _) => collect_constraints(e, parent),
+                        }
+                    }
+                }
+                Expr::Call(func, args, _) => {
+                    collect_constraints(func, parent);
+                    for arg in args {
+                        collect_constraints(arg, parent);
+                    }
+                }
+                Expr::Lambda(_, body, _) => {
+                    collect_constraints(body, parent);
+                }
+                Expr::Match(scrutinee, arms, _) => {
+                    collect_constraints(scrutinee, parent);
+                    for arm in arms {
+                        collect_constraints(&arm.body, parent);
+                    }
+                }
+                Expr::List(elems, _, _) => {
+                    for elem in elems {
+                        collect_constraints(elem, parent);
+                    }
+                }
+                Expr::Tuple(elems, _) => {
+                    for elem in elems {
+                        collect_constraints(elem, parent);
+                    }
+                }
+                Expr::UnaryOp(_, e, _) => collect_constraints(e, parent),
+                Expr::FieldAccess(e, _, _) => collect_constraints(e, parent),
+                Expr::Index(e, idx, _) => {
+                    collect_constraints(e, parent);
+                    collect_constraints(idx, parent);
+                }
+                _ => {}
+            }
+        }
+
+        // Collect all variable references from an expression
+        fn collect_vars(expr: &Expr) -> HashSet<String> {
+            let mut vars = HashSet::new();
+            collect_vars_inner(expr, &mut vars);
+            vars
+        }
+
+        fn collect_vars_inner(expr: &Expr, vars: &mut HashSet<String>) {
+            match expr {
+                Expr::Var(ident) => {
+                    vars.insert(ident.node.clone());
+                }
+                Expr::BinOp(l, _, r, _) => {
+                    collect_vars_inner(l, vars);
+                    collect_vars_inner(r, vars);
+                }
+                Expr::UnaryOp(_, e, _) => collect_vars_inner(e, vars),
+                Expr::Call(f, args, _) => {
+                    collect_vars_inner(f, vars);
+                    for arg in args {
+                        collect_vars_inner(arg, vars);
+                    }
+                }
+                Expr::FieldAccess(e, _, _) => collect_vars_inner(e, vars),
+                Expr::Index(e, idx, _) => {
+                    collect_vars_inner(e, vars);
+                    collect_vars_inner(idx, vars);
+                }
+                Expr::If(c, t, e, _) => {
+                    collect_vars_inner(c, vars);
+                    collect_vars_inner(t, vars);
+                    collect_vars_inner(e, vars);
+                }
+                _ => {}
+            }
+        }
+
+        // Analyze the function body
+        collect_constraints(&clause.body, &mut parent);
+
+        // Also unify return expression variables with parameters used in arithmetic
+        // This handles cases like `add(x, y) = x + y` where return type should match params
+        let return_vars = collect_vars(&clause.body);
+
+        // Assign type variables based on equivalence classes
+        let mut class_to_type_var: HashMap<String, char> = HashMap::new();
+        let mut type_var_counter = 0u8;
+
+        let param_types: Vec<String> = clause.params.iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if let Some(t) = p.ty.as_ref() {
+                    t.to_string_pretty()
+                } else if let Some(ref name) = param_names[i] {
+                    // Find the equivalence class for this parameter
+                    let root = find(&mut parent, name);
+                    let type_var = *class_to_type_var.entry(root).or_insert_with(|| {
+                        let v = (b'a' + type_var_counter) as char;
+                        type_var_counter = (type_var_counter + 1) % 26;
+                        v
+                    });
+                    type_var.to_string()
+                } else {
+                    // Complex pattern without simple name
+                    let v = (b'a' + type_var_counter) as char;
+                    type_var_counter = (type_var_counter + 1) % 26;
+                    v.to_string()
+                }
+            })
+            .collect();
+
+        // For return type, check if it's constrained by parameters
         let ret_type = clause.return_type.as_ref()
             .map(|t| t.to_string_pretty())
-            .unwrap_or_else(|| "?".to_string());
+            .unwrap_or_else(|| {
+                // Check if return expression uses parameters from a unified class
+                // For simple cases like `x + y`, the result has same type as operands
+                for var in &return_vars {
+                    if parent.contains_key(var) {
+                        let root = find(&mut parent, var);
+                        if let Some(&type_var) = class_to_type_var.get(&root) {
+                            return type_var.to_string();
+                        }
+                    }
+                }
+                // No constraint found, use next type variable
+                let v = (b'a' + type_var_counter) as char;
+                v.to_string()
+            });
 
         if param_types.is_empty() {
             ret_type
