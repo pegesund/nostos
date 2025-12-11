@@ -730,6 +730,33 @@ pub fn standard_env() -> TypeEnv {
         });
     }
 
+    // Built-in functions with trait constraints
+    // println: Show a => a -> ()
+    env.functions.insert(
+        "println".to_string(),
+        FunctionType {
+            type_params: vec![TypeParam {
+                name: "a".to_string(),
+                constraints: vec!["Show".to_string()],
+            }],
+            params: vec![Type::TypeParam("a".to_string())],
+            ret: Box::new(Type::Unit),
+        },
+    );
+
+    // print: Show a => a -> ()
+    env.functions.insert(
+        "print".to_string(),
+        FunctionType {
+            type_params: vec![TypeParam {
+                name: "a".to_string(),
+                constraints: vec!["Show".to_string()],
+            }],
+            params: vec![Type::TypeParam("a".to_string())],
+            ret: Box::new(Type::Unit),
+        },
+    );
+
     env
 }
 

@@ -5169,7 +5169,12 @@ impl Compiler {
         }
 
         // Register known functions in environment for recursive calls
+        // Don't overwrite functions from standard_env (like println) that have trait constraints
         for (fn_name, fn_val) in &self.functions {
+            if env.functions.contains_key(fn_name) {
+                // Skip - don't overwrite built-in functions with proper type params/constraints
+                continue;
+            }
             let param_types: Vec<nostos_types::Type> = fn_val.param_types
                 .iter()
                 .map(|ty| self.type_name_to_type(ty))
@@ -8748,5 +8753,31 @@ mod tests {
     fn test_hm_140_partial_unified() {
         let sig = get_signature("partial(a, b, c) = (a + b, c)\nmain() = 0", "partial").unwrap();
         assert!(sig.contains("->"), "partial: got: {}", sig);
+    }
+
+    // -------------------------------------------------------------------------
+    // Show Trait Constraint Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hm_141_println_wrapper_has_show_constraint() {
+        let sig = get_signature("printIt(x) = println(x)\nmain() = 0", "printIt").unwrap();
+        // Should infer: Show a => a -> ()
+        assert!(sig.contains("Show"), "printIt: expected Show constraint, got: {}", sig);
+        assert!(sig.contains("()"), "printIt: expected Unit return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_142_print_wrapper_has_show_constraint() {
+        let sig = get_signature("printVal(x) = print(x)\nmain() = 0", "printVal").unwrap();
+        // Should infer: Show a => a -> ()
+        assert!(sig.contains("Show"), "printVal: expected Show constraint, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_143_println_with_specific_type_no_constraint() {
+        let sig = get_signature("printInt(x: Int) = println(x)\nmain() = 0", "printInt").unwrap();
+        // With a concrete type annotation, no type variable, so no constraint needed
+        assert_eq!(sig, "Int -> ()", "printInt: got: {}", sig);
     }
 }

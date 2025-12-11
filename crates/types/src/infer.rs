@@ -102,6 +102,80 @@ impl<'a> InferCtx<'a> {
             .push(Constraint::HasField(ty, field.to_string(), field_ty));
     }
 
+    /// Instantiate a polymorphic function type.
+    /// Replaces type parameters with fresh type variables and records trait constraints.
+    pub fn instantiate_function(&mut self, func_ty: &FunctionType) -> Type {
+        if func_ty.type_params.is_empty() {
+            // No type parameters, return as-is
+            return Type::Function(func_ty.clone());
+        }
+
+        // Create fresh type variables for each type parameter
+        let mut subst: HashMap<String, Type> = HashMap::new();
+        for type_param in &func_ty.type_params {
+            let fresh_var = self.fresh();
+
+            // Add trait constraints for this fresh variable
+            if let Type::Var(var_id) = fresh_var {
+                for constraint in &type_param.constraints {
+                    self.add_trait_bound(var_id, constraint.clone());
+                }
+            }
+
+            subst.insert(type_param.name.clone(), fresh_var);
+        }
+
+        // Substitute type parameters in params and return type
+        let instantiated_params: Vec<Type> = func_ty.params
+            .iter()
+            .map(|p| self.substitute_type_param(p, &subst))
+            .collect();
+        let instantiated_ret = self.substitute_type_param(&func_ty.ret, &subst);
+
+        Type::Function(FunctionType {
+            type_params: vec![], // Instantiated function has no type params
+            params: instantiated_params,
+            ret: Box::new(instantiated_ret),
+        })
+    }
+
+    /// Substitute type parameters in a type using the given mapping
+    fn substitute_type_param(&self, ty: &Type, subst: &HashMap<String, Type>) -> Type {
+        match ty {
+            Type::TypeParam(name) => {
+                subst.get(name).cloned().unwrap_or_else(|| ty.clone())
+            }
+            Type::List(elem) => Type::List(Box::new(self.substitute_type_param(elem, subst))),
+            Type::Array(elem) => Type::Array(Box::new(self.substitute_type_param(elem, subst))),
+            Type::Set(elem) => Type::Set(Box::new(self.substitute_type_param(elem, subst))),
+            Type::Map(k, v) => Type::Map(
+                Box::new(self.substitute_type_param(k, subst)),
+                Box::new(self.substitute_type_param(v, subst)),
+            ),
+            Type::Tuple(elems) => Type::Tuple(
+                elems.iter().map(|e| self.substitute_type_param(e, subst)).collect()
+            ),
+            Type::Function(f) => Type::Function(FunctionType {
+                type_params: f.type_params.clone(),
+                params: f.params.iter().map(|p| self.substitute_type_param(p, subst)).collect(),
+                ret: Box::new(self.substitute_type_param(&f.ret, subst)),
+            }),
+            Type::IO(inner) => Type::IO(Box::new(self.substitute_type_param(inner, subst))),
+            Type::Record(rec) => Type::Record(RecordType {
+                name: rec.name.clone(),
+                fields: rec.fields.iter().map(|(n, t, m)| {
+                    (n.clone(), self.substitute_type_param(t, subst), *m)
+                }).collect(),
+            }),
+            Type::Named { name, args } => Type::Named {
+                name: name.clone(),
+                args: args.iter().map(|a| self.substitute_type_param(a, subst)).collect(),
+            },
+            // Primitive types, Var, etc. - no substitution needed
+            _ => ty.clone(),
+        }
+    }
+
     /// Solve all constraints through unification.
     /// Uses a fixed-point iteration with a maximum iteration limit to avoid infinite loops
     /// when constraints reference unresolved type variables.
@@ -464,8 +538,10 @@ impl<'a> InferCtx<'a> {
                 // Then check bindings
                 if let Some((ty, _)) = self.env.lookup(name) {
                     Ok(ty.clone())
-                } else if let Some(sig) = self.env.functions.get(name) {
-                    Ok(Type::Function(sig.clone()))
+                } else if let Some(sig) = self.env.functions.get(name).cloned() {
+                    // Instantiate polymorphic functions with fresh type variables
+                    // and record trait constraints
+                    Ok(self.instantiate_function(&sig))
                 } else {
                     Err(TypeError::UnknownIdent(name.clone()))
                 }
