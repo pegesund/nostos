@@ -35,6 +35,15 @@ pub type JitIntFn3 = fn(i64, i64, i64) -> i64;
 pub type JitIntFn4 = fn(i64, i64, i64, i64) -> i64;
 pub type JitLoopArrayFn = fn(*const i64, i64) -> i64;
 
+/// Result from running a function, including captured output.
+#[derive(Debug)]
+pub struct RunResult {
+    /// The return value from the function
+    pub value: Option<SendableValue>,
+    /// Captured output (from println, print, etc.)
+    pub output: Vec<String>,
+}
+
 /// Number of bits reserved for thread ID in Pid.
 /// With 16 bits, we support up to 65536 threads.
 const THREAD_ID_BITS: u32 = 16;
@@ -509,6 +518,8 @@ impl SendableValue {
 struct ThreadResult {
     thread_id: u16,
     main_result: Option<Result<SendableValue, String>>,
+    /// Captured output from the main process (println, print, etc.)
+    main_output: Vec<String>,
 }
 
 /// Per-thread worker state.
@@ -535,6 +546,8 @@ struct ThreadWorker {
     main_pid: Option<Pid>,
     /// Main process result (sendable between threads)
     main_result: Option<Result<SendableValue, String>>,
+    /// Main process output (captured from println, print, etc.)
+    main_output: Vec<String>,
     /// List of local_ids waiting for async IO (for efficient polling)
     io_waiting: Vec<u64>,
     /// Idle backoff counter (doubles sleep time up to max when idle)
@@ -838,8 +851,8 @@ impl ParallelVM {
     }
 
     /// Run the VM with the given main function.
-    /// Returns the result of the main process.
-    pub fn run(&mut self, main_func: Arc<FunctionValue>) -> Result<Option<SendableValue>, RuntimeError> {
+    /// Returns the result of the main process, including captured output.
+    pub fn run(&mut self, main_func: Arc<FunctionValue>) -> Result<RunResult, RuntimeError> {
         // Clear previous run state
         self.thread_senders.clear();
         self.shared.shutdown.store(false, Ordering::SeqCst);
@@ -890,11 +903,13 @@ impl ParallelVM {
 
         // Wait for all threads to finish
         let mut main_result = None;
+        let mut main_output = Vec::new();
         for handle in self.threads.drain(..) {
             match handle.join() {
                 Ok(result) => {
                     if result.main_result.is_some() {
                         main_result = result.main_result;
+                        main_output = result.main_output;
                     }
                 }
                 Err(e) => {
@@ -904,9 +919,9 @@ impl ParallelVM {
         }
 
         match main_result {
-            Some(Ok(value)) => Ok(Some(value)),
+            Some(Ok(value)) => Ok(RunResult { value: Some(value), output: main_output }),
             Some(Err(e)) => Err(RuntimeError::Panic(e)),
-            None => Ok(None),
+            None => Ok(RunResult { value: None, output: main_output }),
         }
     }
 
@@ -936,6 +951,7 @@ impl ThreadWorker {
             config,
             main_pid: None,
             main_result: None,
+            main_output: Vec::new(),
             io_waiting: Vec::new(),
             idle_backoff: 0,
         }
@@ -1057,6 +1073,8 @@ impl ThreadWorker {
                         // Convert GcValue to SendableValue for thread-safe result
                         let proc = self.get_process(local_id).unwrap();
                         let sendable = SendableValue::from_gc_value(&value, &proc.heap);
+                        // Capture output before removing process
+                        self.main_output = proc.output.clone();
                         self.main_result = Some(Ok(sendable));
                         // Signal shutdown
                         self.shared.shutdown.store(true, Ordering::SeqCst);
@@ -1078,6 +1096,7 @@ impl ThreadWorker {
         ThreadResult {
             thread_id: self.thread_id,
             main_result: self.main_result,
+            main_output: self.main_output,
         }
     }
 
@@ -5175,9 +5194,16 @@ impl ThreadWorker {
 
             // === I/O ===
             Println(src) => {
-                let proc = self.get_process(local_id).unwrap();
-                let s = proc.heap.display_value(reg!(*src));
+                // Get the value and display it first (immutable borrow)
+                let s = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let frame = proc.frames.last().unwrap();
+                    proc.heap.display_value(&frame.registers[*src as usize])
+                };
                 println!("{}", s);
+                // Now push to output (mutable borrow)
+                let proc = self.get_process_mut(local_id).unwrap();
+                proc.output.push(s);
             }
 
             // === Assertions ===
@@ -5711,6 +5737,7 @@ impl ThreadWorker {
                 let proc = self.get_process_mut(local_id).unwrap();
                 let s = proc.heap.display_value(&val);
                 println!("{}", s);
+                proc.output.push(s.clone());
                 let str_ptr = proc.heap.alloc_string(s);
                 set_reg!(*dst, GcValue::String(str_ptr));
             }

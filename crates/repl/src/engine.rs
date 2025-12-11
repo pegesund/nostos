@@ -389,13 +389,24 @@ impl ReplEngine {
 
         if let Some(func) = self.compiler.get_all_functions().get(&eval_name) {
             match self.vm.run(func.clone()) {
-                Ok(Some(val)) => {
-                    if !val.is_unit() {
-                        return Ok(val.display());
+                Ok(result) => {
+                    let mut output = String::new();
+
+                    // Add captured output (from println, print, etc.)
+                    for line in &result.output {
+                        output.push_str(line);
+                        output.push('\n');
                     }
-                    return Ok("".to_string());
+
+                    // Add return value (if not Unit)
+                    if let Some(val) = result.value {
+                        if !val.is_unit() {
+                            output.push_str(&val.display());
+                        }
+                    }
+
+                    Ok(output.trim_end().to_string())
                 }
-                Ok(None) => Ok("".to_string()),
                 Err(e) => Err(format!("Runtime error: {}", e)),
             }
         } else {

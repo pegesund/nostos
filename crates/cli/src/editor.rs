@@ -1,10 +1,9 @@
-use cursive::event::{Event, EventResult, Key, MouseButton, MouseEvent};
-use cursive::theme::{Color, ColorStyle, Effect, Style};
+use cursive::event::{Event, EventResult, Key};
+use cursive::theme::{Color, ColorStyle, Style};
 use cursive::view::{View, CannotFocus};
 use cursive::direction::Direction;
-use cursive::{Printer, Vec2, Rect, Cursive};
+use cursive::{Printer, Vec2, Rect};
 use nostos_syntax::lexer::{Token, lex};
-use std::cmp::min;
 use std::rc::Rc;
 use std::cell::RefCell;
 use nostos_repl::ReplEngine;

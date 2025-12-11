@@ -567,13 +567,16 @@ fn main() -> ExitCode {
 
     // Run the program
     match vm.run(main_func) {
-        Ok(Some(val)) => {
-            if !val.is_unit() {
-                println!("{}", val.display());
+        Ok(result) => {
+            // Output is already printed to stdout by the VM
+            // Print return value if not unit
+            if let Some(val) = result.value {
+                if !val.is_unit() {
+                    println!("{}", val.display());
+                }
             }
             ExitCode::SUCCESS
         }
-        Ok(None) => ExitCode::SUCCESS,
         Err(e) => {
             if json_errors {
                 println!("{}", format_error_json(&e, file_path_arg));

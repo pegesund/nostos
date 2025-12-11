@@ -2,11 +2,11 @@
 
 use cursive::Cursive;
 use cursive::traits::*;
-use cursive::views::{Button, Dialog, EditView, LinearLayout, Panel, ScrollView, TextView, OnEventView};
+use cursive::views::{Dialog, EditView, LinearLayout, ScrollView, TextView, OnEventView};
 use cursive::theme::{Color, PaletteColor, Theme, BorderStyle};
 use cursive::view::Resizable;
 use cursive::utils::markup::StyledString;
-use cursive::event::{Event, Key};
+use cursive::event::{Event, EventResult, Key};
 use nostos_repl::{ReplEngine, ReplConfig};
 use nostos_syntax::lexer::{Token, lex};
 use std::cell::RefCell;
@@ -18,6 +18,7 @@ use crate::custom_views::ActiveWindow;
 struct TuiState {
     open_editors: Vec<String>,
     active_window_idx: usize,
+    engine: Rc<RefCell<ReplEngine>>,
 }
 
 pub fn run_tui(args: &[String]) -> ExitCode {
@@ -34,19 +35,13 @@ pub fn run_tui(args: &[String]) -> ExitCode {
     theme.palette[PaletteColor::Secondary] = Color::TerminalDefault;
     siv.set_theme(theme);
 
-    // Initialize State
-    siv.set_user_data(Rc::new(RefCell::new(TuiState { 
-        open_editors: Vec::new(),
-        active_window_idx: 0,
-    })));
-
     // Initialize REPL engine
     let config = ReplConfig::default();
     let mut engine = ReplEngine::new(config);
     if let Err(e) = engine.load_stdlib() {
         eprintln!("Failed to load stdlib: {}", e);
     }
-    
+
     // Load files
     for arg in args {
         if !arg.starts_with('-') {
@@ -58,25 +53,32 @@ pub fn run_tui(args: &[String]) -> ExitCode {
 
     let engine = Rc::new(RefCell::new(engine));
 
+    // Initialize State
+    siv.set_user_data(Rc::new(RefCell::new(TuiState {
+        open_editors: Vec::new(),
+        active_window_idx: 0,
+        engine: engine.clone(),
+    })));
+
     // Components
-    
-    // 1. REPL Log
-    let repl_log = TextView::new(format!("Nostos TUI v{} (Colors updated)\nType :help for commands\n\n", env!("CARGO_PKG_VERSION")))
+
+    // 1. REPL Log (Console) - will be added to workspace
+    let repl_log = TextView::new(format!("Nostos TUI v{}\nType :help for commands\n\n", env!("CARGO_PKG_VERSION")))
         .scrollable()
         .with_name("repl_log");
-    
-    // 2. Editor Column
-    let editor_column = LinearLayout::vertical()
-        .with_name("editor_column");
-    let _editor_scroll = ScrollView::new(editor_column)
-        .with_name("editor_scroll");
 
-    // 3. Workspace
-    let workspace = LinearLayout::horizontal()
-        .child(ActiveWindow::new(repl_log, "Console").full_width())
+    // 2. Workspace - starts with just Console (full width and height)
+    let workspace = LinearLayout::vertical()
+        .child(
+            LinearLayout::horizontal()
+                .child(ActiveWindow::new(repl_log, "Console").full_width())
+                .full_width()
+                .full_height()
+                .with_name("workspace_row_0")
+        )
         .with_name("workspace");
 
-    // 4. Input
+    // 3. Input
     let engine_clone = engine.clone();
     let input_view = EditView::new()
         .on_submit(move |s, text| {
@@ -100,7 +102,7 @@ pub fn run_tui(args: &[String]) -> ExitCode {
                 if name.is_empty() {
                     log_to_repl(s, "Usage: :edit <name>");
                 } else {
-                    open_editor(s, engine_clone.clone(), name);
+                    open_editor(s, name);
                 }
                 return;
             }
@@ -118,25 +120,32 @@ pub fn run_tui(args: &[String]) -> ExitCode {
                 handle_command(&mut engine_clone.borrow_mut(), &input_text)
             } else {
                 match engine_clone.borrow_mut().eval(&input_text) {
-                    Ok(output) => output,
+                    Ok(output) => {
+                        // Debug: log to file to see what's returned
+                        let _ = std::fs::write("/var/tmp/nostos_eval_result.txt", &output);
+                        output
+                    }
                     Err(e) => format!("Error: {}", e),
                 }
             };
 
-            if !result.is_empty() {
+            // Always log something to confirm the flow works
+            if result.is_empty() {
+                log_to_repl(s, "(no output)");
+            } else {
                 log_to_repl(s, &result);
             }
         })
         .with_name("input");
 
-    // Root Layout
+    // Root Layout - Input always has full width
     let root_layout = LinearLayout::vertical()
-        .child(workspace.full_height()) 
-        .child(ActiveWindow::new(input_view, "Input").fixed_height(3));
+        .child(workspace.full_width().full_height())
+        .child(ActiveWindow::new(input_view, "Input").full_width().fixed_height(3));
 
     siv.add_layer(root_layout);
 
-    // Global Window Cycling
+    // Global Window Cycling with Shift+Tab
     siv.add_global_callback(Event::Shift(Key::Tab), cycle_window);
 
     siv.run();
@@ -151,17 +160,133 @@ fn log_to_repl(s: &mut Cursive, text: &str) {
     });
 }
 
-fn open_editor(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, name: &str) {
+/// Rebuild the workspace layout based on current windows
+/// Layout rules:
+/// - 1-3 windows: single row, equal width
+/// - 4-6 windows: two rows, top row has 3 windows, bottom row has rest
+fn rebuild_workspace(s: &mut Cursive) {
+    let (editor_names, engine) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let state = state.borrow();
+        (state.open_editors.clone(), state.engine.clone())
+    }).unwrap();
+
+    // Get console content BEFORE clearing workspace
+    let repl_log_content: String = s.call_on_name("repl_log", |view: &mut ScrollView<TextView>| {
+        view.get_inner().get_content().source().to_string()
+    }).unwrap_or_default();
+
+    // Remove old workspace content
+    s.call_on_name("workspace", |ws: &mut LinearLayout| {
+        ws.clear();
+    });
+
+    // Total windows = Console + editors
+    let total_windows = 1 + editor_names.len();
+
+    let repl_log = TextView::new(repl_log_content)
+        .scrollable()
+        .with_name("repl_log");
+    let console = ActiveWindow::new(repl_log, "Console").full_width();
+
+    if total_windows <= 3 {
+        // Single row layout
+        let mut row = LinearLayout::horizontal().child(console);
+
+        for name in &editor_names {
+            let editor_view = create_editor_view(s, &engine, name);
+            row.add_child(editor_view);
+        }
+
+        s.call_on_name("workspace", |ws: &mut LinearLayout| {
+            ws.add_child(row.full_width().full_height().with_name("workspace_row_0"));
+        });
+    } else {
+        // Two row layout: first 2 editors + console on top, rest on bottom
+        let mut row0 = LinearLayout::horizontal().child(console);
+        let mut row1 = LinearLayout::horizontal();
+
+        for (i, name) in editor_names.iter().enumerate() {
+            let editor_view = create_editor_view(s, &engine, name);
+            if i < 2 {
+                row0.add_child(editor_view);
+            } else {
+                row1.add_child(editor_view);
+            }
+        }
+
+        s.call_on_name("workspace", |ws: &mut LinearLayout| {
+            ws.add_child(row0.full_width().full_height().with_name("workspace_row_0"));
+            ws.add_child(row1.full_width().full_height().with_name("workspace_row_1"));
+        });
+    }
+}
+
+/// Create an editor view for a given name
+fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: &str) -> impl View {
+    let source = engine.borrow().get_source(name);
+    let source = if source.starts_with("Not found") {
+        format!("{}() = {{\n    \n}}", name)
+    } else {
+        source
+    };
+
+    let editor = CodeEditor::new(source).with_engine(engine.clone());
+    let editor_id = format!("editor_{}", name);
+
+    let name_for_save = name.to_string();
+    let name_for_close = name.to_string();
+    let engine_save = engine.clone();
+    let editor_id_save = editor_id.clone();
+
+    // Ctrl+S to save, Esc to close
+    let editor_with_events = OnEventView::new(editor.with_name(&editor_id))
+        .on_event(Event::CtrlChar('s'), move |s| {
+            let content = match s.call_on_name(&editor_id_save, |v: &mut CodeEditor| v.get_content()) {
+                Some(c) => c,
+                None => {
+                    log_to_repl(s, &format!("Error: Could not find editor {}", editor_id_save));
+                    return;
+                }
+            };
+
+            match engine_save.borrow_mut().eval(&content) {
+                Ok(output) => {
+                    if output.is_empty() {
+                        log_to_repl(s, &format!("Saved {} (no definitions found)", name_for_save));
+                    } else {
+                        log_to_repl(s, &output);
+                    }
+                    close_editor(s, &name_for_save);
+                }
+                Err(e) => {
+                    s.add_layer(Dialog::info(format!("Error: {}", e)));
+                }
+            }
+        })
+        .on_event(Key::Esc, move |s| {
+            close_editor(s, &name_for_close);
+        })
+        .on_pre_event_inner(Event::Shift(Key::Tab), |_, _| {
+            // Consume the event - don't let it propagate
+            // Global callback will handle window cycling
+            Some(EventResult::Consumed(None))
+        });
+
+    // Wrap in ActiveWindow with just the function name as title
+    ActiveWindow::new(editor_with_events.full_height(), name).full_width()
+}
+
+fn open_editor(s: &mut Cursive, name: &str) {
     let name_owned = name.to_string();
-    
-    // Check limit
+
+    // Check limit and add to state
     let can_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let mut state = state.borrow_mut();
         if state.open_editors.contains(&name_owned) {
             return Err("Editor already open");
         }
-        if state.open_editors.len() >= 6 {
-            return Err("Max 6 editors open");
+        if state.open_editors.len() >= 5 { // 5 editors + 1 console = 6 windows max
+            return Err("Max 6 windows");
         }
         state.open_editors.push(name_owned.clone());
         Ok(())
@@ -172,97 +297,30 @@ fn open_editor(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, name: &str) {
         return;
     }
 
-    let source = engine.borrow().get_source(name);
-    let source = if source.starts_with("Not found") { format!("{}() = {{\n    \n}}", name) } else { source };
+    // Rebuild the entire workspace layout
+    rebuild_workspace(s);
 
-    let editor = CodeEditor::new(source).with_engine(engine.clone());
+    // Focus the new editor
     let editor_id = format!("editor_{}", name);
-    let save_id = format!("save_{}", name);
-    let cancel_id = format!("cancel_{}", name);
-    
-    // Build Editor UI
-    let name_clone = name.to_string();
-    let name_clone2 = name.to_string();
-    let engine_save = engine.clone();
-
-    let editor_id_save = editor_id.clone();
-    let save_btn = Button::new("Save", move |s| {
-        let content = s.call_on_name(&editor_id_save, |v: &mut CodeEditor| v.get_content()).unwrap();
-        
-        let _ = std::fs::write("/var/tmp/nostos_debug.txt", &content);
-
-        match engine_save.borrow_mut().eval(&content) {
-            Ok(_) => {
-                log_to_repl(s, &format!("Saved {}", name_clone));
-                close_editor(s, &name_clone);
-            }
-            Err(e) => {
-                s.add_layer(Dialog::info(format!("Parse error: {}", e)));
-            }
-        }
-    }).with_name(&save_id);
-
-    let cancel_btn = Button::new("Cancel", move |s| {
-        close_editor(s, &name_clone2);
-    }).with_name(&cancel_id);
-
-    // Layout
-    let editor_content = LinearLayout::vertical()
-            .child(ActiveWindow::new(editor.with_name(&editor_id).full_height(), &name))
-            .child(LinearLayout::horizontal().child(save_btn).child(cancel_btn));
-            
-    let save_id_tab = save_id.clone();
-    
-    let editor_wrapper = OnEventView::new(editor_content)
-        .on_event(Key::Tab, move |s| {
-            s.focus_name(&save_id_tab).ok();
-        });
-
-    // Add to layout
-    s.call_on_name("workspace", |ws: &mut LinearLayout| {
-        if ws.len() == 1 {
-            let col = LinearLayout::vertical().with_name("editor_column");
-            let scroll = ScrollView::new(col).with_name("editor_scroll");
-            ws.add_child(scroll.full_width());
-        }
-    });
-
-    s.call_on_name("editor_column", |col: &mut LinearLayout| {
-        col.add_child(editor_wrapper);
-    });
-    
-    // Focus new editor
     s.focus_name(&editor_id).ok();
 }
 
 fn close_editor(s: &mut Cursive, name: &str) {
-    let index_to_remove = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+    let was_removed = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let mut state = state.borrow_mut();
         if let Some(idx) = state.open_editors.iter().position(|x| x == name) {
             state.open_editors.remove(idx);
-            Some(idx)
+            true
         } else {
-            None
+            false
         }
     }).unwrap();
 
-    if let Some(idx) = index_to_remove {
-        s.call_on_name("editor_column", |col: &mut LinearLayout| {
-            col.remove_child(idx);
-        });
+    if was_removed {
+        // Rebuild the entire workspace layout
+        rebuild_workspace(s);
 
-        let is_empty = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
-            state.borrow().open_editors.is_empty()
-        }).unwrap();
-
-        if is_empty {
-            s.call_on_name("workspace", |ws: &mut LinearLayout| {
-                if ws.len() > 1 {
-                    ws.remove_child(1);
-                }
-            });
-        }
-        
+        // Focus input
         s.focus_name("input").ok();
     }
 }
@@ -271,21 +329,21 @@ fn cycle_window(s: &mut Cursive) {
     let target = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let mut state = state.borrow_mut();
         let mut windows = vec!["input".to_string(), "repl_log".to_string()];
-        
+
         for name in &state.open_editors {
             windows.push(format!("editor_{}", name));
         }
-        
+
         state.active_window_idx = (state.active_window_idx + 1) % windows.len();
         windows[state.active_window_idx].clone()
     }).unwrap();
-    
+
     s.focus_name(&target).ok();
 }
 
 fn style_input(text: &str) -> StyledString {
     let mut styled = StyledString::new();
-    styled.append_styled("nos> ", Color::Rgb(0, 255, 0)); 
+    styled.append_styled("nos> ", Color::Rgb(0, 255, 0));
 
     let mut last_idx = 0;
     for (token, span) in lex(text) {
@@ -300,32 +358,32 @@ fn style_input(text: &str) -> StyledString {
             Token::Try | Token::Catch | Token::Finally | Token::Do |
             Token::While | Token::For | Token::To | Token::Break | Token::Continue |
             Token::Spawn | Token::SpawnLink | Token::SpawnMonitor | Token::Receive | Token::After |
-            Token::Panic | Token::Extern | Token::From | Token::Test | Token::Deriving | Token::Quote => 
+            Token::Panic | Token::Extern | Token::From | Token::Test | Token::Deriving | Token::Quote =>
                 Color::Rgb(255, 0, 255),
 
             Token::True | Token::False |
-            Token::Int(_) | Token::HexInt(_) | Token::BinInt(_) | 
+            Token::Int(_) | Token::HexInt(_) | Token::BinInt(_) |
             Token::Int8(_) | Token::Int16(_) | Token::Int32(_) |
             Token::UInt8(_) | Token::UInt16(_) | Token::UInt32(_) | Token::UInt64(_) |
-            Token::BigInt(_) | Token::Float(_) | Token::Float32(_) | Token::Decimal(_) => 
+            Token::BigInt(_) | Token::Float(_) | Token::Float32(_) | Token::Decimal(_) =>
                 Color::Rgb(255, 255, 0),
 
-            Token::String(_) | Token::Char(_) => Color::Rgb(0, 255, 0), 
+            Token::String(_) | Token::Char(_) => Color::Rgb(0, 255, 0),
 
             Token::Plus | Token::Minus | Token::Star | Token::Slash | Token::Percent | Token::StarStar |
             Token::EqEq | Token::NotEq | Token::Lt | Token::Gt | Token::LtEq | Token::GtEq |
             Token::AndAnd | Token::OrOr | Token::Bang | Token::PlusPlus | Token::PipeRight |
             Token::Eq | Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq |
             Token::LeftArrow | Token::RightArrow | Token::FatArrow | Token::Caret | Token::Dollar | Token::Question |
-            Token::LParen | Token::RParen | Token::LBracket | Token::RBracket | 
-            Token::LBrace | Token::RBrace | Token::Comma | Token::Colon | Token::Dot | 
+            Token::LParen | Token::RParen | Token::LBracket | Token::RBracket |
+            Token::LBrace | Token::RBrace | Token::Comma | Token::Colon | Token::Dot |
             Token::Pipe | Token::Hash =>
-                Color::Rgb(255, 165, 0), 
+                Color::Rgb(255, 165, 0),
 
-            Token::UpperIdent(_) => Color::Rgb(255, 255, 0), 
-            Token::LowerIdent(_) => Color::Rgb(255, 255, 255), 
-            
-            Token::Underscore => Color::Rgb(100, 100, 100), 
+            Token::UpperIdent(_) => Color::Rgb(255, 255, 0),
+            Token::LowerIdent(_) => Color::Rgb(255, 255, 255),
+
+            Token::Underscore => Color::Rgb(100, 100, 100),
             Token::Newline => Color::TerminalDefault,
         };
 

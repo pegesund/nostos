@@ -1278,13 +1278,14 @@ impl Repl {
 
         if let Some(func) = self.compiler.get_all_functions().get(&eval_name) {
             match self.vm.run(func.clone()) {
-                Ok(Some(val)) => {
-                    if !val.is_unit() {
-                        return Some(val.display());
+                Ok(result) => {
+                    // Output is already printed to stdout by the VM
+                    // Return the value for display if not Unit
+                    if let Some(val) = result.value {
+                        if !val.is_unit() {
+                            return Some(val.display());
+                        }
                     }
-                    return None; // Unit type, no display
-                }
-                Ok(None) => {
                     return None;
                 }
                 Err(e) => {
