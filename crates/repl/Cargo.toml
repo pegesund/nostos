@@ -8,6 +8,7 @@ nostos-syntax.workspace = true
 nostos-compiler.workspace = true
 nostos-vm.workspace = true
 nostos-types.workspace = true
+nostos-jit.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

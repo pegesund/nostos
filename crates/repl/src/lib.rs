@@ -5,8 +5,10 @@
 
 pub mod callgraph;
 pub mod session;
+pub mod engine;
 
 pub use callgraph::CallGraph;
 pub use session::{
     Definition, DefineSuccess, FunctionError, ReplError, ReplSession, TryDefineResult,
 };
+pub use engine::{ReplEngine, ReplConfig};
