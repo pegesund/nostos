@@ -1771,6 +1771,40 @@ impl Compiler {
         // Store AST for potential monomorphization
         self.fn_asts.insert(name.clone(), def.clone());
 
+        // Invalidate any existing monomorphized variants of this function
+        // We replace them with stale markers so CallDirect indices remain valid.
+        // The variants will be recompiled on next use (checked in compile_monomorphized_variant)
+        let prefix = format!("{}$", name);
+        let variants_to_invalidate: Vec<String> = self.functions.keys()
+            .filter(|k| k.starts_with(&prefix))
+            .cloned()
+            .collect();
+        for variant in &variants_to_invalidate {
+            // Mark as invalidated by inserting a placeholder with empty code
+            // The actual recompilation happens in compile_monomorphized_variant
+            // which checks if the variant needs updating
+            if let Some(old_func) = self.functions.get(variant) {
+                let stale_marker = FunctionValue {
+                    name: format!("__stale__{}", variant),  // Mark as stale
+                    arity: old_func.arity,
+                    param_names: old_func.param_names.clone(),
+                    code: Arc::new(Chunk::new()),
+                    module: old_func.module.clone(),
+                    source_span: None,
+                    jit_code: None,
+                    call_count: std::sync::atomic::AtomicU32::new(0),
+                    debug_symbols: vec![],
+                    source_code: None,
+                    source_file: None,
+                    doc: None,
+                    signature: None,
+                    param_types: vec![],
+                    return_type: None,
+                };
+                self.functions.insert(variant.clone(), Arc::new(stale_marker));
+            }
+        }
+
         // Store type parameters with bounds for trait bound checking at call sites
         if !def.type_params.is_empty() {
             self.fn_type_params.insert(name.clone(), def.type_params.clone());
@@ -3658,9 +3692,13 @@ impl Compiler {
         let suffix = arg_type_names.join("_");
         let mangled_name = format!("{}${}", base_name, suffix);
 
-        // If variant already exists, just return the name
-        if self.functions.contains_key(&mangled_name) {
-            return Ok(mangled_name);
+        // Check if variant exists and is NOT stale (marked by __stale__ prefix in name)
+        if let Some(existing) = self.functions.get(&mangled_name) {
+            if !existing.name.starts_with("__stale__") {
+                // Variant exists and is fresh - use it
+                return Ok(mangled_name);
+            }
+            // Variant is stale (base function was redefined) - continue to recompile
         }
 
         // Get the original function's AST

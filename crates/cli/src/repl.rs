@@ -1099,8 +1099,48 @@ impl Repl {
         }).collect()
     }
 
+    /// Preprocess input to support semicolons as statement separators.
+    /// This allows multi-clause function definitions like: `f(0) = 0; f(n) = n * f(n-1)`
+    fn preprocess_input(input: &str) -> String {
+        // Replace semicolons with newlines, but be careful not to replace semicolons inside strings
+        let mut result = String::with_capacity(input.len());
+        let mut in_string = false;
+        let mut escape_next = false;
+
+        for ch in input.chars() {
+            if escape_next {
+                result.push(ch);
+                escape_next = false;
+                continue;
+            }
+
+            match ch {
+                '\\' if in_string => {
+                    result.push(ch);
+                    escape_next = true;
+                }
+                '"' => {
+                    in_string = !in_string;
+                    result.push(ch);
+                }
+                ';' if !in_string => {
+                    result.push('\n');
+                }
+                _ => {
+                    result.push(ch);
+                }
+            }
+        }
+
+        result
+    }
+
     /// Process user input (expression or definition)
     fn process_input(&mut self, input: &str) {
+        // Preprocess: convert semicolons to newlines (for multi-clause definitions)
+        let input = Self::preprocess_input(input);
+        let input = input.as_str();
+
         // Check for variable binding first (e.g., "x = 5" or "var y = 10")
         if let Some((name, mutable, expr)) = Self::is_var_binding(input) {
             self.define_var(&name, mutable, &expr);
@@ -1313,6 +1353,10 @@ impl Repl {
     /// Evaluate input and return the result as a string (for testing)
     /// This handles variable bindings, function definitions, and expressions.
     pub fn eval(&mut self, input: &str) -> Option<String> {
+        // Preprocess: convert semicolons to newlines (for multi-clause definitions)
+        let input = Self::preprocess_input(input);
+        let input = input.as_str();
+
         // Check for variable binding first (e.g., "x = 5" or "var y = 10")
         if let Some((name, mutable, expr)) = Self::is_var_binding(input) {
             if self.define_var(&name, mutable, &expr) {
@@ -1758,5 +1802,67 @@ mod tests {
         // bar and baz should be unchanged
         assert_eq!(repl.eval("bar()"), Some("2".to_string()));
         assert_eq!(repl.eval("baz()"), Some("3".to_string()));
+    }
+
+    #[test]
+    fn test_parameterized_function_redefinition_direct() {
+        let mut repl = create_test_repl();
+
+        // Define a function with parameters
+        repl.eval("double(x) = x * 2");
+        assert_eq!(repl.eval("double(5)"), Some("10".to_string()));
+
+        // Redefine it to triple
+        repl.eval("double(x) = x * 3");
+
+        // Direct call should use new definition
+        assert_eq!(repl.eval("double(5)"), Some("15".to_string()));
+    }
+
+    #[test]
+    fn test_recursive_function_safe() {
+        let mut repl = create_test_repl();
+
+        // Define multi-clause function using semicolons
+        repl.eval("countdown(0) = 0; countdown(n) = countdown(n - 1)");
+
+        // Should terminate and return 0
+        assert_eq!(repl.eval("countdown(5)"), Some("0".to_string()));
+
+        // Define a function that uses countdown
+        repl.eval("count_from(n) = countdown(n)");
+        assert_eq!(repl.eval("count_from(3)"), Some("0".to_string()));
+    }
+
+    #[test]
+    fn test_recursive_function_accumulator() {
+        let mut repl = create_test_repl();
+
+        // Define sum using semicolons
+        repl.eval("sum_to(0) = 0; sum_to(n) = n + sum_to(n - 1)");
+
+        // sum_to(5) = 5 + 4 + 3 + 2 + 1 + 0 = 15
+        assert_eq!(repl.eval("sum_to(5)"), Some("15".to_string()));
+    }
+
+    #[test]
+    fn test_semicolon_in_string_preserved() {
+        let mut repl = create_test_repl();
+
+        // Semicolons inside strings should NOT be converted to newlines
+        repl.eval(r#"greeting() = "Hello; World""#);
+        assert_eq!(repl.eval("greeting()"), Some("Hello; World".to_string()));
+    }
+
+    #[test]
+    fn test_multiple_definitions_semicolon() {
+        let mut repl = create_test_repl();
+
+        // Multiple independent definitions separated by semicolons
+        repl.eval("first() = 1; second() = 2; third() = 3");
+
+        assert_eq!(repl.eval("first()"), Some("1".to_string()));
+        assert_eq!(repl.eval("second()"), Some("2".to_string()));
+        assert_eq!(repl.eval("third()"), Some("3".to_string()));
     }
 }

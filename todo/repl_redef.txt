@@ -1,5 +1,0 @@
-  Note: The tests avoid:
-  - Direct redefinition of parameterized functions (doesn't work in current REPL)
-  - Multi-clause pattern-matched functions (redefinition semantics unclear)
-  - Recursive functions being redefined (risk of infinite loops/OOM)
-
