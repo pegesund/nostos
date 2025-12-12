@@ -294,11 +294,20 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         eprintln!("Failed to load stdlib: {}", e);
     }
 
-    // Load files
+    // Load files or directories
     for arg in args {
         if !arg.starts_with('-') {
-            if let Err(e) = engine.load_file(arg) {
-                eprintln!("Error loading {}: {}", arg, e);
+            let path = std::path::Path::new(arg);
+            if path.is_dir() {
+                // Load directory with SourceManager
+                if let Err(e) = engine.load_directory(arg) {
+                    eprintln!("Error loading directory {}: {}", arg, e);
+                }
+            } else {
+                // Load single file
+                if let Err(e) = engine.load_file(arg) {
+                    eprintln!("Error loading {}: {}", arg, e);
+                }
             }
         }
     }
@@ -637,16 +646,42 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                 }
             };
 
-            match engine_save.borrow_mut().eval(&content) {
+            let mut engine = engine_save.borrow_mut();
+            match engine.eval(&content) {
                 Ok(output) => {
-                    if output.is_empty() {
-                        log_to_repl(s, &format!("Saved {} (no definitions found)", name_for_save));
+                    // Also save to SourceManager if available (auto-commits to .nostos/defs/)
+                    if engine.has_source_manager() {
+                        match engine.save_definition(&name_for_save, &content) {
+                            Ok(changed) => {
+                                if changed {
+                                    drop(engine);
+                                    log_to_repl(s, &format!("Saved {} (committed to .nostos/defs/)", name_for_save));
+                                } else if output.is_empty() {
+                                    drop(engine);
+                                    log_to_repl(s, &format!("Saved {} (no changes)", name_for_save));
+                                } else {
+                                    drop(engine);
+                                    log_to_repl(s, &output);
+                                }
+                            }
+                            Err(e) => {
+                                drop(engine);
+                                log_to_repl(s, &format!("Warning: {}", e));
+                                log_to_repl(s, &output);
+                            }
+                        }
                     } else {
-                        log_to_repl(s, &output);
+                        drop(engine);
+                        if output.is_empty() {
+                            log_to_repl(s, &format!("Saved {} (no definitions found)", name_for_save));
+                        } else {
+                            log_to_repl(s, &output);
+                        }
                     }
                     close_editor(s, &name_for_save);
                 }
                 Err(e) => {
+                    drop(engine);
                     s.add_layer(Dialog::info(format!("Error: {}", e)));
                 }
             }
@@ -1421,6 +1456,7 @@ fn handle_command(engine: &mut ReplEngine, line: &str) -> String {
   :traits              List traits
   :vars                List variables
   :copy, :cp           Copy console to clipboard
+  :w, :write           Write module files from defs
 
 Keyboard shortcuts:
   Shift+Tab            Cycle between windows
@@ -1473,6 +1509,14 @@ Keyboard shortcuts:
             engine.switch_module(args)
         },
         ":vars" | ":bindings" => engine.get_vars(),
+        ":w" | ":write" => {
+            match engine.write_module_files() {
+                Ok(0) => "No changes to write".to_string(),
+                Ok(1) => "1 module file written".to_string(),
+                Ok(n) => format!("{} module files written", n),
+                Err(e) => e,
+            }
+        }
         _ => format!("Unknown command: {}", cmd),
     }
 }

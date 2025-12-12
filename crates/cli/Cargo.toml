@@ -16,6 +16,7 @@ nostos-compiler = { path = "../compiler" }
 nostos-vm = { path = "../vm" }
 nostos-jit = { path = "../jit" }
 nostos-repl = { path = "../repl" }
+nostos-source = { path = "../source" }
 reedline = "0.38.0"
 nu-ansi-term = "0.50"
 cursive = { version = "0.20", default-features = false, features = ["crossterm-backend"] }

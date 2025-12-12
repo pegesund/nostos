@@ -1637,7 +1637,10 @@ fn module() -> impl Parser<Token, Module, Error = Simple<Token>> + Clone {
 
 /// Parse source code into a module.
 pub fn parse(source: &str) -> (Option<Module>, Vec<Simple<Token>>) {
-    let tokens: Vec<_> = crate::lexer::lex(source).collect();
+    // Filter out comment tokens - they're kept for syntax highlighting only
+    let tokens: Vec<_> = crate::lexer::lex(source)
+        .filter(|(tok, _)| !matches!(tok, Token::Comment | Token::MultiLineComment))
+        .collect();
     let len = source.len();
 
     let (result, errors) = module().parse_recovery(chumsky::Stream::from_iter(
@@ -1650,7 +1653,10 @@ pub fn parse(source: &str) -> (Option<Module>, Vec<Simple<Token>>) {
 
 /// Parse a single expression (useful for REPL).
 pub fn parse_expr(source: &str) -> (Option<Expr>, Vec<Simple<Token>>) {
-    let tokens: Vec<_> = crate::lexer::lex(source).collect();
+    // Filter out comment tokens - they're kept for syntax highlighting only
+    let tokens: Vec<_> = crate::lexer::lex(source)
+        .filter(|(tok, _)| !matches!(tok, Token::Comment | Token::MultiLineComment))
+        .collect();
     let len = source.len();
 
     let (result, errors) = expr()
