@@ -13,7 +13,257 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::process::ExitCode;
 use crate::editor::CodeEditor;
-use crate::custom_views::ActiveWindow;
+use crate::custom_views::{ActiveWindow, FocusableConsole};
+
+mod nomouse_backend {
+    //! Custom crossterm backend without mouse capture enabled.
+    //! This allows normal terminal text selection and copy/paste to work.
+
+    use crossterm::{
+        cursor,
+        event::{
+            DisableBracketedPaste, EnableBracketedPaste,
+            Event as CEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+            MouseButton, MouseEvent as CMouseEvent, MouseEventKind,
+        },
+        execute, queue,
+        style::{Attribute, Color, Print, SetAttribute, SetBackgroundColor, SetForegroundColor},
+        terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
+    };
+    use cursive::backend::Backend;
+    use cursive::event::{Event, Key, MouseButton as CursiveMouseButton, MouseEvent};
+    use cursive::theme;
+    use cursive::Vec2;
+    use std::io::{self, BufWriter, Stdout, Write};
+
+    pub struct NoMouseBackend {
+        writer: BufWriter<Stdout>,
+        #[allow(dead_code)]
+        current_style: theme::ColorPair,
+    }
+
+    impl NoMouseBackend {
+        pub fn init() -> io::Result<Box<dyn Backend>> {
+            terminal::enable_raw_mode()?;
+            let mut stdout = io::stdout();
+
+            // Note: We intentionally skip EnableMouseCapture here
+            execute!(
+                stdout,
+                EnterAlternateScreen,
+                EnableBracketedPaste,
+                cursor::Hide
+            )?;
+
+            Ok(Box::new(Self {
+                writer: BufWriter::new(stdout),
+                current_style: theme::ColorPair {
+                    front: theme::Color::TerminalDefault,
+                    back: theme::Color::TerminalDefault,
+                },
+            }))
+        }
+    }
+
+    impl Drop for NoMouseBackend {
+        fn drop(&mut self) {
+            let _ = self.writer.flush();
+            let _ = execute!(
+                io::stdout(),
+                LeaveAlternateScreen,
+                DisableBracketedPaste,
+                cursor::Show
+            );
+            let _ = terminal::disable_raw_mode();
+        }
+    }
+
+    impl Backend for NoMouseBackend {
+        fn poll_event(&mut self) -> Option<Event> {
+            self.writer.flush().ok();
+
+            match crossterm::event::poll(std::time::Duration::from_millis(10)) {
+                Ok(true) => match crossterm::event::read() {
+                    Ok(CEvent::Key(key_event)) => translate_key_event(key_event),
+                    Ok(CEvent::Mouse(mouse_event)) => translate_mouse_event(mouse_event),
+                    Ok(CEvent::Resize(_, _)) => Some(Event::WindowResize),
+                    Ok(CEvent::Paste(_text)) => None, // Paste events not supported in this cursive version
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+
+        fn set_title(&mut self, title: String) {
+            let _ = execute!(self.writer, crossterm::terminal::SetTitle(title));
+        }
+
+        fn refresh(&mut self) {
+            let _ = self.writer.flush();
+        }
+
+        fn has_colors(&self) -> bool {
+            true
+        }
+
+        fn screen_size(&self) -> Vec2 {
+            terminal::size().map(|(w, h)| Vec2::new(w as usize, h as usize)).unwrap_or(Vec2::new(80, 24))
+        }
+
+        fn print_at(&self, pos: Vec2, text: &str) {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            let _ = queue!(
+                handle,
+                cursor::MoveTo(pos.x as u16, pos.y as u16),
+                Print(text)
+            );
+        }
+
+        fn print_at_rep(&self, pos: Vec2, repetitions: usize, text: &str) {
+            if repetitions > 0 {
+                let stdout = io::stdout();
+                let mut handle = stdout.lock();
+                let _ = queue!(handle, cursor::MoveTo(pos.x as u16, pos.y as u16));
+                for _ in 0..repetitions {
+                    let _ = queue!(handle, Print(text));
+                }
+            }
+        }
+
+        fn clear(&self, color: theme::Color) {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            let _ = queue!(
+                handle,
+                SetBackgroundColor(translate_color(color)),
+                terminal::Clear(terminal::ClearType::All)
+            );
+        }
+
+        fn set_color(&self, color_pair: theme::ColorPair) -> theme::ColorPair {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            let _ = queue!(
+                handle,
+                SetForegroundColor(translate_color(color_pair.front)),
+                SetBackgroundColor(translate_color(color_pair.back))
+            );
+            color_pair
+        }
+
+        fn set_effect(&self, effect: theme::Effect) {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            let attr = match effect {
+                theme::Effect::Bold => Attribute::Bold,
+                theme::Effect::Italic => Attribute::Italic,
+                theme::Effect::Strikethrough => Attribute::CrossedOut,
+                theme::Effect::Underline => Attribute::Underlined,
+                theme::Effect::Reverse => Attribute::Reverse,
+                theme::Effect::Blink => Attribute::SlowBlink,
+                theme::Effect::Dim => Attribute::Dim,
+                theme::Effect::Simple => Attribute::Reset,
+            };
+            let _ = queue!(handle, SetAttribute(attr));
+        }
+
+        fn unset_effect(&self, effect: theme::Effect) {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            let attr = match effect {
+                theme::Effect::Bold => Attribute::NormalIntensity,
+                theme::Effect::Italic => Attribute::NoItalic,
+                theme::Effect::Strikethrough => Attribute::NotCrossedOut,
+                theme::Effect::Underline => Attribute::NoUnderline,
+                theme::Effect::Reverse => Attribute::NoReverse,
+                theme::Effect::Blink => Attribute::NoBlink,
+                theme::Effect::Dim => Attribute::NormalIntensity,
+                theme::Effect::Simple => Attribute::Reset,
+            };
+            let _ = queue!(handle, SetAttribute(attr));
+        }
+
+        fn name(&self) -> &str {
+            "crossterm-nomouse"
+        }
+    }
+
+    fn translate_color(color: theme::Color) -> Color {
+        match color {
+            theme::Color::TerminalDefault => Color::Reset,
+            theme::Color::Dark(theme::BaseColor::Black) => Color::Black,
+            theme::Color::Dark(theme::BaseColor::Red) => Color::DarkRed,
+            theme::Color::Dark(theme::BaseColor::Green) => Color::DarkGreen,
+            theme::Color::Dark(theme::BaseColor::Yellow) => Color::DarkYellow,
+            theme::Color::Dark(theme::BaseColor::Blue) => Color::DarkBlue,
+            theme::Color::Dark(theme::BaseColor::Magenta) => Color::DarkMagenta,
+            theme::Color::Dark(theme::BaseColor::Cyan) => Color::DarkCyan,
+            theme::Color::Dark(theme::BaseColor::White) => Color::Grey,
+            theme::Color::Light(theme::BaseColor::Black) => Color::DarkGrey,
+            theme::Color::Light(theme::BaseColor::Red) => Color::Red,
+            theme::Color::Light(theme::BaseColor::Green) => Color::Green,
+            theme::Color::Light(theme::BaseColor::Yellow) => Color::Yellow,
+            theme::Color::Light(theme::BaseColor::Blue) => Color::Blue,
+            theme::Color::Light(theme::BaseColor::Magenta) => Color::Magenta,
+            theme::Color::Light(theme::BaseColor::Cyan) => Color::Cyan,
+            theme::Color::Light(theme::BaseColor::White) => Color::White,
+            theme::Color::Rgb(r, g, b) => Color::Rgb { r, g, b },
+            theme::Color::RgbLowRes(r, g, b) => Color::AnsiValue(16 + 36 * r + 6 * g + b),
+        }
+    }
+
+    fn translate_key_event(event: KeyEvent) -> Option<Event> {
+        // Only process key press events (not release or repeat for most keys)
+        if event.kind != KeyEventKind::Press {
+            return None;
+        }
+
+        let mods = event.modifiers;
+        let shift = mods.contains(KeyModifiers::SHIFT);
+        let ctrl = mods.contains(KeyModifiers::CONTROL);
+        let alt = mods.contains(KeyModifiers::ALT);
+
+        match event.code {
+            KeyCode::Char(c) if ctrl => Some(Event::CtrlChar(c)),
+            KeyCode::Char(c) if alt => Some(Event::AltChar(c)),
+            KeyCode::Char(c) => Some(Event::Char(c)),
+            KeyCode::Enter => Some(Event::Key(Key::Enter)),
+            KeyCode::Backspace => Some(Event::Key(Key::Backspace)),
+            KeyCode::Tab if shift => Some(Event::Shift(Key::Tab)),
+            KeyCode::Tab => Some(Event::Key(Key::Tab)),
+            KeyCode::Esc => Some(Event::Key(Key::Esc)),
+            KeyCode::Left => Some(Event::Key(Key::Left)),
+            KeyCode::Right => Some(Event::Key(Key::Right)),
+            KeyCode::Up => Some(Event::Key(Key::Up)),
+            KeyCode::Down => Some(Event::Key(Key::Down)),
+            KeyCode::Home => Some(Event::Key(Key::Home)),
+            KeyCode::End => Some(Event::Key(Key::End)),
+            KeyCode::PageUp => Some(Event::Key(Key::PageUp)),
+            KeyCode::PageDown => Some(Event::Key(Key::PageDown)),
+            KeyCode::Delete => Some(Event::Key(Key::Del)),
+            KeyCode::Insert => Some(Event::Key(Key::Ins)),
+            KeyCode::F(n) => Some(Event::Key(Key::from_f(n))),
+            _ => None,
+        }
+    }
+
+    fn translate_mouse_event(event: CMouseEvent) -> Option<Event> {
+        let pos = cursive::Vec2::new(event.column as usize, event.row as usize);
+        let event = match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => MouseEvent::Press(CursiveMouseButton::Left),
+            MouseEventKind::Down(MouseButton::Right) => MouseEvent::Press(CursiveMouseButton::Right),
+            MouseEventKind::Down(MouseButton::Middle) => MouseEvent::Press(CursiveMouseButton::Middle),
+            MouseEventKind::Up(MouseButton::Left) => MouseEvent::Release(CursiveMouseButton::Left),
+            MouseEventKind::Up(MouseButton::Right) => MouseEvent::Release(CursiveMouseButton::Right),
+            MouseEventKind::Up(MouseButton::Middle) => MouseEvent::Release(CursiveMouseButton::Middle),
+            MouseEventKind::ScrollUp => MouseEvent::WheelUp,
+            MouseEventKind::ScrollDown => MouseEvent::WheelDown,
+            _ => return None,
+        };
+        Some(Event::Mouse { offset: cursive::Vec2::zero(), position: pos, event })
+    }
+}
 
 struct TuiState {
     open_editors: Vec<String>,
@@ -22,6 +272,7 @@ struct TuiState {
 }
 
 pub fn run_tui(args: &[String]) -> ExitCode {
+    // Use default cursive backend
     let mut siv = cursive::default();
 
     // Custom theme
@@ -63,15 +314,35 @@ pub fn run_tui(args: &[String]) -> ExitCode {
     // Components
 
     // 1. REPL Log (Console) - will be added to workspace
-    let repl_log = TextView::new(format!("Nostos TUI v{}\nType :help for commands\n\n", env!("CARGO_PKG_VERSION")))
+    // Wrap in FocusableConsole so it can receive focus and show yellow border
+    let repl_log = FocusableConsole::new(
+        TextView::new(format!(
+            "Nostos TUI v{}\nType :help for commands\n\n",
+            env!("CARGO_PKG_VERSION")
+        ))
         .scrollable()
-        .with_name("repl_log");
+    ).with_name("repl_log");
+
+    // Wrap console with OnEventView for Ctrl+Y copy (same pattern as Ctrl+S on editor)
+    let repl_log_with_events = OnEventView::new(repl_log)
+        .on_event(Event::CtrlChar('y'), |s| {
+            if let Some(text) = s.call_on_name("repl_log", |view: &mut FocusableConsole| {
+                view.get_content()
+            }) {
+                if !text.is_empty() {
+                    match copy_to_system_clipboard(&text) {
+                        Ok(_) => log_to_repl(s, &format!("Copied {} chars", text.len())),
+                        Err(e) => log_to_repl(s, &format!("Copy failed: {}", e)),
+                    }
+                }
+            }
+        });
 
     // 2. Workspace - starts with just Console (full width and height)
     let workspace = LinearLayout::vertical()
         .child(
             LinearLayout::horizontal()
-                .child(ActiveWindow::new(repl_log, "Console").full_width())
+                .child(ActiveWindow::new(repl_log_with_events, "Console").full_width())
                 .full_width()
                 .full_height()
                 .with_name("workspace_row_0")
@@ -107,12 +378,22 @@ pub fn run_tui(args: &[String]) -> ExitCode {
                 return;
             }
 
+            // Handle :copy
+            if input_text == ":copy" || input_text == ":cp" {
+                copy_focused_window(s);
+                return;
+            }
+
+            // Handle :debug - show what command was received
+            if input_text == ":debug" {
+                log_to_repl(s, "Debug: TUI commands are working");
+                return;
+            }
+
             // Echo
-            s.call_on_name("repl_log", |view: &mut ScrollView<TextView>| {
-                let text_view = view.get_inner_mut();
-                text_view.append(style_input(&input_text));
-                text_view.append("\n");
-                view.scroll_to_bottom();
+            s.call_on_name("repl_log", |view: &mut FocusableConsole| {
+                view.append_styled(style_input(&input_text));
+                view.append("\n");
             });
 
             // Eval
@@ -138,25 +419,43 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         })
         .with_name("input");
 
+    // Wrap input with OnEventView for Ctrl+Y copy (same pattern as Ctrl+S on editor)
+    let input_with_events = OnEventView::new(input_view)
+        .on_event(Event::CtrlChar('y'), |s| {
+            if let Some(text) = s.call_on_name("input", |view: &mut EditView| {
+                view.get_content().to_string()
+            }) {
+                if !text.is_empty() {
+                    match copy_to_system_clipboard(&text) {
+                        Ok(_) => log_to_repl(s, &format!("Copied {} chars", text.len())),
+                        Err(e) => log_to_repl(s, &format!("Copy failed: {}", e)),
+                    }
+                }
+            }
+        });
+
     // Root Layout - Input always has full width
     let root_layout = LinearLayout::vertical()
         .child(workspace.full_width().full_height())
-        .child(ActiveWindow::new(input_view, "Input").full_width().fixed_height(3));
+        .child(ActiveWindow::new(input_with_events, "Input").full_width().fixed_height(3));
 
     siv.add_layer(root_layout);
 
-    // Global Window Cycling with Shift+Tab
-    siv.add_global_callback(Event::Shift(Key::Tab), cycle_window);
+    // Focus input at start
+    siv.focus_name("input").ok();
+
+    // Global Shift+Tab for window cycling (this one needs to be global)
+    siv.set_on_pre_event(Event::Shift(Key::Tab), |s| {
+        cycle_window(s);
+    });
 
     siv.run();
     ExitCode::SUCCESS
 }
 
 fn log_to_repl(s: &mut Cursive, text: &str) {
-    s.call_on_name("repl_log", |view: &mut ScrollView<TextView>| {
-        let text_view = view.get_inner_mut();
-        text_view.append(format!("{}\n", text));
-        view.scroll_to_bottom();
+    s.call_on_name("repl_log", |view: &mut FocusableConsole| {
+        view.append(&format!("{}\n", text));
     });
 }
 
@@ -171,8 +470,8 @@ fn rebuild_workspace(s: &mut Cursive) {
     }).unwrap();
 
     // Get console content BEFORE clearing workspace
-    let repl_log_content: String = s.call_on_name("repl_log", |view: &mut ScrollView<TextView>| {
-        view.get_inner().get_content().source().to_string()
+    let repl_log_content: String = s.call_on_name("repl_log", |view: &mut FocusableConsole| {
+        view.get_content()
     }).unwrap_or_default();
 
     // Remove old workspace content
@@ -183,10 +482,26 @@ fn rebuild_workspace(s: &mut Cursive) {
     // Total windows = Console + editors
     let total_windows = 1 + editor_names.len();
 
-    let repl_log = TextView::new(repl_log_content)
-        .scrollable()
-        .with_name("repl_log");
-    let console = ActiveWindow::new(repl_log, "Console").full_width();
+    let repl_log = FocusableConsole::new(
+        TextView::new(repl_log_content).scrollable()
+    ).with_name("repl_log");
+
+    // Wrap console with OnEventView for Ctrl+Y copy (same pattern as Ctrl+S on editor)
+    let repl_log_with_events = OnEventView::new(repl_log)
+        .on_event(Event::CtrlChar('y'), |s| {
+            if let Some(text) = s.call_on_name("repl_log", |view: &mut FocusableConsole| {
+                view.get_content()
+            }) {
+                if !text.is_empty() {
+                    match copy_to_system_clipboard(&text) {
+                        Ok(_) => log_to_repl(s, &format!("Copied {} chars", text.len())),
+                        Err(e) => log_to_repl(s, &format!("Copy failed: {}", e)),
+                    }
+                }
+            }
+        });
+
+    let console = ActiveWindow::new(repl_log_with_events, "Console").full_width();
 
     if total_windows <= 3 {
         // Single row layout
@@ -235,11 +550,28 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
 
     let name_for_save = name.to_string();
     let name_for_close = name.to_string();
+    let name_for_close_w = name.to_string();
     let engine_save = engine.clone();
     let editor_id_save = editor_id.clone();
+    let editor_id_copy = editor_id.clone();
 
-    // Ctrl+S to save, Esc to close
+    // Ctrl+S to save, Ctrl+W to close, Ctrl+Y to copy, Esc to close
     let editor_with_events = OnEventView::new(editor.with_name(&editor_id))
+        .on_event(Event::CtrlChar('y'), move |s| {
+            // Copy editor content to clipboard (Ctrl+Y)
+            if let Some(text) = s.call_on_name(&editor_id_copy, |v: &mut CodeEditor| v.get_content()) {
+                if !text.is_empty() {
+                    match copy_to_system_clipboard(&text) {
+                        Ok(_) => log_to_repl(s, &format!("Copied {} chars", text.len())),
+                        Err(e) => log_to_repl(s, &format!("Copy failed: {}", e)),
+                    }
+                }
+            }
+        })
+        .on_event(Event::CtrlChar('w'), move |s| {
+            // Close this editor
+            close_editor(s, &name_for_close_w);
+        })
         .on_event(Event::CtrlChar('s'), move |s| {
             let content = match s.call_on_name(&editor_id_save, |v: &mut CodeEditor| v.get_content()) {
                 Some(c) => c,
@@ -338,7 +670,106 @@ fn cycle_window(s: &mut Cursive) {
         windows[state.active_window_idx].clone()
     }).unwrap();
 
+    // Now console is focusable via FocusableConsole wrapper
     s.focus_name(&target).ok();
+}
+
+fn close_active_editor(s: &mut Cursive) {
+    // Get active window info
+    let (active_idx, editor_names) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let state = state.borrow();
+        (state.active_window_idx, state.open_editors.clone())
+    }).unwrap_or((0, vec![]));
+
+    // Build window list (same order as cycle_window)
+    let mut windows = vec!["input".to_string(), "repl_log".to_string()];
+    for name in &editor_names {
+        windows.push(format!("editor_{}", name));
+    }
+
+    let focused_window = windows.get(active_idx % windows.len()).cloned().unwrap_or_default();
+
+    // Only close if it's an editor window
+    if focused_window.starts_with("editor_") {
+        let name = focused_window.strip_prefix("editor_").unwrap().to_string();
+        close_editor(s, &name);
+    }
+}
+
+fn copy_focused_window(s: &mut Cursive) {
+    // Get the currently active window from tracked index
+    let (active_idx, editor_names) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let state = state.borrow();
+        (state.active_window_idx, state.open_editors.clone())
+    }).unwrap_or((0, vec![]));
+
+    // Build window list (same order as cycle_window)
+    let mut windows = vec!["input".to_string(), "repl_log".to_string()];
+    for name in &editor_names {
+        windows.push(format!("editor_{}", name));
+    }
+
+    let focused_window = windows.get(active_idx % windows.len()).cloned().unwrap_or_default();
+
+    // Get content based on focused window
+    let content: Option<String> = if focused_window == "input" {
+        s.call_on_name("input", |view: &mut EditView| {
+            view.get_content().to_string()
+        })
+    } else if focused_window == "repl_log" {
+        s.call_on_name("repl_log", |view: &mut FocusableConsole| {
+            view.get_content()
+        })
+    } else if focused_window.starts_with("editor_") {
+        s.call_on_name(&focused_window, |view: &mut crate::editor::CodeEditor| {
+            view.get_content()
+        })
+    } else {
+        None
+    };
+
+    // Copy to clipboard silently (no logging to avoid console resize)
+    if let Some(text) = content {
+        if !text.is_empty() {
+            let _ = copy_to_system_clipboard(&text);
+        }
+    }
+}
+
+/// Copy text to system clipboard using xclip (X11) or wl-copy (Wayland)
+fn copy_to_system_clipboard(text: &str) -> Result<String, String> {
+    use std::process::{Command, Stdio};
+    use std::io::Write;
+
+    // Try wl-copy first (Wayland), then xclip (X11)
+    let commands = [
+        ("wl-copy", vec![]),
+        ("xclip", vec!["-selection", "clipboard"]),
+        ("xsel", vec!["--clipboard", "--input"]),
+    ];
+
+    for (cmd, args) in &commands {
+        if let Ok(mut child) = Command::new(cmd)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                if stdin.write_all(text.as_bytes()).is_ok() {
+                    drop(stdin);
+                    if let Ok(status) = child.wait() {
+                        if status.success() {
+                            return Ok(cmd.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Err("No clipboard tool found (tried wl-copy, xclip, xsel)".to_string())
 }
 
 fn style_input(text: &str) -> StyledString {
@@ -420,7 +851,15 @@ fn handle_command(engine: &mut ReplEngine, line: &str) -> String {
   :functions, :fns     List functions
   :types               List types
   :traits              List traits
-  :vars                List variables".to_string()
+  :vars                List variables
+  :copy, :cp           Copy console to clipboard
+
+Keyboard shortcuts:
+  Shift+Tab            Cycle between windows
+  Ctrl+Y               Copy focused window to clipboard
+  Ctrl+W               Close active editor
+  Ctrl+S               Save editor (when in editor)
+  Esc                  Close editor (when in editor)".to_string()
         }
         ":load" | ":l" => {
             if args.is_empty() { return "Usage: :load <file.nos>".to_string(); }
