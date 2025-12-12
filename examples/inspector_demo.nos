@@ -1,0 +1,99 @@
+# Demo file for the smart variable inspector
+# Run with: nostos tui examples/inspector_demo.nos
+# Then use :browse to explore variables
+
+# Simple values
+simpleInt = 42
+simpleString = "Hello, Inspector!"
+simpleBool = true
+
+# A list of numbers
+numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+# Nested list
+matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+
+# A tuple
+point = (100, 200, 300)
+
+# Record type for a person
+type Person = { name: String, age: Int, email: String }
+
+# Record type for an address
+type Address = { street: String, city: String, zip: Int, country: String }
+
+# Complex nested record
+type Employee = { person: Person, address: Address, department: String, salary: Int }
+
+# Create some people
+alice = Person("Alice", 30, "alice@example.com")
+
+bob = Person("Bob", 25, "bob@example.com")
+
+# Create an employee with nested data
+employee = Employee(
+    Person("Charlie", 35, "charlie@corp.com"),
+    Address("123 Main St", "Springfield", 12345, "USA"),
+    "Engineering",
+    75000
+)
+
+# Variant type (sum type)
+type Shape = Circle(Int) | Rectangle(Int, Int) | Triangle(Int, Int, Int)
+
+# Create some shapes
+circle = Circle(50)
+rect = Rectangle(100, 200)
+triangle = Triangle(3, 4, 5)
+
+# List of shapes
+shapes = [Circle(10), Rectangle(20, 30), Circle(40), Triangle(5, 12, 13)]
+
+# Recursive variant - custom linked list
+type IntList = Nil | Cons(Int, IntList)
+
+# Create a linked list
+myList = Cons(1, Cons(2, Cons(3, Nil)))
+
+# Option type examples (non-generic for simplicity)
+type MaybeInt = Nothing | Just(Int)
+
+maybeValue = Just(42)
+noValue = Nothing
+
+# Result type (non-generic for simplicity)
+type IntResult = IntOk(Int) | IntErr(String)
+
+success = IntOk(100)
+failure = IntErr("Something went wrong")
+
+# Deep nesting example
+deepNest = [[[[1, 2], [3, 4]], [[5, 6], [7, 8]]], [[[9, 10], [11, 12]], [[13, 14], [15, 16]]]]
+
+# Large list for pagination testing
+bigList = List.range(1, 100)
+
+# A company with multiple employees
+type Company = { name: String, employees: List[Employee], founded: Int }
+
+techCorp = Company(
+    "TechCorp Inc.",
+    [
+        Employee(
+            Person("Diana", 40, "diana@techcorp.com"),
+            Address("456 Tech Blvd", "Silicon Valley", 94000, "USA"),
+            "CEO",
+            250000
+        ),
+        Employee(
+            Person("Eve", 28, "eve@techcorp.com"),
+            Address("789 Code Lane", "Austin", 73301, "USA"),
+            "Engineering",
+            120000
+        )
+    ],
+    2015
+)
+
+# Print a message when loaded
+main() = println("Inspector demo loaded! Use :browse to explore variables.")

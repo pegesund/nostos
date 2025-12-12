@@ -8,6 +8,7 @@ use cursive::view::Resizable;
 use cursive::utils::markup::StyledString;
 use cursive::event::{Event, EventResult, Key};
 use nostos_repl::{ReplEngine, ReplConfig, BrowserItem};
+use nostos_vm::{Value, Inspector, Slot, SlotInfo};
 use nostos_syntax::lexer::{Token, lex};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -755,6 +756,13 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                     format!("ƒ  {} :: {}", name, signature)
                 }
             }
+            BrowserItem::Variable { name, mutable } => {
+                if *mutable {
+                    format!("⚡ var {}", name)
+                } else {
+                    format!("📌 {}", name)
+                }
+            }
         };
         select.add_item(label, item);
     }
@@ -779,7 +787,7 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 new_path.push(name.clone());
                 show_browser_dialog(s, engine, new_path);
             }
-            BrowserItem::Function { name, .. } => {
+            BrowserItem::Function { .. } => {
                 // Open function in editor
                 let full_name = engine.borrow().get_full_name(&new_path, item);
                 s.pop_layer();
@@ -789,10 +797,11 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 // Show type info
                 let full_name = engine.borrow().get_full_name(&new_path, item);
                 let info = engine.borrow().get_info(&full_name);
+                let name_owned = name.clone();
                 s.pop_layer();
                 s.add_layer(
                     Dialog::text(info)
-                        .title(format!("Type: {}", name))
+                        .title(format!("Type: {}", name_owned))
                         .button("Edit", move |s| {
                             s.pop_layer();
                             open_editor(s, &full_name);
@@ -804,12 +813,23 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 // Show trait info
                 let full_name = engine.borrow().get_full_name(&new_path, item);
                 let info = engine.borrow().get_info(&full_name);
+                let name_owned = name.clone();
                 s.pop_layer();
                 s.add_layer(
                     Dialog::text(info)
-                        .title(format!("Trait: {}", name))
+                        .title(format!("Trait: {}", name_owned))
                         .button("Close", |s| { s.pop_layer(); })
                 );
+            }
+            BrowserItem::Variable { name, mutable: _ } => {
+                // Get variable value and open in inspector
+                // Don't pop browser - keep it underneath so Left at root returns to browser
+                let var_name = name.clone();
+                if let Some(value) = engine.borrow_mut().get_var_value_raw(&var_name) {
+                    open_inspector(s, &var_name, value);
+                } else {
+                    log_to_repl(s, &format!("Unable to evaluate variable: {}", var_name));
+                }
             }
         }
     });
@@ -824,16 +844,18 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let dialog = Dialog::around(
         LinearLayout::vertical()
             .child(select_scroll)
-            .child(TextView::new("Enter: Select | Esc: Close | Backspace: Up"))
+            .child(TextView::new("Enter: Select | Esc: Close | Left: Up"))
     )
-    .title(&title)
-    .button("Close", |s| { s.pop_layer(); });
+    .title(&title);
 
     // Wrap in OnEventView for keyboard navigation
     let path_for_back = path.clone();
     let engine_for_back = engine.clone();
     let dialog_with_keys = OnEventView::new(dialog)
-        .on_event(Key::Backspace, move |s| {
+        .on_event(Key::Esc, |s| {
+            s.pop_layer();
+        })
+        .on_event(Key::Left, move |s| {
             if !path_for_back.is_empty() {
                 let engine = engine_for_back.clone();
                 let mut new_path = path_for_back.clone();
@@ -844,6 +866,362 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
         });
 
     s.add_layer(dialog_with_keys);
+}
+
+/// Open the value inspector dialog
+fn open_inspector(s: &mut Cursive, var_name: &str, value: Value) {
+    let inspector = Rc::new(RefCell::new(Inspector::new(var_name.to_string(), value)));
+    show_inspector_dialog(s, inspector);
+}
+
+/// Show the inspector dialog at the current navigation position
+fn show_inspector_dialog(s: &mut Cursive, inspector: Rc<RefCell<Inspector>>) {
+    let inspector_borrow = inspector.borrow();
+    let path_str = inspector_borrow.path_string();
+
+    let inspect_result = match inspector_borrow.inspect_current() {
+        Some(r) => r,
+        None => {
+            drop(inspector_borrow);
+            log_to_repl(s, "Error: Invalid inspection path");
+            return;
+        }
+    };
+
+    // Build title with type info
+    let title = format!("Inspector: {} :: {}", path_str, inspect_result.type_name);
+
+    // Build the content
+    let mut select = SelectView::<Slot>::new();
+
+    // Show ".." to go up if not at root
+    if inspector_borrow.depth() > 0 {
+        select.add_item("⬆️  ..", Slot::Field("..".to_string()));
+    }
+
+    // If it's a leaf, show the full value
+    if inspect_result.is_leaf {
+        drop(inspector_borrow);
+
+        let content = if let Some(count) = inspect_result.total_count {
+            format!("{}\n\n({} items)", inspect_result.preview, count)
+        } else {
+            inspect_result.preview.clone()
+        };
+
+        let dialog = Dialog::around(
+            LinearLayout::vertical()
+                .child(TextView::new(format!("Path: {}", path_str)))
+                .child(TextView::new(format!("Type: {}", inspect_result.type_name)))
+                .child(TextView::new(""))
+                .child(TextView::new(content).scrollable().fixed_height(15))
+                .child(TextView::new("Left: Go up | Esc: Close"))
+        )
+        .title("Inspector");
+
+        let inspector_for_back = inspector.clone();
+        let dialog_with_keys = OnEventView::new(dialog)
+            .on_event(Key::Esc, |s| {
+                s.pop_layer();
+            })
+            .on_event(Key::Left, move |s| {
+                s.pop_layer();
+                if inspector_for_back.borrow_mut().navigate_up() {
+                    show_inspector_dialog(s, inspector_for_back.clone());
+                }
+            });
+
+        s.add_layer(dialog_with_keys);
+        return;
+    }
+
+    // Show slots
+    let page_offset = inspector_borrow.page_offset;
+    let page_size = inspector_borrow.page_size;
+    let total_slots = inspect_result.slots.len();
+
+    for slot_info in &inspect_result.slots {
+        let slot = slot_info.slot.clone();
+        let is_cycle = inspector_borrow.would_cycle(&slot);
+
+        let icon = if is_cycle {
+            "🔄"
+        } else if slot_info.is_leaf {
+            "📄"
+        } else {
+            "📁"
+        };
+
+        let label = match &slot_info.slot {
+            Slot::Field(name) => format!("{} .{}: {} = {}", icon, name, slot_info.value_type, slot_info.preview),
+            Slot::Index(i) => format!("{} [{}]: {} = {}", icon, i, slot_info.value_type, slot_info.preview),
+            Slot::MapKey(k) => format!("{} [{}]: {} = {}", icon, k.display(), slot_info.value_type, slot_info.preview),
+            Slot::VariantField(i) => format!("{} .{}: {} = {}", icon, i, slot_info.value_type, slot_info.preview),
+            Slot::VariantNamedField(name) => format!("{} .{}: {} = {}", icon, name, slot_info.value_type, slot_info.preview),
+        };
+
+        select.add_item(label, slot);
+    }
+
+    drop(inspector_borrow);
+
+    // Handle selection
+    let inspector_for_select = inspector.clone();
+    select.set_on_submit(move |s, slot: &Slot| {
+        // Handle ".." navigation
+        if matches!(slot, Slot::Field(name) if name == "..") {
+            s.pop_layer();
+            inspector_for_select.borrow_mut().navigate_up();
+            show_inspector_dialog(s, inspector_for_select.clone());
+            return;
+        }
+
+        // Check for cycle
+        if inspector_for_select.borrow().would_cycle(slot) {
+            log_to_repl(s, "Cannot navigate: cycle detected");
+            return;
+        }
+
+        // Navigate into the slot
+        s.pop_layer();
+        if let Err(e) = inspector_for_select.borrow_mut().navigate_to(slot.clone()) {
+            log_to_repl(s, &format!("Navigation error: {}", e));
+        }
+        show_inspector_dialog(s, inspector_for_select.clone());
+    });
+
+    let select_scroll = select
+        .with_name("inspector_select")
+        .scrollable()
+        .fixed_size((70, 18));
+
+    // Pagination info
+    let pagination_info = if total_slots > page_size {
+        format!("Showing {}-{} of {} | PgUp/PgDn: Navigate pages",
+            page_offset + 1,
+            (page_offset + page_size).min(total_slots),
+            total_slots)
+    } else {
+        "Enter/Right: Drill in | Left: Go up | Esc: Close".to_string()
+    };
+
+    let dialog = Dialog::around(
+        LinearLayout::vertical()
+            .child(TextView::new(format!("Path: {}", path_str)))
+            .child(TextView::new(format!("Type: {} {}", inspect_result.type_name,
+                inspect_result.total_count.map(|c| format!("({} items)", c)).unwrap_or_default())))
+            .child(TextView::new(""))
+            .child(select_scroll)
+            .child(TextView::new(pagination_info))
+    )
+    .title(&title);
+
+    // Wrap for keyboard navigation
+    let inspector_for_back = inspector.clone();
+    let inspector_for_pgup = inspector.clone();
+    let inspector_for_pgdn = inspector.clone();
+
+    let dialog_with_keys = OnEventView::new(dialog)
+        .on_event(Key::Esc, |s| {
+            // Close inspector, browser underneath will be revealed
+            s.pop_layer();
+        })
+        .on_event(Key::Left, move |s| {
+            s.pop_layer();
+            if inspector_for_back.borrow_mut().navigate_up() {
+                show_inspector_dialog(s, inspector_for_back.clone());
+            }
+        })
+        .on_event(Key::PageUp, move |s| {
+            inspector_for_pgup.borrow_mut().prev_page();
+            s.pop_layer();
+            show_inspector_dialog(s, inspector_for_pgup.clone());
+        })
+        .on_event(Key::PageDown, move |s| {
+            inspector_for_pgdn.borrow_mut().next_page();
+            s.pop_layer();
+            show_inspector_dialog(s, inspector_for_pgdn.clone());
+        });
+
+    s.add_layer(dialog_with_keys);
+}
+
+/// Open a variable viewer in the workspace
+fn open_variable_viewer(s: &mut Cursive, name: &str, mutable: bool, value: &str) {
+    let viewer_name = format!("var_{}", name);
+
+    // Check limit and add to state
+    let can_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let mut state = state.borrow_mut();
+        if state.open_editors.contains(&viewer_name) {
+            return Err("Viewer already open");
+        }
+        if state.open_editors.len() >= 5 {
+            return Err("Max 6 windows");
+        }
+        state.open_editors.push(viewer_name.clone());
+        Ok(())
+    }).unwrap();
+
+    if let Err(msg) = can_open {
+        log_to_repl(s, msg);
+        return;
+    }
+
+    // Format the display text
+    let var_kind = if mutable { "var" } else { "val" };
+    let display_text = format!("{} {} = {}", var_kind, name, value);
+
+    // Rebuild workspace with the new viewer
+    rebuild_workspace_with_viewer(s, &viewer_name, &display_text);
+
+    // Focus the new viewer
+    s.focus_name(&viewer_name).ok();
+}
+
+/// Rebuild workspace including a variable viewer
+fn rebuild_workspace_with_viewer(s: &mut Cursive, viewer_name: &str, viewer_content: &str) {
+    let (editor_names, engine) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let state = state.borrow();
+        (state.open_editors.clone(), state.engine.clone())
+    }).unwrap();
+
+    // Get console content BEFORE clearing workspace
+    let repl_log_content: String = s.call_on_name("repl_log", |view: &mut FocusableConsole| {
+        view.get_content()
+    }).unwrap_or_default();
+
+    // Remove old workspace content
+    s.call_on_name("workspace", |ws: &mut LinearLayout| {
+        ws.clear();
+    });
+
+    // Total windows = Console + editors/viewers
+    let total_windows = 1 + editor_names.len();
+
+    let repl_log = FocusableConsole::new(
+        TextView::new(repl_log_content).scrollable()
+    ).with_name("repl_log");
+
+    let repl_log_with_events = OnEventView::new(repl_log)
+        .on_event(Event::CtrlChar('y'), |s| {
+            if let Some(text) = s.call_on_name("repl_log", |view: &mut FocusableConsole| {
+                view.get_content()
+            }) {
+                if !text.is_empty() {
+                    match copy_to_system_clipboard(&text) {
+                        Ok(_) => log_to_repl(s, &format!("Copied {} chars", text.len())),
+                        Err(e) => log_to_repl(s, &format!("Copy failed: {}", e)),
+                    }
+                }
+            }
+        });
+
+    let console = ActiveWindow::new(repl_log_with_events, "Console").full_width();
+
+    if total_windows <= 3 {
+        let mut row = LinearLayout::horizontal().child(console);
+
+        for name in &editor_names {
+            if name == viewer_name {
+                // Create viewer
+                let view = create_variable_viewer(name, viewer_content);
+                row.add_child(view);
+            } else if name.starts_with("var_") {
+                // Existing viewer - skip for now (would need stored content)
+                continue;
+            } else {
+                let editor_view = create_editor_view(s, &engine, name);
+                row.add_child(editor_view);
+            }
+        }
+
+        s.call_on_name("workspace", |ws: &mut LinearLayout| {
+            ws.add_child(row.full_width().full_height().with_name("workspace_row_0"));
+        });
+    } else {
+        let mut row0 = LinearLayout::horizontal().child(console);
+        let mut row1 = LinearLayout::horizontal();
+
+        for (i, name) in editor_names.iter().enumerate() {
+            let view: Box<dyn View> = if name == viewer_name {
+                Box::new(create_variable_viewer(name, viewer_content))
+            } else if name.starts_with("var_") {
+                continue;
+            } else {
+                Box::new(create_editor_view(s, &engine, name))
+            };
+
+            if i < 2 {
+                row0.add_child(view);
+            } else {
+                row1.add_child(view);
+            }
+        }
+
+        s.call_on_name("workspace", |ws: &mut LinearLayout| {
+            ws.add_child(row0.full_width().full_height().with_name("workspace_row_0"));
+            ws.add_child(row1.full_width().full_height().with_name("workspace_row_1"));
+        });
+    }
+}
+
+/// Create a read-only variable viewer
+fn create_variable_viewer(viewer_name: &str, content: &str) -> impl View {
+    // Extract the variable name from viewer_name (remove "var_" prefix)
+    let display_name = viewer_name.strip_prefix("var_").unwrap_or(viewer_name);
+
+    let text_view = TextView::new(content)
+        .scrollable()
+        .with_name(viewer_name);
+
+    let name_for_close = viewer_name.to_string();
+    let name_for_close_w = viewer_name.to_string();
+    let viewer_id_copy = viewer_name.to_string();
+
+    // Ctrl+W to close, Ctrl+Y to copy, Esc to close
+    let viewer_with_events = OnEventView::new(text_view)
+        .on_event(Event::CtrlChar('y'), move |s| {
+            if let Some(view) = s.call_on_name(&viewer_id_copy, |v: &mut ScrollView<TextView>| {
+                v.get_inner().get_content().source().to_string()
+            }) {
+                if !view.is_empty() {
+                    match copy_to_system_clipboard(&view) {
+                        Ok(_) => log_to_repl(s, &format!("Copied {} chars", view.len())),
+                        Err(e) => log_to_repl(s, &format!("Copy failed: {}", e)),
+                    }
+                }
+            }
+        })
+        .on_event(Event::CtrlChar('w'), move |s| {
+            close_viewer(s, &name_for_close_w);
+        })
+        .on_event(Key::Esc, move |s| {
+            close_viewer(s, &name_for_close);
+        })
+        .on_pre_event_inner(Event::Shift(Key::Tab), |_, _| {
+            Some(EventResult::Consumed(None))
+        });
+
+    ActiveWindow::new(viewer_with_events.full_height(), display_name).full_width()
+}
+
+/// Close a variable viewer
+fn close_viewer(s: &mut Cursive, viewer_name: &str) {
+    let was_removed = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let mut state = state.borrow_mut();
+        if let Some(idx) = state.open_editors.iter().position(|x| x == viewer_name) {
+            state.open_editors.remove(idx);
+            true
+        } else {
+            false
+        }
+    }).unwrap();
+
+    if was_removed {
+        rebuild_workspace(s);
+        s.focus_name("input").ok();
+    }
 }
 
 fn cycle_window(s: &mut Cursive) {

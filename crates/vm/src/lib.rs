@@ -9,6 +9,7 @@
 //! - Multi-CPU parallel execution
 
 pub mod gc;
+pub mod inspect;
 pub mod io_runtime;
 pub mod parallel;
 pub mod process;
@@ -18,6 +19,7 @@ pub mod value;
 pub mod worker;
 
 pub use gc::*;
+pub use inspect::*;
 pub use io_runtime::*;
 pub use parallel::*;
 pub use process::*;
