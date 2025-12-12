@@ -1,0 +1,37 @@
+# expect: ()
+# Test that function overloading does NOT override functions with different signatures
+# Each signature is a separate function
+
+# Define greet with String parameter
+greet(name: String) = "Hello, " ++ name
+
+# Define greet with Int parameter - should NOT override the String version
+greet(n: Int) = "Number: " ++ show(n)
+
+# Define greet with two Int parameters - another separate function
+greet(a: Int, b: Int) = "Sum: " ++ show(a + b)
+
+# Define process with untyped parameter
+process(x) = x
+
+# Define process with typed Int parameter - should NOT override untyped version
+process(x: Int) = x * 10
+
+main() = {
+    # Test that String version still works (wasn't overridden by Int version)
+    assert_eq(greet("World"), "Hello, World")
+
+    # Test that Int version works
+    assert_eq(greet(42), "Number: 42")
+
+    # Test that two-arg version works (different arity)
+    assert_eq(greet(10, 20), "Sum: 30")
+
+    # Test that typed Int version is preferred for Int argument
+    assert_eq(process(5), 50)
+
+    # Test calling with different order of definition doesn't matter
+    # (The functions are defined String first, then Int, but both should exist)
+    assert_eq(greet("Alice"), "Hello, Alice")
+    assert_eq(greet(100), "Number: 100")
+}

@@ -482,23 +482,36 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    // Resolve entry point
+    // Resolve entry point (function names now include signature, main has no params so it's "main/")
     let entry_point_name = if input_path.is_dir() {
-        if compiler.get_all_functions().contains_key("main.main") {
-            "main.main"
-        } else if compiler.get_all_functions().contains_key("main") {
-            "main"
+        // Check for main.main/ or main/ (with signature suffix)
+        let funcs = compiler.get_all_functions();
+        if funcs.contains_key("main.main/") {
+            "main.main/".to_string()
+        } else if funcs.contains_key("main/") {
+            "main/".to_string()
+        } else if funcs.keys().any(|k| k.starts_with("main.main/")) {
+            // Find the main.main function with any signature (should be 0-arity for entry point)
+            funcs.keys()
+                .find(|k| k.starts_with("main.main/"))
+                .cloned()
+                .unwrap_or_else(|| "main.main/".to_string())
+        } else if funcs.keys().any(|k| k.starts_with("main/")) {
+            funcs.keys()
+                .find(|k| k.starts_with("main/"))
+                .cloned()
+                .unwrap_or_else(|| "main/".to_string())
         } else {
              eprintln!("Error: No 'main.main' or 'main' function found in project.");
              return ExitCode::FAILURE;
         }
     } else {
-        "main"
+        "main/".to_string()
     };
 
     // Get main function
-    let main_func = match compiler.get_all_functions().get(entry_point_name) {
-        Some(func) => func.clone(),
+    let main_func = match compiler.get_function(&entry_point_name) {
+        Some(func) => func,
         None => {
             eprintln!("Error: Entry point '{}' not found", entry_point_name);
             return ExitCode::FAILURE;

@@ -1,0 +1,7 @@
+a(v: Int) = println(v)
+a(v: string) = println(v)
+
+main() = {
+    a(8)
+    a("xx")
+}

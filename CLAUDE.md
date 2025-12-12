@@ -1,2 +1,3 @@
 - do not make new vms yourself, work with the exising ones. the parallell one is the main target, so prefer fixing this first. Single threaded is for experimentation and validation.
 - remember we only work with/benchmark the paralell vm. The single threaded is only kept for experiments.
+- build release, not debug

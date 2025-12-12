@@ -1,6 +1,6 @@
 //! Core REPL engine logic (UI-agnostic).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -331,13 +331,34 @@ impl ReplEngine {
             };
 
             let mut output = String::new();
+            let mut defined_fns = HashSet::new();
             for fn_def in Self::get_fn_defs(&module) {
-                let name = &fn_def.name.node;
-                let qualified_name = format!("{}{}", prefix, name);
-                if let Some(sig) = self.compiler.get_function_signature(&qualified_name) {
-                    output.push_str(&format!("{} :: {}\n", qualified_name, sig));
+                defined_fns.insert(fn_def.name.node.clone());
+            }
+
+            let all_functions = self.compiler.get_function_names();
+
+            for name in defined_fns {
+                let base_name = format!("{}{}", prefix, name);
+                
+                // Find matching keys in all_functions (overloads)
+                let mut matches = Vec::new();
+                for key in &all_functions {
+                    if key == &base_name || key.starts_with(&format!("{}/", base_name)) {
+                        matches.push(key.clone());
+                    }
+                }
+                
+                if matches.is_empty() {
+                     output.push_str(&format!("Defined {}\n", base_name));
                 } else {
-                    output.push_str(&format!("Defined {}\n", qualified_name));
+                    for key in matches {
+                        if let Some(sig) = self.compiler.get_function_signature(&key) {
+                             output.push_str(&format!("{} :: {}\n", name, sig)); 
+                        } else {
+                             output.push_str(&format!("Defined {}\n", key));
+                        }
+                    }
                 }
             }
             for type_def in Self::get_type_defs(&module) {
@@ -387,7 +408,7 @@ impl ReplEngine {
 
         self.sync_vm();
 
-        if let Some(func) = self.compiler.get_all_functions().get(&eval_name) {
+        if let Some(func) = self.compiler.get_function(&eval_name) {
             match self.vm.run(func.clone()) {
                 Ok(result) => {
                     let mut output = String::new();
