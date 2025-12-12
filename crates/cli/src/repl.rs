@@ -103,6 +103,7 @@ impl Highlighter for NostosHighlighter {
                 
                 Token::Underscore => Style::new().fg(Color::DarkGray),
                 Token::Newline => Style::new(),
+                Token::Comment | Token::MultiLineComment => Style::new().fg(Color::DarkGray),
             };
 
             styled.push((style, line[span.clone()].to_string()));
