@@ -228,6 +228,9 @@ pub struct Compiler {
 
     /// Type definition ASTs for REPL introspection: type name -> TypeDef
     type_defs: HashMap<String, TypeDef>,
+    /// Known module prefixes (for distinguishing module.func from value.field)
+    /// Contains all module path prefixes, e.g., "String", "utils", "math.vector"
+    known_modules: HashSet<String>,
 }
 
 /// Context for a loop being compiled (for break/continue).
@@ -285,6 +288,13 @@ pub struct TraitImplInfo {
 
 impl Compiler {
     pub fn new_empty() -> Self {
+        // Pre-register built-in pseudo-modules for native functions
+        let builtin_modules: HashSet<String> = [
+            "String", "File", "List", "Option", "Result", "Char", "Int", "Float",
+            "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
+            "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
+        ].iter().map(|s| s.to_string()).collect();
+
         Self {
             chunk: Chunk::new(),
             locals: HashMap::new(),
@@ -315,6 +325,7 @@ impl Compiler {
             current_source: None,
             current_source_name: None,
             type_defs: HashMap::new(),
+            known_modules: builtin_modules,
         }
     }
 
@@ -363,6 +374,19 @@ impl Compiler {
         self.current_source = Some(source);
         self.current_source_name = Some(source_name.clone());
 
+        // Register this module path and all its prefixes as known modules
+        // e.g., for ["math", "vector"], register both "math" and "math.vector"
+        if !module_path.is_empty() {
+            let mut prefix = String::new();
+            for component in &module_path {
+                if !prefix.is_empty() {
+                    prefix.push('.');
+                }
+                prefix.push_str(component);
+                self.known_modules.insert(prefix.clone());
+            }
+        }
+
         // Set module path
         self.module_path = module_path;
 
@@ -383,6 +407,13 @@ impl Compiler {
                 line_starts.push(i + 1); // Next line starts after the newline
             }
         }
+
+        // Pre-register built-in pseudo-modules for native functions
+        let builtin_modules: HashSet<String> = [
+            "String", "File", "List", "Option", "Result", "Char", "Int", "Float",
+            "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
+            "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
+        ].iter().map(|s| s.to_string()).collect();
 
         Self {
             chunk: Chunk::new(),
@@ -414,6 +445,7 @@ impl Compiler {
             current_source: Some(Arc::new(source.to_string())),
             current_source_name: Some("unknown".to_string()),
             type_defs: HashMap::new(),
+            known_modules: builtin_modules,
         }
     }
 
@@ -3736,11 +3768,20 @@ impl Compiler {
     fn extract_qualified_name(&self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Var(ident) => Some(ident.node.clone()),
+            // Handle empty Record expressions as type/module references
+            // The parser parses uppercase identifiers like `Box` as Record constructors
+            Expr::Record(type_name, fields, _) if fields.is_empty() => {
+                Some(type_name.node.clone())
+            }
             Expr::FieldAccess(target, field, _) => {
-                // Try to build a qualified name like "Module.SubModule.function"
+                // Try to build a qualified name like "module.submodule.function"
                 if let Some(base) = self.extract_qualified_name(target) {
-                    // Check if the base looks like a module name (starts with uppercase)
-                    if base.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                    // Check if the base is a known module OR if there are functions with this prefix
+                    // (supports both module.func and Type.Trait.method patterns)
+                    let prefix = format!("{}.", base);
+                    let is_module_or_type = self.known_modules.contains(&base)
+                        || self.functions.keys().any(|k| k.starts_with(&prefix));
+                    if is_module_or_type {
                         Some(format!("{}.{}", base, field.node))
                     } else {
                         None // It's a field access on a value, not a module
@@ -4004,28 +4045,43 @@ impl Compiler {
     }
 
     /// Extract a module path from an expression.
-    /// Returns Some("Module") or Some("Outer.Inner") if the expression is a module reference.
+    /// Returns Some("module") or Some("outer.inner") if the expression is a module reference.
+    /// Also returns Type.Trait prefixes for explicit trait method calls.
     fn extract_module_path(&self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Var(ident) => {
-                // Check if the identifier starts with uppercase (module name convention)
-                if ident.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                // Check if the identifier is a known module OR if there are functions with this prefix
+                let prefix = format!("{}.", ident.node);
+                if self.known_modules.contains(&ident.node)
+                    || self.functions.keys().any(|k| k.starts_with(&prefix)) {
                     Some(ident.node.clone())
                 } else {
                     None
                 }
             }
             // Handle empty Record expressions as module references (e.g., Math in Math.add)
+            // or type references (e.g., Box in Box.Doubler.doubler)
             // The parser parses uppercase identifiers like `Math` as Record constructors
             Expr::Record(type_name, fields, _) if fields.is_empty() => {
-                Some(type_name.node.clone())
+                // Check if it's a known module OR if there are functions with this prefix
+                let prefix = format!("{}.", type_name.node);
+                if self.known_modules.contains(&type_name.node)
+                    || self.functions.keys().any(|k| k.starts_with(&prefix)) {
+                    Some(type_name.node.clone())
+                } else {
+                    None
+                }
             }
             Expr::FieldAccess(target, field, _) => {
-                // Check if we're building a nested module path like Outer.Inner
+                // Check if we're building a nested module path like outer.inner
+                // or Type.Trait prefix like Box.Doubler
                 if let Some(base) = self.extract_module_path(target) {
-                    // Check if the field also looks like a module name
-                    if field.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
-                        Some(format!("{}.{}", base, field.node))
+                    let combined = format!("{}.{}", base, field.node);
+                    // Check if the combined path is a known module OR if there are functions with this prefix
+                    let prefix = format!("{}.", combined);
+                    if self.known_modules.contains(&combined)
+                        || self.functions.keys().any(|k| k.starts_with(&prefix)) {
+                        Some(combined)
                     } else {
                         None
                     }
@@ -4033,11 +4089,15 @@ impl Compiler {
                     None
                 }
             }
-            // Handle MethodCall on modules for nested modules (e.g., Outer.Inner in Outer.Inner.func)
+            // Handle MethodCall on modules for nested modules (e.g., outer.inner in outer.inner.func)
             Expr::MethodCall(obj, method, args, _) if args.is_empty() => {
                 if let Some(base) = self.extract_module_path(obj) {
-                    if method.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
-                        Some(format!("{}.{}", base, method.node))
+                    let combined = format!("{}.{}", base, method.node);
+                    // Check if the combined path is a known module OR if there are functions with this prefix
+                    let prefix = format!("{}.", combined);
+                    if self.known_modules.contains(&combined)
+                        || self.functions.keys().any(|k| k.starts_with(&prefix)) {
+                        Some(combined)
                     } else {
                         None
                     }
@@ -6156,6 +6216,10 @@ impl Compiler {
     fn compile_module_def(&mut self, module_def: &ModuleDef) -> Result<(), CompileError> {
         // Push the module name onto the path
         self.module_path.push(module_def.name.node.clone());
+
+        // Register the full module path as known (e.g., "Utils" or "Outer.Inner")
+        let full_path = self.module_path.join(".");
+        self.known_modules.insert(full_path);
 
         // Compile the module's items
         self.compile_items(&module_def.items)?;

@@ -821,7 +821,7 @@ impl ReplEngine {
         // Initialize SourceManager
         let sm = SourceManager::new(path_buf.clone())?;
 
-        // Load all .nos files from the directory into the compiler
+        // Load all .nos files from the main directory (excluding .nostos/)
         let mut source_files = Vec::new();
         visit_dirs(&path_buf, &mut source_files)?;
 
@@ -853,6 +853,51 @@ impl ReplEngine {
                     Arc::new(source.clone()),
                     file_path.to_str().unwrap().to_string(),
                 ).ok();
+            }
+        }
+
+        // Also load from .nostos/defs/ if it exists
+        let defs_dir = path_buf.join(".nostos").join("defs");
+        if defs_dir.exists() && defs_dir.is_dir() {
+            let mut defs_files = Vec::new();
+            visit_dirs(&defs_dir, &mut defs_files)?;
+
+            for file_path in &defs_files {
+                // Skip special files like _meta.nos and _imports.nos
+                if let Some(name) = file_path.file_stem() {
+                    let name_str = name.to_string_lossy();
+                    if name_str.starts_with('_') {
+                        continue;
+                    }
+                }
+
+                let source = fs::read_to_string(file_path)
+                    .map_err(|e| format!("Failed to read {}: {}", file_path.display(), e))?;
+
+                let (module_opt, errors) = parse(&source);
+                if !errors.is_empty() {
+                    continue; // Skip files with parse errors
+                }
+
+                if let Some(module) = module_opt {
+                    // Module path is relative to .nostos/defs/, excluding filename
+                    let relative = file_path.strip_prefix(&defs_dir).unwrap();
+                    let components: Vec<String> = relative
+                        .parent()
+                        .map(|p| {
+                            p.components()
+                                .map(|c| c.as_os_str().to_string_lossy().to_string())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    self.compiler.add_module(
+                        &module,
+                        components,
+                        Arc::new(source.clone()),
+                        file_path.to_str().unwrap().to_string(),
+                    ).ok();
+                }
             }
         }
 
@@ -1197,6 +1242,42 @@ impl ReplEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn test_load_directory_with_nostos_defs() {
+        // Create a temp directory with .nostos/defs structure
+        let temp_dir = std::env::temp_dir().join(format!("nostos_test_{}", std::process::id()));
+        let defs_dir = temp_dir.join(".nostos").join("defs").join("utils");
+        fs::create_dir_all(&defs_dir).unwrap();
+
+        // Create a module file (pub makes it accessible outside the module)
+        let triple_path = defs_dir.join("triple.nos");
+        let mut f = fs::File::create(&triple_path).unwrap();
+        writeln!(f, "pub triple(x: Int) = x * 3").unwrap();
+
+        // Create nostos.toml to make it a valid project
+        let mut config = fs::File::create(temp_dir.join("nostos.toml")).unwrap();
+        writeln!(config, "[project]\nname = \"test\"").unwrap();
+
+        // Load the directory
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        let result = engine.load_directory(temp_dir.to_str().unwrap());
+        assert!(result.is_ok(), "load_directory failed: {:?}", result);
+
+        // Try to call utils.triple(2) - should return 6
+        let result = engine.eval("utils.triple(2)");
+        println!("Result of utils.triple(2): {:?}", result);
+        assert!(result.is_ok(), "eval utils.triple(2) failed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("6"), "Expected 6, got: {}", output);
+
+        // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
+    }
 
     #[test]
     fn test_var_binding_detection() {
@@ -1246,6 +1327,12 @@ fn visit_dirs(dir: &std::path::Path, files: &mut Vec<PathBuf>) -> Result<(), Str
             let entry = entry.map_err(|e| e.to_string())?;
             let path = entry.path();
             if path.is_dir() {
+                // Skip .nostos directory - it's handled separately
+                if let Some(name) = path.file_name() {
+                    if name == ".nostos" {
+                        continue;
+                    }
+                }
                 visit_dirs(&path, files)?;
             } else if let Some(ext) = path.extension() {
                 if ext == "nos" {

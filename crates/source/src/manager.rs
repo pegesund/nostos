@@ -1277,12 +1277,8 @@ cube(n: Int) = n * n * n
 
         let mut sm = SourceManager::new(root.to_path_buf()).unwrap();
 
-        // Mark module as dirty to test writing
+        // update_definition now auto-syncs to module files, so just update and verify
         sm.update_definition("square", "square(x: Int) = x * x * 1").unwrap();
-
-        // Write module files
-        let written = sm.write_module_files().unwrap();
-        assert!(written > 0, "Should write at least one file");
 
         // Check utils/math.nos was created with both functions
         let math_file = root.join("utils").join("math.nos");
