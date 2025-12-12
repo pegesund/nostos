@@ -13,6 +13,22 @@ use nostos_syntax::lexer::{Token, lex};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::process::ExitCode;
+use std::io::Write;
+
+/// Debug logging to /tmp/nostos_tui_debug.log
+fn debug_log(msg: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/nostos_tui_debug.log")
+    {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(f, "[{}] {}", timestamp, msg);
+    }
+}
 use crate::editor::CodeEditor;
 use crate::custom_views::{ActiveWindow, FocusableConsole};
 
@@ -638,31 +654,60 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
             }
         })
         .on_event(Event::CtrlChar('s'), move |s| {
+            debug_log(&format!("Ctrl+S pressed for: {}", name_for_save));
             let content = match s.call_on_name(&editor_id_save, |v: &mut CodeEditor| v.get_content()) {
                 Some(c) => c,
                 None => {
+                    debug_log(&format!("ERROR: Could not find editor {}", editor_id_save));
                     log_to_repl(s, &format!("Error: Could not find editor {}", editor_id_save));
                     return;
                 }
             };
+            debug_log(&format!("Content length: {} chars", content.len()));
 
             let mut engine = engine_save.borrow_mut();
 
+            // Check if this is a metadata file
+            if engine.is_metadata(&name_for_save) {
+                debug_log(&format!("Saving as METADATA: {}", name_for_save));
+                // Metadata files only need to be saved, not evaluated
+                match engine.save_metadata(&name_for_save, &content) {
+                    Ok(()) => {
+                        debug_log(&format!("Metadata saved OK: {}", name_for_save));
+                        drop(engine);
+                        log_to_repl(s, &format!("Saved {}", name_for_save));
+                        close_editor(s, &name_for_save);
+                    }
+                    Err(e) => {
+                        debug_log(&format!("Metadata save ERROR: {}", e));
+                        drop(engine);
+                        s.add_layer(Dialog::info(format!("Error: {}", e)));
+                    }
+                }
+                return;
+            }
+
+            debug_log(&format!("Saving as DEFINITION: {}", name_for_save));
             // Strip together directives before eval (compiler doesn't understand them)
             let eval_content: String = content
                 .lines()
                 .filter(|line| !line.trim().starts_with("# together "))
                 .collect::<Vec<_>>()
                 .join("\n");
+            debug_log(&format!("Eval content (stripped together): {} chars", eval_content.len()));
 
             // Use eval_in_module to ensure definitions go to the correct module
+            debug_log(&format!("Calling eval_in_module with module hint: {}", name_for_save));
             match engine.eval_in_module(&eval_content, Some(&name_for_save)) {
                 Ok(output) => {
+                    debug_log(&format!("eval_in_module OK, output: {}", if output.is_empty() { "(empty)" } else { &output }));
                     // Save to SourceManager if available (auto-commits to .nostos/defs/)
                     // Uses save_group_source to handle together directives and multiple definitions
                     if engine.has_source_manager() {
+                        debug_log(&format!("Calling save_group_source for: {}", name_for_save));
                         match engine.save_group_source(&name_for_save, &content) {
                             Ok(updated_names) => {
+                                debug_log(&format!("save_group_source OK, updated: {:?}", updated_names));
                                 if updated_names.is_empty() {
                                     drop(engine);
                                     if output.is_empty() {
@@ -680,12 +725,14 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                                 }
                             }
                             Err(e) => {
+                                debug_log(&format!("save_group_source ERROR: {}", e));
                                 drop(engine);
                                 log_to_repl(s, &format!("Warning: {}", e));
                                 log_to_repl(s, &output);
                             }
                         }
                     } else {
+                        debug_log("No source manager available");
                         drop(engine);
                         if output.is_empty() {
                             log_to_repl(s, &format!("Saved {} (no definitions found)", name_for_save));
@@ -693,9 +740,11 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                             log_to_repl(s, &output);
                         }
                     }
+                    debug_log(&format!("Closing editor: {}", name_for_save));
                     close_editor(s, &name_for_save);
                 }
                 Err(e) => {
+                    debug_log(&format!("eval_in_module ERROR: {}", e));
                     drop(engine);
                     s.add_layer(Dialog::info(format!("Error: {}", e)));
                 }
@@ -715,6 +764,7 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
 }
 
 fn open_editor(s: &mut Cursive, name: &str) {
+    debug_log(&format!("open_editor called for: {}", name));
     let name_owned = name.to_string();
 
     // Check limit and add to state
@@ -813,6 +863,7 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                     format!("📌 {}", name)
                 }
             }
+            BrowserItem::Metadata { .. } => "⚙  _meta (together directives)".to_string(),
         };
         select.add_item(label, item);
     }
@@ -837,9 +888,10 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 new_path.push(name.clone());
                 show_browser_dialog(s, engine, new_path);
             }
-            BrowserItem::Function { .. } => {
+            BrowserItem::Function { name, .. } => {
                 // Open function in editor
                 let full_name = engine.borrow().get_full_name(&new_path, item);
+                debug_log(&format!("Browser: selected Function: {} -> full_name: {}", name, full_name));
                 s.pop_layer();
                 open_editor(s, &full_name);
             }
@@ -880,6 +932,13 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 } else {
                     log_to_repl(s, &format!("Unable to evaluate variable: {}", var_name));
                 }
+            }
+            BrowserItem::Metadata { module } => {
+                // Open metadata editor
+                let full_name = format!("{}._meta", module);
+                debug_log(&format!("Browser: selected Metadata for module: {}", module));
+                s.pop_layer();
+                open_editor(s, &full_name);
             }
         }
     });

@@ -67,10 +67,12 @@ pub fn add_and_commit(nostos_dir: &Path, files: &[&str], message: &str) -> Resul
         .map_err(|e| format!("Failed to run git commit: {}", e))?;
 
     // Commit can "fail" if there's nothing to commit, which is fine
+    // Note: "nothing to commit" message goes to stdout, not stderr
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if !stderr.contains("nothing to commit") {
-            return Err(format!("git commit failed: {}", stderr));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if !stderr.contains("nothing to commit") && !stdout.contains("nothing to commit") {
+            return Err(format!("git commit failed: {}{}", stderr, stdout));
         }
     }
 

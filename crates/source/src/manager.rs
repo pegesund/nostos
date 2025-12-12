@@ -587,6 +587,43 @@ impl SourceManager {
         self.def_index.get(name).map(|s| s.as_str())
     }
 
+    /// Get module metadata (together directives etc.)
+    /// Returns the content of _meta.nos for the module
+    pub fn get_module_metadata(&self, module_name: &str) -> Option<String> {
+        let module = self.modules.get(module_name)?;
+        if module.groups.is_empty() {
+            None
+        } else {
+            Some(generate_meta_content(&module.groups))
+        }
+    }
+
+    /// Save module metadata (together directives etc.)
+    /// Parses together directives from content and updates the module
+    pub fn save_module_metadata(&mut self, module_name: &str, content: &str) -> Result<(), String> {
+        let module = self.modules.get_mut(module_name)
+            .ok_or_else(|| format!("Module not found: {}", module_name))?;
+
+        // Parse together directives
+        let new_groups = parse_together_directives(content);
+
+        // Update groups
+        module.set_groups(new_groups);
+
+        // Validate no duplicates
+        if let Err(dups) = module.validate_groups() {
+            return Err(format!(
+                "Definition cannot be in multiple groups: {}",
+                dups.join(", ")
+            ));
+        }
+
+        // Write _meta.nos
+        self.write_meta_to_defs(module_name)?;
+
+        Ok(())
+    }
+
     /// Update a definition's source
     /// Returns true if the definition changed
     pub fn update_definition(&mut self, name: &str, new_source: &str) -> Result<bool, String> {

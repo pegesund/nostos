@@ -21,6 +21,8 @@ pub enum BrowserItem {
     Type { name: String },
     Trait { name: String },
     Variable { name: String, mutable: bool },
+    /// Module metadata (_meta.nos) - contains together directives etc.
+    Metadata { module: String },
 }
 
 /// REPL configuration
@@ -703,6 +705,18 @@ impl ReplEngine {
     }
 
     pub fn get_source(&self, name: &str) -> String {
+        // Check for metadata request (e.g., "utils._meta")
+        if name.ends_with("._meta") {
+            if let Some(ref sm) = self.source_manager {
+                let module_name = &name[..name.len() - 6]; // Strip "._meta"
+                if let Some(meta) = sm.get_module_metadata(module_name) {
+                    return meta;
+                }
+            }
+            return format!("# Module metadata for {}\n# Add together directives here, e.g.:\n# together func1 func2\n",
+                &name[..name.len() - 6]);
+        }
+
         // Check SourceManager first (if available)
         if let Some(ref sm) = self.source_manager {
             if let Some(source) = sm.get_source(name) {
@@ -829,6 +843,26 @@ impl ReplEngine {
         } else {
             vec![name.to_string()]
         }
+    }
+
+    /// Save module metadata (together directives)
+    /// name should be like "utils._meta"
+    pub fn save_metadata(&mut self, name: &str, content: &str) -> Result<(), String> {
+        if let Some(ref mut sm) = self.source_manager {
+            if name.ends_with("._meta") {
+                let module_name = &name[..name.len() - 6];
+                sm.save_module_metadata(module_name, content)
+            } else {
+                Err(format!("Invalid metadata name: {}", name))
+            }
+        } else {
+            Err("No project loaded (use directory mode)".to_string())
+        }
+    }
+
+    /// Check if a name refers to module metadata
+    pub fn is_metadata(&self, name: &str) -> bool {
+        name.ends_with("._meta")
     }
 
     /// Check if SourceManager is active
@@ -1011,12 +1045,18 @@ impl ReplEngine {
             }
         }
 
-        // Build result list: modules first, then variables (at root), then types, traits, functions
+        // Build result list: modules first, then metadata, then variables (at root), then types, traits, functions
         let mut items = Vec::new();
 
         // Modules first
         for m in modules {
             items.push(BrowserItem::Module(m));
+        }
+
+        // Metadata entry (when inside a module, not at root)
+        if !path.is_empty() {
+            let module_name = path.join(".");
+            items.push(BrowserItem::Metadata { module: module_name });
         }
 
         // Variables second (at root level only) - so user's REPL bindings are visible
@@ -1063,6 +1103,7 @@ impl ReplEngine {
             BrowserItem::Type { name } => format!("{}{}", prefix, name),
             BrowserItem::Trait { name } => format!("{}{}", prefix, name),
             BrowserItem::Variable { name, .. } => name.clone(),
+            BrowserItem::Metadata { module } => format!("{}._meta", module),
         }
     }
 
