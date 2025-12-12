@@ -353,6 +353,13 @@ impl ReplEngine {
 
     /// Process input (eval or define). Returns output string or error.
     pub fn eval(&mut self, input: &str) -> Result<String, String> {
+        self.eval_in_module(input, None)
+    }
+
+    /// Process input in the context of a specific module.
+    /// If module_name is None, uses current_module.
+    /// If module_name is Some, uses that module path.
+    pub fn eval_in_module(&mut self, input: &str, module_name: Option<&str>) -> Result<String, String> {
         let input = input.trim();
         // Check for variable binding
         if let Some((name, mutable, expr)) = Self::is_var_binding(input) {
@@ -368,10 +375,24 @@ impl ReplEngine {
         let module = module_opt.ok_or("Failed to parse input")?;
 
         if Self::has_definitions(&module) {
-            let module_path = if self.current_module == "repl" {
-                vec![]
-            } else {
-                self.current_module.split('.').map(String::from).collect()
+            let module_path = match module_name {
+                Some(name) if !name.is_empty() && name != "repl" => {
+                    // Strip the definition name to get just the module path
+                    // e.g., "utils.greet" -> ["utils"]
+                    let parts: Vec<&str> = name.split('.').collect();
+                    if parts.len() > 1 {
+                        parts[..parts.len()-1].iter().map(|s| s.to_string()).collect()
+                    } else {
+                        vec![]
+                    }
+                }
+                _ => {
+                    if self.current_module == "repl" {
+                        vec![]
+                    } else {
+                        self.current_module.split('.').map(String::from).collect()
+                    }
+                }
             };
 
             self.compiler.add_module(&module, module_path.clone(), Arc::new(input.to_string()), "<repl>".to_string())
@@ -785,6 +806,28 @@ impl ReplEngine {
             // No SourceManager - just update compiler (for non-directory mode)
             // This is the existing behavior through eval
             Ok(false)
+        }
+    }
+
+    /// Save grouped source (may contain together directive and multiple definitions)
+    /// Returns list of updated definition names
+    pub fn save_group_source(&mut self, primary_name: &str, source: &str) -> Result<Vec<String>, String> {
+        if let Some(ref mut sm) = self.source_manager {
+            // Strip module prefix if present
+            let simple_name = primary_name.rsplit('.').next().unwrap_or(primary_name);
+            sm.update_group_source(simple_name, source)
+        } else {
+            Err("No project loaded (use directory mode)".to_string())
+        }
+    }
+
+    /// Get names of definitions that are grouped with the given definition
+    pub fn get_grouped_names(&self, name: &str) -> Vec<String> {
+        if let Some(ref sm) = self.source_manager {
+            let simple_name = name.rsplit('.').next().unwrap_or(name);
+            sm.get_grouped_names(simple_name)
+        } else {
+            vec![name.to_string()]
         }
     }
 

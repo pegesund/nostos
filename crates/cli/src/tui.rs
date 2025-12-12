@@ -647,21 +647,36 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
             };
 
             let mut engine = engine_save.borrow_mut();
-            match engine.eval(&content) {
+
+            // Strip together directives before eval (compiler doesn't understand them)
+            let eval_content: String = content
+                .lines()
+                .filter(|line| !line.trim().starts_with("# together "))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            // Use eval_in_module to ensure definitions go to the correct module
+            match engine.eval_in_module(&eval_content, Some(&name_for_save)) {
                 Ok(output) => {
-                    // Also save to SourceManager if available (auto-commits to .nostos/defs/)
+                    // Save to SourceManager if available (auto-commits to .nostos/defs/)
+                    // Uses save_group_source to handle together directives and multiple definitions
                     if engine.has_source_manager() {
-                        match engine.save_definition(&name_for_save, &content) {
-                            Ok(changed) => {
-                                if changed {
+                        match engine.save_group_source(&name_for_save, &content) {
+                            Ok(updated_names) => {
+                                if updated_names.is_empty() {
                                     drop(engine);
-                                    log_to_repl(s, &format!("Saved {} (committed to .nostos/defs/)", name_for_save));
-                                } else if output.is_empty() {
+                                    if output.is_empty() {
+                                        log_to_repl(s, &format!("Saved {} (no changes)", name_for_save));
+                                    } else {
+                                        log_to_repl(s, &output);
+                                    }
+                                } else if updated_names.len() == 1 {
                                     drop(engine);
-                                    log_to_repl(s, &format!("Saved {} (no changes)", name_for_save));
+                                    log_to_repl(s, &format!("Saved {} (committed to .nostos/defs/)", updated_names[0]));
                                 } else {
                                     drop(engine);
-                                    log_to_repl(s, &output);
+                                    log_to_repl(s, &format!("Saved {} definitions: {} (committed to .nostos/defs/)",
+                                        updated_names.len(), updated_names.join(", ")));
                                 }
                             }
                             Err(e) => {
