@@ -11,4 +11,4 @@ pub use callgraph::CallGraph;
 pub use session::{
     Definition, DefineSuccess, FunctionError, ReplError, ReplSession, TryDefineResult,
 };
-pub use engine::{ReplEngine, ReplConfig};
+pub use engine::{ReplEngine, ReplConfig, BrowserItem};

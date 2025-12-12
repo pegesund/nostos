@@ -1,6 +1,6 @@
 //! Core REPL engine logic (UI-agnostic).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,6 +11,15 @@ use crate::CallGraph;
 use nostos_syntax::ast::Item;
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::parallel::{ParallelVM, ParallelConfig};
+
+/// An item in the browser
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BrowserItem {
+    Module(String),
+    Function { name: String, signature: String },
+    Type { name: String },
+    Trait { name: String },
+}
 
 /// REPL configuration
 pub struct ReplConfig {
@@ -725,6 +734,127 @@ impl ReplEngine {
             output.push_str(&format!("  {}{}{}\n", mutability, name, type_str));
         }
         output.trim_end().to_string()
+    }
+
+    /// Get browser items at a given module path
+    /// If path is empty, returns top-level modules and items
+    pub fn get_browser_items(&self, path: &[String]) -> Vec<BrowserItem> {
+        let prefix = if path.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", path.join("."))
+        };
+        let prefix_len = prefix.len();
+
+        let mut modules: BTreeSet<String> = BTreeSet::new();
+        let mut functions: BTreeSet<(String, String)> = BTreeSet::new();
+        let mut types: BTreeSet<String> = BTreeSet::new();
+        let mut traits: BTreeSet<String> = BTreeSet::new();
+
+        // Process functions
+        for name in self.compiler.get_function_names() {
+            // Skip internal names
+            if name.starts_with("__") {
+                continue;
+            }
+
+            // Extract base name (without signature suffix)
+            let base_name = if let Some(slash_pos) = name.find('/') {
+                &name[..slash_pos]
+            } else {
+                name
+            };
+
+            if prefix.is_empty() {
+                // At root level
+                if let Some(dot_pos) = base_name.find('.') {
+                    // Has a module prefix - extract first component
+                    modules.insert(base_name[..dot_pos].to_string());
+                } else {
+                    // Direct function at root
+                    let sig = self.compiler.get_function_signature(name).unwrap_or_default();
+                    functions.insert((base_name.to_string(), sig));
+                }
+            } else if base_name.starts_with(&prefix) {
+                // Under our path
+                let rest = &base_name[prefix_len..];
+                if let Some(dot_pos) = rest.find('.') {
+                    // Has more path components - it's a submodule
+                    modules.insert(rest[..dot_pos].to_string());
+                } else {
+                    // Direct function in this module
+                    let sig = self.compiler.get_function_signature(name).unwrap_or_default();
+                    functions.insert((rest.to_string(), sig));
+                }
+            }
+        }
+
+        // Process types
+        for name in self.compiler.get_type_names() {
+            if prefix.is_empty() {
+                if let Some(dot_pos) = name.find('.') {
+                    modules.insert(name[..dot_pos].to_string());
+                } else {
+                    types.insert(name.to_string());
+                }
+            } else if name.starts_with(&prefix) {
+                let rest = &name[prefix_len..];
+                if let Some(dot_pos) = rest.find('.') {
+                    modules.insert(rest[..dot_pos].to_string());
+                } else {
+                    types.insert(rest.to_string());
+                }
+            }
+        }
+
+        // Process traits
+        for name in self.compiler.get_trait_names() {
+            if prefix.is_empty() {
+                if let Some(dot_pos) = name.find('.') {
+                    modules.insert(name[..dot_pos].to_string());
+                } else {
+                    traits.insert(name.to_string());
+                }
+            } else if name.starts_with(&prefix) {
+                let rest = &name[prefix_len..];
+                if let Some(dot_pos) = rest.find('.') {
+                    modules.insert(rest[..dot_pos].to_string());
+                } else {
+                    traits.insert(rest.to_string());
+                }
+            }
+        }
+
+        // Build result list: modules first, then types, traits, functions
+        let mut items = Vec::new();
+        for m in modules {
+            items.push(BrowserItem::Module(m));
+        }
+        for t in types {
+            items.push(BrowserItem::Type { name: t });
+        }
+        for t in traits {
+            items.push(BrowserItem::Trait { name: t });
+        }
+        for (name, sig) in functions {
+            items.push(BrowserItem::Function { name, signature: sig });
+        }
+        items
+    }
+
+    /// Get the full qualified name for a browser item at a given path
+    pub fn get_full_name(&self, path: &[String], item: &BrowserItem) -> String {
+        let prefix = if path.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", path.join("."))
+        };
+        match item {
+            BrowserItem::Module(name) => format!("{}{}", prefix, name),
+            BrowserItem::Function { name, .. } => format!("{}{}", prefix, name),
+            BrowserItem::Type { name } => format!("{}{}", prefix, name),
+            BrowserItem::Trait { name } => format!("{}{}", prefix, name),
+        }
     }
 }
 

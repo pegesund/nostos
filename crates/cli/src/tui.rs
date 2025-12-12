@@ -2,12 +2,12 @@
 
 use cursive::Cursive;
 use cursive::traits::*;
-use cursive::views::{Dialog, EditView, LinearLayout, ScrollView, TextView, OnEventView};
+use cursive::views::{Dialog, EditView, LinearLayout, ScrollView, TextView, OnEventView, SelectView};
 use cursive::theme::{Color, PaletteColor, Theme, BorderStyle};
 use cursive::view::Resizable;
 use cursive::utils::markup::StyledString;
 use cursive::event::{Event, EventResult, Key};
-use nostos_repl::{ReplEngine, ReplConfig};
+use nostos_repl::{ReplEngine, ReplConfig, BrowserItem};
 use nostos_syntax::lexer::{Token, lex};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -390,6 +390,12 @@ pub fn run_tui(args: &[String]) -> ExitCode {
                 return;
             }
 
+            // Handle :browse
+            if input_text == ":browse" || input_text == ":b" {
+                open_browser(s);
+                return;
+            }
+
             // Echo
             s.call_on_name("repl_log", |view: &mut FocusableConsole| {
                 view.append_styled(style_input(&input_text));
@@ -706,6 +712,140 @@ fn close_editor(s: &mut Cursive, name: &str) {
     }
 }
 
+/// Open the module browser dialog
+fn open_browser(s: &mut Cursive) {
+    // Get engine reference
+    let engine = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().engine.clone()
+    }).unwrap();
+
+    // Initial path is empty (root)
+    let path: Vec<String> = vec![];
+
+    show_browser_dialog(s, engine, path);
+}
+
+/// Show the browser dialog at a given path
+fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: Vec<String>) {
+    let items = engine.borrow().get_browser_items(&path);
+
+    let title = if path.is_empty() {
+        "Browse".to_string()
+    } else {
+        format!("Browse: {}", path.join("."))
+    };
+
+    let mut select = SelectView::<BrowserItem>::new();
+
+    // Add ".." entry if not at root
+    if !path.is_empty() {
+        select.add_item("📁 ..", BrowserItem::Module("..".to_string()));
+    }
+
+    // Add all items with appropriate icons
+    for item in items {
+        let label = match &item {
+            BrowserItem::Module(name) => format!("📁 {}", name),
+            BrowserItem::Type { name } => format!("📦 {}", name),
+            BrowserItem::Trait { name } => format!("🔷 {}", name),
+            BrowserItem::Function { name, signature } => {
+                if signature.is_empty() {
+                    format!("ƒ  {}", name)
+                } else {
+                    format!("ƒ  {} :: {}", name, signature)
+                }
+            }
+        };
+        select.add_item(label, item);
+    }
+
+    // Handle selection
+    let path_for_select = path.clone();
+    let engine_for_select = engine.clone();
+    select.set_on_submit(move |s, item: &BrowserItem| {
+        let engine = engine_for_select.clone();
+        let mut new_path = path_for_select.clone();
+
+        match item {
+            BrowserItem::Module(name) if name == ".." => {
+                // Go up one level
+                s.pop_layer();
+                new_path.pop();
+                show_browser_dialog(s, engine, new_path);
+            }
+            BrowserItem::Module(name) => {
+                // Drill into module
+                s.pop_layer();
+                new_path.push(name.clone());
+                show_browser_dialog(s, engine, new_path);
+            }
+            BrowserItem::Function { name, .. } => {
+                // Open function in editor
+                let full_name = engine.borrow().get_full_name(&new_path, item);
+                s.pop_layer();
+                open_editor(s, &full_name);
+            }
+            BrowserItem::Type { name } => {
+                // Show type info
+                let full_name = engine.borrow().get_full_name(&new_path, item);
+                let info = engine.borrow().get_info(&full_name);
+                s.pop_layer();
+                s.add_layer(
+                    Dialog::text(info)
+                        .title(format!("Type: {}", name))
+                        .button("Edit", move |s| {
+                            s.pop_layer();
+                            open_editor(s, &full_name);
+                        })
+                        .button("Close", |s| { s.pop_layer(); })
+                );
+            }
+            BrowserItem::Trait { name } => {
+                // Show trait info
+                let full_name = engine.borrow().get_full_name(&new_path, item);
+                let info = engine.borrow().get_info(&full_name);
+                s.pop_layer();
+                s.add_layer(
+                    Dialog::text(info)
+                        .title(format!("Trait: {}", name))
+                        .button("Close", |s| { s.pop_layer(); })
+                );
+            }
+        }
+    });
+
+    // Wrap in scroll view for long lists
+    let select_scroll = select
+        .with_name("browser_select")
+        .scrollable()
+        .fixed_size((60, 20));
+
+    // Create dialog with navigation hints
+    let dialog = Dialog::around(
+        LinearLayout::vertical()
+            .child(select_scroll)
+            .child(TextView::new("Enter: Select | Esc: Close | Backspace: Up"))
+    )
+    .title(&title)
+    .button("Close", |s| { s.pop_layer(); });
+
+    // Wrap in OnEventView for keyboard navigation
+    let path_for_back = path.clone();
+    let engine_for_back = engine.clone();
+    let dialog_with_keys = OnEventView::new(dialog)
+        .on_event(Key::Backspace, move |s| {
+            if !path_for_back.is_empty() {
+                let engine = engine_for_back.clone();
+                let mut new_path = path_for_back.clone();
+                s.pop_layer();
+                new_path.pop();
+                show_browser_dialog(s, engine, new_path);
+            }
+        });
+
+    s.add_layer(dialog_with_keys);
+}
+
 fn cycle_window(s: &mut Cursive) {
     let target = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let mut state = state.borrow_mut();
@@ -891,7 +1031,7 @@ fn handle_command(engine: &mut ReplEngine, line: &str) -> String {
   :edit <name>, :e     Edit function
   :load <file>, :l     Load file
   :reload, :r          Reload files
-  :browse [mod], :b    List functions
+  :browse, :b          Open module browser
   :info <name>, :i     Show info
   :view <name>, :v     Show source
   :type <expr>, :t     Show type (not impl)
