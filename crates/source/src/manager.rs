@@ -636,6 +636,8 @@ impl SourceManager {
                         // Write to .nostos/defs/ and commit
                         self.write_definition_to_defs(&module_key, name)?;
                         self.commit_definition(&module_key, name)?;
+                        // Also sync to the main .nos source file
+                        self.write_module_files()?;
                     }
                     return Ok(changed);
                 }
@@ -802,6 +804,9 @@ impl SourceManager {
         if changed {
             self.write_meta_to_defs(&module_key)?;
         }
+
+        // Also sync to the main .nos source file
+        self.write_module_files()?;
 
         Ok(updated_names)
     }
