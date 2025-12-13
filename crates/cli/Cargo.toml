@@ -20,5 +20,6 @@ nostos-source = { path = "../source" }
 reedline = "0.38.0"
 nu-ansi-term = "0.50"
 cursive = { version = "0.20", default-features = false, features = ["crossterm-backend"] }
+cursive-tabs = "0.8"
 crossbeam-channel = "0.5"
 crossterm = "0.27"

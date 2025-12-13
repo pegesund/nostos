@@ -27,6 +27,20 @@ use crate::io_runtime::{IoRequest, IoRuntime};
 use crate::process::{CallFrame, IoResponseValue, Process, ProcessState, ThreadSafeValue};
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, TypeValue, Value};
 
+/// An entry for the inspect queue - a named value to display in the inspector
+#[derive(Debug, Clone)]
+pub struct InspectEntry {
+    /// Tab name for the inspector
+    pub name: String,
+    /// The value (deep-copied for thread safety)
+    pub value: ThreadSafeValue,
+}
+
+/// Type alias for the inspect sender channel
+pub type InspectSender = crossbeam::channel::Sender<InspectEntry>;
+/// Type alias for the inspect receiver channel
+pub type InspectReceiver = crossbeam::channel::Receiver<InspectEntry>;
+
 // JIT function pointer types (moved from runtime.rs)
 pub type JitIntFn = fn(i64) -> i64;
 pub type JitIntFn0 = fn() -> i64;
@@ -122,6 +136,8 @@ pub struct SharedState {
     pub num_threads: usize,
     /// IO request sender (for async file/HTTP operations)
     pub io_sender: Option<tokio_mpsc::UnboundedSender<IoRequest>>,
+    /// Inspect sender (for sending values to TUI inspector)
+    pub inspect_sender: Option<InspectSender>,
 }
 
 /// Configuration for the parallel VM.
@@ -590,6 +606,7 @@ impl ParallelVM {
             thread_local_ids,
             num_threads,
             io_sender: Some(io_sender),
+            inspect_sender: None,
         });
 
         Self {
@@ -840,6 +857,54 @@ impl ParallelVM {
                 Ok(GcValue::Int64(hash_val))
             }),
         }));
+    }
+
+    /// Set up the inspect channel and register the inspect native function.
+    /// Returns a receiver that will receive InspectEntry messages when inspect() is called.
+    pub fn setup_inspect(&mut self) -> InspectReceiver {
+        let (sender, receiver) = channel::unbounded();
+
+        // Store sender in shared state
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot setup inspect after threads started")
+            .inspect_sender = Some(sender.clone());
+
+        // Register the inspect native function
+        // inspect(value, name: String) -> ()
+        self.register_native("inspect", Arc::new(GcNativeFn {
+            name: "inspect".to_string(),
+            arity: 2,
+            func: Box::new(move |args, heap| {
+                // Get the name (second argument must be a string)
+                let name = match &args[1] {
+                    GcValue::String(ptr) => {
+                        if let Some(s) = heap.get_string(*ptr) {
+                            s.data.clone()
+                        } else {
+                            return Err(RuntimeError::Panic("Invalid string pointer".to_string()));
+                        }
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+
+                // Deep copy the value to ThreadSafeValue
+                if let Some(safe_value) = ThreadSafeValue::from_gc_value(&args[0], heap) {
+                    // Send to the inspector (ignore send errors - TUI might not be listening)
+                    let _ = sender.send(InspectEntry {
+                        name,
+                        value: safe_value,
+                    });
+                }
+                // If value can't be converted, silently ignore (like spawn does)
+
+                Ok(GcValue::Unit)
+            }),
+        }));
+
+        receiver
     }
 
     /// Register a type.

@@ -52,7 +52,7 @@ impl<'a> CompletionSource for EngineCompletionSource<'a> {
 
 /// A single REPL entry (input + output)
 #[derive(Clone)]
-struct ReplEntry {
+pub struct ReplEntry {
     /// The input code
     input: Vec<String>,
     /// The output/result (None if not yet evaluated)
@@ -61,7 +61,7 @@ struct ReplEntry {
 
 /// Output from evaluating an entry
 #[derive(Clone)]
-enum ReplOutput {
+pub enum ReplOutput {
     /// Successful evaluation with result
     Success(String),
     /// Error during evaluation
@@ -901,5 +901,15 @@ impl ReplPanel {
 
     pub fn get_instance_id(&self) -> usize {
         self.instance_id
+    }
+
+    /// Get the history for preservation across rebuilds
+    pub fn get_history(&self) -> Vec<ReplEntry> {
+        self.history.clone()
+    }
+
+    /// Set the history (restore after rebuild)
+    pub fn set_history(&mut self, history: Vec<ReplEntry>) {
+        self.history = history;
     }
 }

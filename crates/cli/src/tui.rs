@@ -17,6 +17,7 @@ use std::process::ExitCode;
 use std::io::Write;
 
 use crate::repl_panel::ReplPanel;
+use crate::inspector_panel::InspectorPanel;
 
 /// Debug logging to /tmp/nostos_tui_debug.log
 fn debug_log(msg: &str) {
@@ -434,6 +435,7 @@ struct TuiState {
     next_repl_id: usize,
     active_window_idx: usize,
     engine: Rc<RefCell<ReplEngine>>,
+    inspector_open: bool,
 }
 
 pub fn run_tui(args: &[String]) -> ExitCode {
@@ -485,6 +487,7 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         next_repl_id: 1,
         active_window_idx: 0,
         engine: engine.clone(),
+        inspector_open: false,
     })));
 
     // Components
@@ -572,6 +575,12 @@ pub fn run_tui(args: &[String]) -> ExitCode {
                 return;
             }
 
+            // Handle :inspect (toggle inspector panel)
+            if input_text == ":inspect" || input_text == ":ins" {
+                toggle_inspector(s);
+                return;
+            }
+
             // Echo
             s.call_on_name("repl_log", |view: &mut FocusableConsole| {
                 view.append_styled(style_input(&input_text));
@@ -598,6 +607,9 @@ pub fn run_tui(args: &[String]) -> ExitCode {
             } else {
                 log_to_repl(s, &result);
             }
+
+            // Poll for any inspect entries and update inspector panel if open
+            poll_inspect_entries(s, &engine_clone);
         })
         .with_name("input");
 
@@ -641,6 +653,16 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         open_repl_panel(s);
     });
 
+    // Global Alt+I to toggle inspector panel (Ctrl+I conflicts with Tab in terminals)
+    siv.set_on_pre_event(Event::AltChar('i'), |s| {
+        toggle_inspector(s);
+    });
+
+    // Also try F9 as backup
+    siv.set_on_pre_event(Event::Key(Key::F9), |s| {
+        toggle_inspector(s);
+    });
+
     siv.run();
     ExitCode::SUCCESS
 }
@@ -651,28 +673,67 @@ fn log_to_repl(s: &mut Cursive, text: &str) {
     });
 }
 
+/// Poll for inspect entries and update the inspector panel if open.
+fn poll_inspect_entries(s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>) {
+    let entries = engine.borrow().drain_inspect_entries();
+    if entries.is_empty() {
+        return;
+    }
+
+    // Check if inspector is open
+    let inspector_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().inspector_open
+    }).unwrap_or(false);
+
+    if inspector_open {
+        // Update the existing panel
+        s.call_on_name("inspector_panel", |panel: &mut InspectorPanel| {
+            panel.process_entries(entries);
+        });
+    }
+    // If inspector is closed, entries are simply discarded
+    // (they were already drained from the queue)
+}
+
 /// Rebuild the workspace layout based on current windows
 /// Layout rules:
 /// - 1-3 windows: single row, equal width
 /// - 4-6 windows: two rows, top row has 3 windows, bottom row has rest
 fn rebuild_workspace(s: &mut Cursive) {
-    let (editor_names, repl_ids, engine) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+    let (editor_names, repl_ids, engine, inspector_open) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let state = state.borrow();
-        (state.open_editors.clone(), state.open_repls.clone(), state.engine.clone())
+        (state.open_editors.clone(), state.open_repls.clone(), state.engine.clone(), state.inspector_open)
     }).unwrap();
 
     // Get console content BEFORE clearing workspace
     let repl_log_content: String = s.call_on_name("repl_log", |view: &mut FocusableConsole| {
         view.get_content()
-    }).unwrap_or_default();
+    }).unwrap_or_else(|| {
+        debug_log("WARNING: Could not find repl_log view!");
+        String::new()
+    });
+
+    debug_log(&format!("rebuild_workspace: preserved {} chars of console content", repl_log_content.len()));
+
+    // Preserve REPL panel histories before clearing
+    let mut repl_histories: std::collections::HashMap<usize, Vec<crate::repl_panel::ReplEntry>> = std::collections::HashMap::new();
+    for &repl_id in &repl_ids {
+        let panel_id = format!("repl_panel_{}", repl_id);
+        if let Some(history) = s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
+            panel.get_history()
+        }) {
+            repl_histories.insert(repl_id, history);
+        }
+    }
 
     // Remove old workspace content
     s.call_on_name("workspace", |ws: &mut LinearLayout| {
         ws.clear();
     });
 
-    // Total windows = Console + editors + REPL panels
-    let total_windows = 1 + editor_names.len() + repl_ids.len();
+    // Total windows = Console + editors + REPL panels + (inspector if open)
+    let inspector_count = if inspector_open { 1 } else { 0 };
+    let total_windows = 1 + editor_names.len() + repl_ids.len() + inspector_count;
 
     let repl_log = FocusableConsole::new(
         TextView::new(repl_log_content).scrollable()
@@ -695,8 +756,14 @@ fn rebuild_workspace(s: &mut Cursive) {
 
     let console = ActiveWindow::new(repl_log_with_events, "Console").full_width();
 
-    // Collect all window views: editors + REPL panels
+    // Collect all window views: editors + REPL panels + inspector (if open)
     let mut windows: Vec<Box<dyn View>> = Vec::new();
+
+    // Add inspector first (so it's the first window after console)
+    if inspector_open {
+        let inspector_view = create_inspector_view(&engine);
+        windows.push(Box::new(inspector_view));
+    }
 
     for name in &editor_names {
         let editor_view = create_editor_view(s, &engine, name);
@@ -704,7 +771,7 @@ fn rebuild_workspace(s: &mut Cursive) {
     }
 
     for &repl_id in &repl_ids {
-        let repl_view = create_repl_panel_view(&engine, repl_id);
+        let repl_view = create_repl_panel_view(&engine, repl_id, repl_histories.remove(&repl_id));
         windows.push(Box::new(repl_view));
     }
 
@@ -740,8 +807,11 @@ fn rebuild_workspace(s: &mut Cursive) {
 }
 
 /// Create a REPL panel view
-fn create_repl_panel_view(engine: &Rc<RefCell<ReplEngine>>, repl_id: usize) -> impl View {
-    let panel = ReplPanel::new(engine.clone(), repl_id);
+fn create_repl_panel_view(engine: &Rc<RefCell<ReplEngine>>, repl_id: usize, history: Option<Vec<crate::repl_panel::ReplEntry>>) -> impl View {
+    let mut panel = ReplPanel::new(engine.clone(), repl_id);
+    if let Some(h) = history {
+        panel.set_history(h);
+    }
     let panel_id = format!("repl_panel_{}", repl_id);
     let panel_id_copy = panel_id.clone();
     let panel_id_close = repl_id;
@@ -814,6 +884,60 @@ pub fn close_repl_panel(s: &mut Cursive, repl_id: usize) {
         s.focus_name("input").ok();
         log_to_repl(s, &format!("Closed REPL #{}", repl_id));
     }
+}
+
+/// Toggle the inspector panel
+fn toggle_inspector(s: &mut Cursive) {
+    let inspector_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let mut state = state.borrow_mut();
+        state.inspector_open = !state.inspector_open;
+        state.inspector_open
+    }).unwrap();
+
+    if inspector_open {
+        // rebuild_workspace will create the inspector panel and drain entries
+        rebuild_workspace(s);
+        s.focus_name("inspector_panel").ok();
+        log_to_repl(s, "Inspector panel opened (Alt+I or :ins to close)");
+    } else {
+        rebuild_workspace(s);
+        s.focus_name("input").ok();
+        log_to_repl(s, "Inspector panel closed");
+    }
+}
+
+/// Create the inspector panel view
+fn create_inspector_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
+    let panel = InspectorPanel::new();
+
+    // Add any pending entries
+    let entries = engine.borrow().drain_inspect_entries();
+    let mut panel = panel;
+    if !entries.is_empty() {
+        panel.process_entries(entries);
+    }
+
+    let panel_with_events = OnEventView::new(panel.with_name("inspector_panel"))
+        .on_event(Event::CtrlChar('w'), |s| {
+            // Close inspector with Ctrl+W
+            s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                state.borrow_mut().inspector_open = false;
+            });
+            rebuild_workspace(s);
+            s.focus_name("input").ok();
+            log_to_repl(s, "Inspector panel closed");
+        })
+        .on_event(Key::Esc, |s| {
+            // Close inspector with Esc
+            s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                state.borrow_mut().inspector_open = false;
+            });
+            rebuild_workspace(s);
+            s.focus_name("input").ok();
+            log_to_repl(s, "Inspector panel closed");
+        });
+
+    ActiveWindow::new(panel_with_events, "Inspector").full_width()
 }
 
 /// Create an editor view for a given name

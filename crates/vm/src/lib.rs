@@ -21,7 +21,12 @@ pub mod worker;
 pub use gc::*;
 pub use inspect::*;
 pub use io_runtime::*;
-pub use parallel::*;
+pub use parallel::{
+    ParallelVM, ParallelConfig, SharedState, RunResult,
+    SendableValue, SendableRecord, SendableVariant, SendableMapKey,
+    InspectEntry, InspectSender, InspectReceiver,
+    JitIntFn, JitIntFn0, JitIntFn2, JitIntFn3, JitIntFn4, JitLoopArrayFn,
+};
 pub use process::*;
 pub use scheduler::*;
 pub use supervisor::*;

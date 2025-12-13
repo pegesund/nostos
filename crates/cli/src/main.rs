@@ -6,6 +6,7 @@ mod editor;
 mod custom_views;
 mod repl_panel;
 mod autocomplete;
+mod inspector_panel;
 
 use nostos_compiler::compile::{compile_module, Compiler};
 use nostos_jit::{JitCompiler, JitConfig};

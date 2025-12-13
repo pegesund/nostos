@@ -12,7 +12,7 @@ use crate::CallGraph;
 use crate::session::extract_dependencies_from_fn;
 use nostos_syntax::ast::{Item, Pattern};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
-use nostos_vm::parallel::{ParallelVM, ParallelConfig};
+use nostos_vm::parallel::{ParallelVM, ParallelConfig, InspectReceiver, InspectEntry};
 
 /// An item in the browser
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -113,6 +113,8 @@ pub struct ReplEngine {
     compile_status: HashMap<String, CompileStatus>,
     /// Last known good signature for each function (for detecting signature changes after error fix)
     last_known_signatures: HashMap<String, String>,
+    /// Receiver for inspect() calls from VM
+    inspect_receiver: Option<InspectReceiver>,
 }
 
 impl ReplEngine {
@@ -126,6 +128,7 @@ impl ReplEngine {
         };
         let mut vm = ParallelVM::new(vm_config);
         vm.register_default_natives();
+        let inspect_receiver = Some(vm.setup_inspect());
 
         Self {
             compiler,
@@ -142,6 +145,7 @@ impl ReplEngine {
             source_manager: None,
             compile_status: HashMap::new(),
             last_known_signatures: HashMap::new(),
+            inspect_receiver,
         }
     }
 
@@ -1897,6 +1901,24 @@ impl ReplEngine {
     /// Check if a variable is mutable
     pub fn is_var_mutable(&self, name: &str) -> bool {
         self.var_bindings.get(name).map(|b| b.mutable).unwrap_or(false)
+    }
+
+    /// Try to receive an inspect entry (non-blocking).
+    /// Returns None if no entry is available or if inspect is not set up.
+    pub fn try_recv_inspect(&self) -> Option<InspectEntry> {
+        self.inspect_receiver.as_ref()?.try_recv().ok()
+    }
+
+    /// Drain all available inspect entries (non-blocking).
+    /// Returns an empty vec if no entries are available.
+    pub fn drain_inspect_entries(&self) -> Vec<InspectEntry> {
+        let mut entries = Vec::new();
+        if let Some(ref receiver) = self.inspect_receiver {
+            while let Ok(entry) = receiver.try_recv() {
+                entries.push(entry);
+            }
+        }
+        entries
     }
 }
 

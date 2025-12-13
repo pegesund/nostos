@@ -770,6 +770,19 @@ pub fn standard_env() -> TypeEnv {
         },
     );
 
+    // inspect: a -> String -> () (for TUI debugging - sends value to inspector panel)
+    env.functions.insert(
+        "inspect".to_string(),
+        FunctionType {
+            type_params: vec![TypeParam {
+                name: "a".to_string(),
+                constraints: vec![],  // No constraints - any value can be inspected
+            }],
+            params: vec![Type::TypeParam("a".to_string()), Type::String],
+            ret: Box::new(Type::Unit),
+        },
+    );
+
     env
 }
 

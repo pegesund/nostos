@@ -1,0 +1,41 @@
+// Demo of the inspect() function for debugging
+// Run with: nostos tui examples/inspect_demo.nos
+// Then press Ctrl+I to open the inspector panel
+
+// Create some data structures to inspect
+type Person = {
+    name: String,
+    age: Int64,
+    hobbies: [String],
+}
+
+fn main() {
+    // Inspect a simple value
+    let x = 42
+    inspect(x, "number")
+
+    // Inspect a list
+    let numbers = [1, 2, 3, 4, 5]
+    inspect(numbers, "numbers")
+
+    // Inspect a record
+    let person = Person {
+        name: "Alice",
+        age: 30,
+        hobbies: ["reading", "hiking", "coding"],
+    }
+    inspect(person, "person")
+
+    // Inspect a map
+    let scores = { "Alice": 95, "Bob": 87, "Charlie": 92 }
+    inspect(scores, "scores")
+
+    // Inspect a nested structure
+    let team = [
+        Person { name: "Bob", age: 25, hobbies: ["gaming"] },
+        Person { name: "Carol", age: 35, hobbies: ["music", "art"] },
+    ]
+    inspect(team, "team")
+
+    println("Inspect demo complete! Press Ctrl+I to view inspected values.")
+}

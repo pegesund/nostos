@@ -251,6 +251,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
 
 [[package]]
+name = "castaway"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dec551ab6e7578819132c713a93c022a05d60159dc86e7a7050223577484c55a"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.49"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -298,6 +307,20 @@ checksum = "8eebd66744a15ded14960ab4ccdbfb51ad3b81f51f3f04a80adac98c985396c9"
 dependencies = [
  "hashbrown 0.14.5",
  "stacker",
+]
+
+[[package]]
+name = "compact_str"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b79c4069c6cad78e2e0cdfcbd26275770669fb39fd308a752dc110e83b9af32"
+dependencies = [
+ "castaway",
+ "cfg-if 1.0.4",
+ "itoa",
+ "rustversion",
+ "ryu",
+ "static_assertions",
 ]
 
 [[package]]
@@ -650,13 +673,34 @@ dependencies = [
  "cfg-if 1.0.4",
  "crossbeam-channel",
  "crossterm 0.25.0",
- "cursive_core",
+ "cursive_core 0.3.7",
  "lazy_static",
  "libc",
  "log",
  "signal-hook",
  "unicode-segmentation",
  "unicode-width",
+]
+
+[[package]]
+name = "cursive-macros"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac7ac0eb0cede3dfdfebf4d5f22354e05a730b79c25fd03481fc69fcfba0a73e"
+dependencies = [
+ "proc-macro2",
+]
+
+[[package]]
+name = "cursive-tabs"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "192333eafe9ed1a1416e7be2c4f596378f90fe97c37d6b87e8c77e25250c4059"
+dependencies = [
+ "crossbeam",
+ "cursive_core 0.4.6",
+ "log",
+ "num",
 ]
 
 [[package]]
@@ -673,6 +717,29 @@ dependencies = [
  "log",
  "num",
  "owning_ref",
+ "time",
+ "unicode-segmentation",
+ "unicode-width",
+ "xi-unicode",
+]
+
+[[package]]
+name = "cursive_core"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "321ec774d27fafc66e812034d0025f8858bd7d9095304ff8fc200e0b9f9cc257"
+dependencies = [
+ "ahash 0.8.12",
+ "compact_str",
+ "crossbeam-channel",
+ "cursive-macros",
+ "enum-map",
+ "enumset",
+ "lazy_static",
+ "log",
+ "num",
+ "parking_lot",
+ "serde_json",
  "time",
  "unicode-segmentation",
  "unicode-width",
@@ -1510,6 +1577,7 @@ dependencies = [
  "crossbeam-channel",
  "crossterm 0.27.0",
  "cursive",
+ "cursive-tabs",
  "nostos-compiler",
  "nostos-jit",
  "nostos-repl",
@@ -1646,6 +1714,7 @@ version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
 dependencies = [
+ "num-bigint",
  "num-complex",
  "num-integer",
  "num-iter",
@@ -1704,6 +1773,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
 dependencies = [
+ "num-bigint",
  "num-integer",
  "num-traits",
 ]
@@ -2483,6 +2553,12 @@ dependencies = [
  "psm",
  "windows-sys 0.59.0",
 ]
+
+[[package]]
+name = "static_assertions"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "strip-ansi-escapes"

@@ -3917,6 +3917,13 @@ impl Compiler {
                         self.chunk.emit(Instruction::Print(dst, arg_regs[0]), 0);
                         return Ok(dst);
                     }
+                    "inspect" if arg_regs.len() == 2 => {
+                        // inspect(value, name) - call native function
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("inspect".to_string())));
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        return Ok(dst);
+                    }
                     "head" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ListHead(dst, arg_regs[0]), 0);
