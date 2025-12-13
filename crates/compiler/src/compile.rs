@@ -20,7 +20,7 @@ use nostos_types::{TypeEnv, infer::InferCtx};
 /// immediately before the definition, with only whitespace between comment lines.
 ///
 /// Example:
-/// ```
+/// ```text
 /// # This is the doc comment
 /// # It can span multiple lines
 /// myFunction(x) = x + 1
@@ -3644,24 +3644,56 @@ impl Compiler {
         let is_float = left_is_float || right_is_float;
         let is_bigint = left_is_bigint || right_is_bigint;
 
-        let mut left_reg = self.compile_expr_tail(left, false)?;
-        let mut right_reg = self.compile_expr_tail(right, false)?;
+        // Compile-time coercion: if one side is float and the other is an int literal,
+        // compile the int literal directly as a float constant (no runtime conversion needed)
+        let left_reg = if is_float && !left_is_float {
+            if let Expr::Int(n, _) = left {
+                // Compile int literal directly as float
+                let dst = self.alloc_reg();
+                let idx = self.chunk.add_constant(Value::Float64(*n as f64));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), self.span_line(left.span()));
+                dst
+            } else {
+                // Not a literal - compile normally and coerce at runtime
+                let reg = self.compile_expr_tail(left, false)?;
+                if self.is_int_expr(left) {
+                    let coerced = self.alloc_reg();
+                    self.chunk.emit(Instruction::IntToFloat(coerced, reg), self.span_line(left.span()));
+                    coerced
+                } else {
+                    reg
+                }
+            }
+        } else {
+            self.compile_expr_tail(left, false)?
+        };
 
-        // Emit type coercion if needed
-        // Priority: Float > BigInt > small ints
-        if is_float {
-            // Float coercion: convert non-floats to float
-            if !left_is_float && self.is_int_expr(left) {
-                let coerced = self.alloc_reg();
-                self.chunk.emit(Instruction::IntToFloat(coerced, left_reg), self.span_line(left.span()));
-                left_reg = coerced;
+        let right_reg = if is_float && !right_is_float {
+            if let Expr::Int(n, _) = right {
+                // Compile int literal directly as float
+                let dst = self.alloc_reg();
+                let idx = self.chunk.add_constant(Value::Float64(*n as f64));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), self.span_line(right.span()));
+                dst
+            } else {
+                // Not a literal - compile normally and coerce at runtime
+                let reg = self.compile_expr_tail(right, false)?;
+                if self.is_int_expr(right) {
+                    let coerced = self.alloc_reg();
+                    self.chunk.emit(Instruction::IntToFloat(coerced, reg), self.span_line(right.span()));
+                    coerced
+                } else {
+                    reg
+                }
             }
-            if !right_is_float && self.is_int_expr(right) {
-                let coerced = self.alloc_reg();
-                self.chunk.emit(Instruction::IntToFloat(coerced, right_reg), self.span_line(right.span()));
-                right_reg = coerced;
-            }
-        } else if is_bigint {
+        } else {
+            self.compile_expr_tail(right, false)?
+        };
+
+        // BigInt coercion (runtime only, no compile-time optimization for BigInt literals)
+        let mut left_reg = left_reg;
+        let mut right_reg = right_reg;
+        if is_bigint {
             // BigInt coercion: convert small ints to BigInt
             if !left_is_bigint && self.is_small_int_expr(left) {
                 let coerced = self.alloc_reg();

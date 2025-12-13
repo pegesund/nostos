@@ -2883,9 +2883,9 @@ mod tests {
     }
 
     #[test]
-    fn test_infer_mixed_int_float_error() {
+    fn test_infer_mixed_int_float_coercion() {
         let mut env = crate::standard_env();
-        // 3.14 + 1 (should fail - can't mix Float and Int)
+        // 3.14 + 1 (with int-to-float coercion, this should succeed and return Float)
         let expr = Expr::BinOp(
             Box::new(Expr::Float(3.14, span())),
             BinOp::Add,
@@ -2893,7 +2893,8 @@ mod tests {
             span(),
         );
         let result = infer_expr_type(&mut env, &expr);
-        assert!(matches!(result, Err(TypeError::UnificationFailed(_, _))));
+        assert!(result.is_ok(), "Mixed Int/Float should coerce to Float");
+        assert_eq!(result.unwrap(), Type::Float);
     }
 
     #[test]

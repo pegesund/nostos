@@ -757,6 +757,19 @@ pub fn standard_env() -> TypeEnv {
         },
     );
 
+    // show: Show a => a -> String
+    env.functions.insert(
+        "show".to_string(),
+        FunctionType {
+            type_params: vec![TypeParam {
+                name: "a".to_string(),
+                constraints: vec!["Show".to_string()],
+            }],
+            params: vec![Type::TypeParam("a".to_string())],
+            ret: Box::new(Type::String),
+        },
+    );
+
     env
 }
 
