@@ -916,13 +916,15 @@ impl ReplEngine {
             }
         }
 
+        // Store source manager before compilation so we can still read sources on error
+        self.source_manager = Some(sm);
+
         // Compile all bodies
         if let Err((e, _, _)) = self.compiler.compile_all() {
             return Err(format!("Compilation error: {}", e));
         }
 
         self.sync_vm();
-        self.source_manager = Some(sm);
 
         Ok(())
     }
