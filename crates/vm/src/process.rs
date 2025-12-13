@@ -291,6 +291,10 @@ pub enum ThreadSafeValue {
     Map(Vec<(ThreadSafeMapKey, ThreadSafeValue)>),
     /// A set of keys
     Set(Vec<ThreadSafeMapKey>),
+    /// Int64 typed array (deep copy of data)
+    Int64Array(Vec<i64>),
+    /// Float64 typed array (deep copy of data)
+    Float64Array(Vec<f64>),
 }
 
 impl ThreadSafeMapKey {
@@ -416,6 +420,15 @@ impl ThreadSafeValue {
                     .collect();
                 ThreadSafeValue::Set(items)
             }
+            // Typed arrays (deep copy)
+            GcValue::Int64Array(ptr) => {
+                let arr = heap.get_int64_array(*ptr)?;
+                ThreadSafeValue::Int64Array(arr.items.clone())
+            }
+            GcValue::Float64Array(ptr) => {
+                let arr = heap.get_float64_array(*ptr)?;
+                ThreadSafeValue::Float64Array(arr.items.clone())
+            }
             // Other values cannot be sent safely
             _ => return None,
         })
@@ -499,6 +512,14 @@ impl ThreadSafeValue {
                     .collect();
                 let ptr = heap.alloc_set(gc_items);
                 GcValue::Set(ptr)
+            }
+            ThreadSafeValue::Int64Array(items) => {
+                let ptr = heap.alloc_int64_array(items.clone());
+                GcValue::Int64Array(ptr)
+            }
+            ThreadSafeValue::Float64Array(items) => {
+                let ptr = heap.alloc_float64_array(items.clone());
+                GcValue::Float64Array(ptr)
             }
         }
     }
