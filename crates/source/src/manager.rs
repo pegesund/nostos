@@ -12,6 +12,53 @@ use crate::module::{Module, ModulePath, module_path_to_string, DefinitionGroupin
 use crate::project::ProjectConfig;
 use crate::git;
 
+/// Find the start position including any doc comment before a definition
+fn find_doc_comment_start(input: &str, def_start: usize) -> usize {
+    // Get text before the definition
+    let before = &input[..def_start];
+
+    // Track byte positions as we go through lines
+    let mut line_starts: Vec<usize> = vec![0];
+    for (i, c) in before.char_indices() {
+        if c == '\n' {
+            line_starts.push(i + 1);
+        }
+    }
+
+    // Go backwards through lines to find comment block
+    let mut comment_start = def_start;
+    let mut found_comment = false;
+
+    for i in (0..line_starts.len()).rev() {
+        let line_start = line_starts[i];
+        let line_end = if i + 1 < line_starts.len() {
+            line_starts[i + 1]
+        } else {
+            def_start
+        };
+        let line = &before[line_start..line_end];
+        let trimmed = line.trim();
+
+        if trimmed.starts_with('#') && !trimmed.starts_with("# together ") {
+            // This is a comment line (but not a together directive), include it
+            comment_start = line_start;
+            found_comment = true;
+        } else if trimmed.is_empty() {
+            // Empty line - continue checking above for more comments
+            continue;
+        } else {
+            // Non-comment, non-empty line - stop
+            break;
+        }
+    }
+
+    if found_comment {
+        comment_start
+    } else {
+        def_start
+    }
+}
+
 /// Parse together directives from content
 /// Returns list of groups, each group is a list of definition names
 fn parse_together_directives(content: &str) -> Vec<DefinitionGrouping> {
@@ -469,9 +516,10 @@ impl SourceManager {
             match item {
                 Item::TypeDef(type_def) => {
                     let name = type_def.name.node.clone();
-                    // Get source from span
+                    // Get source from span (including doc comment)
                     let span = &type_def.span;
-                    let source = content[span.start..span.end].to_string();
+                    let start = find_doc_comment_start(content, span.start);
+                    let source = content[start..span.end].to_string();
 
                     let kind = if source.contains("trait ") {
                         DefKind::Trait
@@ -486,7 +534,9 @@ impl SourceManager {
                 Item::FnDef(fn_def) => {
                     let name = fn_def.name.node.clone();
                     let span = &fn_def.span;
-                    let source = content[span.start..span.end].to_string();
+                    // Include doc comment in source
+                    let start = find_doc_comment_start(content, span.start);
+                    let source = content[start..span.end].to_string();
 
                     // Check if we already have this function (overload)
                     if module.has_definition(&name) {
@@ -520,7 +570,9 @@ impl SourceManager {
                 Item::TraitDef(trait_def) => {
                     let name = trait_def.name.node.clone();
                     let span = &trait_def.span;
-                    let source = content[span.start..span.end].to_string();
+                    // Include doc comment in source
+                    let start = find_doc_comment_start(content, span.start);
+                    let source = content[start..span.end].to_string();
 
                     let group = DefinitionGroup::new(name.clone(), DefKind::Trait, source);
                     self.def_index.insert(name, module_key.clone());
@@ -884,7 +936,11 @@ impl SourceManager {
                     Item::FnDef(fn_def) => {
                         let name = fn_def.name.node.clone();
                         let span = &fn_def.span;
-                        let def_source = code_only[span.start..span.end].to_string();
+                        // Include doc comment in source
+                        let start = find_doc_comment_start(&code_only, span.start);
+                        let def_source = code_only[start..span.end].to_string();
+                        debug_log!("[SourceManager] Found FnDef: '{}', span={}..{}, start_with_comment={}, def_source={:?}",
+                            name, span.start, span.end, start, &def_source[..def_source.len().min(60)]);
                         debug_log!("[SourceManager] Found FnDef: '{}', checking if module has it: {}", name, module.has_definition(&name));
 
                         if module.has_definition(&name) {
@@ -907,7 +963,9 @@ impl SourceManager {
                     Item::TypeDef(type_def) => {
                         let name = type_def.name.node.clone();
                         let span = &type_def.span;
-                        let def_source = code_only[span.start..span.end].to_string();
+                        // Include doc comment in source
+                        let start = find_doc_comment_start(&code_only, span.start);
+                        let def_source = code_only[start..span.end].to_string();
 
                         if module.has_definition(&name) {
                             if let Some(def_group) = module.get_definition_mut(&name) {
@@ -927,7 +985,9 @@ impl SourceManager {
                     Item::TraitDef(trait_def) => {
                         let name = trait_def.name.node.clone();
                         let span = &trait_def.span;
-                        let def_source = code_only[span.start..span.end].to_string();
+                        // Include doc comment in source
+                        let start = find_doc_comment_start(&code_only, span.start);
+                        let def_source = code_only[start..span.end].to_string();
 
                         if module.has_definition(&name) {
                             if let Some(def_group) = module.get_definition_mut(&name) {
