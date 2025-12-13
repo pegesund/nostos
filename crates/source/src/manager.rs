@@ -687,8 +687,10 @@ impl SourceManager {
         })?;
 
         // Extract definitions from parsed content
-        let mut updated_names: Vec<String> = Vec::new();
-        let mut changed = false;
+        // Track which definitions actually changed (for git commit)
+        let mut changed_names: Vec<String> = Vec::new();
+        let mut all_names: Vec<String> = Vec::new();
+        let mut groups_changed = false;
 
         if let Some(module) = self.modules.get_mut(&module_key) {
             // Update groups (merge new together directives)
@@ -702,12 +704,12 @@ impl SourceManager {
                     // Replace existing group
                     if module.groups[idx] != *group {
                         module.groups[idx] = group.clone();
-                        changed = true;
+                        groups_changed = true;
                     }
                 } else {
                     // Add new group
                     module.add_group(group.clone());
-                    changed = true;
+                    groups_changed = true;
                 }
             }
 
@@ -730,11 +732,11 @@ impl SourceManager {
                         if module.has_definition(&name) {
                             if let Some(def_group) = module.get_definition_mut(&name) {
                                 if def_group.update_from_source(&def_source) {
-                                    changed = true;
+                                    changed_names.push(name.clone());
                                 }
                             }
                         }
-                        updated_names.push(name);
+                        all_names.push(name);
                     }
                     Item::TypeDef(type_def) => {
                         let name = type_def.name.node.clone();
@@ -744,11 +746,11 @@ impl SourceManager {
                         if module.has_definition(&name) {
                             if let Some(def_group) = module.get_definition_mut(&name) {
                                 if def_group.update_from_source(&def_source) {
-                                    changed = true;
+                                    changed_names.push(name.clone());
                                 }
                             }
                         }
-                        updated_names.push(name);
+                        all_names.push(name);
                     }
                     Item::TraitDef(trait_def) => {
                         let name = trait_def.name.node.clone();
@@ -758,11 +760,11 @@ impl SourceManager {
                         if module.has_definition(&name) {
                             if let Some(def_group) = module.get_definition_mut(&name) {
                                 if def_group.update_from_source(&def_source) {
-                                    changed = true;
+                                    changed_names.push(name.clone());
                                 }
                             }
                         }
-                        updated_names.push(name);
+                        all_names.push(name);
                     }
                     Item::Binding(binding) => {
                         if let nostos_syntax::ast::Pattern::Var(ident) = &binding.pattern {
@@ -778,37 +780,39 @@ impl SourceManager {
                             if module.has_definition(&name) {
                                 if let Some(def_group) = module.get_definition_mut(&name) {
                                     if def_group.update_from_source(&def_source) {
-                                        changed = true;
+                                        changed_names.push(name.clone());
                                     }
                                 }
                             }
-                            updated_names.push(name);
+                            all_names.push(name);
                         }
                     }
                     _ => {}
                 }
             }
 
-            if changed {
+            if !changed_names.is_empty() || groups_changed {
                 module.dirty = true;
             }
         }
 
-        // Write updated definitions and meta to defs
-        for name in &updated_names {
+        // Write and commit only definitions that actually changed
+        for name in &changed_names {
             self.write_definition_to_defs(&module_key, name)?;
             self.commit_definition(&module_key, name)?;
         }
 
         // Write _meta.nos if groups changed
-        if changed {
+        if groups_changed {
             self.write_meta_to_defs(&module_key)?;
         }
 
-        // Also sync to the main .nos source file
-        self.write_module_files()?;
+        // Also sync to the main .nos source file if anything changed
+        if !changed_names.is_empty() || groups_changed {
+            self.write_module_files()?;
+        }
 
-        Ok(updated_names)
+        Ok(changed_names)
     }
 
     /// Add a new definition
