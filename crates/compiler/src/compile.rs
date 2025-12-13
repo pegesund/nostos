@@ -6206,6 +6206,28 @@ impl Compiler {
         false
     }
 
+    /// Get field names for a record type.
+    /// Returns empty vec for non-record types or unknown types.
+    pub fn get_type_fields(&self, type_name: &str) -> Vec<String> {
+        if let Some(type_info) = self.types.get(type_name) {
+            if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
+                return fields.iter().map(|(name, _)| name.clone()).collect();
+            }
+        }
+        Vec::new()
+    }
+
+    /// Get constructor names for a variant type.
+    /// Returns empty vec for non-variant types or unknown types.
+    pub fn get_type_constructors(&self, type_name: &str) -> Vec<String> {
+        if let Some(type_info) = self.types.get(type_name) {
+            if let TypeInfoKind::Variant { constructors } = &type_info.kind {
+                return constructors.iter().map(|(name, _)| name.clone()).collect();
+            }
+        }
+        Vec::new()
+    }
+
     /// Infer the type signature of a function definition using Hindley-Milner type inference.
     /// Returns a formatted signature string like "Int -> Int -> Int" or "a -> a -> a".
     ///

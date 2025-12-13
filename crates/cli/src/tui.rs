@@ -689,7 +689,7 @@ fn open_repl_panel(s: &mut Cursive) {
 }
 
 /// Close a REPL panel by ID
-fn close_repl_panel(s: &mut Cursive, repl_id: usize) {
+pub fn close_repl_panel(s: &mut Cursive, repl_id: usize) {
     let was_removed = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let mut state = state.borrow_mut();
         if let Some(idx) = state.open_repls.iter().position(|&id| id == repl_id) {

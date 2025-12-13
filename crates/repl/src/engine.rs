@@ -815,6 +815,21 @@ impl ReplEngine {
         types
     }
 
+    /// Get all variable names currently bound in the REPL
+    pub fn get_variables(&self) -> Vec<String> {
+        self.var_bindings.keys().cloned().collect()
+    }
+
+    /// Get field names for a record type
+    pub fn get_type_fields(&self, type_name: &str) -> Vec<String> {
+        self.compiler.get_type_fields(type_name)
+    }
+
+    /// Get constructor names for a variant type
+    pub fn get_type_constructors(&self, type_name: &str) -> Vec<String> {
+        self.compiler.get_type_constructors(type_name)
+    }
+
     pub fn browse(&self, module_filter: Option<&str>) -> String {
         let mut functions: Vec<_> = self.compiler.get_function_names()
             .into_iter()

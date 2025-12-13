@@ -1,17 +1,46 @@
-//! Interactive REPL panel with syntax highlighting
+//! Interactive REPL panel with syntax highlighting and autocomplete
 //!
 //! Provides a notebook-style REPL where each input/output pair is displayed
 //! in a scrollable view with syntax highlighting.
 
-use cursive::event::{Event, EventResult, Key};
+use cursive::event::{Callback, Event, EventResult, Key};
 use cursive::theme::{Color, ColorStyle, Style};
 use cursive::view::{View, CannotFocus};
 use cursive::direction::Direction;
-use cursive::{Printer, Vec2, Rect};
+use cursive::{Cursive, Printer, Vec2, Rect};
 use nostos_syntax::lexer::{Token, lex};
 use std::rc::Rc;
 use std::cell::RefCell;
 use nostos_repl::ReplEngine;
+
+use crate::autocomplete::{Autocomplete, CompletionContext, CompletionItem, CompletionKind, CompletionSource};
+
+/// Wrapper to implement CompletionSource for ReplEngine
+struct EngineCompletionSource<'a> {
+    engine: &'a ReplEngine,
+}
+
+impl<'a> CompletionSource for EngineCompletionSource<'a> {
+    fn get_functions(&self) -> Vec<String> {
+        self.engine.get_functions()
+    }
+
+    fn get_types(&self) -> Vec<String> {
+        self.engine.get_types()
+    }
+
+    fn get_variables(&self) -> Vec<String> {
+        self.engine.get_variables()
+    }
+
+    fn get_type_fields(&self, type_name: &str) -> Vec<String> {
+        self.engine.get_type_fields(type_name)
+    }
+
+    fn get_type_constructors(&self, type_name: &str) -> Vec<String> {
+        self.engine.get_type_constructors(type_name)
+    }
+}
 
 /// A single REPL entry (input + output)
 #[derive(Clone)]
@@ -41,15 +70,7 @@ impl ReplEntry {
         }
     }
 
-    fn from_input(input: &str) -> Self {
-        let lines: Vec<String> = input.lines().map(String::from).collect();
-        Self {
-            input: if lines.is_empty() { vec![String::new()] } else { lines },
-            output: None,
-        }
-    }
-
-    /// Total height in lines (input lines + output lines + separator)
+    /// Total height in lines (input lines + output lines)
     fn height(&self) -> usize {
         let input_height = self.input.len();
         let output_height = match &self.output {
@@ -58,9 +79,45 @@ impl ReplEntry {
                 if s.is_empty() { 0 } else { s.lines().count().max(1) }
             }
         };
-        // 1 line for prompt prefix on first input line
         input_height + output_height
     }
+}
+
+/// Autocomplete state
+struct AutocompleteState {
+    /// Whether autocomplete popup is visible
+    active: bool,
+    /// Current completion candidates
+    candidates: Vec<CompletionItem>,
+    /// Selected index in candidates
+    selected: usize,
+    /// The context (prefix info)
+    context: Option<CompletionContext>,
+}
+
+impl AutocompleteState {
+    fn new() -> Self {
+        Self {
+            active: false,
+            candidates: Vec::new(),
+            selected: 0,
+            context: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.active = false;
+        self.candidates.clear();
+        self.selected = 0;
+        self.context = None;
+    }
+}
+
+/// Result of evaluating input - whether to close the panel
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum EvalResult {
+    Continue,
+    Exit,
 }
 
 /// Interactive REPL panel
@@ -79,10 +136,22 @@ pub struct ReplPanel {
     engine: Rc<RefCell<ReplEngine>>,
     /// REPL instance number (for display)
     instance_id: usize,
+    /// Autocomplete engine
+    autocomplete: Autocomplete,
+    /// Autocomplete state
+    ac_state: AutocompleteState,
 }
 
 impl ReplPanel {
     pub fn new(engine: Rc<RefCell<ReplEngine>>, instance_id: usize) -> Self {
+        let mut autocomplete = Autocomplete::new();
+        // Initialize autocomplete from engine
+        {
+            let eng = engine.borrow();
+            let source = EngineCompletionSource { engine: &eng };
+            autocomplete.update_from_source(&source);
+        }
+
         Self {
             history: Vec::new(),
             current: ReplEntry::new(),
@@ -91,19 +160,24 @@ impl ReplPanel {
             last_size: Vec2::zero(),
             engine,
             instance_id,
+            autocomplete,
+            ac_state: AutocompleteState::new(),
         }
     }
 
-    /// Get the prompt string for a line
-    fn prompt(&self, is_continuation: bool) -> &'static str {
-        if is_continuation { "... " } else { ">>> " }
-    }
-
     /// Evaluate the current input
-    fn evaluate(&mut self) {
+    /// Returns Exit if :exit command was entered
+    fn evaluate(&mut self) -> EvalResult {
         let input_text = self.current.input.join("\n");
-        if input_text.trim().is_empty() {
-            return;
+        let trimmed = input_text.trim();
+
+        if trimmed.is_empty() {
+            return EvalResult::Continue;
+        }
+
+        // Check for :exit command
+        if trimmed == ":exit" || trimmed == ":quit" || trimmed == ":q" {
+            return EvalResult::Exit;
         }
 
         // Evaluate using the engine
@@ -125,8 +199,17 @@ impl ReplPanel {
         self.current = ReplEntry::new();
         self.cursor = (0, 0);
 
+        // Update autocomplete cache after evaluation (new definitions may be available)
+        {
+            let eng = self.engine.borrow();
+            let source = EngineCompletionSource { engine: &eng };
+            self.autocomplete.update_from_source(&source);
+        }
+
         // Scroll to bottom
         self.scroll_to_bottom();
+
+        EvalResult::Continue
     }
 
     /// Calculate total content height
@@ -197,6 +280,9 @@ impl ReplPanel {
         let byte_idx = Self::char_to_byte_idx(line, self.cursor.0);
         line.insert(byte_idx, c);
         self.cursor.0 += 1;
+
+        // Update autocomplete after each character
+        self.update_autocomplete();
     }
 
     fn insert_newline(&mut self) {
@@ -207,6 +293,7 @@ impl ReplPanel {
         self.current.input.insert(self.cursor.1 + 1, rest);
         self.cursor.1 += 1;
         self.cursor.0 = 0;
+        self.ac_state.reset();
     }
 
     fn backspace(&mut self) {
@@ -219,11 +306,13 @@ impl ReplPanel {
                 line.replace_range(byte_idx..byte_idx + c.len_utf8(), "");
             }
             self.cursor.0 -= 1;
+            self.update_autocomplete();
         } else if self.cursor.1 > 0 {
             let current_line = self.current.input.remove(self.cursor.1);
             self.cursor.1 -= 1;
             self.cursor.0 = self.line_char_count(self.cursor.1);
             self.current.input[self.cursor.1].push_str(&current_line);
+            self.ac_state.reset();
         }
     }
 
@@ -235,10 +324,67 @@ impl ReplPanel {
             if let Some(c) = line[byte_idx..].chars().next() {
                 line.replace_range(byte_idx..byte_idx + c.len_utf8(), "");
             }
+            self.update_autocomplete();
         } else if self.cursor.1 < self.current.input.len() - 1 {
             let next_line = self.current.input.remove(self.cursor.1 + 1);
             self.current.input[self.cursor.1].push_str(&next_line);
         }
+    }
+
+    /// Update autocomplete candidates based on current input
+    fn update_autocomplete(&mut self) {
+        let line = &self.current.input[self.cursor.1];
+        let context = self.autocomplete.parse_context(line, self.cursor.0);
+
+        // Get completions
+        let eng = self.engine.borrow();
+        let source = EngineCompletionSource { engine: &eng };
+        let candidates = self.autocomplete.get_completions(&context, &source);
+
+        // Only show popup if we have candidates and a non-empty prefix (or dot completion)
+        let show_popup = match &context {
+            CompletionContext::Identifier { prefix } => !prefix.is_empty() && !candidates.is_empty(),
+            CompletionContext::ModuleMember { .. } => !candidates.is_empty(),
+            CompletionContext::FieldAccess { .. } => !candidates.is_empty(),
+        };
+
+        if show_popup {
+            self.ac_state.active = true;
+            self.ac_state.candidates = candidates;
+            self.ac_state.selected = 0;
+            self.ac_state.context = Some(context);
+        } else {
+            self.ac_state.reset();
+        }
+    }
+
+    /// Accept the currently selected completion
+    fn accept_completion(&mut self) {
+        if !self.ac_state.active || self.ac_state.candidates.is_empty() {
+            return;
+        }
+
+        let item = &self.ac_state.candidates[self.ac_state.selected];
+        let context = self.ac_state.context.as_ref().unwrap();
+
+        // Calculate how much to replace
+        let prefix_len = match context {
+            CompletionContext::Identifier { prefix } => prefix.len(),
+            CompletionContext::ModuleMember { prefix, .. } => prefix.len(),
+            CompletionContext::FieldAccess { prefix, .. } => prefix.len(),
+        };
+
+        // Replace prefix with completion text
+        let line = &mut self.current.input[self.cursor.1];
+        let cursor_byte = Self::char_to_byte_idx(line, self.cursor.0);
+        let prefix_start_byte = Self::char_to_byte_idx(line, self.cursor.0 - prefix_len);
+
+        line.replace_range(prefix_start_byte..cursor_byte, &item.text);
+
+        // Update cursor position
+        self.cursor.0 = self.cursor.0 - prefix_len + item.text.chars().count();
+
+        self.ac_state.reset();
     }
 
     /// Draw a line with syntax highlighting
@@ -309,6 +455,73 @@ impl ReplPanel {
             }
         }
     }
+
+    /// Draw the autocomplete popup
+    fn draw_autocomplete(&self, printer: &Printer, cursor_screen_y: usize) {
+        if !self.ac_state.active || self.ac_state.candidates.is_empty() {
+            return;
+        }
+
+        let prompt_width = 4;
+        let max_items = 6.min(self.ac_state.candidates.len());
+        let popup_width = self.ac_state.candidates.iter()
+            .take(max_items)
+            .map(|c| c.label.len() + 6) // +6 for kind prefix "[fn] "
+            .max()
+            .unwrap_or(20)
+            .min(printer.size.x.saturating_sub(prompt_width + 2));
+
+        // Position popup below cursor line
+        let popup_y = cursor_screen_y + 1;
+        let popup_x = prompt_width + self.cursor.0.saturating_sub(self.scroll_offset.0);
+
+        // Draw popup background
+        let bg_style = Style::from(ColorStyle::new(
+            Color::Rgb(200, 200, 200),
+            Color::Rgb(40, 40, 60)
+        ));
+
+        // Draw items
+        for (i, item) in self.ac_state.candidates.iter().take(max_items).enumerate() {
+            let y = popup_y + i;
+            if y >= printer.size.y {
+                break;
+            }
+
+            let is_selected = i == self.ac_state.selected;
+            let (r, g, b) = item.kind.color();
+            let kind_color = Color::Rgb(r, g, b);
+            let style = if is_selected {
+                Style::from(ColorStyle::new(
+                    Color::Rgb(0, 0, 0),
+                    kind_color
+                ))
+            } else {
+                Style::from(ColorStyle::new(
+                    kind_color,
+                    Color::Rgb(40, 40, 60)
+                ))
+            };
+
+            // Format: [fn] name
+            let prefix = format!("[{}] ", item.kind.prefix());
+            let display = format!("{}{}", prefix, &item.label);
+            let display_truncated: String = display.chars().take(popup_width).collect();
+            let padded = format!("{:width$}", display_truncated, width = popup_width);
+
+            printer.with_style(style, |p| {
+                p.print((popup_x, y), &padded);
+            });
+        }
+
+        // Show scroll indicator if more items
+        if self.ac_state.candidates.len() > max_items {
+            let more = format!("... +{} more", self.ac_state.candidates.len() - max_items);
+            printer.with_style(bg_style, |p| {
+                p.print((popup_x, popup_y + max_items), &more);
+            });
+        }
+    }
 }
 
 impl View for ReplPanel {
@@ -325,6 +538,9 @@ impl View for ReplPanel {
         let output_success_style = Style::from(Color::Rgb(100, 255, 100));
         let output_error_style = Style::from(Color::Rgb(255, 100, 100));
         let output_def_style = Style::from(Color::Rgb(150, 150, 150));
+
+        // Track cursor screen position for autocomplete popup
+        let mut cursor_screen_y = 0;
 
         // Draw history entries
         for entry in &self.history {
@@ -380,6 +596,7 @@ impl View for ReplPanel {
 
                 // Draw cursor if on this line
                 if i == self.cursor.1 {
+                    cursor_screen_y = screen_y;
                     let cursor_screen_x = prompt_width + self.cursor.0.saturating_sub(self.scroll_offset.0);
                     if cursor_screen_x < printer.size.x {
                         let cursor_style = Style::from(ColorStyle::new(
@@ -401,6 +618,9 @@ impl View for ReplPanel {
             }
             content_y += 1;
         }
+
+        // Draw autocomplete popup
+        self.draw_autocomplete(printer, cursor_screen_y);
 
         // Draw scrollbar if needed
         let total_height = self.total_height();
@@ -443,24 +663,71 @@ impl View for ReplPanel {
 
     fn on_event(&mut self, event: Event) -> EventResult {
         match event {
+            // Tab: accept completion or cycle through candidates
+            Event::Key(Key::Tab) => {
+                if self.ac_state.active && !self.ac_state.candidates.is_empty() {
+                    // If only one candidate, accept it
+                    if self.ac_state.candidates.len() == 1 {
+                        self.accept_completion();
+                    } else {
+                        // Cycle to next
+                        self.ac_state.selected = (self.ac_state.selected + 1) % self.ac_state.candidates.len();
+                    }
+                    return EventResult::Consumed(None);
+                }
+                EventResult::Ignored
+            }
+            // Shift+Tab: cycle backwards
+            Event::Shift(Key::Tab) => {
+                if self.ac_state.active && self.ac_state.candidates.len() > 1 {
+                    if self.ac_state.selected == 0 {
+                        self.ac_state.selected = self.ac_state.candidates.len() - 1;
+                    } else {
+                        self.ac_state.selected -= 1;
+                    }
+                    return EventResult::Consumed(None);
+                }
+                EventResult::Ignored
+            }
             Event::Char(c) => {
                 self.insert_char(c);
                 self.ensure_cursor_visible();
                 EventResult::Consumed(None)
             }
             Event::Key(Key::Enter) => {
-                // Shift+Enter or if line ends with \ or { -> insert newline
-                // Otherwise evaluate
+                // If autocomplete is active, accept the selection
+                if self.ac_state.active && !self.ac_state.candidates.is_empty() {
+                    self.accept_completion();
+                    self.ensure_cursor_visible();
+                    return EventResult::Consumed(None);
+                }
+
+                // Check for multiline continuation
                 let current_line = &self.current.input[self.cursor.1];
                 let trimmed = current_line.trim_end();
 
                 if trimmed.ends_with('\\') || trimmed.ends_with('{') || trimmed.ends_with("do") {
                     self.insert_newline();
                 } else {
-                    self.evaluate();
+                    // Evaluate and check for :exit
+                    if self.evaluate() == EvalResult::Exit {
+                        // Return a callback to close this REPL panel
+                        let id = self.instance_id;
+                        return EventResult::Consumed(Some(Callback::from_fn(move |s| {
+                            crate::tui::close_repl_panel(s, id);
+                        })));
+                    }
                 }
                 self.ensure_cursor_visible();
                 EventResult::Consumed(None)
+            }
+            Event::Key(Key::Esc) => {
+                // If autocomplete is active, close it
+                if self.ac_state.active {
+                    self.ac_state.reset();
+                    return EventResult::Consumed(None);
+                }
+                EventResult::Ignored
             }
             Event::Key(Key::Backspace) => {
                 self.backspace();
@@ -472,6 +739,7 @@ impl View for ReplPanel {
                 EventResult::Consumed(None)
             }
             Event::Key(Key::Left) => {
+                self.ac_state.reset();
                 if self.cursor.0 > 0 {
                     self.cursor.0 -= 1;
                 } else if self.cursor.1 > 0 {
@@ -482,6 +750,7 @@ impl View for ReplPanel {
                 EventResult::Consumed(None)
             }
             Event::Key(Key::Right) => {
+                self.ac_state.reset();
                 if self.cursor.0 < self.line_char_count(self.cursor.1) {
                     self.cursor.0 += 1;
                 } else if self.cursor.1 < self.current.input.len() - 1 {
@@ -492,6 +761,16 @@ impl View for ReplPanel {
                 EventResult::Consumed(None)
             }
             Event::Key(Key::Up) => {
+                // If autocomplete is active, navigate up
+                if self.ac_state.active && self.ac_state.candidates.len() > 1 {
+                    if self.ac_state.selected == 0 {
+                        self.ac_state.selected = self.ac_state.candidates.len() - 1;
+                    } else {
+                        self.ac_state.selected -= 1;
+                    }
+                    return EventResult::Consumed(None);
+                }
+                // Otherwise normal cursor movement
                 if self.cursor.1 > 0 {
                     self.cursor.1 -= 1;
                     self.fix_cursor_x();
@@ -500,6 +779,12 @@ impl View for ReplPanel {
                 EventResult::Consumed(None)
             }
             Event::Key(Key::Down) => {
+                // If autocomplete is active, navigate down
+                if self.ac_state.active && self.ac_state.candidates.len() > 1 {
+                    self.ac_state.selected = (self.ac_state.selected + 1) % self.ac_state.candidates.len();
+                    return EventResult::Consumed(None);
+                }
+                // Otherwise normal cursor movement
                 if self.cursor.1 < self.current.input.len() - 1 {
                     self.cursor.1 += 1;
                     self.fix_cursor_x();
@@ -508,11 +793,13 @@ impl View for ReplPanel {
                 EventResult::Consumed(None)
             }
             Event::Key(Key::Home) => {
+                self.ac_state.reset();
                 self.cursor.0 = 0;
                 self.ensure_cursor_visible();
                 EventResult::Consumed(None)
             }
             Event::Key(Key::End) => {
+                self.ac_state.reset();
                 self.cursor.0 = self.line_char_count(self.cursor.1);
                 self.ensure_cursor_visible();
                 EventResult::Consumed(None)
@@ -532,6 +819,15 @@ impl View for ReplPanel {
             Event::AltChar('\n') | Event::AltChar('\r') => {
                 self.insert_newline();
                 self.ensure_cursor_visible();
+                EventResult::Consumed(None)
+            }
+            // Ctrl+Space to trigger autocomplete manually
+            Event::CtrlChar(' ') => {
+                self.update_autocomplete();
+                // Show even with empty prefix
+                if !self.ac_state.candidates.is_empty() {
+                    self.ac_state.active = true;
+                }
                 EventResult::Consumed(None)
             }
             _ => EventResult::Ignored,
