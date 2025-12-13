@@ -577,7 +577,9 @@ fn rebuild_workspace(s: &mut Cursive) {
 fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: &str) -> impl View {
     let source = engine.borrow().get_source(name);
     let source = if source.starts_with("Not found") {
-        format!("{}() = {{\n    \n}}", name)
+        // Use simple name (without module prefix) for the placeholder
+        let simple_name = name.rsplit('.').next().unwrap_or(name);
+        format!("{}() = {{\n    \n}}", simple_name)
     } else {
         source
     };
@@ -958,12 +960,13 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let dialog = Dialog::around(
         LinearLayout::vertical()
             .child(select_scroll)
-            .child(TextView::new("Enter: Select | Esc: Close | Left: Up"))
+            .child(TextView::new("Enter: Select | Esc: Close | Left: Up | n: New"))
     )
     .title(&title);
 
     // Wrap in OnEventView for keyboard navigation
     let path_for_back = path.clone();
+    let path_for_new = path.clone();
     let engine_for_back = engine.clone();
     let dialog_with_keys = OnEventView::new(dialog)
         .on_event(Key::Esc, |s| {
@@ -977,6 +980,40 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 new_path.pop();
                 show_browser_dialog(s, engine, new_path);
             }
+        })
+        .on_event(Event::Char('n'), move |s| {
+            // Show dialog to enter new function name
+            let path_for_create = path_for_new.clone();
+            debug_log(&format!("New function dialog opened, current path: {:?}", path_for_create));
+            s.add_layer(
+                Dialog::new()
+                    .title("New Function")
+                    .content(
+                        LinearLayout::vertical()
+                            .child(TextView::new("Function name:"))
+                            .child(EditView::new().with_name("new_func_name").fixed_width(30))
+                    )
+                    .button("Create", move |s| {
+                        let name = s.call_on_name("new_func_name", |v: &mut EditView| {
+                            v.get_content()
+                        }).unwrap();
+                        let name = name.trim();
+                        if name.is_empty() {
+                            return;
+                        }
+                        // Build full name with module path
+                        let full_name = if path_for_create.is_empty() {
+                            name.to_string()
+                        } else {
+                            format!("{}.{}", path_for_create.join("."), name)
+                        };
+                        debug_log(&format!("Creating new function: name='{}', full_name='{}'", name, full_name));
+                        s.pop_layer(); // Remove new function dialog
+                        s.pop_layer(); // Remove browser dialog
+                        open_editor(s, &full_name);
+                    })
+                    .button("Cancel", |s| { s.pop_layer(); })
+            );
         });
 
     s.add_layer(dialog_with_keys);
