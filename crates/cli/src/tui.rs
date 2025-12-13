@@ -3,7 +3,7 @@
 use cursive::Cursive;
 use cursive::traits::*;
 use cursive::views::{Dialog, EditView, LinearLayout, ScrollView, TextView, OnEventView, SelectView};
-use cursive::theme::{Color, PaletteColor, Theme, BorderStyle};
+use cursive::theme::{Color, PaletteColor, Theme, BorderStyle, Style};
 use cursive::view::Resizable;
 use cursive::utils::markup::StyledString;
 use cursive::event::{Event, EventResult, Key};
@@ -1316,21 +1316,21 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
 
     // Add all items with appropriate icons and status indicators
     for item in &items {
-        let label = match item {
+        let label: StyledString = match item {
             BrowserItem::Module(name) => {
                 // Check if this module has any errors
                 let mut module_path = path.clone();
                 module_path.push(name.clone());
                 let has_errors = engine_ref.module_has_problems(&module_path);
                 if has_errors {
-                    format!("📁 {} 🔴", name)
+                    StyledString::plain(format!("📁 {} 🔴", name))
                 } else {
-                    format!("📁 {}", name)
+                    StyledString::plain(format!("📁 {}", name))
                 }
             }
-            BrowserItem::Type { name } => format!("📦 {}", name),
-            BrowserItem::Trait { name } => format!("🔷 {}", name),
-            BrowserItem::Function { name, signature } => {
+            BrowserItem::Type { name } => StyledString::plain(format!("📦 {}", name)),
+            BrowserItem::Trait { name } => StyledString::plain(format!("🔷 {}", name)),
+            BrowserItem::Function { name, signature, doc } => {
                 // Check compile status for this function
                 let qualified_name = format!("{}{}", module_prefix, name);
                 let status_indicator = match engine_ref.get_compile_status(&qualified_name) {
@@ -1339,20 +1339,30 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                     Some(CompileStatus::NotCompiled) => " [?]",
                     _ => "",
                 };
+                // Build styled string with doc comment in different color
+                let mut styled = StyledString::new();
                 if signature.is_empty() {
-                    format!("ƒ  {}{}", name, status_indicator)
+                    styled.append_plain(format!("ƒ  {}{}", name, status_indicator));
                 } else {
-                    format!("ƒ  {} :: {}{}", name, signature, status_indicator)
+                    styled.append_plain(format!("ƒ  {} :: {}{}", name, signature, status_indicator));
                 }
+                // Add doc comment in a muted green/cyan color
+                if let Some(doc_text) = doc.as_ref().and_then(|d| d.lines().next()) {
+                    styled.append_styled(
+                        format!(" # {}", doc_text),
+                        Style::from(Color::Rgb(120, 180, 140))  // Muted green
+                    );
+                }
+                styled
             }
             BrowserItem::Variable { name, mutable } => {
                 if *mutable {
-                    format!("⚡ var {}", name)
+                    StyledString::plain(format!("⚡ var {}", name))
                 } else {
-                    format!("📌 {}", name)
+                    StyledString::plain(format!("📌 {}", name))
                 }
             }
-            BrowserItem::Metadata { .. } => "⚙  _meta (together directives)".to_string(),
+            BrowserItem::Metadata { .. } => StyledString::plain("⚙  _meta (together directives)"),
         };
         select.add_item(label, item.clone());
     }

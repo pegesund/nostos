@@ -15,6 +15,68 @@ use nostos_syntax::ast::*;
 use nostos_vm::*;
 use nostos_types::{TypeEnv, infer::InferCtx};
 
+/// Extract doc comment immediately preceding a definition at the given span start.
+/// Doc comments are lines starting with `#` (but not `#*` for multi-line or `#{` for sets)
+/// immediately before the definition, with only whitespace between comment lines.
+///
+/// Example:
+/// ```
+/// # This is the doc comment
+/// # It can span multiple lines
+/// myFunction(x) = x + 1
+/// ```
+pub fn extract_doc_comment(source: &str, span_start: usize) -> Option<String> {
+    if span_start == 0 || span_start > source.len() {
+        return None;
+    }
+
+    // Get the text before the span
+    let before = &source[..span_start];
+
+    // Find all lines before the definition
+    let lines: Vec<&str> = before.lines().collect();
+    if lines.is_empty() {
+        return None;
+    }
+
+    // Collect comment lines going backwards from the definition
+    let mut doc_lines: Vec<&str> = Vec::new();
+
+    // Start from the line before the definition
+    // The last line in `lines` might be empty or contain only whitespace
+    // if the span_start is at the beginning of a line
+    let mut idx = lines.len();
+
+    // Skip trailing empty/whitespace lines
+    while idx > 0 {
+        idx -= 1;
+        let line = lines[idx].trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // Check if this line is a comment
+        if line.starts_with('#') && !line.starts_with("#*") && !line.starts_with("#{") {
+            // It's a doc comment line - extract the comment text
+            let comment_text = line[1..].trim();
+            doc_lines.push(comment_text);
+        } else {
+            // Not a comment - stop looking
+            break;
+        }
+    }
+
+    if doc_lines.is_empty() {
+        return None;
+    }
+
+    // Reverse since we collected them backwards
+    doc_lines.reverse();
+
+    // Join with newlines
+    Some(doc_lines.join("\n"))
+}
+
 /// Compilation errors with source location information.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum CompileError {
@@ -2354,6 +2416,13 @@ impl Compiler {
             }
         });
 
+        // Extract doc comment from source (comment lines immediately before the function)
+        let doc = def.doc.clone().or_else(|| {
+            self.current_source.as_ref().and_then(|src| {
+                extract_doc_comment(src, def.span.start)
+            })
+        });
+
         let func = FunctionValue {
             name: name.clone(),
             arity,
@@ -2367,7 +2436,7 @@ impl Compiler {
             // REPL introspection fields
             source_code,
             source_file: self.current_source_name.clone(),
-            doc: def.doc.clone(),
+            doc,
             signature: Some(self.infer_signature(def)),
             param_types: def.param_type_strings(),
             return_type: def.return_type_string(),
@@ -6157,6 +6226,11 @@ impl Compiler {
         self.find_function(name).and_then(|f| f.signature.clone())
     }
 
+    /// Get a function's doc comment.
+    pub fn get_function_doc(&self, name: &str) -> Option<String> {
+        self.find_function(name).and_then(|f| f.doc.clone())
+    }
+
     /// Get a function's source code.
     pub fn get_function_source(&self, name: &str) -> Option<String> {
         self.find_function(name)
@@ -6185,11 +6259,6 @@ impl Compiler {
         } else {
             Some(sources.join("\n\n"))
         }
-    }
-
-    /// Get a function's doc comment.
-    pub fn get_function_doc(&self, name: &str) -> Option<String> {
-        self.find_function(name).and_then(|f| f.doc.clone())
     }
 
     /// Get all traits implemented by a type.
@@ -7225,6 +7294,104 @@ mod tests {
             .map(|v| v.to_value())
             .ok_or_else(|| "No result returned".to_string())
     }
+
+    // ========== Doc Comment Tests ==========
+
+    #[test]
+    fn test_extract_doc_comment_basic() {
+        let source = "# This is a doc comment\nmain() = 42";
+        let span_start = source.find("main").unwrap();
+        let doc = extract_doc_comment(source, span_start);
+        assert_eq!(doc, Some("This is a doc comment".to_string()));
+    }
+
+    #[test]
+    fn test_extract_doc_comment_multiline() {
+        let source = "# First line\n# Second line\nmain() = 42";
+        let span_start = source.find("main").unwrap();
+        let doc = extract_doc_comment(source, span_start);
+        assert_eq!(doc, Some("First line\nSecond line".to_string()));
+    }
+
+    #[test]
+    fn test_extract_doc_comment_with_whitespace() {
+        let source = "# Doc comment\n\nmain() = 42";
+        let span_start = source.find("main").unwrap();
+        let doc = extract_doc_comment(source, span_start);
+        assert_eq!(doc, Some("Doc comment".to_string()));
+    }
+
+    #[test]
+    fn test_extract_doc_comment_none() {
+        let source = "main() = 42";
+        let span_start = source.find("main").unwrap();
+        let doc = extract_doc_comment(source, span_start);
+        assert_eq!(doc, None);
+    }
+
+    #[test]
+    fn test_extract_doc_comment_not_immediately_before() {
+        let source = "# Orphan comment\n\nother() = 1\nmain() = 42";
+        let span_start = source.find("main").unwrap();
+        let doc = extract_doc_comment(source, span_start);
+        // Should be None because there's code (other function) between
+        assert_eq!(doc, None);
+    }
+
+    #[test]
+    fn test_doc_comment_stored_on_function() {
+        let source = "# Computes factorial of n\nfact(n) = if n == 0 then 1 else n * fact(n - 1)";
+        let (module_opt, errors) = parse(source);
+        assert!(errors.is_empty());
+        let module = module_opt.unwrap();
+        let compiler = compile_module(&module, source).unwrap();
+
+        // Find the function key (could be fact, fact/, or fact/Int64)
+        let func_names = compiler.get_function_names();
+        let fact_name = func_names.iter().find(|n| n.starts_with("fact"))
+            .expect(&format!("fact function should exist in {:?}", func_names));
+
+        // The function should have the doc comment
+        let doc = compiler.get_function_doc(fact_name);
+        assert_eq!(doc, Some("Computes factorial of n".to_string()));
+    }
+
+    #[test]
+    fn test_doc_comment_multiline_on_function() {
+        let source = "# Doubles a number\n# Works with any numeric type\ndouble(x) = x + x";
+        let (module_opt, errors) = parse(source);
+        assert!(errors.is_empty());
+        let module = module_opt.unwrap();
+        let compiler = compile_module(&module, source).unwrap();
+
+        // Find the function key
+        let func_names = compiler.get_function_names();
+        let double_name = func_names.iter().find(|n| n.starts_with("double"))
+            .expect(&format!("double function should exist in {:?}", func_names));
+
+        let doc = compiler.get_function_doc(double_name);
+        assert_eq!(doc, Some("Doubles a number\nWorks with any numeric type".to_string()));
+    }
+
+    #[test]
+    fn test_doc_comment_not_multiline_comment() {
+        // #* is for multi-line comments, should not be treated as doc
+        let source = "#* This is a block comment *#\nmain() = 42";
+        let span_start = source.find("main").unwrap();
+        let doc = extract_doc_comment(source, span_start);
+        assert_eq!(doc, None);
+    }
+
+    #[test]
+    fn test_doc_comment_not_set_literal() {
+        // #{ is for set literals, should not be treated as doc
+        let source = "#{ not a doc }\nmain() = 42";
+        let span_start = source.find("main").unwrap();
+        let doc = extract_doc_comment(source, span_start);
+        assert_eq!(doc, None);
+    }
+
+    // ========== Basic Compilation Tests ==========
 
     #[test]
     fn test_compile_simple_function() {

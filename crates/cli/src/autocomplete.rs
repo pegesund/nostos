@@ -89,6 +89,8 @@ pub struct CompletionItem {
     pub label: String,
     /// Kind of completion
     pub kind: CompletionKind,
+    /// Doc comment for the item (if available)
+    pub doc: Option<String>,
 }
 
 /// Kind of completion item
@@ -147,6 +149,9 @@ pub trait CompletionSource {
 
     /// Get the signature for a function (e.g., "Int -> Int -> Int")
     fn get_function_signature(&self, name: &str) -> Option<String>;
+
+    /// Get the doc comment for a function
+    fn get_function_doc(&self, name: &str) -> Option<String>;
 }
 
 /// Completion context - what kind of completion is needed
@@ -319,6 +324,7 @@ impl Autocomplete {
                     text: module.clone(),
                     label: module.clone(),
                     kind: CompletionKind::Module,
+                    doc: None,
                 });
             }
         }
@@ -332,6 +338,7 @@ impl Autocomplete {
                     text: base.to_string(),
                     label: type_name.clone(),
                     kind: CompletionKind::Type,
+                    doc: None,
                 });
             }
         }
@@ -341,10 +348,12 @@ impl Autocomplete {
             if !func_name.contains('.') {
                 if func_name.to_lowercase().starts_with(&prefix_lower) {
                     let label = Self::format_function_label(func_name, func_name, None, source);
+                    let doc = source.get_function_doc(func_name);
                     items.push(CompletionItem {
                         text: func_name.clone(),
                         label,
                         kind: CompletionKind::Function,
+                        doc,
                     });
                 }
             }
@@ -357,6 +366,7 @@ impl Autocomplete {
                     text: var_name.clone(),
                     label: var_name,
                     kind: CompletionKind::Variable,
+                    doc: None,
                 });
             }
         }
@@ -415,6 +425,7 @@ impl Autocomplete {
                         text: module.clone(),
                         label: module.clone(),
                         kind: CompletionKind::Module,
+                        doc: None,
                     });
                 }
             }
@@ -429,6 +440,7 @@ impl Autocomplete {
                         text: base.to_string(),
                         label: type_name.clone(),
                         kind: CompletionKind::Type,
+                        doc: None,
                     });
                 }
             }
@@ -444,10 +456,12 @@ impl Autocomplete {
                     if !short_name.contains('.') && short_name.to_lowercase().starts_with(&prefix_lower) {
                         if seen.insert(short_name.to_string()) {
                             let label = Self::format_function_label(short_name, func_name, Some("(mod)"), source);
+                            let doc = source.get_function_doc(func_name);
                             items.push(CompletionItem {
                                 text: short_name.to_string(),
                                 label,
                                 kind: CompletionKind::Function,
+                                doc,
                             });
                         }
                     }
@@ -460,10 +474,12 @@ impl Autocomplete {
             if short_name.to_lowercase().starts_with(&prefix_lower) {
                 if seen.insert(short_name.clone()) {
                     let label = Self::format_function_label(short_name, full_name, Some("(imp)"), source);
+                    let doc = source.get_function_doc(full_name);
                     items.push(CompletionItem {
                         text: short_name.clone(),
                         label,
                         kind: CompletionKind::Function,
+                        doc,
                     });
                 }
             }
@@ -475,10 +491,12 @@ impl Autocomplete {
                 if func_name.to_lowercase().starts_with(&prefix_lower) {
                     if seen.insert(func_name.clone()) {
                         let label = Self::format_function_label(func_name, func_name, None, source);
+                        let doc = source.get_function_doc(func_name);
                         items.push(CompletionItem {
                             text: func_name.clone(),
                             label,
                             kind: CompletionKind::Function,
+                            doc,
                         });
                     }
                 }
@@ -493,6 +511,7 @@ impl Autocomplete {
                         text: var_name.clone(),
                         label: var_name,
                         kind: CompletionKind::Variable,
+                        doc: None,
                     });
                 }
             }
@@ -530,10 +549,12 @@ impl Autocomplete {
                 // Only direct members (no more dots)
                 if !member.contains('.') && member.to_lowercase().starts_with(&prefix_lower) {
                     let label = Self::format_function_label(member, func_name, None, source);
+                    let doc = source.get_function_doc(func_name);
                     items.push(CompletionItem {
                         text: member.to_string(),
                         label,
                         kind: CompletionKind::Function,
+                        doc,
                     });
                 }
             }
@@ -548,6 +569,7 @@ impl Autocomplete {
                         text: member.to_string(),
                         label: type_name.clone(),
                         kind: CompletionKind::Type,
+                        doc: None,
                     });
                 }
             }
@@ -566,6 +588,7 @@ impl Autocomplete {
                             text: direct_member.to_string(),
                             label: format!("{}.{}", module, direct_member),
                             kind: CompletionKind::Module,
+                            doc: None,
                         });
                     }
                 }
@@ -604,6 +627,7 @@ impl Autocomplete {
                     text: field.clone(),
                     label: field,
                     kind: CompletionKind::Field,
+                    doc: None,
                 });
             }
         }
@@ -615,6 +639,7 @@ impl Autocomplete {
                     text: ctor.clone(),
                     label: ctor,
                     kind: CompletionKind::Constructor,
+                    doc: None,
                 });
             }
         }
@@ -720,6 +745,11 @@ mod tests {
 
         fn get_function_signature(&self, _name: &str) -> Option<String> {
             // MockSource doesn't have signatures
+            None
+        }
+
+        fn get_function_doc(&self, _name: &str) -> Option<String> {
+            // MockSource doesn't have doc comments
             None
         }
     }
@@ -1010,6 +1040,7 @@ mod tests {
             text: "println".to_string(),
             label: "println".to_string(),
             kind: CompletionKind::Function,
+            doc: None,
         };
 
         let (text, advance) = ac.apply_completion(&ctx, &item);

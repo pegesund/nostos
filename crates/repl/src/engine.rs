@@ -18,7 +18,7 @@ use nostos_vm::parallel::{ParallelVM, ParallelConfig};
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BrowserItem {
     Module(String),
-    Function { name: String, signature: String },
+    Function { name: String, signature: String, doc: Option<String> },
     Type { name: String },
     Trait { name: String },
     Variable { name: String, mutable: bool },
@@ -783,18 +783,68 @@ impl ReplEngine {
         }).collect()
     }
 
-    /// Extract definition source from input by name
+    /// Find the start position including any doc comment before a definition
+    fn find_doc_comment_start(input: &str, def_start: usize) -> usize {
+        // Get text before the definition
+        let before = &input[..def_start];
+
+        // Track byte positions as we go through lines
+        let mut line_starts: Vec<usize> = vec![0];
+        for (i, c) in before.char_indices() {
+            if c == '\n' {
+                line_starts.push(i + 1);
+            }
+        }
+
+        // Go backwards through lines to find comment block
+        let mut comment_start = def_start;
+        let mut found_comment = false;
+
+        for i in (0..line_starts.len()).rev() {
+            let line_start = line_starts[i];
+            let line_end = if i + 1 < line_starts.len() {
+                line_starts[i + 1]
+            } else {
+                def_start
+            };
+            let line = &before[line_start..line_end];
+            let trimmed = line.trim();
+
+            if trimmed.starts_with('#') {
+                // This is a comment line, include it
+                comment_start = line_start;
+                found_comment = true;
+            } else if trimmed.is_empty() {
+                // Empty line - continue checking above for more comments
+                continue;
+            } else {
+                // Non-comment, non-empty line - stop
+                break;
+            }
+        }
+
+        if found_comment {
+            comment_start
+        } else {
+            def_start
+        }
+    }
+
+    /// Extract definition source from input by name (including doc comments)
     fn get_def_source(module: &nostos_syntax::Module, name: &str, input: &str) -> Option<String> {
         for item in &module.items {
             match item {
                 Item::FnDef(fn_def) if fn_def.name.node == name => {
-                    return Some(input[fn_def.span.start..fn_def.span.end].to_string());
+                    let start = Self::find_doc_comment_start(input, fn_def.span.start);
+                    return Some(input[start..fn_def.span.end].to_string());
                 }
                 Item::TypeDef(type_def) if type_def.name.node == name => {
-                    return Some(input[type_def.span.start..type_def.span.end].to_string());
+                    let start = Self::find_doc_comment_start(input, type_def.span.start);
+                    return Some(input[start..type_def.span.end].to_string());
                 }
                 Item::TraitDef(trait_def) if trait_def.name.node == name => {
-                    return Some(input[trait_def.span.start..trait_def.span.end].to_string());
+                    let start = Self::find_doc_comment_start(input, trait_def.span.start);
+                    return Some(input[start..trait_def.span.end].to_string());
                 }
                 _ => {}
             }
@@ -833,6 +883,11 @@ impl ReplEngine {
     /// Get the signature for a function (for autocomplete display)
     pub fn get_function_signature(&self, name: &str) -> Option<String> {
         self.compiler.get_function_signature(name)
+    }
+
+    /// Get the doc comment for a function (for autocomplete display)
+    pub fn get_function_doc(&self, name: &str) -> Option<String> {
+        self.compiler.get_function_doc(name)
     }
 
     pub fn browse(&self, module_filter: Option<&str>) -> String {
@@ -1673,7 +1728,7 @@ impl ReplEngine {
         let prefix_len = prefix.len();
 
         let mut modules: BTreeSet<String> = BTreeSet::new();
-        let mut functions: BTreeSet<(String, String)> = BTreeSet::new();
+        let mut functions: BTreeSet<(String, String, Option<String>)> = BTreeSet::new();
         let mut types: BTreeSet<String> = BTreeSet::new();
         let mut traits: BTreeSet<String> = BTreeSet::new();
 
@@ -1699,7 +1754,8 @@ impl ReplEngine {
                 } else {
                     // Direct function at root
                     let sig = self.compiler.get_function_signature(name).unwrap_or_default();
-                    functions.insert((base_name.to_string(), sig));
+                    let doc = self.compiler.get_function_doc(name);
+                    functions.insert((base_name.to_string(), sig, doc));
                 }
             } else if base_name.starts_with(&prefix) {
                 // Under our path
@@ -1710,7 +1766,8 @@ impl ReplEngine {
                 } else {
                     // Direct function in this module
                     let sig = self.compiler.get_function_signature(name).unwrap_or_default();
-                    functions.insert((rest.to_string(), sig));
+                    let doc = self.compiler.get_function_doc(name);
+                    functions.insert((rest.to_string(), sig, doc));
                 }
             }
         }
@@ -1789,8 +1846,8 @@ impl ReplEngine {
         }
 
         // Functions last
-        for (name, sig) in functions {
-            items.push(BrowserItem::Function { name, signature: sig });
+        for (name, sig, doc) in functions {
+            items.push(BrowserItem::Function { name, signature: sig, doc });
         }
 
         items
@@ -1895,6 +1952,98 @@ mod tests {
     }
 
     #[test]
+    fn test_find_doc_comment_start() {
+        // Test that find_doc_comment_start finds comments above a definition
+        let input = "# This is a doc comment\nfoo(x) = x + 1";
+        let def_start = 24; // Position of 'f' in 'foo' (after the newline)
+        let result = ReplEngine::find_doc_comment_start(input, def_start);
+        assert_eq!(result, 0, "Should find start of comment");
+        assert_eq!(&input[result..def_start], "# This is a doc comment\n");
+    }
+
+    #[test]
+    fn test_find_doc_comment_start_multiline() {
+        // Test multi-line comments
+        let input = "# Line 1\n# Line 2\nbar(y) = y * 2";
+        let def_start = 18; // Position of 'b' in 'bar'
+        let result = ReplEngine::find_doc_comment_start(input, def_start);
+        assert_eq!(result, 0, "Should find start of first comment line");
+    }
+
+    #[test]
+    fn test_find_doc_comment_start_no_comment() {
+        // Test when there's no comment
+        let input = "foo(x) = x + 1";
+        let def_start = 0;
+        let result = ReplEngine::find_doc_comment_start(input, def_start);
+        assert_eq!(result, 0, "Should return def_start when no comment");
+    }
+
+    #[test]
+    fn test_find_doc_comment_start_with_code_above() {
+        // Test when there's code above (should not include it)
+        let input = "other(z) = z\n# Doc for bar\nbar(y) = y * 2";
+        let def_start = 27; // Position of 'b' in 'bar'
+        let result = ReplEngine::find_doc_comment_start(input, def_start);
+        // Should start at the comment, not at other(z)
+        assert!(input[result..].starts_with("# Doc for bar"));
+    }
+
+    #[test]
+    fn test_doc_comments_persist_after_save() {
+        use std::io::Write;
+        // Create a temp directory with a project structure
+        let temp_dir = std::env::temp_dir().join(format!("nostos_doc_test_{}", std::process::id()));
+        let defs_dir = temp_dir.join(".nostos").join("defs");
+        fs::create_dir_all(&defs_dir).unwrap();
+
+        // Create nostos.toml to make it a valid project
+        let mut config = fs::File::create(temp_dir.join("nostos.toml")).unwrap();
+        writeln!(config, "[project]\nname = \"test\"").unwrap();
+
+        // First engine: define a function with doc comment and save
+        let repl_config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(repl_config);
+        engine.load_stdlib().ok();
+        engine.load_directory(temp_dir.to_str().unwrap()).ok();
+
+        // Define a function with a doc comment
+        let code = "# This is the documentation for myFunc\nmyFunc(x: Int) = x * 2";
+        let result = engine.eval(code);
+        println!("Eval result: {:?}", result);
+        assert!(result.is_ok(), "eval failed: {:?}", result);
+
+        // Save the definition
+        let save_result = engine.save_definition("myFunc", code);
+        println!("Save result: {:?}", save_result);
+        assert!(save_result.is_ok(), "save failed: {:?}", save_result);
+
+        // Check that the doc comment is in the saved file
+        let def_path = defs_dir.join("myFunc.nos");
+        let saved_content = fs::read_to_string(&def_path).unwrap_or_default();
+        println!("Saved content:\n{}", saved_content);
+        assert!(saved_content.contains("# This is the documentation for myFunc"),
+                "Doc comment should be in saved file. Content: {}", saved_content);
+
+        // Now create a new engine and load the saved project
+        let repl_config2 = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine2 = ReplEngine::new(repl_config2);
+        engine2.load_stdlib().ok();
+        let load_result = engine2.load_directory(temp_dir.to_str().unwrap());
+        println!("Load result: {:?}", load_result);
+
+        // Check that the doc comment was extracted and is available
+        let doc = engine2.get_function_doc("myFunc");
+        println!("Doc after reload: {:?}", doc);
+        assert!(doc.is_some(), "Doc should be available after reload");
+        assert!(doc.unwrap().contains("documentation for myFunc"),
+                "Doc should contain original text");
+
+        // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
     fn test_var_bindings_in_browser() {
         let config = ReplConfig { enable_jit: false, num_threads: 1 };
         let mut engine = ReplEngine::new(config);
@@ -1983,7 +2132,7 @@ mod tests {
         let items = engine.get_browser_items(&[]);
         println!("\nBrowser items (functions only):");
         for item in &items {
-            if let BrowserItem::Function { name, signature } = item {
+            if let BrowserItem::Function { name, signature, .. } = item {
                 if name.contains("bar") {
                     println!("  {} :: {}", name, signature);
                     // The signature should not be empty
@@ -2157,7 +2306,7 @@ mod tests {
         let items = engine.get_browser_items(&["main".to_string()]);
         println!("Browser items in main:");
         for item in &items {
-            if let BrowserItem::Function { name, signature } = item {
+            if let BrowserItem::Function { name, signature, .. } = item {
                 println!("  {} :: {}", name, signature);
                 if name == "bar23" {
                     assert!(signature.contains("Int"),

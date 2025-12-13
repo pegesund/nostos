@@ -39,6 +39,10 @@ impl<'a> CompletionSource for EngineCompletionSource<'a> {
     fn get_function_signature(&self, name: &str) -> Option<String> {
         self.engine.get_function_signature(name)
     }
+
+    fn get_function_doc(&self, name: &str) -> Option<String> {
+        self.engine.get_function_doc(name)
+    }
 }
 
 /// Maximum items to show in autocomplete popup
@@ -409,10 +413,13 @@ impl CodeEditor {
                         } else {
                             short_name.to_string()
                         };
+                        let doc = source.get_function_doc(&func)
+                            .or_else(|| source.get_function_doc(&base_name));
                         return Some(CompletionItem {
                             text: short_name.to_string(),
                             label,
                             kind: crate::autocomplete::CompletionKind::Function,
+                            doc,
                         });
                     }
                 }
@@ -549,6 +556,25 @@ impl CodeEditor {
             printer.with_style(bg_style, |p| {
                 p.print((popup_x, status_y), &padded_status);
             });
+        }
+
+        // Show doc comment for selected item (if available)
+        let selected_item = &self.ac_state.candidates[self.ac_state.selected];
+        if let Some(ref doc) = selected_item.doc {
+            let doc_y = status_y + 1;
+            if doc_y < printer.size.y {
+                let doc_style = Style::from(ColorStyle::new(
+                    Color::Rgb(180, 180, 180),
+                    Color::Rgb(30, 30, 45)
+                ));
+                // Show first line of doc (truncated to fit)
+                let first_line = doc.lines().next().unwrap_or("");
+                let doc_display: String = first_line.chars().take(popup_width).collect();
+                let padded_doc = format!("{:width$}", doc_display, width = popup_width);
+                printer.with_style(doc_style, |p| {
+                    p.print((popup_x, doc_y), &padded_doc);
+                });
+            }
         }
     }
 }
