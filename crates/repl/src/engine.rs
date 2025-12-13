@@ -830,6 +830,11 @@ impl ReplEngine {
         self.compiler.get_type_constructors(type_name)
     }
 
+    /// Get the signature for a function (for autocomplete display)
+    pub fn get_function_signature(&self, name: &str) -> Option<String> {
+        self.compiler.get_function_signature(name)
+    }
+
     pub fn browse(&self, module_filter: Option<&str>) -> String {
         let mut functions: Vec<_> = self.compiler.get_function_names()
             .into_iter()

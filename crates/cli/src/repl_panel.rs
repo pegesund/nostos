@@ -40,6 +40,10 @@ impl<'a> CompletionSource for EngineCompletionSource<'a> {
     fn get_type_constructors(&self, type_name: &str) -> Vec<String> {
         self.engine.get_type_constructors(type_name)
     }
+
+    fn get_function_signature(&self, name: &str) -> Option<String> {
+        self.engine.get_function_signature(name)
+    }
 }
 
 /// A single REPL entry (input + output)

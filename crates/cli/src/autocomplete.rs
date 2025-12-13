@@ -144,6 +144,9 @@ pub trait CompletionSource {
 
     /// Get constructors for a variant type
     fn get_type_constructors(&self, type_name: &str) -> Vec<String>;
+
+    /// Get the signature for a function (e.g., "Int -> Int -> Int")
+    fn get_function_signature(&self, name: &str) -> Option<String>;
 }
 
 /// Completion context - what kind of completion is needed
@@ -337,9 +340,10 @@ impl Autocomplete {
         for func_name in self.functions.keys() {
             if !func_name.contains('.') {
                 if func_name.to_lowercase().starts_with(&prefix_lower) {
+                    let label = Self::format_function_label(func_name, func_name, None, source);
                     items.push(CompletionItem {
                         text: func_name.clone(),
-                        label: func_name.clone(),
+                        label,
                         kind: CompletionKind::Function,
                     });
                 }
@@ -369,6 +373,17 @@ impl Autocomplete {
         });
 
         items
+    }
+
+    /// Format a function label with optional signature
+    fn format_function_label(name: &str, full_name: &str, suffix: Option<&str>, source: &dyn CompletionSource) -> String {
+        let sig = source.get_function_signature(full_name);
+        match (sig, suffix) {
+            (Some(s), Some(suf)) => format!("{} :: {} {}", name, s, suf),
+            (Some(s), None) => format!("{} :: {}", name, s),
+            (None, Some(suf)) => format!("{} {}", name, suf),
+            (None, None) => name.to_string(),
+        }
     }
 
     /// Complete identifier with module context and imports
@@ -428,9 +443,10 @@ impl Autocomplete {
                     // Only direct members (no nested modules)
                     if !short_name.contains('.') && short_name.to_lowercase().starts_with(&prefix_lower) {
                         if seen.insert(short_name.to_string()) {
+                            let label = Self::format_function_label(short_name, func_name, Some("(mod)"), source);
                             items.push(CompletionItem {
                                 text: short_name.to_string(),
-                                label: format!("{} (same module)", short_name),
+                                label,
                                 kind: CompletionKind::Function,
                             });
                         }
@@ -443,9 +459,10 @@ impl Autocomplete {
         for (short_name, full_name) in &imported_names {
             if short_name.to_lowercase().starts_with(&prefix_lower) {
                 if seen.insert(short_name.clone()) {
+                    let label = Self::format_function_label(short_name, full_name, Some("(imp)"), source);
                     items.push(CompletionItem {
                         text: short_name.clone(),
-                        label: format!("{} (imported)", full_name),
+                        label,
                         kind: CompletionKind::Function,
                     });
                 }
@@ -457,9 +474,10 @@ impl Autocomplete {
             if !func_name.contains('.') {
                 if func_name.to_lowercase().starts_with(&prefix_lower) {
                     if seen.insert(func_name.clone()) {
+                        let label = Self::format_function_label(func_name, func_name, None, source);
                         items.push(CompletionItem {
                             text: func_name.clone(),
-                            label: func_name.clone(),
+                            label,
                             kind: CompletionKind::Function,
                         });
                     }
@@ -499,7 +517,7 @@ impl Autocomplete {
         &self,
         module: &str,
         prefix: &str,
-        _source: &dyn CompletionSource,
+        source: &dyn CompletionSource,
     ) -> Vec<CompletionItem> {
         let mut items = Vec::new();
         let prefix_lower = prefix.to_lowercase();
@@ -511,9 +529,10 @@ impl Autocomplete {
                 let member = &func_name[module_prefix.len()..];
                 // Only direct members (no more dots)
                 if !member.contains('.') && member.to_lowercase().starts_with(&prefix_lower) {
+                    let label = Self::format_function_label(member, func_name, None, source);
                     items.push(CompletionItem {
                         text: member.to_string(),
-                        label: func_name.clone(),
+                        label,
                         kind: CompletionKind::Function,
                     });
                 }
@@ -697,6 +716,11 @@ mod tests {
 
         fn get_type_constructors(&self, type_name: &str) -> Vec<String> {
             self.type_constructors.get(type_name).cloned().unwrap_or_default()
+        }
+
+        fn get_function_signature(&self, _name: &str) -> Option<String> {
+            // MockSource doesn't have signatures
+            None
         }
     }
 
@@ -1138,7 +1162,8 @@ mod tests {
 
         // Should find "print" from imports
         assert!(items.iter().any(|i| i.text == "print"));
-        assert!(items.iter().any(|i| i.label.contains("imported")));
+        // Label should contain "(imp)" suffix for imported functions
+        assert!(items.iter().any(|i| i.label.contains("(imp)")));
     }
 
     #[test]

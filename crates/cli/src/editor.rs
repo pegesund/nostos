@@ -35,6 +35,10 @@ impl<'a> CompletionSource for EngineCompletionSource<'a> {
     fn get_type_constructors(&self, type_name: &str) -> Vec<String> {
         self.engine.get_type_constructors(type_name)
     }
+
+    fn get_function_signature(&self, name: &str) -> Option<String> {
+        self.engine.get_function_signature(name)
+    }
 }
 
 /// Maximum items to show in autocomplete popup
@@ -396,9 +400,18 @@ impl CodeEditor {
                     let func_module = &func[..dot_pos];
                     if func_module == module {
                         let short_name = func[dot_pos + 1..].split('/').next().unwrap_or(&func[dot_pos + 1..]);
+                        // Get the base function name (without signature) for signature lookup
+                        let base_name = format!("{}.{}", func_module, short_name);
+                        let label = if let Some(sig) = source.get_function_signature(&func) {
+                            format!("{} :: {}", short_name, sig)
+                        } else if let Some(sig) = source.get_function_signature(&base_name) {
+                            format!("{} :: {}", short_name, sig)
+                        } else {
+                            short_name.to_string()
+                        };
                         return Some(CompletionItem {
                             text: short_name.to_string(),
-                            label: format!("{} ({})", short_name, module),
+                            label,
                             kind: crate::autocomplete::CompletionKind::Function,
                         });
                     }
