@@ -786,8 +786,8 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                             log_to_repl(s, &output);
                         }
                     }
-                    debug_log(&format!("Closing editor: {}", name_for_save));
-                    close_editor(s, &name_for_save);
+                    debug_log(&format!("Closing editor and opening browser: {}", name_for_save));
+                    close_editor_and_browse(s, &name_for_save);
                 }
                 Err(e) => {
                     debug_log(&format!("eval_in_module ERROR: {}", e));
@@ -856,6 +856,39 @@ fn close_editor(s: &mut Cursive, name: &str) {
 
         // Focus input
         s.focus_name("input").ok();
+    }
+}
+
+/// Close the editor and open the browser at the module containing the definition
+fn close_editor_and_browse(s: &mut Cursive, name: &str) {
+    // Extract module path from qualified name (e.g., "utils.foo" -> ["utils"])
+    let parts: Vec<&str> = name.split('.').collect();
+    let module_path: Vec<String> = if parts.len() > 1 {
+        parts[..parts.len()-1].iter().map(|s| s.to_string()).collect()
+    } else {
+        vec![]
+    };
+
+    let was_removed = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let mut state = state.borrow_mut();
+        if let Some(idx) = state.open_editors.iter().position(|x| x == name) {
+            state.open_editors.remove(idx);
+            true
+        } else {
+            false
+        }
+    }).unwrap();
+
+    if was_removed {
+        // Rebuild the entire workspace layout
+        rebuild_workspace(s);
+
+        // Get engine and open browser at the module path
+        let engine = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+            state.borrow().engine.clone()
+        }).unwrap();
+
+        show_browser_dialog(s, engine, module_path);
     }
 }
 
