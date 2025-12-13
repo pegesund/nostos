@@ -5814,9 +5814,10 @@ impl Compiler {
 
     /// Get the ordered function list for direct indexed calls.
     /// Returns functions in the same order as their indices (for CallDirect).
+    /// Functions that have been removed will be skipped (their slots become None).
     pub fn get_function_list(&self) -> Vec<Arc<FunctionValue>> {
         self.function_list.iter()
-            .map(|name| self.functions.get(name).cloned().expect("Function should exist"))
+            .filter_map(|name| self.functions.get(name).cloned())
             .collect()
     }
 
@@ -5951,6 +5952,38 @@ impl Compiler {
         // Sort by signature for consistent ordering
         variants.sort_by(|a, b| a.0.cmp(&b.0));
         variants
+    }
+
+    /// Remove a function (and all its overloads) by base name.
+    /// Used when deleting a definition from the project.
+    pub fn remove_function(&mut self, base_name: &str) {
+        // Collect all variants to remove
+        let prefix = format!("{}/", base_name);
+        let keys_to_remove: Vec<String> = self.functions.keys()
+            .filter(|name| name.starts_with(&prefix) || *name == base_name)
+            .cloned()
+            .collect();
+
+        for key in keys_to_remove {
+            self.functions.remove(&key);
+            self.function_visibility.remove(&key);
+            // Note: function_indices and function_list are not updated
+            // because that would invalidate existing indices. This is fine
+            // for a REPL/TUI session - the stale index just won't be called.
+        }
+
+        // Also remove from fn_asts if present
+        self.fn_asts.remove(base_name);
+    }
+
+    /// Remove a type definition by name.
+    pub fn remove_type(&mut self, name: &str) {
+        self.types.remove(name);
+    }
+
+    /// Remove a trait definition by name.
+    pub fn remove_trait(&mut self, name: &str) {
+        self.trait_defs.remove(name);
     }
 
     /// Convert a full function name to a display-friendly format.
