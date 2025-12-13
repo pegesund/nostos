@@ -421,6 +421,7 @@ fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
         let base_no_list = choice((literals.clone(), base_containers, variants_box.clone()));
 
         // List pattern: [], [h | t], [a, b, c]
+        // String cons pattern: ["prefix" | rest] - when all elements are strings and there's a tail
         // Note: list elements use base_no_list to avoid Or pattern conflicts with | cons operator
         let list_empty = just(Token::LBracket)
             .then(just(Token::RBracket))
@@ -433,7 +434,28 @@ fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
             .then(just(Token::Pipe).ignore_then(pat.clone()).or_not())
             .delimited_by(just(Token::LBracket), just(Token::RBracket))
             .map_with_span(|(elems, tail), span| {
-                Pattern::List(ListPattern::Cons(elems, tail.map(Box::new)), to_span(span))
+                // Check if all elements are string literals and there's a tail
+                // If so, this is a string cons pattern like ["hello" | rest]
+                let all_strings: Option<Vec<String>> = elems.iter().map(|p| {
+                    match p {
+                        Pattern::String(s, _) => Some(s.clone()),
+                        _ => None,
+                    }
+                }).collect();
+
+                match (all_strings, tail) {
+                    (Some(strings), Some(tail_pat)) => {
+                        // This is a string cons pattern
+                        Pattern::StringCons(
+                            StringPattern::Cons(strings, Box::new(tail_pat)),
+                            to_span(span)
+                        )
+                    }
+                    (_, tail) => {
+                        // Regular list pattern
+                        Pattern::List(ListPattern::Cons(elems, tail.map(Box::new)), to_span(span))
+                    }
+                }
             });
 
         // Full containers including list patterns
@@ -1045,10 +1067,31 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         })
         .boxed(); // Box to reduce type complexity
 
-        // ++
-        let concat = term
+        // :: (cons - higher precedence than ++, RIGHT-ASSOCIATIVE)
+        // 1 :: 2 :: [3] should parse as 1 :: (2 :: [3]) not (1 :: 2) :: [3]
+        let cons = term
             .clone()
-            .then(just(Token::PlusPlus).to(BinOp::Concat).then(nl.clone().ignore_then(term)).repeated());
+            .then(just(Token::ColonColon).ignore_then(nl.clone()).ignore_then(term.clone()).repeated())
+            .map(|(first, rest)| {
+                if rest.is_empty() {
+                    first
+                } else {
+                    // Fold from right: [1, 2, 3] with base [] becomes 1 :: (2 :: (3 :: []))
+                    let mut items: Vec<_> = std::iter::once(first).chain(rest).collect();
+                    // Start from the rightmost item and work backwards
+                    let mut result = items.pop().unwrap();
+                    while let Some(item) = items.pop() {
+                        let span = get_span(&item).merge(get_span(&result));
+                        result = Expr::BinOp(Box::new(item), BinOp::Cons, Box::new(result), span);
+                    }
+                    result
+                }
+            });
+
+        // ++
+        let concat = cons
+            .clone()
+            .then(just(Token::PlusPlus).to(BinOp::Concat).then(nl.clone().ignore_then(cons)).repeated());
         let concat = concat.foldl(|lhs, (op, rhs)| {
             let span = get_span(&lhs).merge(get_span(&rhs));
             Expr::BinOp(Box::new(lhs), op, Box::new(rhs), span)

@@ -1110,6 +1110,15 @@ impl<'a> InferCtx<'a> {
                 Ok(left_ty)
             }
 
+            // Cons: h :: t means prepend h to list t
+            // left is the element, right is the list
+            BinOp::Cons => {
+                // right should be a List of left's type
+                let expected_list = Type::List(Box::new(left_ty));
+                self.unify(right_ty, expected_list.clone());
+                Ok(expected_list)
+            }
+
             // Pipe: f |> g means g(f)
             BinOp::Pipe => {
                 let result_ty = self.fresh();
@@ -1236,6 +1245,20 @@ impl<'a> InferCtx<'a> {
                         if let Some(tail_pat) = tail {
                             self.infer_pattern(tail_pat, &Type::List(Box::new(elem_ty)))?;
                         }
+                    }
+                }
+                Ok(())
+            }
+
+            Pattern::StringCons(string_pat, _) => {
+                // String cons pattern matches against strings
+                self.unify(expected.clone(), Type::String);
+
+                match string_pat {
+                    nostos_syntax::ast::StringPattern::Empty => {}
+                    nostos_syntax::ast::StringPattern::Cons(_, tail_pat) => {
+                        // tail_pat binds to the rest of the string
+                        self.infer_pattern(tail_pat, &Type::String)?;
                     }
                 }
                 Ok(())

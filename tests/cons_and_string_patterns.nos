@@ -1,0 +1,39 @@
+# expect: ()
+# Test the :: cons operator and string pattern matching
+
+# Function using string pattern matching
+greet(["hello" | rest]) = rest
+greet(_) = "unknown"
+
+# Single character match
+first_char(["h" | _]) = "starts with h"
+first_char(["a" | _]) = "starts with a"
+first_char(_) = "other"
+
+main() = {
+    # Test 1: Basic cons operator
+    list1 = 1 :: [2, 3]
+    assert_eq(list1, [1, 2, 3])
+
+    # Test 2: Multiple cons (right associative)
+    list2 = 1 :: 2 :: 3 :: []
+    assert_eq(list2, [1, 2, 3])
+
+    # Test 3: Cons with variables
+    x = 0
+    xs = [1, 2]
+    list3 = x :: xs
+    assert_eq(list3, [0, 1, 2])
+
+    # Test 4: String pattern matching
+    result1 = greet("hello world")
+    assert_eq(result1, " world")
+
+    result2 = greet("hi there")
+    assert_eq(result2, "unknown")
+
+    # Test 5: Single char string pattern
+    assert_eq(first_char("hello"), "starts with h")
+    assert_eq(first_char("apple"), "starts with a")
+    assert_eq(first_char("world"), "other")
+}

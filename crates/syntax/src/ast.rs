@@ -266,6 +266,8 @@ pub enum Pattern {
     Tuple(Vec<Pattern>, Span),
     /// List pattern: `[]`, `[h | t]`, `[a, b | rest]`
     List(ListPattern, Span),
+    /// String cons pattern: `["prefix" | rest]` for string matching
+    StringCons(StringPattern, Span),
     /// Record pattern: `{x, y}`, `{name: n}`
     Record(Vec<RecordPatternField>, Span),
     /// Map pattern: `%{"key": pat, "k2": p2}`
@@ -304,6 +306,7 @@ impl Pattern {
             Pattern::Unit(s) => *s,
             Pattern::Tuple(_, s) => *s,
             Pattern::List(_, s) => *s,
+            Pattern::StringCons(_, s) => *s,
             Pattern::Record(_, s) => *s,
             Pattern::Map(_, s) => *s,
             Pattern::Set(_, s) => *s,
@@ -341,6 +344,17 @@ pub enum ListPattern {
     Empty,
     /// Cons pattern: `[h | t]` or `[a, b | rest]`
     Cons(Vec<Pattern>, Option<Box<Pattern>>),
+}
+
+/// A string pattern for character-wise matching.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StringPattern {
+    /// Empty string pattern: `""`
+    Empty,
+    /// String cons pattern: `["h" | rest]` where elements are string literals and tail is variable
+    /// The Vec contains string literal patterns (each must be single char or string prefix)
+    /// The Option<Box<Pattern>> is the rest of the string (must bind to a variable)
+    Cons(Vec<String>, Box<Pattern>),
 }
 
 /// A field in a record pattern.
@@ -532,6 +546,8 @@ pub enum BinOp {
     And, Or,
     // String/List
     Concat,
+    // List cons (prepend)
+    Cons,
     // Pipeline
     Pipe,
 }
@@ -554,6 +570,7 @@ impl fmt::Display for BinOp {
             BinOp::And => write!(f, "&&"),
             BinOp::Or => write!(f, "||"),
             BinOp::Concat => write!(f, "++"),
+            BinOp::Cons => write!(f, "::"),
             BinOp::Pipe => write!(f, "|>"),
         }
     }

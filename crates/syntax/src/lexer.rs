@@ -307,6 +307,8 @@ pub enum Token {
 
     #[token(",")]
     Comma,
+    #[token("::")]
+    ColonColon,
     #[token(":")]
     Colon,
     #[token(".")]
@@ -473,6 +475,7 @@ impl fmt::Display for Token {
             Token::LBrace => write!(f, "{{"),
             Token::RBrace => write!(f, "}}"),
             Token::Comma => write!(f, ","),
+            Token::ColonColon => write!(f, "::"),
             Token::Colon => write!(f, ":"),
             Token::Dot => write!(f, "."),
             Token::Pipe => write!(f, "|"),
