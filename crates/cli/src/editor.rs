@@ -37,6 +37,9 @@ impl<'a> CompletionSource for EngineCompletionSource<'a> {
     }
 }
 
+/// Maximum items to show in autocomplete popup
+const AC_MAX_VISIBLE: usize = 10;
+
 /// Autocomplete state for the editor
 struct AutocompleteState {
     /// Whether autocomplete popup is visible
@@ -45,6 +48,8 @@ struct AutocompleteState {
     candidates: Vec<CompletionItem>,
     /// Selected index in candidates
     selected: usize,
+    /// Scroll offset for pagination
+    scroll_offset: usize,
     /// The context (prefix info)
     context: Option<CompletionContext>,
 }
@@ -55,6 +60,7 @@ impl AutocompleteState {
             active: false,
             candidates: Vec::new(),
             selected: 0,
+            scroll_offset: 0,
             context: None,
         }
     }
@@ -63,7 +69,68 @@ impl AutocompleteState {
         self.active = false;
         self.candidates.clear();
         self.selected = 0;
+        self.scroll_offset = 0;
         self.context = None;
+    }
+
+    /// Move selection up, with pagination
+    fn select_prev(&mut self) {
+        if self.candidates.is_empty() {
+            return;
+        }
+        if self.selected == 0 {
+            self.selected = self.candidates.len() - 1;
+            // Scroll to show selection
+            if self.selected >= AC_MAX_VISIBLE {
+                self.scroll_offset = self.selected - AC_MAX_VISIBLE + 1;
+            }
+        } else {
+            self.selected -= 1;
+            // Scroll up if selection goes above visible area
+            if self.selected < self.scroll_offset {
+                self.scroll_offset = self.selected;
+            }
+        }
+    }
+
+    /// Move selection down, with pagination
+    fn select_next(&mut self) {
+        if self.candidates.is_empty() {
+            return;
+        }
+        self.selected = (self.selected + 1) % self.candidates.len();
+        if self.selected == 0 {
+            // Wrapped around to top
+            self.scroll_offset = 0;
+        } else if self.selected >= self.scroll_offset + AC_MAX_VISIBLE {
+            // Scroll down to keep selection visible
+            self.scroll_offset = self.selected - AC_MAX_VISIBLE + 1;
+        }
+    }
+
+    /// Page down (move by AC_MAX_VISIBLE items)
+    fn page_down(&mut self) {
+        if self.candidates.is_empty() {
+            return;
+        }
+        let new_selected = (self.selected + AC_MAX_VISIBLE).min(self.candidates.len() - 1);
+        self.selected = new_selected;
+        // Adjust scroll to show selection
+        if self.selected >= self.scroll_offset + AC_MAX_VISIBLE {
+            self.scroll_offset = self.selected - AC_MAX_VISIBLE + 1;
+        }
+    }
+
+    /// Page up (move by AC_MAX_VISIBLE items)
+    fn page_up(&mut self) {
+        if self.candidates.is_empty() {
+            return;
+        }
+        self.selected = self.selected.saturating_sub(AC_MAX_VISIBLE);
+        // Adjust scroll to show selection
+        if self.selected < self.scroll_offset {
+            self.scroll_offset = self.selected;
+        }
     }
 }
 
@@ -393,12 +460,18 @@ impl CodeEditor {
         let cursor_screen_x = self.cursor.0.saturating_sub(self.scroll_offset.0);
         let cursor_screen_y = self.cursor.1.saturating_sub(self.scroll_offset.1);
 
-        let max_items = 6.min(self.ac_state.candidates.len());
+        let total_items = self.ac_state.candidates.len();
+        let visible_count = AC_MAX_VISIBLE.min(total_items);
+        let scroll_offset = self.ac_state.scroll_offset;
+
+        // Calculate popup width based on visible items
         let popup_width = self.ac_state.candidates.iter()
-            .take(max_items)
+            .skip(scroll_offset)
+            .take(visible_count)
             .map(|c| c.label.len() + 8) // +8 for kind prefix "[type] "
             .max()
             .unwrap_or(20)
+            .max(20) // Minimum width for status line
             .min(printer.size.x.saturating_sub(2));
 
         // Position popup below cursor line
@@ -411,14 +484,19 @@ impl CodeEditor {
             Color::Rgb(40, 40, 60)
         ));
 
-        // Draw items
-        for (i, item) in self.ac_state.candidates.iter().take(max_items).enumerate() {
-            let y = popup_y + i;
+        // Draw visible items
+        for (display_idx, item) in self.ac_state.candidates.iter()
+            .skip(scroll_offset)
+            .take(visible_count)
+            .enumerate()
+        {
+            let y = popup_y + display_idx;
             if y >= printer.size.y {
                 break;
             }
 
-            let is_selected = i == self.ac_state.selected;
+            let actual_idx = scroll_offset + display_idx;
+            let is_selected = actual_idx == self.ac_state.selected;
             let (r, g, b) = item.kind.color();
             let kind_color = Color::Rgb(r, g, b);
             let style = if is_selected {
@@ -444,11 +522,19 @@ impl CodeEditor {
             });
         }
 
-        // Show scroll indicator if more items
-        if self.ac_state.candidates.len() > max_items {
-            let more = format!("... +{} more", self.ac_state.candidates.len() - max_items);
+        // Show status line with pagination info
+        let status_y = popup_y + visible_count;
+        if status_y < printer.size.y {
+            let current_page = scroll_offset / AC_MAX_VISIBLE + 1;
+            let total_pages = (total_items + AC_MAX_VISIBLE - 1) / AC_MAX_VISIBLE;
+            let status = if total_pages > 1 {
+                format!("[{}/{}] PgUp/PgDn", current_page, total_pages)
+            } else {
+                format!("[{} items]", total_items)
+            };
+            let padded_status = format!("{:width$}", status, width = popup_width);
             printer.with_style(bg_style, |p| {
-                p.print((popup_x, popup_y + max_items), &more);
+                p.print((popup_x, status_y), &padded_status);
             });
         }
     }
@@ -595,7 +681,7 @@ impl View for CodeEditor {
                         self.accept_completion();
                     } else {
                         // Cycle to next
-                        self.ac_state.selected = (self.ac_state.selected + 1) % self.ac_state.candidates.len();
+                        self.ac_state.select_next();
                     }
                     return EventResult::Consumed(None);
                 }
@@ -608,12 +694,8 @@ impl View for CodeEditor {
             }
             // Shift+Tab: cycle backwards
             Event::Shift(Key::Tab) => {
-                if self.ac_state.active && self.ac_state.candidates.len() > 1 {
-                    if self.ac_state.selected == 0 {
-                        self.ac_state.selected = self.ac_state.candidates.len() - 1;
-                    } else {
-                        self.ac_state.selected -= 1;
-                    }
+                if self.ac_state.active && !self.ac_state.candidates.is_empty() {
+                    self.ac_state.select_prev();
                     return EventResult::Consumed(None);
                 }
                 EventResult::Ignored
@@ -670,12 +752,8 @@ impl View for CodeEditor {
             }
             Event::Key(Key::Up) => {
                 // If autocomplete is active, navigate up
-                if self.ac_state.active && self.ac_state.candidates.len() > 1 {
-                    if self.ac_state.selected == 0 {
-                        self.ac_state.selected = self.ac_state.candidates.len() - 1;
-                    } else {
-                        self.ac_state.selected -= 1;
-                    }
+                if self.ac_state.active && !self.ac_state.candidates.is_empty() {
+                    self.ac_state.select_prev();
                     return EventResult::Consumed(None);
                 }
                 // Otherwise normal cursor movement
@@ -687,8 +765,8 @@ impl View for CodeEditor {
             }
             Event::Key(Key::Down) => {
                 // If autocomplete is active, navigate down
-                if self.ac_state.active && self.ac_state.candidates.len() > 1 {
-                    self.ac_state.selected = (self.ac_state.selected + 1) % self.ac_state.candidates.len();
+                if self.ac_state.active && !self.ac_state.candidates.is_empty() {
+                    self.ac_state.select_next();
                     return EventResult::Consumed(None);
                 }
                 // Otherwise normal cursor movement
@@ -697,6 +775,22 @@ impl View for CodeEditor {
                     self.fix_cursor_x();
                 }
                 EventResult::Consumed(None)
+            }
+            Event::Key(Key::PageUp) => {
+                // If autocomplete is active, page up
+                if self.ac_state.active && !self.ac_state.candidates.is_empty() {
+                    self.ac_state.page_up();
+                    return EventResult::Consumed(None);
+                }
+                EventResult::Ignored
+            }
+            Event::Key(Key::PageDown) => {
+                // If autocomplete is active, page down
+                if self.ac_state.active && !self.ac_state.candidates.is_empty() {
+                    self.ac_state.page_down();
+                    return EventResult::Consumed(None);
+                }
+                EventResult::Ignored
             }
             Event::Key(Key::Home) => {
                 self.ac_state.reset();

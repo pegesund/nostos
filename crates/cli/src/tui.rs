@@ -33,6 +33,115 @@ fn debug_log(msg: &str) {
     }
 }
 
+/// Format compile error for human-readable display
+/// Cleans up token names and provides friendly messages
+fn format_compile_error(error: &str) -> String {
+    let mut result = error.to_string();
+
+    // Replace common token patterns with friendly names
+    let replacements = [
+        // Parser tokens
+        ("expected one of `", "expected "),
+        ("`, `", "`, `"),
+        ("` or `", "` or `"),
+        ("found `EOF`", "found end of input"),
+        ("found `Newline`", "found end of line"),
+        ("Newline", "newline"),
+        ("LParen", "'('"),
+        ("RParen", "')'"),
+        ("LBrace", "'{'"),
+        ("RBrace", "'}'"),
+        ("LBracket", "'['"),
+        ("RBracket", "']'"),
+        ("Comma", "','"),
+        ("Colon", "':'"),
+        ("Semicolon", "';'"),
+        ("Dot", "'.'"),
+        ("Arrow", "'->'"),
+        ("FatArrow", "'=>'"),
+        ("Eq", "'='"),
+        ("EqEq", "'=='"),
+        ("NotEq", "'!='"),
+        ("Lt", "'<'"),
+        ("Gt", "'>'"),
+        ("LtEq", "'<='"),
+        ("GtEq", "'>='"),
+        ("Plus", "'+'"),
+        ("Minus", "'-'"),
+        ("Star", "'*'"),
+        ("Slash", "'/'"),
+        ("Percent", "'%'"),
+        ("AndAnd", "'&&'"),
+        ("OrOr", "'||'"),
+        ("Bang", "'!'"),
+        ("Pipe", "'|'"),
+        ("Underscore", "'_'"),
+        ("EOF", "end of input"),
+    ];
+
+    for (from, to) in replacements {
+        result = result.replace(from, to);
+    }
+
+    // If error is still very cryptic, provide a generic message
+    if result.contains("Token") || result.contains("Parse") && result.len() > 200 {
+        // Try to extract just the line info
+        if let Some(line_info) = extract_line_info(&result) {
+            return format!("Syntax error at {}", line_info);
+        }
+        return "Syntax error in source code".to_string();
+    }
+
+    // Limit length and clean up
+    if result.len() > 300 {
+        result = result.chars().take(300).collect::<String>() + "...";
+    }
+
+    result
+}
+
+/// Extract line/column info from error message if present
+fn extract_line_info(error: &str) -> Option<String> {
+    // Look for patterns like "line 5", "at line 5", "5:10", etc.
+    let error_lower = error.to_lowercase();
+
+    // Try to find "line X" pattern
+    if let Some(line_pos) = error_lower.find("line ") {
+        let after_line = &error[line_pos + 5..];
+        let line_num: String = after_line.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !line_num.is_empty() {
+            // Check for column after
+            let after_num = &after_line[line_num.len()..];
+            if let Some(col_start) = after_num.to_lowercase().find("col") {
+                let after_col = &after_num[col_start..];
+                // Skip "col" or "column"
+                let num_start = after_col.find(|c: char| c.is_ascii_digit());
+                if let Some(start) = num_start {
+                    let col_num: String = after_col[start..].chars().take_while(|c| c.is_ascii_digit()).collect();
+                    if !col_num.is_empty() {
+                        return Some(format!("line {}, column {}", line_num, col_num));
+                    }
+                }
+            }
+            return Some(format!("line {}", line_num));
+        }
+    }
+
+    // Try "X:Y" pattern (line:column) - look for digit:digit
+    for (i, c) in error.chars().enumerate() {
+        if c == ':' && i > 0 {
+            // Check if there are digits before and after
+            let before: String = error[..i].chars().rev().take_while(|c| c.is_ascii_digit()).collect::<String>().chars().rev().collect();
+            let after: String = error[i+1..].chars().take_while(|c| c.is_ascii_digit()).collect();
+            if !before.is_empty() && !after.is_empty() {
+                return Some(format!("line {}, column {}", before, after));
+            }
+        }
+    }
+
+    None
+}
+
 /// Extract definition names from source code
 fn extract_definition_names(source: &str) -> Vec<String> {
     use nostos_syntax::ast::Item;
@@ -945,8 +1054,11 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                         debug_log(&format!("Compilation failed: {}", compile_error));
                         drop(engine);
 
+                        // Format error message for human readability
+                        let friendly_error = format_compile_error(&compile_error);
+
                         // Clone values for the closure
-                        let error_for_dialog = compile_error.clone();
+                        let error_for_status = compile_error.clone();
                         let name_for_dialog = name_for_save.clone();
                         let content_for_dialog = content.clone();
                         let actual_names_for_dialog = actual_names.clone();
@@ -956,7 +1068,7 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                         s.add_layer(
                             Dialog::text(format!(
                                 "Compilation failed:\n\n{}\n\nSave anyway (with errors)?",
-                                error_for_dialog
+                                friendly_error
                             ))
                             .title("Compile Error")
                             .button("Save Anyway", move |s| {
@@ -978,7 +1090,7 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                                         };
                                         for name in &saved_names {
                                             let qualified = format!("{}{}", module_prefix, name);
-                                            engine.set_compile_status(&qualified, CompileStatus::CompileError(error_for_dialog.clone()));
+                                            engine.set_compile_status(&qualified, CompileStatus::CompileError(error_for_status.clone()));
                                             engine.mark_dependents_stale(&qualified, &format!("{} has errors", qualified));
                                         }
 
@@ -1018,8 +1130,8 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                                     }
                                 }
                             })
+                            .dismiss_button("Cancel")  // Esc or click Cancel to close
                         );
-                        // Note: Esc will close the dialog by default
                     }
                 }
             } else {
