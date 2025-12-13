@@ -722,7 +722,9 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
     // Extract the expected simple name (without module prefix)
     let expected_simple_name = name.rsplit('.').next().unwrap_or(name).to_string();
 
-    let editor = CodeEditor::new(source).with_engine(engine.clone());
+    let editor = CodeEditor::new(source)
+        .with_function_name(name)  // Set module context for autocomplete
+        .with_engine(engine.clone());
     let editor_id = format!("editor_{}", name);
 
     let name_for_save = name.to_string();
@@ -1095,7 +1097,12 @@ fn open_editor(s: &mut Cursive, name: &str) {
 
     // Focus the new editor
     let editor_id = format!("editor_{}", name);
-    s.focus_name(&editor_id).ok();
+    eprintln!("[TUI] Focusing editor: {}", editor_id);
+    if let Err(e) = s.focus_name(&editor_id) {
+        eprintln!("[TUI] Failed to focus {}: {:?}", editor_id, e);
+    } else {
+        eprintln!("[TUI] Successfully focused {}", editor_id);
+    }
 }
 
 fn close_editor(s: &mut Cursive, name: &str) {
