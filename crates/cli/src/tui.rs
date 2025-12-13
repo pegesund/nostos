@@ -10,6 +10,7 @@ use cursive::event::{Event, EventResult, Key};
 use nostos_repl::{ReplEngine, ReplConfig, BrowserItem};
 use nostos_vm::{Value, Inspector, Slot, SlotInfo};
 use nostos_syntax::lexer::{Token, lex};
+use nostos_syntax::parse;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::process::ExitCode;
@@ -29,6 +30,40 @@ fn debug_log(msg: &str) {
         let _ = writeln!(f, "[{}] {}", timestamp, msg);
     }
 }
+
+/// Extract definition names from source code
+fn extract_definition_names(source: &str) -> Vec<String> {
+    use nostos_syntax::ast::Item;
+
+    // Strip together directives before parsing
+    let code_only: String = source
+        .lines()
+        .filter(|line| !line.trim().starts_with("# together "))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let (parsed, _errors) = parse(&code_only);
+    let mut names = Vec::new();
+
+    if let Some(module) = parsed {
+        for item in &module.items {
+            match item {
+                Item::FnDef(fn_def) => names.push(fn_def.name.node.clone()),
+                Item::TypeDef(type_def) => names.push(type_def.name.node.clone()),
+                Item::TraitDef(trait_def) => names.push(trait_def.name.node.clone()),
+                Item::Binding(binding) => {
+                    if let nostos_syntax::ast::Pattern::Var(ident) = &binding.pattern {
+                        names.push(ident.node.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    names
+}
+
 use crate::editor::CodeEditor;
 use crate::custom_views::{ActiveWindow, FocusableConsole};
 
@@ -576,13 +611,17 @@ fn rebuild_workspace(s: &mut Cursive) {
 /// Create an editor view for a given name
 fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: &str) -> impl View {
     let source = engine.borrow().get_source(name);
-    let source = if source.starts_with("Not found") {
+    let is_new_definition = source.starts_with("Not found");
+    let source = if is_new_definition {
         // Use simple name (without module prefix) for the placeholder
         let simple_name = name.rsplit('.').next().unwrap_or(name);
         format!("{}() = {{\n    \n}}", simple_name)
     } else {
         source
     };
+
+    // Extract the expected simple name (without module prefix)
+    let expected_simple_name = name.rsplit('.').next().unwrap_or(name).to_string();
 
     let editor = CodeEditor::new(source).with_engine(engine.clone());
     let editor_id = format!("editor_{}", name);
@@ -671,6 +710,16 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                 }
             };
             debug_log(&format!("Content length: {} chars", content.len()));
+
+            // Extract actual definition names from the content
+            let actual_names = extract_definition_names(&content);
+            debug_log(&format!("Actual definition names in content: {:?}", actual_names));
+
+            // Check if this is a rename (existing definition, expected name not in actual names)
+            let was_renamed = !is_new_definition && !actual_names.contains(&expected_simple_name);
+            if was_renamed {
+                debug_log(&format!("Detected rename: expected '{}' not found in {:?}", expected_simple_name, actual_names));
+            }
 
             let mut engine = engine_save.borrow_mut();
 
@@ -786,8 +835,28 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                             log_to_repl(s, &output);
                         }
                     }
+
                     debug_log(&format!("Closing editor and opening browser: {}", name_for_save));
                     close_editor_and_browse(s, &name_for_save);
+
+                    // Show rename warning on top of browser if applicable
+                    if was_renamed {
+                        let new_names = if actual_names.is_empty() {
+                            "(no definitions found)".to_string()
+                        } else {
+                            actual_names.join(", ")
+                        };
+                        debug_log(&format!("Showing rename warning: {} -> {}", expected_simple_name, new_names));
+                        s.add_layer(
+                            Dialog::text(format!(
+                                "Definition '{}' was renamed to '{}'.\n\n\
+                                The original '{}' still exists and can be deleted from the browser if needed.",
+                                expected_simple_name, new_names, expected_simple_name
+                            ))
+                            .title("Definition Renamed")
+                            .button("OK", |s| { s.pop_layer(); })
+                        );
+                    }
                 }
                 Err(e) => {
                     debug_log(&format!("eval_in_module ERROR: {}", e));
