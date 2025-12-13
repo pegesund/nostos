@@ -7,7 +7,7 @@ use cursive::theme::{Color, PaletteColor, Theme, BorderStyle};
 use cursive::view::Resizable;
 use cursive::utils::markup::StyledString;
 use cursive::event::{Event, EventResult, Key};
-use nostos_repl::{ReplEngine, ReplConfig, BrowserItem};
+use nostos_repl::{ReplEngine, ReplConfig, BrowserItem, SaveCompileResult, CompileStatus};
 use nostos_vm::{Value, Inspector, Slot, SlotInfo};
 use nostos_syntax::lexer::{Token, lex};
 use nostos_syntax::parse;
@@ -752,116 +752,207 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                 .join("\n");
             debug_log(&format!("Eval content (stripped together): {} chars", eval_content.len()));
 
-            // Use eval_in_module to ensure definitions go to the correct module
-            // Wrap in catch_unwind to prevent panics from crashing the TUI
-            debug_log(&format!("Calling eval_in_module with module hint: {}", name_for_save));
-            let eval_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                engine.eval_in_module(&eval_content, Some(&name_for_save))
-            }));
+            // Try to compile first, then decide whether to save
+            if engine.has_source_manager() {
+                debug_log(&format!("Trying to compile: {}", name_for_save));
+                let compile_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    engine.eval_in_module(&eval_content, Some(&name_for_save))
+                }));
 
-            let eval_result = match eval_result {
-                Ok(result) => result,
-                Err(panic_info) => {
-                    let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                        s.to_string()
-                    } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                        s.clone()
-                    } else {
-                        "Unknown panic".to_string()
-                    };
-                    debug_log(&format!("eval_in_module PANIC: {}", panic_msg));
-                    Err(format!("Internal error (panic): {}", panic_msg))
-                }
-            };
-
-            match eval_result {
-                Ok(output) => {
-                    debug_log(&format!("eval_in_module OK, output: {}", if output.is_empty() { "(empty)" } else { &output }));
-                    // Save to SourceManager if available (auto-commits to .nostos/defs/)
-                    // Uses save_group_source to handle together directives and multiple definitions
-                    if engine.has_source_manager() {
-                        debug_log(&format!("Calling save_group_source for: {}", name_for_save));
-                        let save_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            engine.save_group_source(&name_for_save, &content)
-                        }));
-
-                        let save_result = match save_result {
-                            Ok(result) => result,
-                            Err(panic_info) => {
-                                let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                                    s.to_string()
-                                } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                                    s.clone()
-                                } else {
-                                    "Unknown panic".to_string()
-                                };
-                                debug_log(&format!("save_group_source PANIC: {}", panic_msg));
-                                Err(format!("Internal error (panic): {}", panic_msg))
-                            }
+                let compile_result = match compile_result {
+                    Ok(r) => r,
+                    Err(panic_info) => {
+                        let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            "Unknown panic".to_string()
                         };
+                        debug_log(&format!("eval_in_module PANIC: {}", panic_msg));
+                        Err(format!("Internal error (panic): {}", panic_msg))
+                    }
+                };
+
+                match compile_result {
+                    Ok(output) => {
+                        // Compilation succeeded - save to disk
+                        debug_log(&format!("Compilation OK, saving to disk"));
+                        let save_result = engine.save_group_source(&name_for_save, &content);
 
                         match save_result {
-                            Ok(updated_names) => {
-                                debug_log(&format!("save_group_source OK, updated: {:?}", updated_names));
-                                if updated_names.is_empty() {
-                                    drop(engine);
-                                    if output.is_empty() {
-                                        log_to_repl(s, &format!("Saved {} (no changes)", name_for_save));
-                                    } else {
-                                        log_to_repl(s, &output);
-                                    }
-                                } else if updated_names.len() == 1 {
-                                    drop(engine);
-                                    log_to_repl(s, &format!("Saved {} (committed to .nostos/defs/)", updated_names[0]));
+                            Ok(saved_names) => {
+                                // Mark as compiled - use actual_names since saved_names may be empty if no file changes
+                                let module_prefix = if let Some(dot_pos) = name_for_save.rfind('.') {
+                                    format!("{}.", &name_for_save[..dot_pos])
                                 } else {
-                                    drop(engine);
-                                    log_to_repl(s, &format!("Saved {} definitions: {} (committed to .nostos/defs/)",
-                                        updated_names.len(), updated_names.join(", ")));
+                                    String::new()
+                                };
+
+                                // Update status for all names in the content (not just saved ones)
+                                // This ensures we clear error status even when file didn't change
+                                let names_to_update = if actual_names.is_empty() {
+                                    // Fall back to the expected name if we couldn't parse actual names
+                                    vec![expected_simple_name.clone()]
+                                } else {
+                                    actual_names.clone()
+                                };
+                                for name in &names_to_update {
+                                    let qualified = format!("{}{}", module_prefix, name);
+                                    debug_log(&format!("Setting compile status to Compiled for: {}", qualified));
+                                    engine.set_compile_status(&qualified, CompileStatus::Compiled);
+                                }
+
+                                if saved_names.is_empty() {
+                                    log_to_repl(s, &format!("Saved {} (no changes)", name_for_save));
+                                } else if saved_names.len() == 1 {
+                                    log_to_repl(s, &format!("Saved {} (committed)", saved_names[0]));
+                                } else {
+                                    log_to_repl(s, &format!("Saved {} definitions: {} (committed)",
+                                        saved_names.len(), saved_names.join(", ")));
+                                }
+
+                                drop(engine);
+                                close_editor_and_browse(s, &name_for_save);
+
+                                // Show rename warning if applicable
+                                if was_renamed {
+                                    let new_names = if actual_names.is_empty() {
+                                        "(no definitions found)".to_string()
+                                    } else {
+                                        actual_names.join(", ")
+                                    };
+                                    s.add_layer(
+                                        Dialog::text(format!(
+                                            "Definition '{}' was renamed to '{}'.\n\n\
+                                            The original '{}' still exists and can be deleted from the browser if needed.",
+                                            expected_simple_name, new_names, expected_simple_name
+                                        ))
+                                        .title("Definition Renamed")
+                                        .button("OK", |s| { s.pop_layer(); })
+                                    );
                                 }
                             }
                             Err(e) => {
-                                debug_log(&format!("save_group_source ERROR: {}", e));
                                 drop(engine);
-                                log_to_repl(s, &format!("Warning: {}", e));
-                                log_to_repl(s, &output);
+                                s.add_layer(Dialog::info(format!("Save failed: {}", e)));
                             }
                         }
-                    } else {
-                        debug_log("No source manager available");
+                    }
+                    Err(compile_error) => {
+                        // Compilation failed - offer to save anyway
+                        debug_log(&format!("Compilation failed: {}", compile_error));
+                        drop(engine);
+
+                        // Clone values for the closure
+                        let error_for_dialog = compile_error.clone();
+                        let name_for_dialog = name_for_save.clone();
+                        let content_for_dialog = content.clone();
+                        let actual_names_for_dialog = actual_names.clone();
+                        let expected_simple_name_for_dialog = expected_simple_name.clone();
+                        let was_renamed_for_dialog = was_renamed;
+
+                        s.add_layer(
+                            Dialog::text(format!(
+                                "Compilation failed:\n\n{}\n\nSave anyway (with errors)?",
+                                error_for_dialog
+                            ))
+                            .title("Compile Error")
+                            .button("Save Anyway", move |s| {
+                                s.pop_layer();
+                                // Save despite errors
+                                let engine = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                                    state.borrow().engine.clone()
+                                }).unwrap();
+                                let mut engine = engine.borrow_mut();
+
+                                let save_result = engine.save_group_source(&name_for_dialog, &content_for_dialog);
+                                match save_result {
+                                    Ok(saved_names) => {
+                                        // Mark as having compile errors
+                                        let module_prefix = if let Some(dot_pos) = name_for_dialog.rfind('.') {
+                                            format!("{}.", &name_for_dialog[..dot_pos])
+                                        } else {
+                                            String::new()
+                                        };
+                                        for name in &saved_names {
+                                            let qualified = format!("{}{}", module_prefix, name);
+                                            engine.set_compile_status(&qualified, CompileStatus::CompileError(error_for_dialog.clone()));
+                                            engine.mark_dependents_stale(&qualified, &format!("{} has errors", qualified));
+                                        }
+
+                                        if saved_names.is_empty() {
+                                            log_to_repl(s, &format!("Saved {} (no changes)", name_for_dialog));
+                                        } else if saved_names.len() == 1 {
+                                            log_to_repl(s, &format!("Saved {} (with errors)", saved_names[0]));
+                                        } else {
+                                            log_to_repl(s, &format!("Saved {} definitions: {} (with errors)",
+                                                saved_names.len(), saved_names.join(", ")));
+                                        }
+
+                                        drop(engine);
+                                        close_editor_and_browse(s, &name_for_dialog);
+
+                                        // Show rename warning if applicable
+                                        if was_renamed_for_dialog {
+                                            let new_names = if actual_names_for_dialog.is_empty() {
+                                                "(no definitions found)".to_string()
+                                            } else {
+                                                actual_names_for_dialog.join(", ")
+                                            };
+                                            s.add_layer(
+                                                Dialog::text(format!(
+                                                    "Definition '{}' was renamed to '{}'.\n\n\
+                                                    The original '{}' still exists and can be deleted from the browser if needed.",
+                                                    expected_simple_name_for_dialog, new_names, expected_simple_name_for_dialog
+                                                ))
+                                                .title("Definition Renamed")
+                                                .button("OK", |s| { s.pop_layer(); })
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        drop(engine);
+                                        s.add_layer(Dialog::info(format!("Save failed: {}", e)));
+                                    }
+                                }
+                            })
+                        );
+                        // Note: Esc will close the dialog by default
+                    }
+                }
+            } else {
+                // No source manager - just try to compile without saving
+                debug_log("No source manager, just compiling");
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    engine.eval_in_module(&eval_content, Some(&name_for_save))
+                }));
+
+                match result {
+                    Ok(Ok(output)) => {
                         drop(engine);
                         if output.is_empty() {
-                            log_to_repl(s, &format!("Saved {} (no definitions found)", name_for_save));
+                            log_to_repl(s, &format!("Evaluated {}", name_for_save));
                         } else {
                             log_to_repl(s, &output);
                         }
+                        close_editor_and_browse(s, &name_for_save);
                     }
-
-                    debug_log(&format!("Closing editor and opening browser: {}", name_for_save));
-                    close_editor_and_browse(s, &name_for_save);
-
-                    // Show rename warning on top of browser if applicable
-                    if was_renamed {
-                        let new_names = if actual_names.is_empty() {
-                            "(no definitions found)".to_string()
+                    Ok(Err(e)) => {
+                        drop(engine);
+                        s.add_layer(Dialog::info(format!("Error: {}", e)));
+                    }
+                    Err(panic_info) => {
+                        let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                            s.clone()
                         } else {
-                            actual_names.join(", ")
+                            "Unknown panic".to_string()
                         };
-                        debug_log(&format!("Showing rename warning: {} -> {}", expected_simple_name, new_names));
-                        s.add_layer(
-                            Dialog::text(format!(
-                                "Definition '{}' was renamed to '{}'.\n\n\
-                                The original '{}' still exists and can be deleted from the browser if needed.",
-                                expected_simple_name, new_names, expected_simple_name
-                            ))
-                            .title("Definition Renamed")
-                            .button("OK", |s| { s.pop_layer(); })
-                        );
+                        drop(engine);
+                        s.add_layer(Dialog::info(format!("Internal error: {}", panic_msg)));
                     }
-                }
-                Err(e) => {
-                    debug_log(&format!("eval_in_module ERROR: {}", e));
-                    drop(engine);
-                    s.add_layer(Dialog::info(format!("Error: {}", e)));
                 }
             }
         })
@@ -976,12 +1067,26 @@ fn open_browser(s: &mut Cursive) {
 
 /// Show the browser dialog at a given path
 fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: Vec<String>) {
-    let items = engine.borrow().get_browser_items(&path);
+    let engine_ref = engine.borrow();
+    let items = engine_ref.get_browser_items(&path);
 
-    let title = if path.is_empty() {
+    // Build title with status summary
+    let mut title = if path.is_empty() {
         "Browse".to_string()
     } else {
         format!("Browse: {}", path.join("."))
+    };
+
+    // Add status summary if there are problems
+    if let Some(status) = engine_ref.get_status_summary() {
+        title = format!("{} {}", title, status);
+    }
+
+    // Get current module prefix for qualified names
+    let module_prefix = if path.is_empty() {
+        String::new()
+    } else {
+        format!("{}.", path.join("."))
     };
 
     let mut select = SelectView::<BrowserItem>::new();
@@ -991,17 +1096,35 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
         select.add_item("📁 ..", BrowserItem::Module("..".to_string()));
     }
 
-    // Add all items with appropriate icons
-    for item in items {
-        let label = match &item {
-            BrowserItem::Module(name) => format!("📁 {}", name),
+    // Add all items with appropriate icons and status indicators
+    for item in &items {
+        let label = match item {
+            BrowserItem::Module(name) => {
+                // Check if this module has any errors
+                let mut module_path = path.clone();
+                module_path.push(name.clone());
+                let has_errors = engine_ref.module_has_problems(&module_path);
+                if has_errors {
+                    format!("📁 {} 🔴", name)
+                } else {
+                    format!("📁 {}", name)
+                }
+            }
             BrowserItem::Type { name } => format!("📦 {}", name),
             BrowserItem::Trait { name } => format!("🔷 {}", name),
             BrowserItem::Function { name, signature } => {
+                // Check compile status for this function
+                let qualified_name = format!("{}{}", module_prefix, name);
+                let status_indicator = match engine_ref.get_compile_status(&qualified_name) {
+                    Some(CompileStatus::CompileError(_)) => " 🔴",
+                    Some(CompileStatus::Stale { .. }) => " 🟡",
+                    Some(CompileStatus::NotCompiled) => " [?]",
+                    _ => "",
+                };
                 if signature.is_empty() {
-                    format!("ƒ  {}", name)
+                    format!("ƒ  {}{}", name, status_indicator)
                 } else {
-                    format!("ƒ  {} :: {}", name, signature)
+                    format!("ƒ  {} :: {}{}", name, signature, status_indicator)
                 }
             }
             BrowserItem::Variable { name, mutable } => {
@@ -1013,8 +1136,9 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
             }
             BrowserItem::Metadata { .. } => "⚙  _meta (together directives)".to_string(),
         };
-        select.add_item(label, item);
+        select.add_item(label, item.clone());
     }
+    drop(engine_ref);
 
     // Handle selection
     let path_for_select = path.clone();
@@ -1101,7 +1225,7 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let dialog = Dialog::around(
         LinearLayout::vertical()
             .child(select_scroll)
-            .child(TextView::new("Enter: Select | n: New | d: Delete | Esc: Close"))
+            .child(TextView::new("Enter: Select | n: New | d: Delete | e: Error | Esc: Close"))
     )
     .title(&title);
 
@@ -1109,8 +1233,10 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let path_for_back = path.clone();
     let path_for_new = path.clone();
     let path_for_delete = path.clone();
+    let path_for_error = path.clone();
     let engine_for_back = engine.clone();
     let engine_for_delete = engine.clone();
+    let engine_for_error = engine.clone();
     let dialog_with_keys = OnEventView::new(dialog)
         .on_event(Key::Esc, |s| {
             s.pop_layer();
@@ -1217,6 +1343,33 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                         })
                         .button("Cancel", |s| { s.pop_layer(); })
                 );
+            }
+        })
+        .on_event(Event::Char('e'), move |s| {
+            // Show error message for selected item
+            let selected = s.call_on_name("browser_select", |v: &mut SelectView<BrowserItem>| {
+                v.selection().map(|rc| (*rc).clone())
+            }).flatten();
+
+            if let Some(item) = selected {
+                // Only functions can have errors
+                if let BrowserItem::Function { name, .. } = &item {
+                    let full_name = if path_for_error.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}.{}", path_for_error.join("."), name)
+                    };
+
+                    if let Some(error_msg) = engine_for_error.borrow().get_error_message(&full_name) {
+                        s.add_layer(
+                            Dialog::text(error_msg)
+                                .title(format!("Error: {}", full_name))
+                                .button("OK", |s| { s.pop_layer(); })
+                        );
+                    } else {
+                        log_to_repl(s, &format!("{} has no errors", full_name));
+                    }
+                }
             }
         });
 

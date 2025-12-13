@@ -10,5 +10,6 @@ pub mod engine;
 pub use callgraph::CallGraph;
 pub use session::{
     Definition, DefineSuccess, FunctionError, ReplError, ReplSession, TryDefineResult,
+    extract_dependencies_from_fn,
 };
-pub use engine::{ReplEngine, ReplConfig, BrowserItem};
+pub use engine::{ReplEngine, ReplConfig, BrowserItem, CompileStatus, SaveCompileResult};
