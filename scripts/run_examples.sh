@@ -35,11 +35,8 @@ PASSED_COUNT=0
 FAILED_COUNT=0
 
 for file in $EXAMPLE_FILES; do
-    # Skip known failing HTTP-related examples and REPL demos
-    if [[ "$file" == *"async_io_demo.nos"* ]] || \
-       [[ "$file" == *"http_client.nos"* ]] || \
-       [[ "$file" == *"http_error_handling.nos"* ]] || \
-       [[ "$file" == *"repl_demo.nos"* ]]; then
+    # Skip REPL demos (interactive mode only)
+    if [[ "$file" == *"repl_demo.nos"* ]]; then
         echo -e "Skipping ${file#$(dirname "${SCRIPT_DIR}")/}"
         continue
     fi
@@ -76,7 +73,15 @@ for file in $EXAMPLE_FILES; do
     else
         # --- Original execution logic for non-server examples ---
         printf "Running %-50s" "${file#${SCRIPT_DIR}/}"
-        if timeout 5s "$NOSTOS_BIN" "$file" > /tmp/nostos_example_run.log 2>&1; then
+        # Use longer timeout for examples with external HTTP requests
+        if [[ "$file" == *"http_client.nos"* ]] || \
+           [[ "$file" == *"http_error_handling.nos"* ]] || \
+           [[ "$file" == *"async_io_demo.nos"* ]]; then
+            EXAMPLE_TIMEOUT=60s
+        else
+            EXAMPLE_TIMEOUT=5s
+        fi
+        if timeout $EXAMPLE_TIMEOUT "$NOSTOS_BIN" "$file" > /tmp/nostos_example_run.log 2>&1; then
             echo -e "[${GREEN}PASS${NC}]"
             ((PASSED_COUNT++))
         else

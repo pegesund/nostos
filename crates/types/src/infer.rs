@@ -306,6 +306,12 @@ impl<'a> InferCtx<'a> {
             // Same type - nothing to do
             _ if t1 == t2 => Ok(()),
 
+            // Float and Float64 are aliases and should unify
+            (Type::Float, Type::Float64) | (Type::Float64, Type::Float) => Ok(()),
+
+            // Int and Int64 are aliases and should unify
+            (Type::Int, Type::Int64) | (Type::Int64, Type::Int) => Ok(()),
+
             // Variable on the left
             (Type::Var(id), _) => {
                 if t2.contains_var(*id) {
@@ -441,8 +447,24 @@ impl<'a> InferCtx<'a> {
             TypeExpr::Name(ident) => {
                 let name = &ident.node;
                 match name.as_str() {
+                    // Integer types
                     "Int" => Type::Int,
+                    "Int8" => Type::Int8,
+                    "Int16" => Type::Int16,
+                    "Int32" => Type::Int32,
+                    "Int64" => Type::Int64,
+                    "UInt8" => Type::UInt8,
+                    "UInt16" => Type::UInt16,
+                    "UInt32" => Type::UInt32,
+                    "UInt64" => Type::UInt64,
+                    // Float types
                     "Float" => Type::Float,
+                    "Float32" => Type::Float32,
+                    "Float64" => Type::Float64,
+                    // Arbitrary precision
+                    "BigInt" => Type::BigInt,
+                    "Decimal" => Type::Decimal,
+                    // Other primitives
                     "Bool" => Type::Bool,
                     "Char" => Type::Char,
                     "String" => Type::String,
@@ -1032,11 +1054,33 @@ impl<'a> InferCtx<'a> {
         let right_ty = self.infer_expr(right)?;
 
         match op {
-            // Arithmetic: both operands same numeric type, result same type
+            // Arithmetic: both operands numeric, with implicit Int->Float coercion
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
-                self.unify(left_ty.clone(), right_ty);
-                self.require_trait(left_ty.clone(), "Num");
-                Ok(left_ty)
+                // Apply substitutions to get resolved types
+                let resolved_left = self.env.apply_subst(&left_ty);
+                let resolved_right = self.env.apply_subst(&right_ty);
+
+                // Check for Int/Float mixing - result is Float due to implicit coercion
+                match (&resolved_left, &resolved_right) {
+                    (Type::Int, Type::Float) | (Type::Float, Type::Int) |
+                    (Type::Int, Type::Float64) | (Type::Float64, Type::Int) |
+                    (Type::Int64, Type::Float) | (Type::Float, Type::Int64) |
+                    (Type::Int64, Type::Float64) | (Type::Float64, Type::Int64) => {
+                        // Mixed Int/Float arithmetic - result is Float
+                        Ok(Type::Float)
+                    }
+                    (Type::Int, Type::BigInt) | (Type::BigInt, Type::Int) |
+                    (Type::Int64, Type::BigInt) | (Type::BigInt, Type::Int64) => {
+                        // Mixed Int/BigInt arithmetic - result is BigInt
+                        Ok(Type::BigInt)
+                    }
+                    _ => {
+                        // Same type or type variables - standard unification
+                        self.unify(left_ty.clone(), right_ty);
+                        self.require_trait(left_ty.clone(), "Num");
+                        Ok(left_ty)
+                    }
+                }
             }
 
             // Comparison: both operands same type with Ord, result Bool
@@ -1298,9 +1342,48 @@ impl<'a> InferCtx<'a> {
 
     /// Look up a constructor and return its type.
     fn lookup_constructor(&mut self, name: &str) -> Option<Type> {
-        // Search through all variant types for this constructor
+        // Search through all types for this constructor
         let types_clone = self.env.types.clone();
         for (type_name, def) in &types_clone {
+            // Check if this is a record type with the same name as the constructor
+            // Record types can be constructed using their type name as a constructor
+            if type_name == name {
+                if let TypeDef::Record { params, fields, .. } = def {
+                    // Create fresh type variables for each type parameter
+                    let substitution: HashMap<String, Type> = params
+                        .iter()
+                        .map(|p| (p.name.clone(), self.fresh()))
+                        .collect();
+
+                    // Get the type args for the result type
+                    let type_args: Vec<Type> = params
+                        .iter()
+                        .map(|p| substitution.get(&p.name).cloned().unwrap_or_else(|| Type::TypeParam(p.name.clone())))
+                        .collect();
+
+                    let result_ty = Type::Named {
+                        name: type_name.clone(),
+                        args: type_args,
+                    };
+
+                    // Get field types in order for positional constructor
+                    let field_types: Vec<Type> = fields
+                        .iter()
+                        .map(|(_, ty, _)| Self::substitute_type_params(ty, &substitution))
+                        .collect();
+
+                    if field_types.is_empty() {
+                        return Some(result_ty);
+                    } else {
+                        return Some(Type::Function(FunctionType {
+                            type_params: vec![],
+                            params: field_types,
+                            ret: Box::new(result_ty),
+                        }));
+                    }
+                }
+            }
+
             if let TypeDef::Variant { params, constructors } = def {
                 for ctor in constructors {
                     let matches = match ctor {

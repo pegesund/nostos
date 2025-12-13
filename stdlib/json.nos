@@ -152,7 +152,7 @@ parse_value(chars) = {
 
 # --- Public API ---
 
-jsonParse(input) = {
+pub jsonParse(input) = {
     chars = String.chars(input)
     (value, _) = parse_value(chars)
     value

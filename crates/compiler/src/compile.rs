@@ -299,9 +299,10 @@ impl Compiler {
     pub fn new_empty() -> Self {
         // Pre-register built-in pseudo-modules for native functions
         let builtin_modules: HashSet<String> = [
-            "String", "File", "List", "Option", "Result", "Char", "Int", "Float",
+            "String", "File", "Dir", "List", "Option", "Result", "Char", "Int", "Float",
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
+            "Base64", "Url", "Encoding", "Server",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -420,9 +421,10 @@ impl Compiler {
 
         // Pre-register built-in pseudo-modules for native functions
         let builtin_modules: HashSet<String> = [
-            "String", "File", "List", "Option", "Result", "Char", "Int", "Float",
+            "String", "File", "Dir", "List", "Option", "Result", "Char", "Int", "Float",
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
+            "Base64", "Url", "Encoding", "Server",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -951,7 +953,8 @@ impl Compiler {
                 // Start with type name hash to differentiate types with same structure
                 let mut expr = type_name_hash.clone();
                 for field in fields.iter() {
-                    let hash_field = self.make_hash_field_expr("self", &field.name.node);
+                    // Use field type to generate correct hash call for nested types
+                    let hash_field = self.make_hash_field_expr_with_type("self", &field.name.node, &field.ty);
                     // result * 31 + hash(field)
                     let mul = Expr::BinOp(
                         Box::new(expr),
@@ -1022,8 +1025,9 @@ impl Compiler {
                                 Box::new(Expr::Int(idx as i64, self.span())),
                                 self.span(),
                             );
-                            for var_name in &var_names {
-                                let hash_call = self.make_hash_var_expr(var_name);
+                            // Use field types to generate correct hash calls
+                            for (var_name, field_type) in var_names.iter().zip(field_types.iter()) {
+                                let hash_call = self.make_hash_call_with_type(var_name, field_type);
                                 let mul = Expr::BinOp(
                                     Box::new(body),
                                     BinOp::Mul,
@@ -1066,8 +1070,9 @@ impl Compiler {
                                 Box::new(Expr::Int(idx as i64, self.span())),
                                 self.span(),
                             );
-                            for var_name in &var_names {
-                                let hash_call = self.make_hash_var_expr(var_name);
+                            // Use field types to generate correct hash calls
+                            for field in fields {
+                                let hash_call = self.make_hash_call_with_type(&field.name.node, &field.ty);
                                 let mul = Expr::BinOp(
                                     Box::new(body),
                                     BinOp::Mul,
@@ -1146,6 +1151,43 @@ impl Compiler {
         )
     }
 
+    /// Helper: make a hash call for a field access with known type.
+    /// If the type implements Hash, generates Type.Hash.hash(self.field).
+    /// Otherwise, generates hash(self.field) for primitive types.
+    fn make_hash_field_expr_with_type(&self, obj: &str, field: &str, field_type: &TypeExpr) -> Expr {
+        let type_name = self.type_expr_to_string(field_type);
+        let field_access = Expr::FieldAccess(
+            Box::new(Expr::Var(self.ident(obj))),
+            self.ident(field),
+            self.span(),
+        );
+
+        // Check if this type implements Hash (user-defined types)
+        if self.type_traits.get(&type_name).map_or(false, |traits| traits.contains(&"Hash".to_string())) {
+            // Call Type.Hash.hash(self.field)
+            Expr::Call(
+                Box::new(Expr::FieldAccess(
+                    Box::new(Expr::FieldAccess(
+                        Box::new(Expr::Record(self.ident(&type_name), vec![], self.span())),
+                        self.ident("Hash"),
+                        self.span(),
+                    )),
+                    self.ident("hash"),
+                    self.span(),
+                )),
+                vec![field_access],
+                self.span(),
+            )
+        } else {
+            // For primitive types or unknown types, use the generic hash call
+            Expr::Call(
+                Box::new(Expr::Var(self.ident("hash"))),
+                vec![field_access],
+                self.span(),
+            )
+        }
+    }
+
     /// Helper: make hash(var) expression
     fn make_hash_var_expr(&self, var: &str) -> Expr {
         Expr::Call(
@@ -1153,6 +1195,35 @@ impl Compiler {
             vec![Expr::Var(self.ident(var))],
             self.span(),
         )
+    }
+
+    /// Helper: make a hash call for a variable with known type.
+    /// If the type implements Hash, generates Type.Hash.hash(var).
+    /// Otherwise, generates hash(var) for primitive types.
+    fn make_hash_call_with_type(&self, var: &str, field_type: &TypeExpr) -> Expr {
+        // Get the type name from the TypeExpr
+        let type_name = self.type_expr_to_string(field_type);
+
+        // Check if this type implements Hash (user-defined types)
+        if self.type_traits.get(&type_name).map_or(false, |traits| traits.contains(&"Hash".to_string())) {
+            // Call Type.Hash.hash(var)
+            Expr::Call(
+                Box::new(Expr::FieldAccess(
+                    Box::new(Expr::FieldAccess(
+                        Box::new(Expr::Record(self.ident(&type_name), vec![], self.span())),
+                        self.ident("Hash"),
+                        self.span(),
+                    )),
+                    self.ident("hash"),
+                    self.span(),
+                )),
+                vec![Expr::Var(self.ident(var))],
+                self.span(),
+            )
+        } else {
+            // For primitive types or unknown types, use the generic hash call
+            self.make_hash_var_expr(var)
+        }
     }
 
     /// Synthesize a Show trait implementation for a type.
@@ -2782,6 +2853,108 @@ impl Compiler {
                             self.chunk.emit(Instruction::FileAppend(dst, path_reg, content_reg), line);
                             return Ok(dst);
                         }
+                        // === Directory operations ===
+                        "Dir.create" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::DirCreate(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        "Dir.createAll" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::DirCreateAll(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        "Dir.list" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::DirList(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        "Dir.remove" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::DirRemove(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        "Dir.removeAll" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::DirRemoveAll(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        "Dir.exists" if args.len() == 1 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::DirExists(dst, path_reg), line);
+                            return Ok(dst);
+                        }
+                        // === String encoding operations ===
+                        "Base64.encode" if args.len() == 1 => {
+                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::Base64Encode(dst, str_reg), line);
+                            return Ok(dst);
+                        }
+                        "Base64.decode" if args.len() == 1 => {
+                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::Base64Decode(dst, str_reg), line);
+                            return Ok(dst);
+                        }
+                        "Url.encode" if args.len() == 1 => {
+                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::UrlEncode(dst, str_reg), line);
+                            return Ok(dst);
+                        }
+                        "Url.decode" if args.len() == 1 => {
+                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::UrlDecode(dst, str_reg), line);
+                            return Ok(dst);
+                        }
+                        "Encoding.toBytes" if args.len() == 1 => {
+                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::Utf8Encode(dst, str_reg), line);
+                            return Ok(dst);
+                        }
+                        "Encoding.fromBytes" if args.len() == 1 => {
+                            let bytes_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::Utf8Decode(dst, bytes_reg), line);
+                            return Ok(dst);
+                        }
+                        // === HTTP Server operations ===
+                        "Server.bind" if args.len() == 1 => {
+                            let port_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ServerBind(dst, port_reg), line);
+                            return Ok(dst);
+                        }
+                        "Server.accept" if args.len() == 1 => {
+                            let server_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ServerAccept(dst, server_reg), line);
+                            return Ok(dst);
+                        }
+                        "Server.respond" if args.len() == 4 => {
+                            let req_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let status_reg = self.compile_expr_tail(&args[1], false)?;
+                            let headers_reg = self.compile_expr_tail(&args[2], false)?;
+                            let body_reg = self.compile_expr_tail(&args[3], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ServerRespond(dst, req_id_reg, status_reg, headers_reg, body_reg), line);
+                            return Ok(dst);
+                        }
+                        "Server.close" if args.len() == 1 => {
+                            let server_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ServerClose(dst, server_reg), line);
+                            return Ok(dst);
+                        }
                         _ => {} // Fall through to user-defined functions
                     }
 
@@ -3505,10 +3678,27 @@ impl Compiler {
             }
         }
 
-        // Compile arguments first
+        // Get expected parameter types from the called function (if known)
+        // This is needed to monomorphize polymorphic function arguments
+        let expected_param_types: Vec<Option<TypeExpr>> = if let Some(ref qname) = maybe_qualified_name {
+            self.get_function_param_types(qname)
+        } else {
+            vec![]
+        };
+
+        // Build type parameter substitution map from argument types
+        // This is needed when calling polymorphic functions like apply_hash[T: Hash](f: (T) -> Int, x: T)
+        // where we need to substitute T with the concrete type from x (Val)
+        let type_param_map: HashMap<String, String> = self.build_type_param_map(&expected_param_types, args);
+
+        // Compile arguments, handling polymorphic function arguments specially
         let mut arg_regs = Vec::new();
-        for arg in args {
-            let reg = self.compile_expr_tail(arg, false)?;
+        for (i, arg) in args.iter().enumerate() {
+            // Get the expected parameter type and substitute any type parameters
+            let expected_type = expected_param_types.get(i)
+                .and_then(|t| t.as_ref())
+                .map(|t| self.substitute_type_params(t, &type_param_map));
+            let reg = self.compile_arg_with_expected_type(arg, expected_type.as_ref())?;
             arg_regs.push(reg);
         }
 
@@ -3984,8 +4174,24 @@ impl Compiler {
             Expr::Set(_, _) => Some("Set".to_string()),
             // For Call expressions on uppercase identifiers (variant constructors),
             // check if it's a known type
-            Expr::Call(func, _, _) => {
+            Expr::Call(func, args, _) => {
                 if let Expr::Var(ident) = func.as_ref() {
+                    // Check for copy/hash/show builtins - these return the same type as their argument
+                    // or a known type (hash -> Int, show -> String)
+                    match ident.node.as_str() {
+                        "copy" if args.len() == 1 => {
+                            // copy(x) returns the same type as x
+                            return self.expr_type_name(&args[0]);
+                        }
+                        "hash" if args.len() == 1 => {
+                            return Some("Int".to_string());
+                        }
+                        "show" if args.len() == 1 => {
+                            return Some("String".to_string());
+                        }
+                        _ => {}
+                    }
+
                     if ident.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
                         // Check if it's a record constructor (type name matches)
                         if self.types.get(&ident.node).map(|info| matches!(&info.kind, TypeInfoKind::Record { .. })).unwrap_or(false) {
@@ -4219,6 +4425,190 @@ impl Compiler {
         self.imports = saved_imports;
 
         Ok(mangled_name)
+    }
+
+    /// Get parameter types for a function by name.
+    /// Returns the TypeExpr for each parameter, or None if no type annotation.
+    fn get_function_param_types(&self, fn_name: &str) -> Vec<Option<TypeExpr>> {
+        let resolved = self.resolve_name(fn_name);
+        let prefix = format!("{}/", resolved);
+
+        // Try to find the function definition in fn_asts
+        for (key, def) in &self.fn_asts {
+            if key.starts_with(&prefix) || key == fn_name {
+                if !def.clauses.is_empty() {
+                    return def.clauses[0].params.iter()
+                        .map(|p| p.ty.clone())
+                        .collect();
+                }
+            }
+        }
+        vec![]
+    }
+
+    /// Compile an argument expression with knowledge of the expected parameter type.
+    /// This handles the case where a polymorphic function is passed as an argument
+    /// and needs to be monomorphized based on the expected function type.
+    fn compile_arg_with_expected_type(
+        &mut self,
+        arg: &Expr,
+        expected_type: Option<&TypeExpr>,
+    ) -> Result<Reg, CompileError> {
+        // Check if this argument is a variable that refers to a polymorphic function
+        if let Expr::Var(ident) = arg {
+            let name = &ident.node;
+            let resolved = self.resolve_name(name);
+            let prefix = format!("{}/", resolved);
+
+            // Check if this variable refers to a polymorphic function
+            let poly_fn_name = self.polymorphic_fns.iter()
+                .find(|k| k.starts_with(&prefix))
+                .cloned();
+
+            if let Some(poly_name) = poly_fn_name {
+                // We have a polymorphic function. Try to determine the type to specialize for.
+                if let Some(TypeExpr::Function(param_types, _)) = expected_type {
+                    // Expected type is a function type like (Val) -> Int
+                    // Extract concrete types from the function parameters
+                    let concrete_types: Vec<String> = param_types.iter()
+                        .filter_map(|t| self.type_expr_to_type_name(t))
+                        .collect();
+
+                    if concrete_types.len() == param_types.len() && !concrete_types.is_empty() {
+                        // All types are concrete - monomorphize and load
+                        if let Some(fn_def) = self.fn_asts.get(&poly_name).cloned() {
+                            let param_names: Vec<String> = fn_def.clauses[0].params.iter()
+                                .filter_map(|p| self.pattern_binding_name(&p.pattern))
+                                .collect();
+
+                            match self.compile_monomorphized_variant(&poly_name, &concrete_types, &param_names) {
+                                Ok(mangled_name) => {
+                                    // Load the monomorphized function
+                                    if let Some(func) = self.functions.get(&mangled_name).cloned() {
+                                        let dst = self.alloc_reg();
+                                        let idx = self.chunk.add_constant(Value::Function(func));
+                                        let line = self.span_line(arg.span());
+                                        self.chunk.emit(Instruction::LoadConst(dst, idx), line);
+                                        return Ok(dst);
+                                    }
+                                }
+                                Err(_) => {
+                                    // Fall through to normal compilation
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Default: compile normally
+        self.compile_expr_tail(arg, false)
+    }
+
+    /// Convert a TypeExpr to a concrete type name, or None if it's a type parameter.
+    fn type_expr_to_type_name(&self, ty: &TypeExpr) -> Option<String> {
+        match ty {
+            TypeExpr::Name(ident) => {
+                let name = &ident.node;
+                // Check if it's a concrete type (in self.types or a primitive)
+                if self.types.contains_key(name) {
+                    return Some(name.clone());
+                }
+                if matches!(name.as_str(), "Int" | "Float" | "String" | "Bool" | "Char" | "()" | "List" | "Map" | "Set" | "Tuple") {
+                    return Some(name.clone());
+                }
+                // Single uppercase letters are likely type parameters
+                if name.len() == 1 && name.chars().next().unwrap().is_uppercase() {
+                    return None;
+                }
+                // Could be an unknown type - return it anyway
+                Some(name.clone())
+            }
+            TypeExpr::Unit => Some("()".to_string()),
+            TypeExpr::Tuple(types) => {
+                // For tuple types, we'd need to handle them specially
+                // For now, just return Tuple
+                if types.iter().all(|t| self.type_expr_to_type_name(t).is_some()) {
+                    Some("Tuple".to_string())
+                } else {
+                    None
+                }
+            }
+            TypeExpr::Function(_, _) => {
+                // Nested function types - return generic name for now
+                Some("Fn".to_string())
+            }
+            _ => None,
+        }
+    }
+
+    /// Build a map from type parameters to concrete types based on argument expressions.
+    /// For example, if expected_types has `(T) -> Int` and `T`, and the second argument
+    /// is `Val(42)`, we can deduce that `T = Val`.
+    fn build_type_param_map(&self, expected_types: &[Option<TypeExpr>], args: &[Expr]) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+
+        // First pass: find simple type parameter mappings from non-function types
+        for (expected, arg) in expected_types.iter().zip(args.iter()) {
+            if let Some(type_expr) = expected {
+                // Check if this parameter is a simple type parameter (single uppercase letter)
+                if let TypeExpr::Name(ident) = type_expr {
+                    let name = &ident.node;
+                    if name.len() == 1 && name.chars().next().unwrap().is_uppercase() {
+                        // This is a type parameter - try to get concrete type from argument
+                        if let Some(concrete_type) = self.expr_type_name(arg) {
+                            // Only map if the concrete type is actually concrete (not another type param)
+                            if !(concrete_type.len() == 1 && concrete_type.chars().next().unwrap().is_uppercase()) {
+                                map.insert(name.clone(), concrete_type);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        map
+    }
+
+    /// Substitute type parameters in a TypeExpr using the given map.
+    /// For example, `(T) -> Int` with map `{T: Val}` becomes `(Val) -> Int`.
+    fn substitute_type_params(&self, type_expr: &TypeExpr, map: &HashMap<String, String>) -> TypeExpr {
+        match type_expr {
+            TypeExpr::Name(ident) => {
+                if let Some(concrete) = map.get(&ident.node) {
+                    TypeExpr::Name(Spanned::new(concrete.clone(), ident.span))
+                } else {
+                    type_expr.clone()
+                }
+            }
+            TypeExpr::Function(params, ret) => {
+                let new_params: Vec<TypeExpr> = params.iter()
+                    .map(|p| self.substitute_type_params(p, map))
+                    .collect();
+                let new_ret = Box::new(self.substitute_type_params(ret, map));
+                TypeExpr::Function(new_params, new_ret)
+            }
+            TypeExpr::Tuple(types) => {
+                let new_types: Vec<TypeExpr> = types.iter()
+                    .map(|t| self.substitute_type_params(t, map))
+                    .collect();
+                TypeExpr::Tuple(new_types)
+            }
+            TypeExpr::Generic(name, args) => {
+                let new_args: Vec<TypeExpr> = args.iter()
+                    .map(|a| self.substitute_type_params(a, map))
+                    .collect();
+                TypeExpr::Generic(name.clone(), new_args)
+            }
+            TypeExpr::Record(fields) => {
+                let new_fields: Vec<(Ident, TypeExpr)> = fields.iter()
+                    .map(|(name, ty)| (name.clone(), self.substitute_type_params(ty, map)))
+                    .collect();
+                TypeExpr::Record(new_fields)
+            }
+            _ => type_expr.clone(),
+        }
     }
 
     /// Extract a module path from an expression.

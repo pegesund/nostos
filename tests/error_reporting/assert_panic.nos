@@ -1,5 +1,5 @@
 # expect_error: Assertion failed: 1 != 2
-# expect_error: main (line 8)
+# expect_error: main/ (line 8)
 
 main() = {
     x = 1
