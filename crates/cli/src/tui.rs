@@ -16,6 +16,8 @@ use std::rc::Rc;
 use std::process::ExitCode;
 use std::io::Write;
 
+use crate::repl_panel::ReplPanel;
+
 /// Debug logging to /tmp/nostos_tui_debug.log
 fn debug_log(msg: &str) {
     if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -319,6 +321,8 @@ mod nomouse_backend {
 
 struct TuiState {
     open_editors: Vec<String>,
+    open_repls: Vec<usize>,  // REPL instance IDs
+    next_repl_id: usize,
     active_window_idx: usize,
     engine: Rc<RefCell<ReplEngine>>,
 }
@@ -368,6 +372,8 @@ pub fn run_tui(args: &[String]) -> ExitCode {
     // Initialize State
     siv.set_user_data(Rc::new(RefCell::new(TuiState {
         open_editors: Vec::new(),
+        open_repls: Vec::new(),
+        next_repl_id: 1,
         active_window_idx: 0,
         engine: engine.clone(),
     })));
@@ -521,6 +527,11 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         open_browser(s);
     });
 
+    // Global Ctrl+R to open new REPL panel
+    siv.set_on_pre_event(Event::CtrlChar('r'), |s| {
+        open_repl_panel(s);
+    });
+
     siv.run();
     ExitCode::SUCCESS
 }
@@ -536,9 +547,9 @@ fn log_to_repl(s: &mut Cursive, text: &str) {
 /// - 1-3 windows: single row, equal width
 /// - 4-6 windows: two rows, top row has 3 windows, bottom row has rest
 fn rebuild_workspace(s: &mut Cursive) {
-    let (editor_names, engine) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+    let (editor_names, repl_ids, engine) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let state = state.borrow();
-        (state.open_editors.clone(), state.engine.clone())
+        (state.open_editors.clone(), state.open_repls.clone(), state.engine.clone())
     }).unwrap();
 
     // Get console content BEFORE clearing workspace
@@ -551,8 +562,8 @@ fn rebuild_workspace(s: &mut Cursive) {
         ws.clear();
     });
 
-    // Total windows = Console + editors
-    let total_windows = 1 + editor_names.len();
+    // Total windows = Console + editors + REPL panels
+    let total_windows = 1 + editor_names.len() + repl_ids.len();
 
     let repl_log = FocusableConsole::new(
         TextView::new(repl_log_content).scrollable()
@@ -575,29 +586,40 @@ fn rebuild_workspace(s: &mut Cursive) {
 
     let console = ActiveWindow::new(repl_log_with_events, "Console").full_width();
 
+    // Collect all window views: editors + REPL panels
+    let mut windows: Vec<Box<dyn View>> = Vec::new();
+
+    for name in &editor_names {
+        let editor_view = create_editor_view(s, &engine, name);
+        windows.push(Box::new(editor_view));
+    }
+
+    for &repl_id in &repl_ids {
+        let repl_view = create_repl_panel_view(&engine, repl_id);
+        windows.push(Box::new(repl_view));
+    }
+
     if total_windows <= 3 {
         // Single row layout
         let mut row = LinearLayout::horizontal().child(console);
 
-        for name in &editor_names {
-            let editor_view = create_editor_view(s, &engine, name);
-            row.add_child(editor_view);
+        for window in windows {
+            row.add_child(window);
         }
 
         s.call_on_name("workspace", |ws: &mut LinearLayout| {
             ws.add_child(row.full_width().full_height().with_name("workspace_row_0"));
         });
     } else {
-        // Two row layout: first 2 editors + console on top, rest on bottom
+        // Two row layout: first 2 windows + console on top, rest on bottom
         let mut row0 = LinearLayout::horizontal().child(console);
         let mut row1 = LinearLayout::horizontal();
 
-        for (i, name) in editor_names.iter().enumerate() {
-            let editor_view = create_editor_view(s, &engine, name);
+        for (i, window) in windows.into_iter().enumerate() {
             if i < 2 {
-                row0.add_child(editor_view);
+                row0.add_child(window);
             } else {
-                row1.add_child(editor_view);
+                row1.add_child(window);
             }
         }
 
@@ -605,6 +627,83 @@ fn rebuild_workspace(s: &mut Cursive) {
             ws.add_child(row0.full_width().full_height().with_name("workspace_row_0"));
             ws.add_child(row1.full_width().full_height().with_name("workspace_row_1"));
         });
+    }
+}
+
+/// Create a REPL panel view
+fn create_repl_panel_view(engine: &Rc<RefCell<ReplEngine>>, repl_id: usize) -> impl View {
+    let panel = ReplPanel::new(engine.clone(), repl_id);
+    let panel_id = format!("repl_panel_{}", repl_id);
+    let panel_id_copy = panel_id.clone();
+    let panel_id_close = repl_id;
+
+    let panel_with_events = OnEventView::new(panel.with_name(&panel_id))
+        .on_event(Event::CtrlChar('y'), move |s| {
+            // Copy REPL content to clipboard
+            if let Some(text) = s.call_on_name(&panel_id_copy, |v: &mut ReplPanel| v.get_content()) {
+                if !text.is_empty() {
+                    match copy_to_system_clipboard(&text) {
+                        Ok(_) => log_to_repl(s, &format!("Copied {} chars", text.len())),
+                        Err(e) => log_to_repl(s, &format!("Copy failed: {}", e)),
+                    }
+                }
+            }
+        })
+        .on_event(Event::CtrlChar('w'), move |s| {
+            close_repl_panel(s, panel_id_close);
+        })
+        .on_event(Key::Esc, move |s| {
+            close_repl_panel(s, panel_id_close);
+        });
+
+    ActiveWindow::new(panel_with_events, &format!("REPL #{}", repl_id)).full_width()
+}
+
+/// Open a new REPL panel
+fn open_repl_panel(s: &mut Cursive) {
+    let can_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let mut state = state.borrow_mut();
+        // Limit total windows (Console + editors + REPLs) to 6
+        let total = 1 + state.open_editors.len() + state.open_repls.len();
+        if total >= 6 {
+            return Err("Max 6 windows");
+        }
+        let id = state.next_repl_id;
+        state.next_repl_id += 1;
+        state.open_repls.push(id);
+        Ok(id)
+    }).unwrap();
+
+    match can_open {
+        Ok(id) => {
+            rebuild_workspace(s);
+            // Focus the new REPL panel
+            let panel_id = format!("repl_panel_{}", id);
+            s.focus_name(&panel_id).ok();
+            log_to_repl(s, &format!("Opened REPL #{}", id));
+        }
+        Err(msg) => {
+            log_to_repl(s, msg);
+        }
+    }
+}
+
+/// Close a REPL panel by ID
+fn close_repl_panel(s: &mut Cursive, repl_id: usize) {
+    let was_removed = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let mut state = state.borrow_mut();
+        if let Some(idx) = state.open_repls.iter().position(|&id| id == repl_id) {
+            state.open_repls.remove(idx);
+            true
+        } else {
+            false
+        }
+    }).unwrap();
+
+    if was_removed {
+        rebuild_workspace(s);
+        s.focus_name("input").ok();
+        log_to_repl(s, &format!("Closed REPL #{}", repl_id));
     }
 }
 

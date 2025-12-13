@@ -4,6 +4,7 @@ mod repl;
 mod tui;
 mod editor;
 mod custom_views;
+mod repl_panel;
 
 use nostos_compiler::compile::{compile_module, Compiler};
 use nostos_jit::{JitCompiler, JitConfig};
