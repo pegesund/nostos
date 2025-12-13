@@ -19,5 +19,8 @@ serde = { version = "1.0", features = ["derive"] }
 # Error handling
 thiserror = "1.0"
 
+# Regex for renaming
+regex = "1.10"
+
 [dev-dependencies]
 tempfile = "3.10"

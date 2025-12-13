@@ -48,6 +48,54 @@ fn generate_meta_content(groups: &[DefinitionGrouping]) -> String {
         .join("\n")
 }
 
+/// Rename a definition in source code
+/// Handles both simple and complex definition patterns
+fn rename_definition_in_source(source: &str, old_name: &str, new_name: &str) -> String {
+    use regex::Regex;
+
+    // Pattern to match function/value definitions: name(...) = or name =
+    // This handles:
+    // - foo() = ...
+    // - foo(x) = ...
+    // - foo(x, y) = ...
+    // - foo = ...
+    let pattern = format!(r"^(\s*){}(\s*\(|\s*=)", regex::escape(old_name));
+    let re = Regex::new(&pattern).unwrap();
+
+    let mut result = String::new();
+    for line in source.lines() {
+        if re.is_match(line) {
+            // This line starts a definition - replace the name
+            let new_line = re.replace(line, format!("${{1}}{}${{2}}", new_name));
+            result.push_str(&new_line);
+        } else {
+            result.push_str(line);
+        }
+        result.push('\n');
+    }
+
+    // Remove trailing newline if original didn't have one
+    if !source.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+
+    result
+}
+
+/// Replace function calls in source code (not definitions)
+/// Replaces old_name( with new_name( when old_name is used as a function call
+pub fn replace_call_in_source(source: &str, old_name: &str, new_name: &str) -> String {
+    use regex::Regex;
+
+    // Pattern to match function calls: old_name followed by (
+    // Use word boundary to avoid partial matches (e.g., don't match "foobar" when looking for "foo")
+    // But we need to handle cases like: old_name(), old_name(x), old_name (with spaces)
+    let pattern = format!(r"\b{}(\s*\()", regex::escape(old_name));
+    let re = Regex::new(&pattern).unwrap();
+
+    re.replace_all(source, format!("{}$1", new_name)).to_string()
+}
+
 /// Manages all source code in a Nostos project
 pub struct SourceManager {
     /// Project root directory
@@ -1079,6 +1127,150 @@ impl SourceManager {
         )?;
 
         Ok(())
+    }
+
+    /// Rename a definition within its module
+    /// Returns the new fully-qualified name
+    pub fn rename_definition(&mut self, old_name: &str, new_name: &str) -> Result<String, String> {
+        // Find the module containing this definition
+        let module_key = self.def_index.get(old_name)
+            .ok_or_else(|| format!("Definition not found: {}", old_name))?
+            .clone();
+
+        // Get the definition and update its source
+        let module = self.modules.get_mut(&module_key)
+            .ok_or_else(|| format!("Module not found: {}", module_key))?;
+
+        // Get the definition group, update its source, and rename
+        let old_source = {
+            let group = module.get_definition_mut(old_name)
+                .ok_or_else(|| format!("Definition not found in module: {}", old_name))?;
+            group.combined_source()
+        };
+
+        // Update the source code to use the new name
+        // Step 1: Rename the definition names (at the start of lines)
+        let renamed_defs = rename_definition_in_source(&old_source, old_name, new_name);
+        // Step 2: Also replace any self-calls (recursive functions)
+        let new_source = replace_call_in_source(&renamed_defs, old_name, new_name);
+
+        // Remove and re-add with new name
+        let mut group = module.remove_definition(old_name)
+            .ok_or_else(|| "Failed to remove definition".to_string())?;
+        group.name = new_name.to_string();
+        group.update_from_source(&new_source);
+        module.add_definition(group);
+
+        // Update def_index
+        self.def_index.remove(old_name);
+        self.def_index.insert(new_name.to_string(), module_key.clone());
+
+        // Rename the file in .nostos/defs/
+        let module_path: ModulePath = module_key.split('.').map(String::from).collect();
+        let old_def_path = self.get_def_path(&module_path, old_name);
+        let new_def_path = self.get_def_path(&module_path, new_name);
+
+        let nostos_dir = self.project_root.join(".nostos");
+
+        // Write new file first
+        if let Some(parent) = new_def_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create directory: {}", e))?;
+        }
+        fs::write(&new_def_path, &new_source)
+            .map_err(|e| format!("Failed to write renamed definition: {}", e))?;
+
+        // Delete old file
+        if old_def_path.exists() {
+            fs::remove_file(&old_def_path)
+                .map_err(|e| format!("Failed to delete old definition: {}", e))?;
+        }
+
+        // Commit both changes
+        let old_relative = old_def_path
+            .strip_prefix(&nostos_dir)
+            .unwrap()
+            .to_string_lossy();
+        let new_relative = new_def_path
+            .strip_prefix(&nostos_dir)
+            .unwrap()
+            .to_string_lossy();
+
+        git::rename_and_commit(
+            &nostos_dir,
+            &old_relative,
+            &new_relative,
+            &format!("Rename {} to {} in {}", old_name, new_name, module_key),
+        )?;
+
+        // Also update the main .nos source file
+        self.write_module_files()?;
+
+        // Return the new fully-qualified name
+        let new_qualified = if module_key.is_empty() {
+            new_name.to_string()
+        } else {
+            format!("{}.{}", module_key, new_name)
+        };
+
+        Ok(new_qualified)
+    }
+
+    /// Update a caller's source to replace calls from old_name to new_name
+    /// Returns the updated source code if changes were made
+    pub fn update_caller_source(&mut self, caller_name: &str, old_call: &str, new_call: &str) -> Result<Option<String>, String> {
+        // Strip module prefix if present
+        let simple_name = caller_name.rsplit('.').next().unwrap_or(caller_name);
+
+        // Find the module containing this definition
+        let module_key = self.def_index.get(simple_name)
+            .ok_or_else(|| format!("Caller not found: {}", caller_name))?
+            .clone();
+
+        let module = self.modules.get_mut(&module_key)
+            .ok_or_else(|| format!("Module not found: {}", module_key))?;
+
+        let group = module.get_definition_mut(simple_name)
+            .ok_or_else(|| format!("Definition not found in module: {}", simple_name))?;
+
+        let old_source = group.combined_source();
+        let new_source = replace_call_in_source(&old_source, old_call, new_call);
+
+        if old_source == new_source {
+            return Ok(None); // No changes made
+        }
+
+        // Update the definition
+        group.update_from_source(&new_source);
+
+        // Update the .nostos/defs file
+        let module_path: ModulePath = module_key.split('.').map(String::from).collect();
+        let def_path = self.get_def_path(&module_path, simple_name);
+        fs::write(&def_path, &new_source)
+            .map_err(|e| format!("Failed to write updated caller: {}", e))?;
+
+        // Commit the change
+        let nostos_dir = self.project_root.join(".nostos");
+        let relative = def_path
+            .strip_prefix(&nostos_dir)
+            .unwrap()
+            .to_string_lossy();
+
+        git::commit_file(
+            &nostos_dir,
+            &relative,
+            &format!("Update {} to call {} instead of {}", simple_name, new_call, old_call),
+        )?;
+
+        // Mark module as dirty so it gets written to .nos file
+        if let Some(module) = self.modules.get_mut(&module_key) {
+            module.dirty = true;
+        }
+
+        // Write module files
+        self.write_module_files()?;
+
+        Ok(Some(new_source))
     }
 
     /// Write dirty modules to main .nos files
@@ -2519,5 +2711,93 @@ bar() = 2
             let names = sm.get_grouped_names("foo");
             assert_eq!(names, vec!["foo", "bar"], "Groups should persist across reloads");
         }
+    }
+
+    // ==================== Rename Function Tests ====================
+
+    #[test]
+    fn test_rename_definition_in_source_simple() {
+        let source = "foo() = 1";
+        let result = rename_definition_in_source(source, "foo", "bar");
+        assert_eq!(result, "bar() = 1");
+    }
+
+    #[test]
+    fn test_rename_definition_in_source_with_params() {
+        let source = "foo(x: Int, y: Int) = x + y";
+        let result = rename_definition_in_source(source, "foo", "bar");
+        assert_eq!(result, "bar(x: Int, y: Int) = x + y");
+    }
+
+    #[test]
+    fn test_rename_definition_in_source_overloaded() {
+        // Overloaded functions are stored as separate definitions joined by \n\n
+        let source = "add(x: Int, y: Int) = x + y\n\nadd(x: Float, y: Float) = x + y";
+        let result = rename_definition_in_source(source, "add", "sum");
+        assert_eq!(result, "sum(x: Int, y: Int) = x + y\n\nsum(x: Float, y: Float) = x + y");
+    }
+
+    #[test]
+    fn test_rename_definition_in_source_multiclause() {
+        // Multi-clause functions (pattern matching)
+        let source = "fib(0) = 0\nfib(1) = 1\nfib(n) = fib(n - 1) + fib(n - 2)";
+        let result = rename_definition_in_source(source, "fib", "fibonacci");
+        // Note: the function calls inside the body should NOT be renamed by this function
+        // That's handled by replace_call_in_source
+        assert_eq!(result, "fibonacci(0) = 0\nfibonacci(1) = 1\nfibonacci(n) = fib(n - 1) + fib(n - 2)");
+    }
+
+    #[test]
+    fn test_rename_definition_in_source_value() {
+        // Value definitions (no parens)
+        let source = "pi = 3.14159";
+        let result = rename_definition_in_source(source, "pi", "PI");
+        assert_eq!(result, "PI = 3.14159");
+    }
+
+    #[test]
+    fn test_replace_call_in_source_simple() {
+        let source = "bar() = foo() + 1";
+        let result = replace_call_in_source(source, "foo", "baz");
+        assert_eq!(result, "bar() = baz() + 1");
+    }
+
+    #[test]
+    fn test_replace_call_in_source_with_args() {
+        let source = "bar() = foo(1, 2) + foo(3, 4)";
+        let result = replace_call_in_source(source, "foo", "baz");
+        assert_eq!(result, "bar() = baz(1, 2) + baz(3, 4)");
+    }
+
+    #[test]
+    fn test_replace_call_in_source_recursive() {
+        // Multi-clause function with recursive calls
+        let source = "fib(0) = 0\nfib(1) = 1\nfib(n) = fib(n - 1) + fib(n - 2)";
+        let result = replace_call_in_source(source, "fib", "fibonacci");
+        // All calls to fib should become fibonacci, including recursive ones
+        assert_eq!(result, "fibonacci(0) = 0\nfibonacci(1) = 1\nfibonacci(n) = fibonacci(n - 1) + fibonacci(n - 2)");
+    }
+
+    #[test]
+    fn test_replace_call_in_source_no_partial_match() {
+        // Should not match partial names
+        let source = "foobar() = foo() + bar()";
+        let result = replace_call_in_source(source, "foo", "baz");
+        // foobar should NOT be changed, only foo
+        assert_eq!(result, "foobar() = baz() + bar()");
+    }
+
+    #[test]
+    fn test_rename_and_replace_combined() {
+        // Full rename workflow: rename definition + replace calls
+        let source = "fib(0) = 0\nfib(1) = 1\nfib(n) = fib(n - 1) + fib(n - 2)";
+
+        // Step 1: Rename definitions
+        let after_rename = rename_definition_in_source(source, "fib", "fibonacci");
+
+        // Step 2: Replace calls (including self-calls)
+        let final_result = replace_call_in_source(&after_rename, "fib", "fibonacci");
+
+        assert_eq!(final_result, "fibonacci(0) = 0\nfibonacci(1) = 1\nfibonacci(n) = fibonacci(n - 1) + fibonacci(n - 2)");
     }
 }

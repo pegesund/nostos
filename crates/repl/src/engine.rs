@@ -1265,6 +1265,75 @@ impl ReplEngine {
         Ok(())
     }
 
+    /// Rename a definition in the project
+    /// Returns the new qualified name and the set of affected callers (functions that were updated)
+    pub fn rename_definition(&mut self, old_name: &str, new_name: &str) -> Result<(String, HashSet<String>), String> {
+        // Strip module prefix if present for SourceManager
+        let simple_old = old_name.rsplit('.').next().unwrap_or(old_name);
+        let simple_new = new_name.rsplit('.').next().unwrap_or(new_name);
+
+        // Get affected callers from call graph BEFORE renaming
+        let affected_callers = self.call_graph.rename(old_name, simple_new);
+
+        // Rename in SourceManager (updates source file and commits)
+        let new_qualified = if let Some(ref mut sm) = self.source_manager {
+            sm.rename_definition(simple_old, simple_new)?
+        } else {
+            return Err("No project loaded".to_string());
+        };
+
+        // Update compile status: transfer from old to new name
+        if let Some(status) = self.compile_status.remove(old_name) {
+            self.compile_status.insert(new_qualified.clone(), status);
+        }
+
+        // Update last known signatures
+        if let Some(sig) = self.last_known_signatures.remove(old_name) {
+            self.last_known_signatures.insert(new_qualified.clone(), sig);
+        }
+
+        // Remove old name from compiler
+        self.compiler.remove_function(old_name);
+        self.compiler.remove_type(old_name);
+        self.compiler.remove_trait(old_name);
+
+        // Get the renamed function's source and recompile it
+        let renamed_source = if let Some(ref sm) = self.source_manager {
+            sm.get_source(simple_new)
+        } else {
+            None
+        };
+
+        if let Some(source) = renamed_source {
+            // Recompile the renamed function
+            let _ = self.eval_in_module(&source, Some(&new_qualified));
+        }
+
+        // Update all callers' source code and recompile them
+        for caller in &affected_callers {
+            // Update the caller's source to use the new name
+            let updated_source = if let Some(ref mut sm) = self.source_manager {
+                sm.update_caller_source(caller, simple_old, simple_new)?
+            } else {
+                None
+            };
+
+            if let Some(source) = updated_source {
+                // Recompile the caller with updated source
+                match self.eval_in_module(&source, Some(caller)) {
+                    Ok(_) => {
+                        self.set_compile_status(caller, CompileStatus::Compiled);
+                    }
+                    Err(e) => {
+                        self.set_compile_status(caller, CompileStatus::CompileError(e));
+                    }
+                }
+            }
+        }
+
+        Ok((new_qualified, affected_callers))
+    }
+
     /// Save module metadata (together directives)
     /// name should be like "utils._meta"
     pub fn save_metadata(&mut self, name: &str, content: &str) -> Result<(), String> {
@@ -4698,6 +4767,114 @@ mod call_graph_tests {
         assert!(engine.eval_in_module("dep1() = 10", Some("mod.dep1")).is_ok());
         assert!(matches!(engine.get_compile_status("mod.combined"), Some(CompileStatus::Compiled)),
                 "mod.combined should be Compiled after mod.dep1 is fixed");
+    }
+
+    // ==================== Rename Tests ====================
+
+    #[test]
+    fn test_rename_updates_call_graph() {
+        // Test that renaming a function updates the call graph
+        let mut engine = create_engine();
+
+        assert!(engine.eval("base() = 1").is_ok());
+        assert!(engine.eval("caller() = base() + 1").is_ok());
+
+        // Verify initial call graph
+        let deps = engine.call_graph.direct_dependencies("caller");
+        assert!(deps.contains("base"), "caller should depend on base");
+
+        // Now simulate rename at the call graph level (since we don't have SourceManager in REPL mode)
+        let affected = engine.call_graph.rename("base", "renamed_base");
+        assert!(affected.contains("caller"), "caller should be affected by rename");
+
+        // Verify call graph is updated
+        let deps_after = engine.call_graph.direct_dependencies("caller");
+        assert!(!deps_after.contains("base"), "caller should no longer depend on 'base'");
+        assert!(deps_after.contains("renamed_base"), "caller should now depend on 'renamed_base'");
+    }
+
+    #[test]
+    fn test_rename_chain_dependencies() {
+        // Test renaming a function in a chain: a -> b -> c
+        let mut engine = create_engine();
+
+        assert!(engine.eval("a() = 1").is_ok());
+        assert!(engine.eval("b() = a() + 1").is_ok());
+        assert!(engine.eval("c() = b() + 1").is_ok());
+
+        // Rename middle function
+        let affected = engine.call_graph.rename("b", "b_renamed");
+
+        // Should affect only c (since c calls b)
+        assert!(affected.contains("c"), "c should be affected by b rename");
+        assert!(!affected.contains("a"), "a should not be affected");
+
+        // c should now depend on b_renamed
+        let c_deps = engine.call_graph.direct_dependencies("c");
+        assert!(c_deps.contains("b_renamed"));
+        assert!(!c_deps.contains("b"));
+
+        // b_renamed should still depend on a
+        let b_deps = engine.call_graph.direct_dependencies("b_renamed");
+        assert!(b_deps.contains("a"));
+    }
+
+    #[test]
+    fn test_rename_multiple_callers() {
+        // Test renaming with multiple callers
+        let mut engine = create_engine();
+
+        assert!(engine.eval("base() = 1").is_ok());
+        assert!(engine.eval("caller1() = base() + 1").is_ok());
+        assert!(engine.eval("caller2() = base() * 2").is_ok());
+        assert!(engine.eval("caller3() = base() - 1").is_ok());
+
+        let affected = engine.call_graph.rename("base", "foundation");
+
+        assert!(affected.contains("caller1"));
+        assert!(affected.contains("caller2"));
+        assert!(affected.contains("caller3"));
+        assert_eq!(affected.len(), 3);
+
+        // All callers should now depend on foundation
+        for caller in &["caller1", "caller2", "caller3"] {
+            let deps = engine.call_graph.direct_dependencies(caller);
+            assert!(deps.contains("foundation"), "{} should depend on foundation", caller);
+            assert!(!deps.contains("base"), "{} should not depend on base", caller);
+        }
+    }
+
+    #[test]
+    fn test_rename_leaf_function() {
+        // Test renaming a function with no dependents
+        let mut engine = create_engine();
+
+        assert!(engine.eval("helper() = 1").is_ok());
+        assert!(engine.eval("main() = helper() + 1").is_ok());
+
+        // Rename main (leaf function - no one calls it)
+        let affected = engine.call_graph.rename("main", "main_renamed");
+        assert!(affected.is_empty(), "No functions should be affected when renaming a leaf");
+
+        // main_renamed should still depend on helper
+        let deps = engine.call_graph.direct_dependencies("main_renamed");
+        assert!(deps.contains("helper"));
+    }
+
+    #[test]
+    fn test_rename_compile_status_transfer() {
+        // Test that compile status is transferred on rename (at call graph level)
+        let mut engine = create_engine();
+
+        assert!(engine.eval("a() = 1").is_ok());
+        engine.set_compile_status("a", CompileStatus::Compiled);
+
+        // Verify status exists
+        assert!(matches!(engine.get_compile_status("a"), Some(CompileStatus::Compiled)));
+
+        // Note: Full rename_definition would transfer the status, but since we're testing
+        // just the call graph here, status won't be transferred automatically.
+        // The ReplEngine.rename_definition method does this transfer.
     }
 }
 

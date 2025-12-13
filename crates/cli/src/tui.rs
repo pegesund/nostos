@@ -1225,16 +1225,18 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let dialog = Dialog::around(
         LinearLayout::vertical()
             .child(select_scroll)
-            .child(TextView::new("Enter: Select | n: New | d: Delete | e: Error | Esc: Close"))
+            .child(TextView::new("Enter: Select | n: New | r: Rename | d: Delete | e: Error | Esc: Close"))
     )
     .title(&title);
 
     // Wrap in OnEventView for keyboard navigation
     let path_for_back = path.clone();
     let path_for_new = path.clone();
+    let path_for_rename = path.clone();
     let path_for_delete = path.clone();
     let path_for_error = path.clone();
     let engine_for_back = engine.clone();
+    let engine_for_rename = engine.clone();
     let engine_for_delete = engine.clone();
     let engine_for_error = engine.clone();
     let dialog_with_keys = OnEventView::new(dialog)
@@ -1287,6 +1289,86 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 .on_event(Key::Esc, |s| { s.pop_layer(); });
 
             s.add_layer(dialog_with_esc);
+        })
+        .on_event(Event::Char('r'), move |s| {
+            // Get selected item from browser for rename
+            let selected = s.call_on_name("browser_select", |v: &mut SelectView<BrowserItem>| {
+                v.selection().map(|rc| (*rc).clone())
+            }).flatten();
+
+            if let Some(item) = selected {
+                // Only allow renaming functions (for now)
+                let name = match &item {
+                    BrowserItem::Function { name, .. } => name.clone(),
+                    _ => {
+                        log_to_repl(s, "Only functions can be renamed");
+                        return;
+                    }
+                };
+
+                // Build full name
+                let full_name = if path_for_rename.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}.{}", path_for_rename.join("."), name)
+                };
+
+                let engine_for_rename_submit = engine_for_rename.clone();
+                let path_for_refresh = path_for_rename.clone();
+                let old_name = full_name.clone();
+
+                // Show dialog to enter new name
+                let edit_view = EditView::new()
+                    .content(&name) // Pre-fill with current name
+                    .on_submit(move |s, new_name| {
+                        let new_name = new_name.trim();
+                        if new_name.is_empty() || new_name == name {
+                            s.pop_layer();
+                            return;
+                        }
+
+                        s.pop_layer(); // Remove rename dialog
+
+                        // Perform rename
+                        let rename_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            engine_for_rename_submit.borrow_mut().rename_definition(&old_name, new_name)
+                        }));
+
+                        match rename_result {
+                            Ok(Ok((new_qualified, affected_callers))) => {
+                                let mut msg = format!("Renamed '{}' to '{}'", old_name, new_qualified);
+                                if !affected_callers.is_empty() {
+                                    msg.push_str(&format!("\nAffected callers (need updating): {:?}", affected_callers));
+                                }
+                                log_to_repl(s, &msg);
+                                // Refresh browser at the same path
+                                s.pop_layer(); // Remove browser
+                                show_browser_dialog(s, engine_for_rename_submit.clone(), path_for_refresh.clone());
+                            }
+                            Ok(Err(e)) => {
+                                s.add_layer(Dialog::info(format!("Rename error: {}", e)));
+                            }
+                            Err(_) => {
+                                s.add_layer(Dialog::info("Internal error during rename"));
+                            }
+                        }
+                    })
+                    .with_name("new_name")
+                    .fixed_width(30);
+
+                let dialog = Dialog::new()
+                    .title(format!("Rename '{}' (Enter to rename, Esc to cancel)", full_name))
+                    .content(
+                        LinearLayout::vertical()
+                            .child(TextView::new("New name:"))
+                            .child(edit_view)
+                    );
+
+                let dialog_with_esc = OnEventView::new(dialog)
+                    .on_event(Key::Esc, |s| { s.pop_layer(); });
+
+                s.add_layer(dialog_with_esc);
+            }
         })
         .on_event(Event::Char('d'), move |s| {
             // Get selected item from browser

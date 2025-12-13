@@ -171,6 +171,53 @@ pub fn move_and_commit(
     Ok(())
 }
 
+/// Rename a file (delete old, add new) and commit
+/// Used when the file content also changes (like renaming a definition)
+pub fn rename_and_commit(
+    nostos_dir: &Path,
+    old_path: &str,
+    new_path: &str,
+    message: &str,
+) -> Result<(), String> {
+    // Stage the deletion of old file
+    // Ignore errors for old path (might not be tracked)
+    let _ = Command::new("git")
+        .args(["add", old_path])
+        .current_dir(nostos_dir)
+        .output();
+
+    // Stage the new file
+    let output = Command::new("git")
+        .args(["add", new_path])
+        .current_dir(nostos_dir)
+        .output()
+        .map_err(|e| format!("Failed to run git add (new): {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "git add failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    // Commit both changes
+    let output = Command::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(nostos_dir)
+        .output()
+        .map_err(|e| format!("Failed to run git commit: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if !stderr.contains("nothing to commit") && !stdout.contains("nothing to commit") {
+            return Err(format!("git commit failed: {}{}", stderr, stdout));
+        }
+    }
+
+    Ok(())
+}
+
 /// Check if repository has uncommitted changes
 pub fn has_uncommitted_changes(nostos_dir: &Path) -> bool {
     let output = Command::new("git")
