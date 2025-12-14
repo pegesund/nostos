@@ -1490,6 +1490,40 @@ impl ThreadWorker {
                     vec![false, false, false, false, false], // all immutable
                 ))
             }
+            ExecResult { exit_code, stdout, stderr } => {
+                // Build stdout as string (try UTF-8, fallback to bytes list)
+                let stdout_value = match std::string::String::from_utf8(stdout.clone()) {
+                    Ok(s) => GcValue::String(proc.heap.alloc_string(s)),
+                    Err(_) => {
+                        let bytes: Vec<GcValue> = stdout.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
+                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                    }
+                };
+
+                // Build stderr as string (try UTF-8, fallback to bytes list)
+                let stderr_value = match std::string::String::from_utf8(stderr.clone()) {
+                    Ok(s) => GcValue::String(proc.heap.alloc_string(s)),
+                    Err(_) => {
+                        let bytes: Vec<GcValue> = stderr.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
+                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                    }
+                };
+
+                // Build result as a record: { exitCode: Int, stdout: String, stderr: String }
+                GcValue::Record(proc.heap.alloc_record(
+                    "ExecResult".to_string(),
+                    vec!["exitCode".to_string(), "stdout".to_string(), "stderr".to_string()],
+                    vec![GcValue::Int64(exit_code as i64), stdout_value, stderr_value],
+                    vec![false, false, false], // all immutable
+                ))
+            }
+            ExecHandle(handle_id) => {
+                // Return process handle as an integer
+                GcValue::Int64(handle_id as i64)
+            }
+            ExitCode(code) => {
+                GcValue::Int64(code as i64)
+            }
         }
     }
 
@@ -4029,6 +4063,293 @@ impl ThreadWorker {
                 let proc = self.get_process_mut(local_id).unwrap();
                 let frame = proc.frames.last_mut().unwrap();
                 frame.registers[*dst as usize] = GcValue::Bool(killed);
+            }
+
+            // === External process execution ===
+            ExecRun(dst, cmd_reg, args_reg) => {
+                // Get command string
+                let cmd = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*cmd_reg) {
+                        GcValue::String(ptr) => {
+                            if let Some(s) = proc.heap.get_string(*ptr) {
+                                s.data.clone()
+                            } else {
+                                return Err(RuntimeError::IOError("Invalid command string".to_string()));
+                            }
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    }
+                };
+
+                // Get args list
+                let args = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*args_reg) {
+                        GcValue::List(list) => {
+                            let mut result = Vec::new();
+                            for item in list.items() {
+                                if let GcValue::String(s_ptr) = item {
+                                    if let Some(s) = proc.heap.get_string(*s_ptr) {
+                                        result.push(s.data.clone());
+                                    }
+                                }
+                            }
+                            result
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "List".to_string(),
+                            found: "non-list".to_string(),
+                        }),
+                    }
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::ExecRun {
+                        command: cmd,
+                        args,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ExecSpawn(dst, cmd_reg, args_reg) => {
+                let cmd = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*cmd_reg) {
+                        GcValue::String(ptr) => {
+                            if let Some(s) = proc.heap.get_string(*ptr) {
+                                s.data.clone()
+                            } else {
+                                return Err(RuntimeError::IOError("Invalid command string".to_string()));
+                            }
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    }
+                };
+
+                let args = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*args_reg) {
+                        GcValue::List(list) => {
+                            let mut result = Vec::new();
+                            for item in list.items() {
+                                if let GcValue::String(s_ptr) = item {
+                                    if let Some(s) = proc.heap.get_string(*s_ptr) {
+                                        result.push(s.data.clone());
+                                    }
+                                }
+                            }
+                            result
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "List".to_string(),
+                            found: "non-list".to_string(),
+                        }),
+                    }
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::ExecSpawn {
+                        command: cmd,
+                        args,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ExecReadLine(dst, handle_reg) => {
+                let handle = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*handle_reg) {
+                        GcValue::Int64(h) => *h as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    }
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::ExecReadLine {
+                        handle,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ExecReadStderr(dst, handle_reg) => {
+                let handle = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*handle_reg) {
+                        GcValue::Int64(h) => *h as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    }
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::ExecReadStderr {
+                        handle,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ExecWrite(dst, handle_reg, data_reg) => {
+                let handle = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*handle_reg) {
+                        GcValue::Int64(h) => *h as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    }
+                };
+
+                let data = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*data_reg) {
+                        GcValue::String(ptr) => {
+                            if let Some(s) = proc.heap.get_string(*ptr) {
+                                s.data.as_bytes().to_vec()
+                            } else {
+                                return Err(RuntimeError::IOError("Invalid string pointer".to_string()));
+                            }
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    }
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::ExecWrite {
+                        handle,
+                        data,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ExecWait(dst, handle_reg) => {
+                let handle = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*handle_reg) {
+                        GcValue::Int64(h) => *h as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    }
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::ExecWait {
+                        handle,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ExecKill(dst, handle_reg) => {
+                let handle = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*handle_reg) {
+                        GcValue::Int64(h) => *h as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    }
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::ExecKill {
+                        handle,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
             }
 
             // === Async I/O ===

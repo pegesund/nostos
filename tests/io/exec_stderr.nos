@@ -1,0 +1,22 @@
+# expect: 0
+# Test Exec.run captures stderr
+
+main() = {
+    # Run a command that outputs to stderr
+    # Using sh -c to redirect echo to stderr
+    (status, result) = Exec.run("sh", ["-c", "echo error message >&2"])
+
+    # Check status is ok
+    assert(status == "ok")
+
+    # Check exit code is 0
+    assert(result.exitCode == 0)
+
+    # stdout should be empty
+    assert(result.stdout == "")
+
+    # stderr should have the message
+    assert(result.stderr == "error message\n")
+
+    0
+}

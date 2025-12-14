@@ -121,6 +121,15 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Process.alive", signature: "Pid -> Bool", doc: "Check if a process is still alive" },
     BuiltinInfo { name: "Process.info", signature: "Pid -> ProcessInfo", doc: "Get process info: { status, mailbox, uptime }" },
     BuiltinInfo { name: "Process.kill", signature: "Pid -> Bool", doc: "Kill a process (returns true if successful)" },
+
+    // === External Process Execution ===
+    BuiltinInfo { name: "Exec.run", signature: "(String, [String]) -> ExecResult", doc: "Run command and wait for completion. Returns { exitCode, stdout, stderr }" },
+    BuiltinInfo { name: "Exec.start", signature: "(String, [String]) -> Int", doc: "Start process with streaming I/O. Returns handle for readline/write/wait" },
+    BuiltinInfo { name: "Exec.readline", signature: "Int -> String", doc: "Read line from spawned process stdout. Returns 'eof' at end of stream" },
+    BuiltinInfo { name: "Exec.readStderr", signature: "Int -> String", doc: "Read line from spawned process stderr. Returns 'eof' at end of stream" },
+    BuiltinInfo { name: "Exec.write", signature: "(Int, String) -> ()", doc: "Write string to spawned process stdin" },
+    BuiltinInfo { name: "Exec.wait", signature: "Int -> Int", doc: "Wait for spawned process to exit. Returns exit code" },
+    BuiltinInfo { name: "Exec.kill", signature: "Int -> ()", doc: "Kill a spawned process" },
 ];
 
 /// Extract doc comment immediately preceding a definition at the given span start.
@@ -472,7 +481,7 @@ impl Compiler {
             "String", "File", "Dir", "List", "Option", "Result", "Char", "Int", "Float",
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
-            "Base64", "Url", "Encoding", "Server",
+            "Base64", "Url", "Encoding", "Server", "Exec",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -654,7 +663,7 @@ impl Compiler {
             "String", "File", "Dir", "List", "Option", "Result", "Char", "Int", "Float",
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
-            "Base64", "Url", "Encoding", "Server",
+            "Base64", "Url", "Encoding", "Server", "Exec",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -3259,6 +3268,52 @@ impl Compiler {
                             self.chunk.emit(Instruction::ProcessKill(dst, pid_reg), line);
                             return Ok(dst);
                         }
+                        // === External process execution ===
+                        "Exec.run" if args.len() == 2 => {
+                            let cmd_reg = self.compile_expr_tail(&args[0], false)?;
+                            let args_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ExecRun(dst, cmd_reg, args_reg), line);
+                            return Ok(dst);
+                        }
+                        "Exec.start" if args.len() == 2 => {
+                            let cmd_reg = self.compile_expr_tail(&args[0], false)?;
+                            let args_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ExecSpawn(dst, cmd_reg, args_reg), line);
+                            return Ok(dst);
+                        }
+                        "Exec.readline" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ExecReadLine(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
+                        "Exec.readStderr" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ExecReadStderr(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
+                        "Exec.write" if args.len() == 2 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let data_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ExecWrite(dst, handle_reg, data_reg), line);
+                            return Ok(dst);
+                        }
+                        "Exec.wait" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ExecWait(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
+                        "Exec.kill" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ExecKill(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
                         _ => {} // Fall through to user-defined functions
                     }
 
@@ -4324,6 +4379,42 @@ impl Compiler {
                     "Process.kill" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ProcessKill(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    // === External process execution ===
+                    "Exec.run" if arg_regs.len() == 2 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ExecRun(dst, arg_regs[0], arg_regs[1]), line);
+                        return Ok(dst);
+                    }
+                    "Exec.start" if arg_regs.len() == 2 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ExecSpawn(dst, arg_regs[0], arg_regs[1]), line);
+                        return Ok(dst);
+                    }
+                    "Exec.readline" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ExecReadLine(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    "Exec.readStderr" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ExecReadStderr(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    "Exec.write" if arg_regs.len() == 2 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ExecWrite(dst, arg_regs[0], arg_regs[1]), line);
+                        return Ok(dst);
+                    }
+                    "Exec.wait" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ExecWait(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    "Exec.kill" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ExecKill(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     _ => {} // Fall through to normal function lookup

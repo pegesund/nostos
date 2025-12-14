@@ -1,0 +1,27 @@
+# expect: 0
+# Test Exec.spawn and Exec.wait
+
+main() = {
+    # Spawn a process that exits immediately with code 0
+    (status, handle) = Exec.start("true", [])
+    assert(status == "ok")
+
+    # Wait for it to exit
+    (ws, exitCode) = Exec.wait(handle)
+    assert(ws == "ok")
+
+    # true should exit with 0
+    assert(exitCode == 0)
+
+    # Spawn a process that exits with non-zero
+    (status2, handle2) = Exec.start("false", [])
+    assert(status2 == "ok")
+
+    (ws2, exitCode2) = Exec.wait(handle2)
+    assert(ws2 == "ok")
+
+    # false should exit with 1
+    assert(exitCode2 == 1)
+
+    0
+}
