@@ -35,8 +35,8 @@ PASSED_COUNT=0
 FAILED_COUNT=0
 
 for file in $EXAMPLE_FILES; do
-    # Skip REPL demos (interactive mode only)
-    if [[ "$file" == *"repl_demo.nos"* ]]; then
+    # Skip REPL demos and TUI-only examples (interactive mode only)
+    if [[ "$file" == *"repl_demo.nos"* ]] || [[ "$file" == *"inspect_demo.nos"* ]] || [[ "$file" == *"inspector_demo.nos"* ]]; then
         echo -e "Skipping ${file#$(dirname "${SCRIPT_DIR}")/}"
         continue
     fi

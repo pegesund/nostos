@@ -15,6 +15,114 @@ use nostos_syntax::ast::*;
 use nostos_vm::*;
 use nostos_types::{TypeEnv, infer::InferCtx};
 
+/// Metadata for a built-in function.
+pub struct BuiltinInfo {
+    pub name: &'static str,
+    pub signature: &'static str,
+    pub doc: &'static str,
+}
+
+/// All built-in functions with their signatures and documentation.
+pub const BUILTINS: &[BuiltinInfo] = &[
+    // === Core ===
+    BuiltinInfo { name: "println", signature: "a -> ()", doc: "Print a value to stdout followed by a newline" },
+    BuiltinInfo { name: "show", signature: "a -> String", doc: "Convert any value to its string representation" },
+    BuiltinInfo { name: "copy", signature: "a -> a", doc: "Create a deep copy of a value" },
+    BuiltinInfo { name: "hash", signature: "a -> Int", doc: "Compute hash code for a value" },
+    BuiltinInfo { name: "inspect", signature: "a -> String -> ()", doc: "Send a value to the inspector panel with a label" },
+    BuiltinInfo { name: "self", signature: "() -> Pid", doc: "Get the current process ID" },
+    BuiltinInfo { name: "spawn", signature: "(() -> a) -> Pid", doc: "Spawn a new lightweight process" },
+    BuiltinInfo { name: "send", signature: "Pid -> a -> ()", doc: "Send a message to a process (also: pid <- msg)" },
+    BuiltinInfo { name: "receive", signature: "Pattern -> a", doc: "Receive a message matching a pattern" },
+
+    // === Math ===
+    BuiltinInfo { name: "sqrt", signature: "Float -> Float", doc: "Square root" },
+    BuiltinInfo { name: "sin", signature: "Float -> Float", doc: "Sine (radians)" },
+    BuiltinInfo { name: "cos", signature: "Float -> Float", doc: "Cosine (radians)" },
+    BuiltinInfo { name: "tan", signature: "Float -> Float", doc: "Tangent (radians)" },
+    BuiltinInfo { name: "floor", signature: "Float -> Int", doc: "Round down to nearest integer" },
+    BuiltinInfo { name: "ceil", signature: "Float -> Int", doc: "Round up to nearest integer" },
+    BuiltinInfo { name: "round", signature: "Float -> Int", doc: "Round to nearest integer" },
+    BuiltinInfo { name: "abs", signature: "Num -> Num", doc: "Absolute value" },
+    BuiltinInfo { name: "min", signature: "a -> a -> a", doc: "Return the smaller of two values" },
+    BuiltinInfo { name: "max", signature: "a -> a -> a", doc: "Return the larger of two values" },
+    BuiltinInfo { name: "pow", signature: "Num -> Num -> Num", doc: "Raise to a power" },
+    BuiltinInfo { name: "log", signature: "Float -> Float", doc: "Natural logarithm" },
+    BuiltinInfo { name: "log10", signature: "Float -> Float", doc: "Base-10 logarithm" },
+
+    // === List/Array ===
+    BuiltinInfo { name: "len", signature: "[a] -> Int", doc: "Length of a list or array" },
+    BuiltinInfo { name: "head", signature: "[a] -> a", doc: "First element of a list" },
+    BuiltinInfo { name: "tail", signature: "[a] -> [a]", doc: "All elements except the first" },
+    BuiltinInfo { name: "init", signature: "[a] -> [a]", doc: "All elements except the last" },
+    BuiltinInfo { name: "last", signature: "[a] -> a", doc: "Last element of a list" },
+    BuiltinInfo { name: "nth", signature: "[a] -> Int -> a", doc: "Get element at index" },
+    BuiltinInfo { name: "push", signature: "[a] -> a -> [a]", doc: "Append element to end of list" },
+    BuiltinInfo { name: "pop", signature: "[a] -> ([a], a)", doc: "Remove and return last element" },
+    BuiltinInfo { name: "get", signature: "[a] -> Int -> a", doc: "Get element at index" },
+    BuiltinInfo { name: "set", signature: "[a] -> Int -> a -> [a]", doc: "Set element at index" },
+    BuiltinInfo { name: "slice", signature: "[a] -> Int -> Int -> [a]", doc: "Get sublist from start to end index" },
+    BuiltinInfo { name: "concat", signature: "[a] -> [a] -> [a]", doc: "Concatenate two lists" },
+    BuiltinInfo { name: "reverse", signature: "[a] -> [a]", doc: "Reverse a list" },
+    BuiltinInfo { name: "sort", signature: "[a] -> [a]", doc: "Sort a list in ascending order" },
+    BuiltinInfo { name: "map", signature: "(a -> b) -> [a] -> [b]", doc: "Apply function to each element" },
+    BuiltinInfo { name: "filter", signature: "(a -> Bool) -> [a] -> [a]", doc: "Keep elements that satisfy predicate" },
+    BuiltinInfo { name: "fold", signature: "(b -> a -> b) -> b -> [a] -> b", doc: "Reduce list to single value (left fold)" },
+    BuiltinInfo { name: "any", signature: "(a -> Bool) -> [a] -> Bool", doc: "True if any element satisfies predicate" },
+    BuiltinInfo { name: "all", signature: "(a -> Bool) -> [a] -> Bool", doc: "True if all elements satisfy predicate" },
+    BuiltinInfo { name: "find", signature: "(a -> Bool) -> [a] -> Option a", doc: "Find first element satisfying predicate" },
+    BuiltinInfo { name: "position", signature: "(a -> Bool) -> [a] -> Option Int", doc: "Find index of first match" },
+    BuiltinInfo { name: "unique", signature: "[a] -> [a]", doc: "Remove duplicate elements" },
+    BuiltinInfo { name: "flatten", signature: "[[a]] -> [a]", doc: "Flatten nested list one level" },
+    BuiltinInfo { name: "zip", signature: "[a] -> [b] -> [(a, b)]", doc: "Pair up elements from two lists" },
+    BuiltinInfo { name: "unzip", signature: "[(a, b)] -> ([a], [b])", doc: "Split list of pairs into two lists" },
+    BuiltinInfo { name: "take", signature: "Int -> [a] -> [a]", doc: "Take first n elements" },
+    BuiltinInfo { name: "drop", signature: "Int -> [a] -> [a]", doc: "Drop first n elements" },
+    BuiltinInfo { name: "split", signature: "String -> String -> [String]", doc: "Split string by delimiter" },
+    BuiltinInfo { name: "join", signature: "String -> [String] -> String", doc: "Join strings with delimiter" },
+    BuiltinInfo { name: "range", signature: "Int -> Int -> [Int]", doc: "Create list of integers from start to end" },
+    BuiltinInfo { name: "replicate", signature: "Int -> a -> [a]", doc: "Create list of n copies of a value" },
+    BuiltinInfo { name: "empty", signature: "[a] -> Bool", doc: "True if list is empty" },
+    BuiltinInfo { name: "sum", signature: "[Num] -> Num", doc: "Sum of all elements" },
+    BuiltinInfo { name: "product", signature: "[Num] -> Num", doc: "Product of all elements" },
+
+    // === File I/O ===
+    BuiltinInfo { name: "File.readAll", signature: "String -> Result String String", doc: "Read entire file contents as string" },
+    BuiltinInfo { name: "File.writeAll", signature: "String -> String -> Result () String", doc: "Write string to file (overwrites)" },
+    BuiltinInfo { name: "File.append", signature: "String -> String -> Result () String", doc: "Append string to file" },
+    BuiltinInfo { name: "File.open", signature: "String -> String -> Result Handle String", doc: "Open file with mode (r/w/a/rw)" },
+    BuiltinInfo { name: "File.write", signature: "Handle -> String -> Result Int String", doc: "Write to file handle, returns bytes written" },
+    BuiltinInfo { name: "File.read", signature: "Handle -> Int -> Result String String", doc: "Read n bytes from file handle" },
+    BuiltinInfo { name: "File.readLine", signature: "Handle -> Result (Option String) String", doc: "Read line from file, None at EOF" },
+    BuiltinInfo { name: "File.flush", signature: "Handle -> Result () String", doc: "Flush file handle to disk" },
+    BuiltinInfo { name: "File.close", signature: "Handle -> Result () String", doc: "Close file handle" },
+    BuiltinInfo { name: "File.seek", signature: "Handle -> Int -> String -> Result () String", doc: "Seek in file (start/current/end)" },
+    BuiltinInfo { name: "File.exists", signature: "String -> Result Bool String", doc: "Check if file exists" },
+    BuiltinInfo { name: "File.remove", signature: "String -> Result () String", doc: "Delete a file" },
+    BuiltinInfo { name: "File.rename", signature: "String -> String -> Result () String", doc: "Rename/move a file" },
+    BuiltinInfo { name: "File.copy", signature: "String -> String -> Result () String", doc: "Copy a file" },
+    BuiltinInfo { name: "File.size", signature: "String -> Result Int String", doc: "Get file size in bytes" },
+
+    // === Directory I/O ===
+    BuiltinInfo { name: "Dir.create", signature: "String -> Result () String", doc: "Create a directory" },
+    BuiltinInfo { name: "Dir.createAll", signature: "String -> Result () String", doc: "Create directory and parents" },
+    BuiltinInfo { name: "Dir.list", signature: "String -> Result [String] String", doc: "List directory contents" },
+    BuiltinInfo { name: "Dir.remove", signature: "String -> Result () String", doc: "Remove empty directory" },
+    BuiltinInfo { name: "Dir.removeAll", signature: "String -> Result () String", doc: "Remove directory recursively" },
+    BuiltinInfo { name: "Dir.exists", signature: "String -> Result Bool String", doc: "Check if directory exists" },
+
+    // === HTTP ===
+    BuiltinInfo { name: "Http.get", signature: "String -> Result HttpResponse String", doc: "HTTP GET request" },
+    BuiltinInfo { name: "Http.request", signature: "HttpRequest -> Result HttpResponse String", doc: "HTTP request with full options" },
+
+    // === Process Introspection ===
+    BuiltinInfo { name: "Process.all", signature: "() -> [Pid]", doc: "Get list of all process IDs on this thread" },
+    BuiltinInfo { name: "Process.time", signature: "Pid -> Int", doc: "Get process uptime in milliseconds (-1 if not found)" },
+    BuiltinInfo { name: "Process.alive", signature: "Pid -> Bool", doc: "Check if a process is still alive" },
+    BuiltinInfo { name: "Process.info", signature: "Pid -> ProcessInfo", doc: "Get process info: { status, mailbox, uptime }" },
+    BuiltinInfo { name: "Process.kill", signature: "Pid -> Bool", doc: "Kill a process (returns true if successful)" },
+];
+
 /// Extract doc comment immediately preceding a definition at the given span start.
 /// Doc comments are lines starting with `#` (but not `#*` for multi-line or `#{` for sets)
 /// immediately before the definition, with only whitespace between comment lines.
@@ -3121,6 +3229,36 @@ impl Compiler {
                             self.chunk.emit(Instruction::ServerClose(dst, server_reg), line);
                             return Ok(dst);
                         }
+                        // === Process introspection ===
+                        "Process.all" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ProcessAll(dst), line);
+                            return Ok(dst);
+                        }
+                        "Process.time" if args.len() == 1 => {
+                            let pid_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ProcessTime(dst, pid_reg), line);
+                            return Ok(dst);
+                        }
+                        "Process.alive" if args.len() == 1 => {
+                            let pid_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ProcessAlive(dst, pid_reg), line);
+                            return Ok(dst);
+                        }
+                        "Process.info" if args.len() == 1 => {
+                            let pid_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ProcessInfo(dst, pid_reg), line);
+                            return Ok(dst);
+                        }
+                        "Process.kill" if args.len() == 1 => {
+                            let pid_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ProcessKill(dst, pid_reg), line);
+                            return Ok(dst);
+                        }
                         _ => {} // Fall through to user-defined functions
                     }
 
@@ -4160,6 +4298,32 @@ impl Compiler {
                         // Http.get(url) -> async HTTP GET request
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::HttpGet(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    // === Process introspection ===
+                    "Process.all" if arg_regs.is_empty() => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ProcessAll(dst), line);
+                        return Ok(dst);
+                    }
+                    "Process.time" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ProcessTime(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    "Process.alive" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ProcessAlive(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    "Process.info" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ProcessInfo(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    "Process.kill" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ProcessKill(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     _ => {} // Fall through to normal function lookup
@@ -6177,6 +6341,21 @@ impl Compiler {
     /// Returns the full names including type signatures (e.g., "greet/String").
     pub fn get_function_names(&self) -> Vec<&str> {
         self.functions.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Get built-in function names for autocomplete.
+    pub fn get_builtin_names() -> Vec<&'static str> {
+        BUILTINS.iter().map(|b| b.name).collect()
+    }
+
+    /// Get signature for a built-in function.
+    pub fn get_builtin_signature(name: &str) -> Option<&'static str> {
+        BUILTINS.iter().find(|b| b.name == name).map(|b| b.signature)
+    }
+
+    /// Get documentation for a built-in function.
+    pub fn get_builtin_doc(name: &str) -> Option<&'static str> {
+        BUILTINS.iter().find(|b| b.name == name).map(|b| b.doc)
     }
 
     /// Get function names formatted for user display.

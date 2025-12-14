@@ -676,6 +676,18 @@ pub enum Instruction {
     /// Sleep for N milliseconds (value in register)
     Sleep(Reg),
 
+    // === Process introspection ===
+    /// Get all process IDs: dst = Process.all()
+    ProcessAll(Reg),
+    /// Get process uptime in ms: dst = Process.time(pid)
+    ProcessTime(Reg, Reg),
+    /// Check if process is alive: dst = Process.alive(pid)
+    ProcessAlive(Reg, Reg),
+    /// Get process info record: dst = Process.info(pid)
+    ProcessInfo(Reg, Reg),
+    /// Kill a process: Process.kill(pid)
+    ProcessKill(Reg, Reg),
+
     // === Error handling ===
     /// Push exception handler
     PushHandler(JumpOffset),

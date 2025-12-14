@@ -1,0 +1,53 @@
+# expect: ()
+# Test Process.* introspection functions
+
+# Helper to check if list is empty
+isEmpty(xs) = match xs
+    [] -> true
+    _ -> false
+
+main() = {
+    me = self()
+
+    # Test Process.all() - should return a non-empty list
+    pids = Process.all()
+    assert(isEmpty(pids) == false)
+
+    # Test Process.time() - uptime should be >= 0
+    uptime = Process.time(me)
+    assert(uptime >= 0)
+
+    # Test Process.alive() - we're definitely alive
+    assert(Process.alive(me))
+
+    # Test Process.info() - should return a record with status, mailbox, uptime
+    info = Process.info(me)
+    assert(info.status == "running")
+    assert(info.mailbox >= 0)
+    assert(info.uptime >= 0)
+
+    # Test Process.kill() on a spawned process
+    parent = self()
+    child = spawn {
+        parent <- "started"
+        # Wait for a message that will never come (we'll kill this process)
+        receive
+            "never" -> ()
+        end
+    }
+
+    # Wait for child to start
+    receive
+        "started" -> ()
+    end
+
+    # Child should be alive
+    assert(Process.alive(child))
+
+    # Kill the child
+    killed = Process.kill(child)
+    assert(killed)
+
+    # Child should no longer be alive
+    assert(Process.alive(child) == false)
+}

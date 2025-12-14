@@ -866,7 +866,12 @@ impl ReplEngine {
     // Introspection methods returning String instead of printing
     pub fn get_functions(&self) -> Vec<String> {
         let mut functions: Vec<_> = self.compiler.get_function_names().into_iter().map(String::from).collect();
+        // Add built-in functions (println, File.read, Dir.list, etc.)
+        for builtin in Compiler::get_builtin_names() {
+            functions.push(builtin.to_string());
+        }
         functions.sort();
+        functions.dedup();
         functions
     }
 
@@ -893,12 +898,16 @@ impl ReplEngine {
 
     /// Get the signature for a function (for autocomplete display)
     pub fn get_function_signature(&self, name: &str) -> Option<String> {
+        // Try user-defined functions first, then builtins
         self.compiler.get_function_signature(name)
+            .or_else(|| Compiler::get_builtin_signature(name).map(String::from))
     }
 
     /// Get the doc comment for a function (for autocomplete display)
     pub fn get_function_doc(&self, name: &str) -> Option<String> {
+        // Try user-defined functions first, then builtins
         self.compiler.get_function_doc(name)
+            .or_else(|| Compiler::get_builtin_doc(name).map(String::from))
     }
 
     pub fn browse(&self, module_filter: Option<&str>) -> String {

@@ -24,7 +24,7 @@ use tokio::sync::mpsc as tokio_mpsc;
 
 use crate::gc::{GcConfig, GcList, GcMapKey, GcNativeFn, GcValue, Heap, InlineOp};
 use crate::io_runtime::{IoRequest, IoRuntime};
-use crate::process::{CallFrame, IoResponseValue, Process, ProcessState, ThreadSafeValue};
+use crate::process::{CallFrame, ExitReason, IoResponseValue, Process, ProcessState, ThreadSafeValue};
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, TypeValue, Value};
 
 /// An entry for the inspect queue - a named value to display in the inspector
@@ -3861,6 +3861,174 @@ impl ThreadWorker {
                 proc.state = ProcessState::Sleeping;
                 self.timer_heap.push(Reverse((wake_time, local_id)));
                 return Ok(StepResult::Waiting);
+            }
+
+            // === Process Introspection ===
+            ProcessAll(dst) => {
+                // Collect all PIDs from this thread's processes
+                let pids: Vec<GcValue> = self.processes.iter()
+                    .enumerate()
+                    .filter_map(|(idx, opt)| {
+                        opt.as_ref().map(|_| {
+                            let pid = encode_pid(self.thread_id, idx as u64);
+                            GcValue::Pid(pid.0)
+                        })
+                    })
+                    .collect();
+                let proc = self.get_process_mut(local_id).unwrap();
+                let list = GcValue::List(GcList { data: Arc::new(pids), start: 0 });
+                let frame = proc.frames.last_mut().unwrap();
+                frame.registers[*dst as usize] = list;
+            }
+
+            ProcessTime(dst, pid_reg) => {
+                let target_pid = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*pid_reg) {
+                        GcValue::Pid(p) => Pid(*p),
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Pid".to_string(),
+                            found: "non-pid".to_string(),
+                        }),
+                    }
+                };
+
+                let target_thread = pid_thread_id(target_pid);
+                let uptime_ms = if target_thread == self.thread_id {
+                    let target_local_id = pid_local_id(target_pid);
+                    if let Some(target_proc) = self.get_process(target_local_id) {
+                        target_proc.started_at.elapsed().as_millis() as i64
+                    } else {
+                        -1 // Process not found
+                    }
+                } else {
+                    -1 // Remote process - not accessible directly
+                };
+
+                let proc = self.get_process_mut(local_id).unwrap();
+                let frame = proc.frames.last_mut().unwrap();
+                frame.registers[*dst as usize] = GcValue::Int64(uptime_ms);
+            }
+
+            ProcessAlive(dst, pid_reg) => {
+                let target_pid = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*pid_reg) {
+                        GcValue::Pid(p) => Pid(*p),
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Pid".to_string(),
+                            found: "non-pid".to_string(),
+                        }),
+                    }
+                };
+
+                let target_thread = pid_thread_id(target_pid);
+                let alive = if target_thread == self.thread_id {
+                    let target_local_id = pid_local_id(target_pid);
+                    if let Some(target_proc) = self.get_process(target_local_id) {
+                        !matches!(target_proc.state, ProcessState::Exited(_))
+                    } else {
+                        false
+                    }
+                } else {
+                    // Remote process - assume alive if we can't check
+                    // (could be extended with cross-thread query)
+                    true
+                };
+
+                let proc = self.get_process_mut(local_id).unwrap();
+                let frame = proc.frames.last_mut().unwrap();
+                frame.registers[*dst as usize] = GcValue::Bool(alive);
+            }
+
+            ProcessInfo(dst, pid_reg) => {
+                let target_pid = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*pid_reg) {
+                        GcValue::Pid(p) => Pid(*p),
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Pid".to_string(),
+                            found: "non-pid".to_string(),
+                        }),
+                    }
+                };
+
+                let target_thread = pid_thread_id(target_pid);
+                let info = if target_thread == self.thread_id {
+                    let target_local_id = pid_local_id(target_pid);
+                    if let Some(target_proc) = self.get_process(target_local_id) {
+                        let status = match target_proc.state {
+                            ProcessState::Running => "running",
+                            ProcessState::Waiting => "waiting",
+                            ProcessState::WaitingTimeout => "waiting",
+                            ProcessState::WaitingIO => "io",
+                            ProcessState::Sleeping => "sleeping",
+                            ProcessState::Suspended => "suspended",
+                            ProcessState::Exited(_) => "exited",
+                        };
+                        let mailbox_len = target_proc.receiver.len() as i64;
+                        let uptime_ms = target_proc.started_at.elapsed().as_millis() as i64;
+                        Some((status, mailbox_len, uptime_ms))
+                    } else {
+                        None
+                    }
+                } else {
+                    None // Remote process
+                };
+
+                let proc = self.get_process_mut(local_id).unwrap();
+                let result = if let Some((status, mailbox_len, uptime_ms)) = info {
+                    // Build a record: { status: String, mailbox: Int, uptime: Int }
+                    let status_str = proc.heap.alloc_string(status.to_string());
+                    let record = proc.heap.alloc_record(
+                        "ProcessInfo".to_string(),
+                        vec!["status".to_string(), "mailbox".to_string(), "uptime".to_string()],
+                        vec![GcValue::String(status_str), GcValue::Int64(mailbox_len), GcValue::Int64(uptime_ms)],
+                        vec![false, false, false],
+                    );
+                    GcValue::Record(record)
+                } else {
+                    GcValue::Unit // Process not found or remote
+                };
+
+                let frame = proc.frames.last_mut().unwrap();
+                frame.registers[*dst as usize] = result;
+            }
+
+            ProcessKill(dst, pid_reg) => {
+                let target_pid = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*pid_reg) {
+                        GcValue::Pid(p) => Pid(*p),
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Pid".to_string(),
+                            found: "non-pid".to_string(),
+                        }),
+                    }
+                };
+
+                let target_thread = pid_thread_id(target_pid);
+                let killed = if target_thread == self.thread_id {
+                    let target_local_id = pid_local_id(target_pid);
+                    if target_local_id != local_id { // Can't kill self
+                        if let Some(target_proc) = self.get_process_mut(target_local_id) {
+                            target_proc.state = ProcessState::Exited(ExitReason::Killed);
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false // Can't kill self
+                    }
+                } else {
+                    // Remote process - would need cross-thread message
+                    // For now, return false
+                    false
+                };
+
+                let proc = self.get_process_mut(local_id).unwrap();
+                let frame = proc.frames.last_mut().unwrap();
+                frame.registers[*dst as usize] = GcValue::Bool(killed);
             }
 
             // === Async I/O ===

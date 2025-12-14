@@ -1,41 +1,33 @@
-// Demo of the inspect() function for debugging
-// Run with: nostos tui examples/inspect_demo.nos
-// Then press Ctrl+I to open the inspector panel
+# Demo of the inspect() function for debugging
+# Run with: nostos tui examples/inspect_demo.nos
+# Then press Alt+I or F9 to open the inspector panel
 
-// Create some data structures to inspect
-type Person = {
-    name: String,
-    age: Int64,
-    hobbies: [String],
-}
+# Create some data structures to inspect
+type Person = { name: String, age: Int, hobbies: List[String] }
 
-fn main() {
-    // Inspect a simple value
-    let x = 42
+main() = {
+    # Inspect a simple value
+    x = 42
     inspect(x, "number")
 
-    // Inspect a list
-    let numbers = [1, 2, 3, 4, 5]
+    # Inspect a list
+    numbers = [1, 2, 3, 4, 5]
     inspect(numbers, "numbers")
 
-    // Inspect a record
-    let person = Person {
-        name: "Alice",
-        age: 30,
-        hobbies: ["reading", "hiking", "coding"],
-    }
+    # Inspect a record
+    person = Person("Alice", 30, ["reading", "hiking", "coding"])
     inspect(person, "person")
 
-    // Inspect a map
-    let scores = { "Alice": 95, "Bob": 87, "Charlie": 92 }
+    # Inspect a map
+    scores = %{ "Alice": 95, "Bob": 87, "Charlie": 92 }
     inspect(scores, "scores")
 
-    // Inspect a nested structure
-    let team = [
-        Person { name: "Bob", age: 25, hobbies: ["gaming"] },
-        Person { name: "Carol", age: 35, hobbies: ["music", "art"] },
+    # Inspect a nested structure
+    team = [
+        Person("Bob", 25, ["gaming"]),
+        Person("Carol", 35, ["music", "art"])
     ]
     inspect(team, "team")
 
-    println("Inspect demo complete! Press Ctrl+I to view inspected values.")
+    println("Inspect demo complete! Press Alt+I or F9 to view inspected values.")
 }

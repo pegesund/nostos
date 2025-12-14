@@ -584,6 +584,9 @@ pub struct Process {
     /// Output buffer (for testing/REPL).
     pub output: Vec<String>,
 
+    /// When this process was created.
+    pub started_at: Instant,
+
     /// Receiver for pending IO operation (when state is WaitingIO).
     pub io_receiver: Option<IoReceiver>,
 
@@ -618,6 +621,7 @@ impl Process {
             wake_time: None,
             timeout_dst: None,
             output: Vec::new(),
+            started_at: Instant::now(),
             io_receiver: None,
             io_result_reg: None,
         }
