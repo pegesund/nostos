@@ -3361,6 +3361,22 @@ impl Compiler {
                                 return Ok(dst);
                             }
                         }
+                    } else {
+                        // Function not found with this arity - check if it exists with different arity
+                        // to provide a better error message than falling through to UFCS
+                        let call_arity = args.len();
+                        if let Some(arities) = self.find_all_function_arities(&resolved_name) {
+                            if !arities.contains(&call_arity) {
+                                // Function exists but not with this arity - report arity mismatch
+                                let expected_arity = arities.into_iter().next().unwrap_or(0);
+                                return Err(CompileError::ArityMismatch {
+                                    name: qualified_name.clone(),
+                                    expected: expected_arity,
+                                    found: call_arity,
+                                    span: method.span,
+                                });
+                            }
+                        }
                     }
                 }
 
