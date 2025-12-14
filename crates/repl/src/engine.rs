@@ -97,7 +97,7 @@ pub struct ReplEngine {
     loaded_files: Vec<PathBuf>,
     config: ReplConfig,
     stdlib_path: Option<PathBuf>,
-    call_graph: CallGraph,
+    pub call_graph: CallGraph,
     eval_counter: u64,
     /// Current active module (default: "repl")
     current_module: String,
@@ -1122,6 +1122,20 @@ impl ReplEngine {
                     Arc::new(source.clone()),
                     file_path.to_str().unwrap().to_string(),
                 ).ok();
+
+
+
+                if !prefix.is_empty() {
+                    // prefix has trailing dot?
+                    // let prefix = format!("{}.", components.join("."));
+                    // We want "utils.math" without trailing dot.
+                    let module_path_str = if prefix.ends_with('.') {
+                        prefix[..prefix.len()-1].to_string()
+                    } else {
+                        prefix
+                    };
+                    self.module_sources.insert(module_path_str, file_path.clone());
+                }
             }
         }
 
@@ -1186,10 +1200,23 @@ impl ReplEngine {
 
                     self.compiler.add_module(
                         &module,
-                        components,
+                        components.clone(),
                         Arc::new(source.clone()),
                         file_path.to_str().unwrap().to_string(),
                     ).ok();
+
+                    // Track module source in module_sources map
+                    if !prefix.is_empty() {
+                         let module_path_str = if prefix.ends_with('.') {
+                             prefix[..prefix.len()-1].to_string()
+                         } else {
+                             prefix
+                         };
+                         // Note: In defs/, multiple files map to same module. 
+                         // This overwrites, which is fine for "is_project_function" check.
+                         self.module_sources.insert(module_path_str, file_path.clone());
+                    }
+
                 }
             }
         }
@@ -1919,6 +1946,60 @@ impl ReplEngine {
             }
         }
         entries
+    }
+    /// Check if a function is a user-defined project function (not internal/stdlib)
+    pub fn is_project_function(&self, name: &str) -> bool {
+        // Internal functions start with __
+        if name.starts_with("__") { return false; }
+
+        // A project function must exist as a compiled FunctionValue.
+        // Built-in functions (println, print, etc.) are VM instructions or native functions,
+        // not compiled user functions, so they won't be in the compiler.
+        let func = match self.compiler.get_function(name) {
+            Some(f) => f,
+            None => {
+                // Not a compiled function - check if it's a REPL variable binding
+                let base_name = name.rsplit('.').next().unwrap_or(name);
+                return self.var_bindings.contains_key(base_name);
+            }
+        };
+
+        // Check source file - REPL functions are project functions
+        if let Some(source_file) = &func.source_file {
+            if source_file == "<repl>" || source_file == "repl" {
+                return true;
+            }
+
+            // Check if source file is in stdlib path
+            if let Some(stdlib) = &self.stdlib_path {
+                if std::path::Path::new(source_file).starts_with(stdlib) {
+                    return false;
+                }
+            }
+        }
+
+        // Check if function's module is in project sources
+        if let Some(module_path) = &func.module {
+            if self.module_sources.contains_key(module_path) {
+                return true;
+            }
+        }
+
+        // Check module from name (e.g., "utils.math.foo" -> "utils.math")
+        if let Some(pos) = name.rfind('.') {
+            let module_name = &name[..pos];
+            if let Some(path) = self.module_sources.get(module_name) {
+                if let Some(stdlib) = &self.stdlib_path {
+                    if path.starts_with(stdlib) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+
+        // Default: not a project function
+        false
     }
 }
 
@@ -5057,6 +5138,8 @@ mod call_graph_tests {
         // Test that compile status is transferred on rename (at call graph level)
         let mut engine = create_engine();
 
+
+
         assert!(engine.eval("a() = 1").is_ok());
         engine.set_compile_status("a", CompileStatus::Compiled);
 
@@ -5067,7 +5150,101 @@ mod call_graph_tests {
         // just the call graph here, status won't be transferred automatically.
         // The ReplEngine.rename_definition method does this transfer.
     }
+
+    #[test]
+    fn test_println_filtering() {
+        use nostos_syntax::parse;
+        use std::sync::Arc;
+        use nostos_vm::{Chunk, FunctionValue};
+        use std::path::PathBuf;
+
+        // Test that is_project_function correctly excludes stdlib functions
+        let mut engine = create_engine();
+        
+        // Simulate stdlib path
+        let stdlib_path = PathBuf::from("/usr/local/lib/nostos/stdlib");
+        engine.stdlib_path = Some(stdlib_path.clone());
+
+        // 1. Simulate a stdlib function (like println)
+        // Stdlib functions are NOT in module_sources
+        let println_path = stdlib_path.join("IO.nos").to_string_lossy().to_string();
+        // Use add_module to insert stdlib function properly without private access
+        let println_src = "println(s) = ()";
+        let (module, _) = parse(println_src);
+        let module = module.unwrap();
+        
+        engine.compiler.add_module(
+            &module,
+            vec!["IO".to_string()], // Module path 
+            Arc::new(println_src.to_string()),
+            println_path
+        ).expect("Failed to add stdlib module");
+        
+        // Ensure it's compiled so get_function works
+        let _ = engine.compiler.compile_all();
+        
+        // Check filtering
+        // Note: compiler will prefix with module path "IO" => "IO.println"
+        assert_eq!(engine.is_project_function("IO.println"), false, "IO.println (in stdlib) should NOT be a project function");
+
+        // 2. Simulate a project function in a module
+        let main_src = "main() = ()";
+        let (module, _) = parse(main_src);
+        let module = module.unwrap();
+        let project_file = "/home/user/project/main.nos".to_string();
+        
+        // Simulate load_directory behavior by populating module_sources
+        engine.module_sources.insert("Main".to_string(), PathBuf::from(&project_file));
+        
+        engine.compiler.add_module(
+            &module, 
+            vec!["Main".to_string()],  // Module path
+            Arc::new(main_src.to_string()),
+            project_file.clone()
+        ).expect("Failed to add project module");
+
+        // Force compilation of pending functions
+        let _ = engine.compiler.compile_all();
+        
+        assert_eq!(engine.is_project_function("Main.main"), true, "Main.main (in project module) SHOULD be a project function");
+        
+        // 3. Simulate a REPL function
+        let repl_src = "f() = ()";
+        let (module, _) = parse(repl_src);
+        let module = module.unwrap();
+        
+        engine.compiler.add_module(
+            &module, 
+            vec![], 
+            Arc::new(repl_src.to_string()),
+            "<repl>".to_string()
+        ).expect("Failed to add REPL module");
+        
+        // Compile REPL function
+        let _ = engine.compiler.compile_all();
+        
+        assert_eq!(engine.is_project_function("f"), true, "REPL function (<repl>) SHOULD be a project function");
+        
+        // 4. Simulate a REPL function with "repl" source file
+        let repl_src2 = "f2() = ()";
+        let (module, _) = parse(repl_src2);
+        let module = module.unwrap();
+        
+        engine.compiler.add_module(
+            &module, 
+            vec![], 
+            Arc::new(repl_src2.to_string()),
+            "repl".to_string()
+        ).expect("Failed to add REPL module (repl)");
+        
+        // Compile REPL function 2
+        let _ = engine.compiler.compile_all();
+        
+        assert_eq!(engine.is_project_function("f2"), true, "REPL function (repl) SHOULD be a project function");
+    }
+
 }
+
 
 fn visit_dirs(dir: &std::path::Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
     if dir.is_dir() {

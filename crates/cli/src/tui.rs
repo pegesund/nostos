@@ -2,7 +2,7 @@
 
 use cursive::Cursive;
 use cursive::traits::*;
-use cursive::views::{Dialog, EditView, LinearLayout, ScrollView, TextView, OnEventView, SelectView};
+use cursive::views::{Dialog, EditView, LinearLayout, ScrollView, TextView, OnEventView, SelectView, Panel};
 use cursive::theme::{Color, PaletteColor, Theme, BorderStyle, Style};
 use cursive::view::Resizable;
 use cursive::utils::markup::StyledString;
@@ -971,8 +971,10 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
     let editor_id_copy = editor_id.clone();
     let editor_id_dirty = editor_id.clone();
     let editor_id_save_w = editor_id.clone();
+    let name_for_graph = name.to_string();
+    let engine_for_graph = engine.clone();
 
-    // Ctrl+S to save, Ctrl+W to close, Ctrl+Y to copy, Esc to close
+    // Ctrl+S to save, Ctrl+W to close, Ctrl+Y to copy, Ctrl+G for graph, Esc to close
     let editor_with_events = OnEventView::new(editor.with_name(&editor_id))
         .on_event(Event::CtrlChar('y'), move |s| {
             // Copy editor content to clipboard (Ctrl+Y)
@@ -1032,6 +1034,11 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                 // No unsaved changes, close directly
                 close_editor(s, &name_for_close_w);
             }
+        })
+        .on_event(Event::CtrlChar('g'), move |s| {
+             let name = name_for_graph.clone();
+             let engine = engine_for_graph.clone();
+             show_call_graph_dialog(s, engine, name);
         })
         .on_event(Event::CtrlChar('s'), move |s| {
             debug_log(&format!("Ctrl+S pressed for: {}", name_for_save));
@@ -1577,7 +1584,7 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let dialog = Dialog::around(
         LinearLayout::vertical()
             .child(select_scroll)
-            .child(TextView::new("Enter: Select | n: New | r: Rename | d: Delete | e: Error | Esc: Close"))
+            .child(TextView::new("Enter: Select | n: New | r: Rename | d: Delete | e: Error | g: Graph | Esc: Close"))
     )
     .title(&title);
 
@@ -1591,6 +1598,8 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let engine_for_rename = engine.clone();
     let engine_for_delete = engine.clone();
     let engine_for_error = engine.clone();
+    let path_for_graph = path.clone();
+    let engine_for_graph = engine.clone();
     let dialog_with_keys = OnEventView::new(dialog)
         .on_event(Key::Esc, |s| {
             s.pop_layer();
@@ -1604,7 +1613,25 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 show_browser_dialog(s, engine, new_path);
             }
         })
-        .on_event(Event::Char('n'), move |s| {
+        .on_event('g', move |s| {
+             let engine = engine_for_graph.clone();
+             let path = path_for_graph.clone();
+             
+             let selected = s.call_on_name("browser_select", |v: &mut SelectView<BrowserItem>| {
+                 v.selection().map(|rc| (*rc).clone())
+             }).flatten();
+             
+             if let Some(item) = selected {
+                 if let BrowserItem::Function { .. } = item {
+                     let full_name = engine.borrow().get_full_name(&path, &item);
+                     // Keep browser open underneath
+                     show_call_graph_dialog(s, engine, full_name);
+                 } else {
+                     log_to_repl(s, "Call graph only available for functions");
+                 }
+             }
+        })
+        .on_event('n', move |s| {
             // Show dialog to enter new function name
             let path_for_create = path_for_new.clone();
             debug_log(&format!("New function dialog opened, current path: {:?}", path_for_create));
@@ -2370,6 +2397,7 @@ Keyboard shortcuts:
   Ctrl+Y               Copy focused window to clipboard
   Ctrl+W               Close active editor
   Ctrl+S               Save editor (when in editor)
+  Ctrl+G               View call graph (when in editor)
   Esc                  Close editor (when in editor)".to_string()
         }
         ":load" | ":l" => {
@@ -2426,4 +2454,86 @@ Keyboard shortcuts:
         }
         _ => format!("Unknown command: {}", cmd),
     }
+}
+
+/// Show call graph dialog for a function
+fn show_call_graph_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, name: String) {
+    let engine_ref = engine.borrow();
+
+    // Get Callers (Dependents) - Only project functions
+    let mut callers: Vec<String> = engine_ref.call_graph.direct_dependents(&name)
+        .into_iter()
+        .filter(|n| engine_ref.is_project_function(n))
+        .collect();
+    callers.sort();
+
+    // Get Callees (Dependencies) - Only project functions
+    let mut callees: Vec<String> = engine_ref.call_graph.direct_dependencies(&name)
+        .into_iter()
+        .filter(|n| engine_ref.is_project_function(n))
+        .collect();
+    callees.sort();
+
+    // Create SelectViews
+    let mut callers_view = SelectView::new();
+    for caller in &callers {
+        callers_view.add_item(caller.clone(), caller.clone());
+    }
+
+    let mut callees_view = SelectView::new();
+    for callee in &callees {
+        callees_view.add_item(callee.clone(), callee.clone());
+    }
+
+    drop(engine_ref); // Release borrow
+
+    // Shared event handler for selection (open editor)
+    let handler = move |s: &mut Cursive, selected: &String| {
+        s.pop_layer(); // Close graph dialog
+        open_editor(s, selected);
+    };
+
+    // Shared event handler for navigation (g key - recursive graph)
+    let engine_nav = engine.clone();
+    let nav_handler = move |s: &mut Cursive, selected: &String| {
+         s.pop_layer(); // Close current graph dialog
+         show_call_graph_dialog(s, engine_nav.clone(), selected.clone());
+    };
+
+    // Bind handlers
+    callers_view.set_on_submit(handler.clone());
+    callees_view.set_on_submit(handler);
+
+    // Wrap in scroll views
+    let callers_scroll = callers_view.with_name("graph_callers").scrollable().fixed_size((40, 20));
+    let callees_scroll = callees_view.with_name("graph_callees").scrollable().fixed_size((40, 20));
+
+    // Layout
+    let layout = LinearLayout::horizontal()
+        .child(Panel::new(callers_scroll).title("Callers (Incoming)"))
+        .child(Panel::new(callees_scroll).title("Callees (Outgoing)"));
+
+    // Dialog
+    let dialog = Dialog::around(layout)
+        .title(format!("Call Graph: {}", name));
+
+    // Add navigation keys
+    let dialog_with_events = OnEventView::new(dialog)
+        .on_event(Key::Esc, |s| { s.pop_layer(); })
+        .on_event(Key::Left, |s| { s.focus_name("graph_callers").ok(); })
+        .on_event(Key::Right, |s| { s.focus_name("graph_callees").ok(); })
+        .on_event('g', move |s| {
+            // Check which view has focus and get selection
+            let selected = if s.focus_name("graph_callers").is_ok() {
+                 s.call_on_name("graph_callers", |v: &mut SelectView<String>| v.selection()).flatten()
+            } else {
+                 s.call_on_name("graph_callees", |v: &mut SelectView<String>| v.selection()).flatten()
+            };
+
+            if let Some(sel) = selected {
+                 nav_handler(s, &sel);
+            }
+        });
+
+    s.add_layer(dialog_with_events);
 }
