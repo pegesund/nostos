@@ -436,6 +436,7 @@ struct TuiState {
     active_window_idx: usize,
     engine: Rc<RefCell<ReplEngine>>,
     inspector_open: bool,
+    console_open: bool,
 }
 
 pub fn run_tui(args: &[String]) -> ExitCode {
@@ -488,6 +489,7 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         active_window_idx: 0,
         engine: engine.clone(),
         inspector_open: false,
+        console_open: true,
     })));
 
     // Components
@@ -562,6 +564,11 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         toggle_inspector(s);
     });
 
+    // Global Ctrl+O to toggle console
+    siv.set_on_pre_event(Event::CtrlChar('o'), |s| {
+        toggle_console(s);
+    });
+
     siv.run();
     ExitCode::SUCCESS
 }
@@ -599,9 +606,9 @@ fn poll_inspect_entries(s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>) {
 /// - 1-3 windows: single row, equal width
 /// - 4-6 windows: two rows, top row has 3 windows, bottom row has rest
 fn rebuild_workspace(s: &mut Cursive) {
-    let (editor_names, repl_ids, engine, inspector_open) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+    let (editor_names, repl_ids, engine, inspector_open, console_open) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let state = state.borrow();
-        (state.open_editors.clone(), state.open_repls.clone(), state.engine.clone(), state.inspector_open)
+        (state.open_editors.clone(), state.open_repls.clone(), state.engine.clone(), state.inspector_open, state.console_open)
     }).unwrap();
 
     // Get console content BEFORE clearing workspace
@@ -651,6 +658,13 @@ fn rebuild_workspace(s: &mut Cursive) {
                     }
                 }
             }
+        })
+        .on_event(Event::CtrlChar('w'), |s| {
+            // Close console (toggle off)
+            s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                state.borrow_mut().console_open = false;
+            });
+            rebuild_workspace(s);
         });
 
     let console = ActiveWindow::new(repl_log_with_events, "Console").full_width();
@@ -658,7 +672,12 @@ fn rebuild_workspace(s: &mut Cursive) {
     // Collect all window views: editors + REPL panels + inspector (if open)
     let mut windows: Vec<Box<dyn View>> = Vec::new();
 
-    // Add inspector first (so it's the first window after console)
+    // Add console first if open
+    if console_open {
+        windows.push(Box::new(console));
+    }
+
+    // Add inspector
     if inspector_open {
         let inspector_view = create_inspector_view(&engine);
         windows.push(Box::new(inspector_view));
@@ -674,9 +693,24 @@ fn rebuild_workspace(s: &mut Cursive) {
         windows.push(Box::new(repl_view));
     }
 
+    if windows.is_empty() {
+        // Empty workspace - maybe show a hint
+        s.call_on_name("workspace", |ws: &mut LinearLayout| {
+             ws.add_child(
+                 TextView::new("Workspace empty. Ctrl+O for Console, Ctrl+B for Browser.")
+                    .center()
+                    .full_width()
+                    .full_height()
+             );
+        });
+        return;
+    }
+
+    let total_windows = windows.len();
+
     if total_windows <= 3 {
         // Single row layout
-        let mut row = LinearLayout::horizontal().child(console);
+        let mut row = LinearLayout::horizontal();
 
         for window in windows {
             row.add_child(window);
@@ -686,12 +720,15 @@ fn rebuild_workspace(s: &mut Cursive) {
             ws.add_child(row.full_width().full_height().with_name("workspace_row_0"));
         });
     } else {
-        // Two row layout: first 2 windows + console on top, rest on bottom
-        let mut row0 = LinearLayout::horizontal().child(console);
+        // Two row layout: first 2 or 3 windows on top, rest on bottom
+        // If we have 4 windows, do 2x2. If 5, 2x3. If 6, 3x3.
+        let split_idx = if total_windows >= 6 { 3 } else { 2 };
+        
+        let mut row0 = LinearLayout::horizontal();
         let mut row1 = LinearLayout::horizontal();
 
         for (i, window) in windows.into_iter().enumerate() {
-            if i < 2 {
+            if i < split_idx {
                 row0.add_child(window);
             } else {
                 row1.add_child(window);
@@ -780,8 +817,44 @@ pub fn close_repl_panel(s: &mut Cursive, repl_id: usize) {
 
     if was_removed {
         rebuild_workspace(s);
-        s.focus_name("input").ok();
+        // Focus something sensible
+        if let Err(_) = s.focus_name("input") {
+             // Fallback if input is gone (it is)
+             let _ = s.focus_name("repl_log");
+        }
         log_to_repl(s, &format!("Closed REPL #{}", repl_id));
+    }
+}
+
+/// Toggle the console visibility
+fn toggle_console(s: &mut Cursive) {
+    let console_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let mut state = state.borrow_mut();
+        state.console_open = !state.console_open;
+        state.console_open
+    }).unwrap();
+
+    rebuild_workspace(s);
+
+    if console_open {
+        s.focus_name("repl_log").ok();
+    } else {
+        // Focus first available window
+        let (first_editor, first_repl) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+            let state = state.borrow();
+            (
+                state.open_editors.first().cloned(),
+                state.open_repls.first().cloned()
+            )
+        }).unwrap();
+
+        if let Some(name) = first_editor {
+            let editor_id = format!("editor_{}", name);
+            s.focus_name(&editor_id).ok();
+        } else if let Some(id) = first_repl {
+            let panel_id = format!("repl_panel_{}", id);
+            s.focus_name(&panel_id).ok();
+        }
     }
 }
 
@@ -800,7 +873,8 @@ fn toggle_inspector(s: &mut Cursive) {
         log_to_repl(s, "Inspector panel opened (Alt+I or :ins to close)");
     } else {
         rebuild_workspace(s);
-        s.focus_name("input").ok();
+        // Focus fallback if nothing else
+        s.focus_name("repl_log").ok();
         log_to_repl(s, "Inspector panel closed");
     }
 }
@@ -823,7 +897,7 @@ fn create_inspector_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
                 state.borrow_mut().inspector_open = false;
             });
             rebuild_workspace(s);
-            s.focus_name("input").ok();
+            s.focus_name("repl_log").ok();
             log_to_repl(s, "Inspector panel closed");
         })
         .on_event(Key::Esc, |s| {
@@ -832,7 +906,7 @@ fn create_inspector_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
                 state.borrow_mut().inspector_open = false;
             });
             rebuild_workspace(s);
-            s.focus_name("input").ok();
+            s.focus_name("repl_log").ok();
             log_to_repl(s, "Inspector panel closed");
         });
 
@@ -1262,8 +1336,8 @@ fn close_editor(s: &mut Cursive, name: &str) {
         // Rebuild the entire workspace layout
         rebuild_workspace(s);
 
-        // Focus input
-        s.focus_name("input").ok();
+        // Focus fallback
+        s.focus_name("repl_log").ok();
     }
 }
 

@@ -12,6 +12,10 @@ use nostos_syntax::lexer::{Token, lex};
 use std::rc::Rc;
 use std::cell::RefCell;
 use nostos_repl::ReplEngine;
+use std::fs;
+use std::env;
+use std::path::PathBuf;
+use std::io::Write;
 
 use crate::autocomplete::{Autocomplete, CompletionContext, CompletionItem, CompletionKind, CompletionSource};
 
@@ -148,6 +152,12 @@ pub struct ReplPanel {
     autocomplete: Autocomplete,
     /// Autocomplete state
     ac_state: AutocompleteState,
+    /// History navigation index (None = current edit buffer)
+    history_index: Option<usize>,
+    /// Stashed current input when navigating history
+    stash_current: Option<Vec<String>>,
+    /// Persistent command history (separate from display history)
+    command_history: Vec<Vec<String>>,
 }
 
 impl ReplPanel {
@@ -169,7 +179,11 @@ impl ReplPanel {
             engine,
             instance_id,
             autocomplete,
+
             ac_state: AutocompleteState::new(),
+            history_index: None,
+            stash_current: None,
+            command_history: Self::load_history_from_disk(),
         }
     }
 
@@ -204,8 +218,12 @@ impl ReplPanel {
 
         // Move current to history and start fresh
         self.history.push(self.current.clone());
+        self.command_history.push(self.current.input.clone());
         self.current = ReplEntry::new();
         self.cursor = (0, 0);
+
+        self.history_index = None;
+        self.stash_current = None;
 
         // Update autocomplete cache after evaluation (new definitions may be available)
         {
@@ -788,6 +806,7 @@ impl View for ReplPanel {
                 self.ensure_cursor_visible();
                 EventResult::Consumed(None)
             }
+
             Event::Key(Key::Up) => {
                 // If autocomplete is active, navigate up
                 if self.ac_state.active && self.ac_state.candidates.len() > 1 {
@@ -798,6 +817,32 @@ impl View for ReplPanel {
                     }
                     return EventResult::Consumed(None);
                 }
+                
+                // History navigation
+                if self.cursor.1 == 0 {
+                    // At top line - navigate history backend
+                    let handled = if self.command_history.is_empty() {
+                         false
+                    } else if let Some(idx) = self.history_index {
+                        if idx > 0 {
+                            self.load_history(Some(idx - 1));
+                            true
+                        } else {
+                            // Already at oldest
+                            true
+                        }
+                    } else {
+                        // Stash current and go to latest
+                        self.stash_current = Some(self.current.input.clone());
+                        self.load_history(Some(self.command_history.len() - 1));
+                        true
+                    };
+                    
+                    if handled {
+                        return EventResult::Consumed(None);
+                    }
+                }
+
                 // Otherwise normal cursor movement
                 if self.cursor.1 > 0 {
                     self.cursor.1 -= 1;
@@ -812,6 +857,29 @@ impl View for ReplPanel {
                     self.ac_state.selected = (self.ac_state.selected + 1) % self.ac_state.candidates.len();
                     return EventResult::Consumed(None);
                 }
+
+                // History navigation
+                let last_line = self.current.input.len().saturating_sub(1);
+                if self.cursor.1 == last_line {
+                    // At bottom line - navigate history forward
+                    let handled = if let Some(idx) = self.history_index {
+                        if idx < self.command_history.len() - 1 {
+                            self.load_history(Some(idx + 1));
+                            true
+                        } else {
+                            // Restore stashed
+                            self.load_history(None);
+                            true
+                        }
+                    } else {
+                        false
+                    };
+
+                    if handled {
+                        return EventResult::Consumed(None);
+                    }
+                }
+
                 // Otherwise normal cursor movement
                 if self.cursor.1 < self.current.input.len() - 1 {
                     self.cursor.1 += 1;
@@ -856,6 +924,10 @@ impl View for ReplPanel {
                 if !self.ac_state.candidates.is_empty() {
                     self.ac_state.active = true;
                 }
+                EventResult::Consumed(None)
+            }
+            Event::CtrlChar('s') => {
+                self.save_history_to_disk();
                 EventResult::Consumed(None)
             }
             _ => EventResult::Ignored,
@@ -911,5 +983,79 @@ impl ReplPanel {
     /// Set the history (restore after rebuild)
     pub fn set_history(&mut self, history: Vec<ReplEntry>) {
         self.history = history;
+    }
+
+
+    /// Load history entry by index (or restore stashed if None)
+    fn load_history(&mut self, index: Option<usize>) {
+        self.history_index = index;
+
+        if let Some(idx) = index {
+            if idx < self.command_history.len() {
+                self.current.input = self.command_history[idx].clone();
+            }
+        } else {
+            // Restore stashed or empty
+            if let Some(stashed) = self.stash_current.take() {
+                self.current.input = stashed;
+            } else {
+                self.current.input = vec![String::new()];
+            }
+        }
+
+        // Move cursor to end
+        self.cursor.1 = self.current.input.len().saturating_sub(1);
+        self.cursor.0 = self.line_char_count(self.cursor.1);
+        self.ensure_cursor_visible();
+        
+        // Reset autocomplete
+        self.ac_state.reset();
+    }
+
+    fn get_history_file_path() -> PathBuf {
+        PathBuf::from(env::var("HOME").unwrap_or_else(|_| ".".to_string()))
+            .join(".nostos_history")
+    }
+
+    fn load_history_from_disk() -> Vec<Vec<String>> {
+        let path = Self::get_history_file_path();
+        if !path.exists() {
+            return Vec::new();
+        }
+
+        if let Ok(content) = fs::read_to_string(path) {
+            let mut history = Vec::new();
+            let mut current_entry = Vec::new();
+
+            for line in content.lines() {
+                if line == "# --- ENTRY ---" {
+                    if !current_entry.is_empty() {
+                        history.push(current_entry);
+                        current_entry = Vec::new();
+                    }
+                } else {
+                    current_entry.push(line.to_string());
+                }
+            }
+            if !current_entry.is_empty() {
+                history.push(current_entry);
+            }
+            history
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn save_history_to_disk(&self) {
+        let path = Self::get_history_file_path();
+        
+        if let Ok(mut file) = fs::File::create(path) {
+            for entry in &self.command_history {
+                if let Err(_) = writeln!(file, "# --- ENTRY ---") { break; }
+                for line in entry {
+                    if let Err(_) = writeln!(file, "{}", line) { break; }
+                }
+            }
+        }
     }
 }
