@@ -528,115 +528,14 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         )
         .with_name("workspace");
 
-    // 3. Input
-    let engine_clone = engine.clone();
-    let input_view = EditView::new()
-        .on_submit(move |s, text| {
-            let text = text.trim();
-            if text.is_empty() { return; }
-            let input_text = text.to_string();
-
-            s.call_on_name("input", |view: &mut EditView| {
-                view.set_content("");
-            });
-
-            if input_text == ":quit" || input_text == ":q" || input_text == ":exit" {
-                s.quit();
-                return;
-            }
-
-            // Handle :edit
-            if input_text.starts_with(":edit") || input_text.starts_with(":e ") {
-                let parts: Vec<&str> = input_text.splitn(2, char::is_whitespace).collect();
-                let name = parts.get(1).map(|s| s.trim()).unwrap_or("");
-                if name.is_empty() {
-                    log_to_repl(s, "Usage: :edit <name>");
-                } else {
-                    open_editor(s, name);
-                }
-                return;
-            }
-
-            // Handle :copy
-            if input_text == ":copy" || input_text == ":cp" {
-                copy_focused_window(s);
-                return;
-            }
-
-            // Handle :debug - show what command was received
-            if input_text == ":debug" {
-                log_to_repl(s, "Debug: TUI commands are working");
-                return;
-            }
-
-            // Handle :browse
-            if input_text == ":browse" || input_text == ":b" {
-                open_browser(s);
-                return;
-            }
-
-            // Handle :inspect (toggle inspector panel)
-            if input_text == ":inspect" || input_text == ":ins" {
-                toggle_inspector(s);
-                return;
-            }
-
-            // Echo
-            s.call_on_name("repl_log", |view: &mut FocusableConsole| {
-                view.append_styled(style_input(&input_text));
-                view.append("\n");
-            });
-
-            // Eval
-            let result = if input_text.starts_with(':') {
-                handle_command(&mut engine_clone.borrow_mut(), &input_text)
-            } else {
-                match engine_clone.borrow_mut().eval(&input_text) {
-                    Ok(output) => {
-                        // Debug: log to file to see what's returned
-                        let _ = std::fs::write("/var/tmp/nostos_eval_result.txt", &output);
-                        output
-                    }
-                    Err(e) => format!("Error: {}", e),
-                }
-            };
-
-            // Always log something to confirm the flow works
-            if result.is_empty() {
-                log_to_repl(s, "(no output)");
-            } else {
-                log_to_repl(s, &result);
-            }
-
-            // Poll for any inspect entries and update inspector panel if open
-            poll_inspect_entries(s, &engine_clone);
-        })
-        .with_name("input");
-
-    // Wrap input with OnEventView for Ctrl+Y copy (same pattern as Ctrl+S on editor)
-    let input_with_events = OnEventView::new(input_view)
-        .on_event(Event::CtrlChar('y'), |s| {
-            if let Some(text) = s.call_on_name("input", |view: &mut EditView| {
-                view.get_content().to_string()
-            }) {
-                if !text.is_empty() {
-                    match copy_to_system_clipboard(&text) {
-                        Ok(_) => log_to_repl(s, &format!("Copied {} chars", text.len())),
-                        Err(e) => log_to_repl(s, &format!("Copy failed: {}", e)),
-                    }
-                }
-            }
-        });
-
-    // Root Layout - Input always has full width
+    // Root Layout - Just workspace, no input
     let root_layout = LinearLayout::vertical()
-        .child(workspace.full_width().full_height())
-        .child(ActiveWindow::new(input_with_events, "Input").full_width().fixed_height(3));
+        .child(workspace.full_width().full_height());
 
     siv.add_layer(root_layout);
 
-    // Focus input at start
-    siv.focus_name("input").ok();
+    // Focus repl_log at start
+    siv.focus_name("repl_log").ok();
 
     // Global Shift+Tab for window cycling (this one needs to be global)
     siv.set_on_pre_event(Event::Shift(Key::Tab), |s| {
@@ -2189,14 +2088,14 @@ fn close_viewer(s: &mut Cursive, viewer_name: &str) {
 
     if was_removed {
         rebuild_workspace(s);
-        s.focus_name("input").ok();
+        s.focus_name("repl_log").ok();
     }
 }
 
 fn cycle_window(s: &mut Cursive) {
     let target = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let mut state = state.borrow_mut();
-        let mut windows = vec!["input".to_string(), "repl_log".to_string()];
+        let mut windows = vec!["repl_log".to_string()];
 
         for name in &state.open_editors {
             windows.push(format!("editor_{}", name));
@@ -2218,7 +2117,7 @@ fn close_active_editor(s: &mut Cursive) {
     }).unwrap_or((0, vec![]));
 
     // Build window list (same order as cycle_window)
-    let mut windows = vec!["input".to_string(), "repl_log".to_string()];
+    let mut windows = vec!["repl_log".to_string()];
     for name in &editor_names {
         windows.push(format!("editor_{}", name));
     }
@@ -2240,7 +2139,7 @@ fn copy_focused_window(s: &mut Cursive) {
     }).unwrap_or((0, vec![]));
 
     // Build window list (same order as cycle_window)
-    let mut windows = vec!["input".to_string(), "repl_log".to_string()];
+    let mut windows = vec!["repl_log".to_string()];
     for name in &editor_names {
         windows.push(format!("editor_{}", name));
     }
@@ -2248,11 +2147,7 @@ fn copy_focused_window(s: &mut Cursive) {
     let focused_window = windows.get(active_idx % windows.len()).cloned().unwrap_or_default();
 
     // Get content based on focused window
-    let content: Option<String> = if focused_window == "input" {
-        s.call_on_name("input", |view: &mut EditView| {
-            view.get_content().to_string()
-        })
-    } else if focused_window == "repl_log" {
+    let content: Option<String> = if focused_window == "repl_log" {
         s.call_on_name("repl_log", |view: &mut FocusableConsole| {
             view.get_content()
         })
