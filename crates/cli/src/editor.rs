@@ -43,6 +43,10 @@ impl<'a> CompletionSource for EngineCompletionSource<'a> {
     fn get_function_doc(&self, name: &str) -> Option<String> {
         self.engine.get_function_doc(name)
     }
+
+    fn get_variable_type(&self, var_name: &str) -> Option<String> {
+        self.engine.get_variable_type(var_name)
+    }
 }
 
 /// Maximum items to show in autocomplete popup

@@ -42,7 +42,7 @@ impl Default for ReplConfig {
 }
 
 /// Information about a REPL variable binding
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct VarBinding {
     /// The thunk function name (e.g., "__repl_var_x__")
     thunk_name: String,
@@ -378,6 +378,104 @@ impl ReplEngine {
         None
     }
 
+    /// Check if input is a tuple destructuring pattern like `(a, b) = expr`
+    /// Returns Some((names, expr)) where names is a vector of variable names
+    pub fn is_tuple_binding(input: &str) -> Option<(Vec<String>, String)> {
+        let input = input.trim();
+
+        // Must start with '(' for tuple pattern
+        if !input.starts_with('(') {
+            return None;
+        }
+
+        // Find the matching closing paren
+        let mut depth = 0;
+        let mut close_paren_pos = None;
+        for (i, c) in input.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close_paren_pos = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let close_paren_pos = close_paren_pos?;
+
+        // After the closing paren, we need `= expr`
+        let after_paren = input[close_paren_pos + 1..].trim();
+        if !after_paren.starts_with('=') {
+            return None;
+        }
+
+        // Make sure it's not == or =>
+        let after_eq = after_paren.chars().nth(1);
+        if matches!(after_eq, Some('=') | Some('>')) {
+            return None;
+        }
+
+        let expr = after_paren[1..].trim();
+        if expr.is_empty() {
+            return None;
+        }
+
+        // Parse the tuple pattern - extract variable names
+        let pattern = &input[1..close_paren_pos];
+        let mut names = Vec::new();
+        let mut current = String::new();
+        let mut paren_depth = 0;
+
+        for c in pattern.chars() {
+            match c {
+                '(' => {
+                    paren_depth += 1;
+                    current.push(c);
+                }
+                ')' => {
+                    paren_depth -= 1;
+                    current.push(c);
+                }
+                ',' if paren_depth == 0 => {
+                    let name = current.trim().to_string();
+                    if !name.is_empty() {
+                        names.push(name);
+                    }
+                    current.clear();
+                }
+                _ => current.push(c),
+            }
+        }
+
+        // Don't forget the last element
+        let last = current.trim().to_string();
+        if !last.is_empty() {
+            names.push(last);
+        }
+
+        // Need at least 2 elements for a tuple
+        if names.len() < 2 {
+            return None;
+        }
+
+        // All names must be valid identifiers (lowercase start or underscore)
+        for name in &names {
+            if let Some(first_char) = name.chars().next() {
+                if !first_char.is_lowercase() && first_char != '_' {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        }
+
+        Some((names, expr.to_string()))
+    }
+
     /// Define a variable binding
     fn define_var(&mut self, name: &str, mutable: bool, expr: &str) -> Result<String, String> {
         self.var_counter += 1;
@@ -411,6 +509,155 @@ impl ReplEngine {
         Ok(format!("{}{} = {}", mutability, name, expr))
     }
 
+    /// Define a tuple destructuring binding like `(a, b) = expr`
+    fn define_tuple_binding(&mut self, names: &[String], expr: &str) -> Result<String, String> {
+        self.var_counter += 1;
+        let tuple_thunk = format!("__repl_tuple_{}", self.var_counter);
+
+        // Create the tuple thunk that evaluates the expression once
+        let tuple_wrapper = format!("{}() = {}", tuple_thunk, expr);
+        let (tuple_module_opt, errors) = parse(&tuple_wrapper);
+
+        if !errors.is_empty() {
+            return Err("Parse error in tuple expression".to_string());
+        }
+
+        let tuple_module = tuple_module_opt.ok_or("Failed to parse tuple expression")?;
+
+        self.compiler.add_module(&tuple_module, vec![], Arc::new(tuple_wrapper.clone()), "<repl>".to_string())
+            .map_err(|e| format!("Error: {}", e))?;
+
+        // Compile the tuple thunk first to get its type
+        if let Err((e, _, _)) = self.compiler.compile_all() {
+            return Err(format!("Compilation error: {}", e));
+        }
+
+        // Get the tuple's type and extract element types
+        let tuple_type = self.compiler.get_function_signature(&tuple_thunk);
+        let mut element_types = tuple_type.as_ref().map(|t| Self::extract_tuple_element_types(t));
+
+        // If we couldn't get a tuple type from type inference, try to get it from builtin signatures
+        if element_types.as_ref().map_or(true, |v| v.is_empty()) {
+            if let Some(builtin_return_type) = Self::get_builtin_return_type(expr) {
+                element_types = Some(Self::extract_tuple_element_types(&builtin_return_type));
+            }
+        }
+
+        // Create accessor thunks for each element
+        for (i, name) in names.iter().enumerate() {
+            // Skip underscore bindings (wildcards)
+            if name == "_" {
+                continue;
+            }
+
+            self.var_counter += 1;
+            let var_thunk = format!("__repl_var_{}_{}", name, self.var_counter);
+
+            // Create accessor: varThunk() = tupleThunk().N
+            let accessor = format!("{}() = {}().{}", var_thunk, tuple_thunk, i);
+            let (accessor_module_opt, errors) = parse(&accessor);
+
+            if !errors.is_empty() {
+                return Err(format!("Parse error creating accessor for {}", name));
+            }
+
+            let accessor_module = accessor_module_opt.ok_or("Failed to parse accessor")?;
+
+            self.compiler.add_module(&accessor_module, vec![], Arc::new(accessor.clone()), "<repl>".to_string())
+                .map_err(|e| format!("Error: {}", e))?;
+
+            // Get element type from parsed tuple type
+            let element_type = element_types.as_ref()
+                .and_then(|types| types.get(i).cloned());
+
+            self.var_bindings.insert(name.clone(), VarBinding {
+                thunk_name: var_thunk,
+                mutable: false,
+                type_annotation: element_type,
+            });
+        }
+
+        // Compile accessor thunks
+        if let Err((e, _, _)) = self.compiler.compile_all() {
+            return Err(format!("Compilation error: {}", e));
+        }
+
+        self.sync_vm();
+
+        // Return a nice message
+        let names_str = names.join(", ");
+        Ok(format!("({}) = {}", names_str, expr))
+    }
+
+    /// Extract element types from a tuple type string like "(String, { exitCode: Int })"
+    fn extract_tuple_element_types(tuple_type: &str) -> Vec<String> {
+        let trimmed = tuple_type.trim();
+
+        // Must be a tuple: starts with '(' and ends with ')'
+        if !trimmed.starts_with('(') || !trimmed.ends_with(')') {
+            return vec![];
+        }
+
+        let inner = &trimmed[1..trimmed.len()-1];
+
+        // Parse comma-separated types, respecting nested brackets
+        let mut types = Vec::new();
+        let mut current = String::new();
+        let mut depth = 0;
+
+        for c in inner.chars() {
+            match c {
+                '(' | '{' | '[' | '<' => {
+                    depth += 1;
+                    current.push(c);
+                }
+                ')' | '}' | ']' | '>' => {
+                    depth -= 1;
+                    current.push(c);
+                }
+                ',' if depth == 0 => {
+                    let t = current.trim().to_string();
+                    if !t.is_empty() {
+                        types.push(t);
+                    }
+                    current.clear();
+                }
+                _ => current.push(c),
+            }
+        }
+
+        // Don't forget the last element
+        let t = current.trim().to_string();
+        if !t.is_empty() {
+            types.push(t);
+        }
+
+        types
+    }
+
+    /// Try to get the return type of a builtin function call from an expression.
+    /// For example, "Exec.run(\"cmd\", [])" -> "(String, { exitCode: Int, stdout: String, stderr: String })"
+    fn get_builtin_return_type(expr: &str) -> Option<String> {
+        use nostos_compiler::Compiler;
+
+        let trimmed = expr.trim();
+
+        // Look for function calls like "Module.func(...)" or "func(...)"
+        if let Some(paren_pos) = trimmed.find('(') {
+            let func_name = trimmed[..paren_pos].trim();
+
+            // Check if this is a builtin function
+            if let Some(sig) = Compiler::get_builtin_signature(func_name) {
+                // Extract return type from signature like "(A, B) -> ReturnType"
+                if let Some(arrow_pos) = sig.rfind("->") {
+                    return Some(sig[arrow_pos + 2..].trim().to_string());
+                }
+            }
+        }
+
+        None
+    }
+
     /// Process input (eval or define). Returns output string or error.
     pub fn eval(&mut self, input: &str) -> Result<String, String> {
         self.eval_in_module(input, None)
@@ -421,6 +668,12 @@ impl ReplEngine {
     /// If module_name is Some, uses that module path.
     pub fn eval_in_module(&mut self, input: &str, module_name: Option<&str>) -> Result<String, String> {
         let input = input.trim();
+
+        // Check for tuple destructuring binding like (a, b) = expr
+        if let Some((names, expr)) = Self::is_tuple_binding(input) {
+            return self.define_tuple_binding(&names, &expr);
+        }
+
         // Check for variable binding
         if let Some((name, mutable, expr)) = Self::is_var_binding(input) {
             return self.define_var(&name, mutable, &expr);
@@ -894,6 +1147,29 @@ impl ReplEngine {
     /// Get constructor names for a variant type
     pub fn get_type_constructors(&self, type_name: &str) -> Vec<String> {
         self.compiler.get_type_constructors(type_name)
+    }
+
+    /// Get the type of a REPL variable (for autocomplete field access)
+    /// Returns the stored type annotation or the inferred return type of the variable's thunk function
+    pub fn get_variable_type(&self, var_name: &str) -> Option<String> {
+        // Look up the variable binding
+        let binding = self.var_bindings.get(var_name)?;
+
+        // First, try the stored type annotation (used for tuple destructuring)
+        if let Some(ref type_ann) = binding.type_annotation {
+            return Some(type_ann.clone());
+        }
+
+        // Fall back to getting the thunk's signature
+        let sig = self.compiler.get_function_signature(&binding.thunk_name)?;
+
+        // Extract the return type (everything after "-> ")
+        if let Some(arrow_pos) = sig.find("-> ") {
+            Some(sig[arrow_pos + 3..].trim().to_string())
+        } else {
+            // If no arrow, the whole signature is the type
+            Some(sig)
+        }
     }
 
     /// Get the signature for a function (for autocomplete display)
@@ -2081,6 +2357,128 @@ mod tests {
         // Not variable bindings
         assert_eq!(ReplEngine::is_var_binding("a == 10"), None);
         assert_eq!(ReplEngine::is_var_binding("f(x) = x + 1"), None);
+    }
+
+    #[test]
+    fn test_tuple_binding_detection() {
+        // Basic tuple binding
+        assert_eq!(
+            ReplEngine::is_tuple_binding("(a, b) = expr"),
+            Some((vec!["a".to_string(), "b".to_string()], "expr".to_string()))
+        );
+
+        // Three elements
+        assert_eq!(
+            ReplEngine::is_tuple_binding("(x, y, z) = foo(1, 2)"),
+            Some((vec!["x".to_string(), "y".to_string(), "z".to_string()], "foo(1, 2)".to_string()))
+        );
+
+        // With underscore (wildcard)
+        assert_eq!(
+            ReplEngine::is_tuple_binding("(status, _) = Exec.run(\"ls\", [])"),
+            Some((vec!["status".to_string(), "_".to_string()], "Exec.run(\"ls\", [])".to_string()))
+        );
+
+        // Not tuple bindings
+        assert_eq!(ReplEngine::is_tuple_binding("a = 10"), None);  // Simple var
+        assert_eq!(ReplEngine::is_tuple_binding("(a, b) == expr"), None);  // Comparison
+        assert_eq!(ReplEngine::is_tuple_binding("(a, b) => expr"), None);  // Arrow
+        assert_eq!(ReplEngine::is_tuple_binding("(a) = expr"), None);  // Single element
+        assert_eq!(ReplEngine::is_tuple_binding("(A, b) = expr"), None);  // Uppercase not allowed
+    }
+
+    #[test]
+    fn test_tuple_binding_eval() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Define a function that returns a tuple
+        let result = engine.eval("makePair(x, y) = (x, y)");
+        assert!(result.is_ok(), "Should define makePair: {:?}", result);
+
+        // Use tuple destructuring to bind the result
+        let result = engine.eval("(first, second) = makePair(10, 20)");
+        assert!(result.is_ok(), "Should bind tuple: {:?}", result);
+
+        // Verify the bound values
+        let result = engine.eval("first");
+        assert!(result.is_ok(), "Should evaluate first");
+        assert_eq!(result.unwrap().trim(), "10");
+
+        let result = engine.eval("second");
+        assert!(result.is_ok(), "Should evaluate second");
+        assert_eq!(result.unwrap().trim(), "20");
+    }
+
+    #[test]
+    fn test_tuple_binding_with_wildcard() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Define a function that returns a tuple
+        let result = engine.eval("getStatusAndData() = (\"ok\", 42)");
+        assert!(result.is_ok(), "Should define getStatusAndData: {:?}", result);
+
+        // Use tuple destructuring with wildcard
+        let result = engine.eval("(status, _) = getStatusAndData()");
+        assert!(result.is_ok(), "Should bind with wildcard: {:?}", result);
+
+        // Verify the bound value
+        let result = engine.eval("status");
+        assert!(result.is_ok(), "Should evaluate status");
+        assert_eq!(result.unwrap().trim(), "ok");
+    }
+
+    #[test]
+    fn test_get_variable_type_simple() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Simple variable binding
+        let result = engine.eval("x = 42");
+        assert!(result.is_ok(), "Should define x: {:?}", result);
+
+        let x_type = engine.get_variable_type("x");
+        assert!(x_type.is_some(), "Should have type for x");
+        assert!(x_type.unwrap().contains("Int"), "x should be Int");
+    }
+
+    #[test]
+    fn test_get_variable_type_for_tuple_binding() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Define a simple function that returns a tuple
+        let result = engine.eval("getData() = (\"ok\", 42)");
+        assert!(result.is_ok(), "Should define getData: {:?}", result);
+
+        // Use tuple destructuring
+        let result = engine.eval("(status, data) = getData()");
+        assert!(result.is_ok(), "Should bind tuple: {:?}", result);
+
+        // Check that we can get the variable type - should be Int from the tuple
+        let data_type = engine.get_variable_type("data");
+        assert!(data_type.is_some(), "Should have type for data");
+        assert_eq!(data_type.unwrap(), "Int", "data should be Int from tuple element");
+    }
+
+    #[test]
+    fn test_get_variable_type_for_exec_run() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Use Exec.run with tuple destructuring
+        let result = engine.eval("(status, result) = Exec.run(\"echo\", [\"test\"])");
+        assert!(result.is_ok(), "Should bind Exec.run result: {:?}", result);
+
+        // Check what type we get for result - should be the record type from builtin signature
+        let result_type = engine.get_variable_type("result");
+        assert!(result_type.is_some(), "Should have type for result");
+
+        let type_str = result_type.unwrap();
+        assert!(type_str.contains("exitCode"), "Type should contain exitCode field: {}", type_str);
+        assert!(type_str.contains("stdout"), "Type should contain stdout field: {}", type_str);
+        assert!(type_str.contains("stderr"), "Type should contain stderr field: {}", type_str);
     }
 
     #[test]

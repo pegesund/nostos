@@ -152,6 +152,9 @@ pub trait CompletionSource {
 
     /// Get the doc comment for a function
     fn get_function_doc(&self, name: &str) -> Option<String>;
+
+    /// Get the type of a variable (for field access completion)
+    fn get_variable_type(&self, var_name: &str) -> Option<String>;
 }
 
 /// Completion context - what kind of completion is needed
@@ -610,17 +613,19 @@ impl Autocomplete {
         let prefix_lower = prefix.to_lowercase();
 
         // Try to find the type of the receiver
-        // For now, if receiver looks like a type name (uppercase), get its fields
-        // This is a simplification - full type inference would be better
-
         let type_name = if self.is_upper_ident(receiver) {
+            // Uppercase - it's a type name directly
             receiver.to_string()
         } else {
-            // Could try to look up variable type here
-            receiver.to_string()
+            // Lowercase - try to look up the variable's type
+            if let Some(var_type) = source.get_variable_type(receiver) {
+                var_type
+            } else {
+                receiver.to_string()
+            }
         };
 
-        // Get fields
+        // Get fields from known type definitions
         for field in source.get_type_fields(&type_name) {
             if field.to_lowercase().starts_with(&prefix_lower) {
                 items.push(CompletionItem {
@@ -629,6 +634,23 @@ impl Autocomplete {
                     kind: CompletionKind::Field,
                     doc: None,
                 });
+            }
+        }
+
+        // If the type looks like an anonymous record "{ field1: Type1, field2: Type2 }",
+        // extract fields from it
+        if type_name.starts_with('{') && type_name.ends_with('}') {
+            for field in Self::extract_record_fields(&type_name) {
+                if field.to_lowercase().starts_with(&prefix_lower) {
+                    if !items.iter().any(|i| i.text == field) {
+                        items.push(CompletionItem {
+                            text: field.clone(),
+                            label: field,
+                            kind: CompletionKind::Field,
+                            doc: None,
+                        });
+                    }
+                }
             }
         }
 
@@ -646,6 +668,65 @@ impl Autocomplete {
 
         items.sort_by(|a, b| a.text.cmp(&b.text));
         items
+    }
+
+    /// Extract field names from an anonymous record type like "{ exitCode: Int, stdout: String }"
+    fn extract_record_fields(type_str: &str) -> Vec<String> {
+        let mut fields = Vec::new();
+
+        // Strip outer braces and whitespace
+        let inner = type_str.trim()
+            .strip_prefix('{')
+            .and_then(|s| s.strip_suffix('}'))
+            .unwrap_or("")
+            .trim();
+
+        if inner.is_empty() {
+            return fields;
+        }
+
+        // Parse field definitions, handling nested types
+        let mut depth = 0;
+        let mut current_field = String::new();
+
+        for c in inner.chars() {
+            match c {
+                '{' | '(' | '[' => {
+                    depth += 1;
+                    current_field.push(c);
+                }
+                '}' | ')' | ']' => {
+                    depth -= 1;
+                    current_field.push(c);
+                }
+                ',' if depth == 0 => {
+                    if let Some(field_name) = Self::extract_field_name(&current_field) {
+                        fields.push(field_name);
+                    }
+                    current_field.clear();
+                }
+                _ => current_field.push(c),
+            }
+        }
+
+        // Don't forget the last field
+        if let Some(field_name) = Self::extract_field_name(&current_field) {
+            fields.push(field_name);
+        }
+
+        fields
+    }
+
+    /// Extract field name from a field definition like "exitCode: Int"
+    fn extract_field_name(field_def: &str) -> Option<String> {
+        let trimmed = field_def.trim();
+        if let Some(colon_pos) = trimmed.find(':') {
+            let name = trimmed[..colon_pos].trim();
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+        None
     }
 
     /// Apply a completion: returns the text to insert and cursor adjustment
@@ -677,6 +758,7 @@ mod tests {
         variables: Vec<String>,
         type_fields: HashMap<String, Vec<String>>,
         type_constructors: HashMap<String, Vec<String>>,
+        variable_types: HashMap<String, String>,
     }
 
     impl MockSource {
@@ -687,6 +769,7 @@ mod tests {
                 variables: Vec::new(),
                 type_fields: HashMap::new(),
                 type_constructors: HashMap::new(),
+                variable_types: HashMap::new(),
             }
         }
 
@@ -720,6 +803,11 @@ mod tests {
             );
             self
         }
+
+        fn with_variable_type(mut self, var_name: &str, var_type: &str) -> Self {
+            self.variable_types.insert(var_name.to_string(), var_type.to_string());
+            self
+        }
     }
 
     impl CompletionSource for MockSource {
@@ -751,6 +839,10 @@ mod tests {
         fn get_function_doc(&self, _name: &str) -> Option<String> {
             // MockSource doesn't have doc comments
             None
+        }
+
+        fn get_variable_type(&self, var_name: &str) -> Option<String> {
+            self.variable_types.get(var_name).cloned()
         }
     }
 
@@ -957,6 +1049,47 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert!(items.iter().any(|i| i.text == "name"));
         assert!(items.iter().any(|i| i.text == "nickname"));
+    }
+
+    #[test]
+    fn test_complete_variable_field_access() {
+        // Test completing fields on a variable with a known type
+        let source = MockSource::new()
+            .with_variables(&["result"])
+            .with_variable_type("result", "{ exitCode: Int, stdout: String, stderr: String }");
+
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "result".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        assert_eq!(items.len(), 3, "Should find 3 fields: {:?}", items);
+        assert!(items.iter().any(|i| i.text == "exitCode"));
+        assert!(items.iter().any(|i| i.text == "stdout"));
+        assert!(items.iter().any(|i| i.text == "stderr"));
+    }
+
+    #[test]
+    fn test_complete_variable_field_access_with_prefix() {
+        // Test prefix matching on variable fields
+        let source = MockSource::new()
+            .with_variables(&["result"])
+            .with_variable_type("result", "{ exitCode: Int, stdout: String, stderr: String }");
+
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "result".to_string(),
+            prefix: "st".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        assert_eq!(items.len(), 2, "Should find stdout and stderr: {:?}", items);
+        assert!(items.iter().any(|i| i.text == "stdout"));
+        assert!(items.iter().any(|i| i.text == "stderr"));
     }
 
     #[test]

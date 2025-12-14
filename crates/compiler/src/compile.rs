@@ -123,13 +123,14 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Process.kill", signature: "Pid -> Bool", doc: "Kill a process (returns true if successful)" },
 
     // === External Process Execution ===
-    BuiltinInfo { name: "Exec.run", signature: "(String, [String]) -> ExecResult", doc: "Run command and wait for completion. Returns { exitCode, stdout, stderr }" },
-    BuiltinInfo { name: "Exec.start", signature: "(String, [String]) -> Int", doc: "Start process with streaming I/O. Returns handle for readline/write/wait" },
-    BuiltinInfo { name: "Exec.readline", signature: "Int -> String", doc: "Read line from spawned process stdout. Returns 'eof' at end of stream" },
-    BuiltinInfo { name: "Exec.readStderr", signature: "Int -> String", doc: "Read line from spawned process stderr. Returns 'eof' at end of stream" },
-    BuiltinInfo { name: "Exec.write", signature: "(Int, String) -> ()", doc: "Write string to spawned process stdin" },
-    BuiltinInfo { name: "Exec.wait", signature: "Int -> Int", doc: "Wait for spawned process to exit. Returns exit code" },
-    BuiltinInfo { name: "Exec.kill", signature: "Int -> ()", doc: "Kill a spawned process" },
+    // All Exec functions return (status, result) tuples where status is "ok" or "error"
+    BuiltinInfo { name: "Exec.run", signature: "(String, [String]) -> (String, { exitCode: Int, stdout: String, stderr: String })", doc: "Run command and wait for completion. Returns (status, { exitCode, stdout, stderr })" },
+    BuiltinInfo { name: "Exec.start", signature: "(String, [String]) -> (String, Int)", doc: "Start process with streaming I/O. Returns (status, handle)" },
+    BuiltinInfo { name: "Exec.readline", signature: "Int -> (String, String)", doc: "Read line from spawned process stdout. Returns (status, line)" },
+    BuiltinInfo { name: "Exec.readStderr", signature: "Int -> (String, String)", doc: "Read line from spawned process stderr. Returns (status, line)" },
+    BuiltinInfo { name: "Exec.write", signature: "(Int, String) -> (String, ())", doc: "Write string to spawned process stdin. Returns (status, ())" },
+    BuiltinInfo { name: "Exec.wait", signature: "Int -> (String, Int)", doc: "Wait for spawned process to exit. Returns (status, exitCode)" },
+    BuiltinInfo { name: "Exec.kill", signature: "Int -> (String, ())", doc: "Kill a spawned process. Returns (status, ())" },
 ];
 
 /// Extract doc comment immediately preceding a definition at the given span start.
