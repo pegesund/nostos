@@ -44,6 +44,11 @@ tower = "0.5"
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["server", "tokio"] }
 
+# Time, Random, Regex
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+regex = "1"
+
 # Internal crates
 nostos-syntax = { path = "crates/syntax" }
 nostos-compiler = { path = "crates/compiler" }

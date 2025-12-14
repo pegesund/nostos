@@ -23,6 +23,9 @@ percent-encoding = { workspace = true }
 axum = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
+chrono = { workspace = true }
+rand = { workspace = true }
+regex = { workspace = true }
 
 [[bench]]
 name = "vm_vs_runtime"

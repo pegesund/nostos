@@ -131,6 +131,90 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Exec.write", signature: "(Int, String) -> (String, ())", doc: "Write string to spawned process stdin. Returns (status, ())" },
     BuiltinInfo { name: "Exec.wait", signature: "Int -> (String, Int)", doc: "Wait for spawned process to exit. Returns (status, exitCode)" },
     BuiltinInfo { name: "Exec.kill", signature: "Int -> (String, ())", doc: "Kill a spawned process. Returns (status, ())" },
+
+    // === String Functions ===
+    BuiltinInfo { name: "String.length", signature: "String -> Int", doc: "Get string length in characters" },
+    BuiltinInfo { name: "String.chars", signature: "String -> [Char]", doc: "Convert string to list of characters" },
+    BuiltinInfo { name: "String.from_chars", signature: "[Char] -> String", doc: "Create string from list of characters" },
+    BuiltinInfo { name: "String.toInt", signature: "String -> Option Int", doc: "Parse string as integer, returns None if invalid" },
+    BuiltinInfo { name: "String.toFloat", signature: "String -> Option Float", doc: "Parse string as float, returns None if invalid" },
+    BuiltinInfo { name: "String.trim", signature: "String -> String", doc: "Remove leading and trailing whitespace" },
+    BuiltinInfo { name: "String.trimStart", signature: "String -> String", doc: "Remove leading whitespace" },
+    BuiltinInfo { name: "String.trimEnd", signature: "String -> String", doc: "Remove trailing whitespace" },
+    BuiltinInfo { name: "String.toUpper", signature: "String -> String", doc: "Convert to uppercase" },
+    BuiltinInfo { name: "String.toLower", signature: "String -> String", doc: "Convert to lowercase" },
+    BuiltinInfo { name: "String.contains", signature: "String -> String -> Bool", doc: "Check if string contains substring" },
+    BuiltinInfo { name: "String.startsWith", signature: "String -> String -> Bool", doc: "Check if string starts with prefix" },
+    BuiltinInfo { name: "String.endsWith", signature: "String -> String -> Bool", doc: "Check if string ends with suffix" },
+    BuiltinInfo { name: "String.replace", signature: "String -> String -> String -> String", doc: "Replace first occurrence: replace(s, from, to)" },
+    BuiltinInfo { name: "String.replaceAll", signature: "String -> String -> String -> String", doc: "Replace all occurrences: replaceAll(s, from, to)" },
+    BuiltinInfo { name: "String.indexOf", signature: "String -> String -> Int", doc: "Find index of substring, -1 if not found" },
+    BuiltinInfo { name: "String.lastIndexOf", signature: "String -> String -> Int", doc: "Find last index of substring, -1 if not found" },
+    BuiltinInfo { name: "String.substring", signature: "String -> Int -> Int -> String", doc: "Get substring from start to end index" },
+    BuiltinInfo { name: "String.repeat", signature: "String -> Int -> String", doc: "Repeat string n times" },
+    BuiltinInfo { name: "String.padStart", signature: "String -> Int -> String -> String", doc: "Pad start to length with given string" },
+    BuiltinInfo { name: "String.padEnd", signature: "String -> Int -> String -> String", doc: "Pad end to length with given string" },
+    BuiltinInfo { name: "String.reverse", signature: "String -> String", doc: "Reverse a string" },
+    BuiltinInfo { name: "String.lines", signature: "String -> [String]", doc: "Split string into lines" },
+    BuiltinInfo { name: "String.words", signature: "String -> [String]", doc: "Split string into words (by whitespace)" },
+    BuiltinInfo { name: "String.isEmpty", signature: "String -> Bool", doc: "Check if string is empty" },
+
+    // === Time Functions ===
+    BuiltinInfo { name: "Time.now", signature: "() -> Int", doc: "Get current Unix timestamp in milliseconds" },
+    BuiltinInfo { name: "Time.nowSecs", signature: "() -> Int", doc: "Get current Unix timestamp in seconds" },
+    BuiltinInfo { name: "Time.format", signature: "Int -> String -> String", doc: "Format timestamp (ms) with format string (e.g., \"%Y-%m-%d %H:%M:%S\")" },
+    BuiltinInfo { name: "Time.formatUtc", signature: "Int -> String -> String", doc: "Format timestamp (ms) as UTC with format string" },
+    BuiltinInfo { name: "Time.parse", signature: "String -> String -> Option Int", doc: "Parse time string with format, returns timestamp in ms" },
+    BuiltinInfo { name: "Time.year", signature: "Int -> Int", doc: "Get year from timestamp (ms)" },
+    BuiltinInfo { name: "Time.month", signature: "Int -> Int", doc: "Get month (1-12) from timestamp (ms)" },
+    BuiltinInfo { name: "Time.day", signature: "Int -> Int", doc: "Get day of month (1-31) from timestamp (ms)" },
+    BuiltinInfo { name: "Time.hour", signature: "Int -> Int", doc: "Get hour (0-23) from timestamp (ms)" },
+    BuiltinInfo { name: "Time.minute", signature: "Int -> Int", doc: "Get minute (0-59) from timestamp (ms)" },
+    BuiltinInfo { name: "Time.second", signature: "Int -> Int", doc: "Get second (0-59) from timestamp (ms)" },
+    BuiltinInfo { name: "Time.weekday", signature: "Int -> Int", doc: "Get day of week (0=Sunday, 6=Saturday) from timestamp (ms)" },
+    BuiltinInfo { name: "Time.toUtc", signature: "Int -> Int", doc: "Convert local timestamp to UTC" },
+    BuiltinInfo { name: "Time.fromUtc", signature: "Int -> Int", doc: "Convert UTC timestamp to local" },
+    BuiltinInfo { name: "Time.timezone", signature: "() -> String", doc: "Get local timezone name" },
+    BuiltinInfo { name: "Time.timezoneOffset", signature: "() -> Int", doc: "Get timezone offset from UTC in minutes" },
+
+    // === Random Functions ===
+    BuiltinInfo { name: "Random.int", signature: "Int -> Int -> Int", doc: "Generate random integer in range [min, max]" },
+    BuiltinInfo { name: "Random.float", signature: "() -> Float", doc: "Generate random float in range [0.0, 1.0)" },
+    BuiltinInfo { name: "Random.bool", signature: "() -> Bool", doc: "Generate random boolean" },
+    BuiltinInfo { name: "Random.choice", signature: "[a] -> a", doc: "Pick random element from list" },
+    BuiltinInfo { name: "Random.shuffle", signature: "[a] -> [a]", doc: "Randomly shuffle a list" },
+    BuiltinInfo { name: "Random.bytes", signature: "Int -> [Int]", doc: "Generate n random bytes (0-255)" },
+
+    // === Environment Functions ===
+    BuiltinInfo { name: "Env.get", signature: "String -> Option String", doc: "Get environment variable value" },
+    BuiltinInfo { name: "Env.set", signature: "String -> String -> ()", doc: "Set environment variable" },
+    BuiltinInfo { name: "Env.remove", signature: "String -> ()", doc: "Remove environment variable" },
+    BuiltinInfo { name: "Env.all", signature: "() -> [(String, String)]", doc: "Get all environment variables" },
+    BuiltinInfo { name: "Env.cwd", signature: "() -> String", doc: "Get current working directory" },
+    BuiltinInfo { name: "Env.setCwd", signature: "String -> Result () String", doc: "Set current working directory" },
+    BuiltinInfo { name: "Env.home", signature: "() -> Option String", doc: "Get user's home directory" },
+    BuiltinInfo { name: "Env.args", signature: "() -> [String]", doc: "Get command-line arguments" },
+    BuiltinInfo { name: "Env.platform", signature: "() -> String", doc: "Get platform name (linux, macos, windows)" },
+
+    // === Path Functions ===
+    BuiltinInfo { name: "Path.join", signature: "String -> String -> String", doc: "Join two path components" },
+    BuiltinInfo { name: "Path.dirname", signature: "String -> String", doc: "Get directory part of path" },
+    BuiltinInfo { name: "Path.basename", signature: "String -> String", doc: "Get filename part of path" },
+    BuiltinInfo { name: "Path.extension", signature: "String -> String", doc: "Get file extension (without dot)" },
+    BuiltinInfo { name: "Path.withExtension", signature: "String -> String -> String", doc: "Replace file extension" },
+    BuiltinInfo { name: "Path.normalize", signature: "String -> String", doc: "Normalize path (resolve . and ..)" },
+    BuiltinInfo { name: "Path.isAbsolute", signature: "String -> Bool", doc: "Check if path is absolute" },
+    BuiltinInfo { name: "Path.isRelative", signature: "String -> Bool", doc: "Check if path is relative" },
+    BuiltinInfo { name: "Path.split", signature: "String -> [String]", doc: "Split path into components" },
+
+    // === Regex Functions ===
+    BuiltinInfo { name: "Regex.matches", signature: "String -> String -> Bool", doc: "Check if string matches regex pattern" },
+    BuiltinInfo { name: "Regex.find", signature: "String -> String -> Option String", doc: "Find first match of pattern in string" },
+    BuiltinInfo { name: "Regex.findAll", signature: "String -> String -> [String]", doc: "Find all matches of pattern in string" },
+    BuiltinInfo { name: "Regex.replace", signature: "String -> String -> String -> String", doc: "Replace first match: replace(s, pattern, replacement)" },
+    BuiltinInfo { name: "Regex.replaceAll", signature: "String -> String -> String -> String", doc: "Replace all matches: replaceAll(s, pattern, replacement)" },
+    BuiltinInfo { name: "Regex.split", signature: "String -> String -> [String]", doc: "Split string by regex pattern" },
+    BuiltinInfo { name: "Regex.captures", signature: "String -> String -> Option [String]", doc: "Get capture groups from first match" },
 ];
 
 /// Extract doc comment immediately preceding a definition at the given span start.
@@ -482,7 +566,7 @@ impl Compiler {
             "String", "File", "Dir", "List", "Option", "Result", "Char", "Int", "Float",
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
-            "Base64", "Url", "Encoding", "Server", "Exec",
+            "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -664,7 +748,7 @@ impl Compiler {
             "String", "File", "Dir", "List", "Option", "Result", "Char", "Int", "Float",
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
-            "Base64", "Url", "Encoding", "Server", "Exec",
+            "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -3004,12 +3088,146 @@ impl Compiler {
                             self.chunk.emit(Instruction::Utf8Decode(dst, bytes_reg), line);
                             return Ok(dst);
                         }
-                        // String functions
-                        "String.length" | "String.chars" | "String.from_chars" | "String.to_int" if args.len() == 1 => {
+                        // String functions (1 arg)
+                        "String.length" | "String.chars" | "String.from_chars" | "String.toInt" | "String.to_int"
+                        | "String.toFloat" | "String.trim" | "String.trimStart" | "String.trimEnd"
+                        | "String.toUpper" | "String.toLower" | "String.reverse" | "String.lines"
+                        | "String.words" | "String.isEmpty" if args.len() == 1 => {
                             let arg_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
                             let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
                             self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // String functions (2 args)
+                        "String.contains" | "String.startsWith" | "String.endsWith"
+                        | "String.indexOf" | "String.lastIndexOf" | "String.repeat" if args.len() == 2 => {
+                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // String functions (3 args)
+                        "String.replace" | "String.replaceAll" | "String.substring"
+                        | "String.padStart" | "String.padEnd" if args.len() == 3 => {
+                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let arg2_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg, arg2_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Time functions (0 args)
+                        "Time.now" | "Time.nowSecs" | "Time.timezone" | "Time.timezoneOffset" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![].into()), line);
+                            return Ok(dst);
+                        }
+                        // Time functions (1 arg)
+                        "Time.year" | "Time.month" | "Time.day" | "Time.hour" | "Time.minute"
+                        | "Time.second" | "Time.weekday" | "Time.toUtc" | "Time.fromUtc" if args.len() == 1 => {
+                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Time functions (2 args)
+                        "Time.format" | "Time.formatUtc" | "Time.parse" if args.len() == 2 => {
+                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Random functions (0 args)
+                        "Random.float" | "Random.bool" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![].into()), line);
+                            return Ok(dst);
+                        }
+                        // Random functions (1 arg)
+                        "Random.choice" | "Random.shuffle" | "Random.bytes" if args.len() == 1 => {
+                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Random.int (2 args)
+                        "Random.int" if args.len() == 2 => {
+                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Env functions (0 args)
+                        "Env.all" | "Env.cwd" | "Env.home" | "Env.args" | "Env.platform" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![].into()), line);
+                            return Ok(dst);
+                        }
+                        // Env functions (1 arg)
+                        "Env.get" | "Env.remove" | "Env.setCwd" if args.len() == 1 => {
+                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Env.set (2 args)
+                        "Env.set" if args.len() == 2 => {
+                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Path functions (1 arg)
+                        "Path.dirname" | "Path.basename" | "Path.extension" | "Path.normalize"
+                        | "Path.isAbsolute" | "Path.isRelative" | "Path.split" if args.len() == 1 => {
+                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Path functions (2 args)
+                        "Path.join" | "Path.withExtension" if args.len() == 2 => {
+                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Regex functions (2 args)
+                        "Regex.matches" | "Regex.find" | "Regex.findAll" | "Regex.split" | "Regex.captures" if args.len() == 2 => {
+                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Regex functions (3 args)
+                        "Regex.replace" | "Regex.replaceAll" if args.len() == 3 => {
+                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let arg2_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg, arg2_reg].into()), line);
                             return Ok(dst);
                         }
                         // File handle operations
@@ -11217,5 +11435,266 @@ mod tests {
     fn test_arity_005_one_arg_vs_two() {
         // foo(x) takes 1 arg but is called with 2
         expect_arity_error("foo(x) = x\nmain() = foo(1, 2)");
+    }
+
+    // === Stdlib Tests ===
+
+    #[test]
+    fn test_e2e_string_trim() {
+        let source = r#"
+            main() = String.trim("  hello  ")
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "hello"),
+            other => panic!("Expected 'hello', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_to_upper() {
+        let source = r#"
+            main() = String.toUpper("hello")
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "HELLO"),
+            other => panic!("Expected 'HELLO', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_to_lower() {
+        let source = r#"
+            main() = String.toLower("HELLO")
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "hello"),
+            other => panic!("Expected 'hello', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_contains() {
+        let source = r#"
+            main() = String.contains("hello world", "world")
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_e2e_string_starts_with() {
+        let source = r#"
+            main() = String.startsWith("hello world", "hello")
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_e2e_string_ends_with() {
+        let source = r#"
+            main() = String.endsWith("hello world", "world")
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_e2e_string_replace() {
+        let source = r#"
+            main() = String.replace("hello world", "world", "rust")
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "hello rust"),
+            other => panic!("Expected 'hello rust', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_index_of() {
+        let source = r#"
+            main() = String.indexOf("hello world", "world")
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int64(6)));
+    }
+
+    #[test]
+    fn test_e2e_string_repeat() {
+        let source = r#"
+            main() = String.repeat("ab", 3)
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "ababab"),
+            other => panic!("Expected 'ababab', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_reverse() {
+        let source = r#"
+            main() = String.reverse("hello")
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "olleh"),
+            other => panic!("Expected 'olleh', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_is_empty() {
+        let source = r#"
+            main() = String.isEmpty("")
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_e2e_time_now() {
+        let source = r#"
+            main() = Time.now() > 0
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_e2e_random_int() {
+        let source = r#"
+            main() = {
+                r = Random.int(1, 10)
+                r >= 1 && r <= 10
+            }
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_e2e_random_float() {
+        let source = r#"
+            main() = {
+                r = Random.float()
+                r >= 0.0 && r < 1.0
+            }
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_e2e_random_bool() {
+        // Just test that it runs without error
+        let source = r#"
+            main() = {
+                b = Random.bool()
+                b || !b
+            }
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_e2e_env_platform() {
+        let source = r#"
+            main() = String.length(Env.platform()) > 0
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_e2e_env_cwd() {
+        let source = r#"
+            main() = String.length(Env.cwd()) > 0
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_e2e_path_join() {
+        let source = r#"
+            main() = Path.join("/home", "user")
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert!(s.contains("user")),
+            other => panic!("Expected path string, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_path_basename() {
+        let source = r#"
+            main() = Path.basename("/home/user/file.txt")
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "file.txt"),
+            other => panic!("Expected 'file.txt', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_path_dirname() {
+        let source = r#"
+            main() = Path.dirname("/home/user/file.txt")
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert!(s.contains("user")),
+            other => panic!("Expected path with 'user', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_path_extension() {
+        let source = r#"
+            main() = Path.extension("/home/user/file.txt")
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "txt"),
+            other => panic!("Expected 'txt', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_path_is_absolute() {
+        let source = r#"
+            main() = Path.isAbsolute("/home/user")
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_e2e_regex_match() {
+        let source = r#"
+            main() = Regex.matches("hello123world", "[0-9]+")
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_e2e_regex_replace() {
+        let source = r#"
+            main() = Regex.replace("hello 123 world", "[0-9]+", "XXX")
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "hello XXX world"),
+            other => panic!("Expected 'hello XXX world', got {:?}", other),
+        }
     }
 }
