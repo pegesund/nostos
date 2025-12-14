@@ -564,8 +564,8 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         toggle_inspector(s);
     });
 
-    // Global Ctrl+O to toggle console
-    siv.set_on_pre_event(Event::CtrlChar('o'), |s| {
+    // Global Alt+C to toggle console
+    siv.set_on_pre_event(Event::AltChar('c'), |s| {
         toggle_console(s);
     });
 
