@@ -12,7 +12,7 @@ use crate::CallGraph;
 use crate::session::extract_dependencies_from_fn;
 use nostos_syntax::ast::{Item, Pattern};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
-use nostos_vm::parallel::{ParallelVM, ParallelConfig, InspectReceiver, InspectEntry};
+use nostos_vm::parallel::{ParallelVM, ParallelConfig, InspectReceiver, InspectEntry, OutputReceiver};
 
 /// An item in the browser
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -115,6 +115,8 @@ pub struct ReplEngine {
     last_known_signatures: HashMap<String, String>,
     /// Receiver for inspect() calls from VM
     inspect_receiver: Option<InspectReceiver>,
+    /// Receiver for output (println) from all VM processes
+    output_receiver: Option<OutputReceiver>,
 }
 
 impl ReplEngine {
@@ -129,6 +131,7 @@ impl ReplEngine {
         let mut vm = ParallelVM::new(vm_config);
         vm.register_default_natives();
         let inspect_receiver = Some(vm.setup_inspect());
+        let output_receiver = Some(vm.setup_output());
 
         Self {
             compiler,
@@ -146,6 +149,7 @@ impl ReplEngine {
             compile_status: HashMap::new(),
             last_known_signatures: HashMap::new(),
             inspect_receiver,
+            output_receiver,
         }
     }
 
@@ -358,7 +362,10 @@ impl ReplEngine {
             if eq_pos > 0 && !is_comparison {
                 let name = input[..eq_pos].trim();
                 let expr = input[eq_pos + 1..].trim();
-                if !name.contains('(') && !name.is_empty() && !expr.is_empty() {
+                // Don't treat as var binding if name contains block/paren characters
+                // (means the = is inside a block, not a top-level assignment)
+                if !name.contains('(') && !name.contains('{') && !name.contains('[')
+                   && !name.is_empty() && !expr.is_empty() {
                     if let Some(first_char) = name.chars().next() {
                         if first_char.is_lowercase() || first_char == '_' {
                             return Some((name.to_string(), false, expr.to_string()));
@@ -1947,6 +1954,19 @@ impl ReplEngine {
         }
         entries
     }
+
+    /// Drain all available output (println) from any VM process (non-blocking).
+    /// Returns an empty vec if no output is available.
+    pub fn drain_output(&self) -> Vec<String> {
+        let mut output = Vec::new();
+        if let Some(ref receiver) = self.output_receiver {
+            while let Ok(line) = receiver.try_recv() {
+                output.push(line);
+            }
+        }
+        output
+    }
+
     /// Check if a function is a user-defined project function (not internal/stdlib)
     pub fn is_project_function(&self, name: &str) -> bool {
         // Internal functions start with __

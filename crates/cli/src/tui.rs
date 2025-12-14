@@ -579,6 +579,14 @@ fn log_to_repl(s: &mut Cursive, text: &str) {
     });
 }
 
+/// Poll for output (println) from any VM process and log to console.
+fn poll_output(s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>) {
+    let output = engine.borrow().drain_output();
+    for line in output {
+        log_to_repl(s, &line);
+    }
+}
+
 /// Poll for inspect entries and update the inspector panel if open.
 fn poll_inspect_entries(s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>) {
     let entries = engine.borrow().drain_inspect_entries();
