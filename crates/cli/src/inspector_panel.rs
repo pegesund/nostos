@@ -7,7 +7,6 @@ use cursive::direction::Direction;
 use cursive::{Printer, Vec2};
 use nostos_repl::{InspectEntry, ThreadSafeValue, ThreadSafeMapKey};
 use std::collections::VecDeque;
-
 /// Maximum number of tabs in the inspector
 const MAX_TABS: usize = 10;
 
@@ -85,7 +84,29 @@ impl InspectorTab {
                 let idx: usize = segment.trim_start_matches('[').trim_end_matches(']').parse().ok()?;
                 items.get(idx).map(|v| ThreadSafeValue::Float64(*v))
             }
+            ThreadSafeValue::Set(items) => {
+                 let idx: usize = segment.trim_start_matches('[').trim_end_matches(']').parse().ok()?;
+                 // ThreadSafeValue::Set uses Vec<ThreadSafeMapKey>, we need to convert to ThreadSafeValue for inspection
+                 items.get(idx).map(|k| self.key_to_value(k))
+            }
             _ => None,
+        }
+    }
+
+    fn key_to_value(&self, key: &ThreadSafeMapKey) -> ThreadSafeValue {
+        match key {
+            ThreadSafeMapKey::Unit => ThreadSafeValue::Unit,
+            ThreadSafeMapKey::Bool(b) => ThreadSafeValue::Bool(*b),
+            ThreadSafeMapKey::Char(c) => ThreadSafeValue::Char(*c),
+            ThreadSafeMapKey::Int8(i) => ThreadSafeValue::Int64(*i as i64),
+            ThreadSafeMapKey::Int16(i) => ThreadSafeValue::Int64(*i as i64),
+            ThreadSafeMapKey::Int32(i) => ThreadSafeValue::Int64(*i as i64),
+            ThreadSafeMapKey::Int64(i) => ThreadSafeValue::Int64(*i),
+            ThreadSafeMapKey::UInt8(i) => ThreadSafeValue::Int64(*i as i64),
+            ThreadSafeMapKey::UInt16(i) => ThreadSafeValue::Int64(*i as i64),
+            ThreadSafeMapKey::UInt32(i) => ThreadSafeValue::Int64(*i as i64),
+            ThreadSafeMapKey::UInt64(i) => ThreadSafeValue::Int64(*i as i64), // Potential overflow if u64 > i64::MAX
+            ThreadSafeMapKey::String(s) => ThreadSafeValue::String(s.clone()),
         }
     }
 
@@ -173,10 +194,15 @@ impl InspectorTab {
             ThreadSafeValue::Float64(f) => f.to_string(),
             ThreadSafeValue::Pid(p) => format!("<{}>", p),
             ThreadSafeValue::String(s) => {
-                if s.len() > 30 {
-                    format!("\"{}...\"", &s[..27])
+                // Escape special characters for display
+                let escaped = s.replace('\\', "\\\\")
+                    .replace('\n', "\\n")
+                    .replace('\r', "\\r")
+                    .replace('\t', "\\t");
+                if escaped.len() > 30 {
+                    format!("\"{}...\"", &escaped[..27.min(escaped.len())])
                 } else {
-                    format!("\"{}\"", s)
+                    format!("\"{}\"", escaped)
                 }
             }
             ThreadSafeValue::Char(c) => format!("'{}'", c),
@@ -241,6 +267,73 @@ impl InspectorTab {
             ThreadSafeValue::Set(items) => items.is_empty(),
             ThreadSafeValue::Int64Array(items) => items.is_empty(),
             ThreadSafeValue::Float64Array(items) => items.is_empty(),
+        }
+    }
+
+    fn full_format_key(&self, key: &ThreadSafeMapKey) -> String {
+        match key {
+            ThreadSafeMapKey::Unit => "()".to_string(),
+            ThreadSafeMapKey::Bool(b) => b.to_string(),
+            ThreadSafeMapKey::Char(c) => format!("{:?}", c),
+            ThreadSafeMapKey::Int8(n) => n.to_string(),
+            ThreadSafeMapKey::Int16(n) => n.to_string(),
+            ThreadSafeMapKey::Int32(n) => n.to_string(),
+            ThreadSafeMapKey::Int64(n) => n.to_string(),
+            ThreadSafeMapKey::UInt8(n) => n.to_string(),
+            ThreadSafeMapKey::UInt16(n) => n.to_string(),
+            ThreadSafeMapKey::UInt32(n) => n.to_string(),
+            ThreadSafeMapKey::UInt64(n) => n.to_string(),
+            ThreadSafeMapKey::String(s) => format!("{:?}", s),
+        }
+    }
+
+    /// formatting for clipboard copy - full view
+    fn full_format(&self, value: &ThreadSafeValue) -> String {
+        match value {
+            ThreadSafeValue::Unit => "()".to_string(),
+            ThreadSafeValue::Bool(b) => b.to_string(),
+            ThreadSafeValue::Int64(n) => n.to_string(),
+            ThreadSafeValue::Float64(f) => f.to_string(),
+            ThreadSafeValue::Pid(p) => format!("<{}>", p),
+            ThreadSafeValue::String(s) => format!("{:?}", s),
+            ThreadSafeValue::Char(c) => format!("{:?}", c),
+            ThreadSafeValue::List(items) => {
+                let items_str: Vec<String> = items.iter().map(|v| self.full_format(v)).collect();
+                format!("[{}]", items_str.join(", "))
+            }
+            ThreadSafeValue::Tuple(items) => {
+                let items_str: Vec<String> = items.iter().map(|v| self.full_format(v)).collect();
+                format!("({})", items_str.join(", "))
+            }
+            ThreadSafeValue::Record { type_name, fields, field_names, .. } => {
+                let fields_str: Vec<String> = field_names.iter().zip(fields.iter())
+                    .map(|(k, v)| format!("{}: {}", k, self.full_format(v)))
+                    .collect();
+                format!("{} {{ {} }}", type_name, fields_str.join(", "))
+            }
+            ThreadSafeValue::Closure { function, .. } => format!("<closure {}>", function.name),
+            ThreadSafeValue::Variant { type_name, constructor, fields } => {
+                if fields.is_empty() {
+                    format!("{}::{}", type_name, constructor)
+                } else {
+                    let fields_str: Vec<String> = fields.iter().map(|v| self.full_format(v)).collect();
+                    format!("{}::{}({})", type_name, constructor, fields_str.join(", "))
+                }
+            }
+            ThreadSafeValue::Function(f) => format!("<fn {}>", f.name),
+            ThreadSafeValue::NativeFunction(f) => format!("<native {}>", f.name),
+            ThreadSafeValue::Map(entries) => {
+                 let entries_str: Vec<String> = entries.iter()
+                    .map(|(k, v)| format!("{} => {}", self.full_format_key(k), self.full_format(v)))
+                    .collect();
+                format!("Map {{ {} }}", entries_str.join(", "))
+            }
+            ThreadSafeValue::Set(items) => {
+                 let items_str: Vec<String> = items.iter().map(|v| self.full_format_key(v)).collect();
+                 format!("Set {{ {} }}", items_str.join(", "))
+            }
+            ThreadSafeValue::Int64Array(items) => format!("{:?}", items),
+            ThreadSafeValue::Float64Array(items) => format!("{:?}", items),
         }
     }
 }
@@ -327,6 +420,16 @@ impl InspectorPanel {
     /// Check if empty
     pub fn is_empty(&self) -> bool {
         self.tabs.is_empty()
+    }
+
+    /// Get the content of the current tab for clipboard copy
+    pub fn get_content(&self) -> String {
+        if let Some(tab) = self.tabs.get(self.active_tab) {
+            if let Some(current) = tab.current_value() {
+                return tab.full_format(&current);
+            }
+        }
+        String::new()
     }
 
     fn current_tab(&self) -> Option<&InspectorTab> {
@@ -469,14 +572,33 @@ impl View for InspectorPanel {
 
             // Draw type and preview
             if let Some(current) = tab.current_value() {
+                // Define colors
+                let color_field = ColorStyle::new(Color::Rgb(80, 200, 255), Color::TerminalDefault); // Light Blue
+                let color_type = ColorStyle::new(Color::Rgb(100, 255, 120), Color::TerminalDefault); // Light Green
+                let color_value = ColorStyle::new(Color::Rgb(220, 220, 220), Color::TerminalDefault); // Off-white
+                let color_punct = ColorStyle::new(Color::Rgb(100, 100, 100), Color::TerminalDefault); // Dark Grey
+                
+                // Selection colors
+                let bg_selected = Color::Rgb(40, 40, 60);
+                let color_field_sel = ColorStyle::new(Color::Rgb(80, 200, 255), bg_selected);
+                let color_type_sel = ColorStyle::new(Color::Rgb(100, 255, 120), bg_selected);
+                let color_value_sel = ColorStyle::new(Color::Rgb(255, 255, 255), bg_selected);
+                let color_punct_sel = ColorStyle::new(Color::Rgb(150, 150, 150), bg_selected);
+                let color_prefix_sel = ColorStyle::new(Color::Rgb(255, 255, 0), bg_selected);
+
                 let type_str = tab.type_name(&current);
                 let preview = tab.preview(&current);
-                printer.print((0, 3), &format!("{}: {}", type_str, preview));
+
+                // Draw type and preview for root
+                printer.print((0, 3), ""); // Clear line start
+                printer.with_color(color_type, |p| p.print((0, 3), &type_str));
+                printer.with_color(color_punct, |p| p.print((type_str.len(), 3), ": "));
+                printer.with_color(color_value, |p| p.print((type_str.len() + 2, 3), &preview));
 
                 // Draw slots
                 let slots = tab.get_slots(&current);
                 if slots.is_empty() {
-                    printer.print((0, 5), "(no children to browse)");
+                    printer.with_color(color_punct, |p| p.print((0, 5), "(no children to browse)"));
                 } else {
                     let start_y = 5;
                     let visible = (height - start_y).min(slots.len() - tab.scroll_offset);
@@ -488,41 +610,67 @@ impl View for InspectorPanel {
                     {
                         let y = start_y + i;
                         let actual_idx = tab.scroll_offset + i;
-                        let selected = actual_idx == tab.selected;
-
-                        let prefix = if selected { ">" } else { " " };
-                        let arrow = if *is_leaf { " " } else { "→" };
-
-                        let line = format!("{} {} {} {} {}", prefix, path_seg, type_name, arrow, preview);
-                        let line = if line.len() > width {
-                            format!("{}...", &line[..width.saturating_sub(3)])
+                        let selected = actual_idx == tab.selected && printer.focused;
+                        
+                        // Select styles based on selection state
+                        let (s_field, s_type, s_value, s_punct, s_prefix) = if selected {
+                            (color_field_sel, color_type_sel, color_value_sel, color_punct_sel, color_prefix_sel)
                         } else {
-                            line
+                            (color_field, color_type, color_value, color_punct, ColorStyle::inherit_parent())
                         };
 
-                        if selected && printer.focused {
-                            printer.with_color(ColorStyle::new(Color::Rgb(0, 0, 0), Color::Rgb(255, 255, 0)), |p| {
-                                p.print((0, y), &line);
-                                // Pad to full width
-                                for x in line.len()..width {
-                                    p.print((x, y), " ");
-                                }
-                            });
-                        } else if selected {
-                            printer.with_color(ColorStyle::new(Color::Rgb(255, 255, 0), Color::TerminalDefault), |p| {
-                                p.print((0, y), &line);
-                            });
-                        } else {
-                            printer.print((0, y), &line);
+                        // Draw background if selected
+                        if selected {
+                             printer.with_color(ColorStyle::new(Color::TerminalDefault, bg_selected), |p| {
+                                 for x in 0..width {
+                                     p.print((x, y), " ");
+                                 }
+                             });
+                        }
+
+                        let mut x = 0;
+                        
+                        // Prefix (> or space)
+                        let prefix = if selected { "> " } else { "  " };
+                        printer.with_color(s_prefix, |p| p.print((x, y), prefix));
+                        x += 2;
+
+                        // Field Name
+                        printer.with_color(s_field, |p| p.print((x, y), path_seg));
+                        x += path_seg.len();
+
+                        // Spacer
+                        printer.with_color(s_punct, |p| p.print((x, y), " "));
+                        x += 1;
+
+                        // Type Name
+                        printer.with_color(s_type, |p| p.print((x, y), type_name));
+                        x += type_name.len();
+
+                        // Arrow
+                        let arrow = if *is_leaf { " " } else { " -> " };
+                        printer.with_color(s_punct, |p| p.print((x, y), arrow));
+                        x += arrow.len();
+
+                        // Value Preview
+                        // Truncate if too long
+                        let max_preview = width.saturating_sub(x);
+                        if max_preview > 0 {
+                            let display_preview = if preview.len() > max_preview {
+                                format!("{}...", &preview[..max_preview.saturating_sub(3)])
+                            } else {
+                                preview.clone()
+                            };
+                            printer.with_color(s_value, |p| p.print((x, y), &display_preview));
                         }
                     }
 
                     // Scroll indicator
                     if slots.len() > visible + tab.scroll_offset {
-                        printer.print((width.saturating_sub(5), height - 1), "more↓");
+                         printer.with_color(color_punct, |p| p.print((width.saturating_sub(5), height - 1), "more\u{2193}"));
                     }
                     if tab.scroll_offset > 0 {
-                        printer.print((width.saturating_sub(5), start_y), "more↑");
+                         printer.with_color(color_punct, |p| p.print((width.saturating_sub(5), start_y), "more\u{2191}"));
                     }
                 }
             }
@@ -596,6 +744,7 @@ impl View for InspectorPanel {
                 }
                 EventResult::Consumed(None)
             }
+            // Ctrl+Y is handled at the tui.rs wrapper level
             _ => EventResult::Ignored,
         }
     }

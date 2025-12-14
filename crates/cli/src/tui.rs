@@ -899,6 +899,19 @@ fn create_inspector_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
     }
 
     let panel_with_events = OnEventView::new(panel.with_name("inspector_panel"))
+        .on_event(Event::CtrlChar('y'), |s| {
+            // Copy inspector content to clipboard
+            if let Some(text) = s.call_on_name("inspector_panel", |view: &mut InspectorPanel| {
+                view.get_content()
+            }) {
+                if !text.is_empty() {
+                    match copy_to_system_clipboard(&text) {
+                        Ok(_) => log_to_repl(s, &format!("Copied {} chars", text.len())),
+                        Err(e) => log_to_repl(s, &format!("Copy failed: {}", e)),
+                    }
+                }
+            }
+        })
         .on_event(Event::CtrlChar('w'), |s| {
             // Close inspector with Ctrl+W
             s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
