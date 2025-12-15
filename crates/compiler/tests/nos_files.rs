@@ -3,12 +3,56 @@
 //! Test files should have a `# expect: <value>` comment at the top to specify
 //! the expected result of running main().
 
-use nostos_compiler::compile::compile_module;
+use nostos_compiler::compile::{compile_module, MvarInitValue};
 use nostos_syntax::parse;
 use nostos_vm::value::Value;
 use nostos_vm::parallel::{ParallelVM, ParallelConfig};
+use nostos_vm::process::ThreadSafeValue;
 use std::fs;
 use std::path::Path;
+
+/// Convert MvarInitValue to ThreadSafeValue for VM registration.
+fn mvar_init_to_thread_safe(init: &MvarInitValue) -> ThreadSafeValue {
+    match init {
+        MvarInitValue::Unit => ThreadSafeValue::Unit,
+        MvarInitValue::Bool(b) => ThreadSafeValue::Bool(*b),
+        MvarInitValue::Int(n) => ThreadSafeValue::Int64(*n),
+        MvarInitValue::Float(f) => ThreadSafeValue::Float64(*f),
+        MvarInitValue::String(s) => ThreadSafeValue::String(s.clone()),
+        MvarInitValue::Char(c) => ThreadSafeValue::Char(*c),
+        MvarInitValue::EmptyList => ThreadSafeValue::List(vec![]),
+        MvarInitValue::IntList(ints) => ThreadSafeValue::List(
+            ints.iter().map(|n| ThreadSafeValue::Int64(*n)).collect()
+        ),
+        MvarInitValue::FloatList(floats) => ThreadSafeValue::List(
+            floats.iter().map(|f| ThreadSafeValue::Float64(*f)).collect()
+        ),
+        MvarInitValue::BoolList(bools) => ThreadSafeValue::List(
+            bools.iter().map(|b| ThreadSafeValue::Bool(*b)).collect()
+        ),
+        MvarInitValue::StringList(strings) => ThreadSafeValue::List(
+            strings.iter().map(|s| ThreadSafeValue::String(s.clone())).collect()
+        ),
+        MvarInitValue::Tuple(items) => ThreadSafeValue::Tuple(
+            items.iter().map(mvar_init_to_thread_safe).collect()
+        ),
+        MvarInitValue::List(items) => ThreadSafeValue::List(
+            items.iter().map(mvar_init_to_thread_safe).collect()
+        ),
+        MvarInitValue::Record(type_name, fields) => {
+            let field_names: Vec<String> = fields.iter().map(|(name, _)| name.clone()).collect();
+            let values: Vec<ThreadSafeValue> = fields.iter()
+                .map(|(_, val)| mvar_init_to_thread_safe(val))
+                .collect();
+            ThreadSafeValue::Record {
+                type_name: type_name.clone(),
+                field_names,
+                fields: values,
+                mutable_fields: vec![false; fields.len()],
+            }
+        }
+    }
+}
 
 /// Parse expected value from test file comments.
 /// Looks for `# expect: <value>` line.
@@ -111,6 +155,12 @@ fn run_nos_source(source: &str) -> Result<Value, String> {
         vm.register_type(&name, type_val);
     }
 
+    // Register mvars (module-level mutable variables)
+    for (name, info) in compiler.get_mvars() {
+        let initial_value = mvar_init_to_thread_safe(&info.initial_value);
+        vm.register_mvar(name, initial_value);
+    }
+
     // Get main function
     let main_func = compiler.get_function("main")
         .ok_or_else(|| "No main function".to_string())?;
@@ -149,6 +199,12 @@ fn run_nos_source_gc(source: &str) -> Result<String, String> {
     vm.set_function_list(compiler.get_function_list());
     for (name, type_val) in compiler.get_vm_types() {
         vm.register_type(&name, type_val);
+    }
+
+    // Register mvars (module-level mutable variables)
+    for (name, info) in compiler.get_mvars() {
+        let initial_value = mvar_init_to_thread_safe(&info.initial_value);
+        vm.register_mvar(name, initial_value);
     }
 
     // Get main function
