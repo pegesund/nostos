@@ -5,6 +5,9 @@
 #
 # Usage: Call panelDemo() from the REPL after loading with :demo
 
+# Panel activation state - must call panelDemo() to activate
+mvar panelActivated: Bool = false
+
 # Panel state using mvars
 mvar panelCursor: Int = 0
 mvar panelItems: List[String] = ["First item", "Second item", "Third item", "Fourth item", "Fifth item"]
@@ -62,10 +65,18 @@ panelView() = {
     header ++ header2 ++ list ++ footer
 }
 
-# Entry point - activates the panel in the TUI
-# Call this from the REPL: panelDemo()
+# Activate the panel - must be called before Alt+T will work
+activatePanel() = {
+    panelActivated = true
+    panelActivated
+}
+
+# Check if panel is activated
+isActivated() = panelActivated
+
+# Entry point - activates the panel and returns instructions
+# Call this from the REPL: demo.panel.panelDemo()
 panelDemo() = {
-    # The TUI will detect this function and open the panel
-    # For now, just return a message
-    "Panel demo loaded. Press Alt+T to open the panel."
+    activatePanel()
+    "Panel activated! Press Alt+T to open."
 }

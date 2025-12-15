@@ -847,11 +847,13 @@ fn open_nostos_test_panel(s: &mut Cursive) {
         state.borrow().engine.clone()
     }).unwrap();
 
-    // Check if required panel functions exist (from :demo)
-    let has_panel = engine.borrow_mut().eval("demo.panel.panelView()").is_ok();
+    // Check if panel is activated (must call demo.panel.panelDemo() first)
+    let is_activated = engine.borrow_mut().eval("demo.panel.isActivated()")
+        .map(|s| s.trim() == "true")
+        .unwrap_or(false);
 
-    if !has_panel {
-        log_to_repl(s, "Panel not loaded. Run :demo first to load demo/panel.nos");
+    if !is_activated {
+        log_to_repl(s, "Panel not activated. Run :demo then demo.panel.panelDemo()");
         return;
     }
 
