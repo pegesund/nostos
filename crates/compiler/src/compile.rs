@@ -2643,6 +2643,44 @@ impl Compiler {
         }
     }
 
+    /// Check if a user-defined function exists with the given name and arity.
+    /// This is used to prevent builtin functions from shadowing user-defined functions.
+    fn has_user_function(&self, name: &str, arity: usize) -> bool {
+        let prefix = format!("{}/", name);
+
+        // Check compiled functions
+        for key in self.functions.keys() {
+            if let Some(suffix) = key.strip_prefix(&prefix) {
+                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                if param_count == arity {
+                    return true;
+                }
+            }
+        }
+
+        // Check fn_asts (for functions being compiled or not yet compiled)
+        for key in self.fn_asts.keys() {
+            if let Some(suffix) = key.strip_prefix(&prefix) {
+                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                if param_count == arity {
+                    return true;
+                }
+            }
+        }
+
+        // Check if current function matches
+        if let Some(current) = &self.current_function_name {
+            if let Some(suffix) = current.strip_prefix(&prefix) {
+                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                if param_count == arity {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
     /// Find the implementation of a trait method for a given type.
     pub fn find_trait_method(&self, type_name: &str, method_name: &str) -> Option<String> {
         // Look through all traits this type implements
@@ -4912,12 +4950,18 @@ impl Compiler {
                         self.chunk.emit(Instruction::ListIsEmpty(dst, arg_regs[0]), 0);
                         return Ok(dst);
                     }
-                    "listSum" | "sum" if arg_regs.len() == 1 => {
+                    // listSum is the canonical name, sum is only used if no user function exists
+                    "listSum" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ListSum(dst, arg_regs[0]), 0);
                         return Ok(dst);
                     }
-                    "product" if arg_regs.len() == 1 => {
+                    "sum" if arg_regs.len() == 1 && !self.has_user_function("sum", 1) => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ListSum(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "product" if arg_regs.len() == 1 && !self.has_user_function("product", 1) => {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("product".to_string())));
                         self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_regs[0]].into()), 0);
@@ -4928,7 +4972,7 @@ impl Compiler {
                         self.chunk.emit(Instruction::RangeList(dst, arg_regs[0]), 0);
                         return Ok(dst);
                     }
-                    "range" if arg_regs.len() == 2 => {
+                    "range" if arg_regs.len() == 2 && !self.has_user_function("range", 2) => {
                         // range(start, end) - create list [start..end)
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("range".to_string())));
