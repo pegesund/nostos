@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use nostos_compiler::compile::Compiler;
+use nostos_compiler::compile::{Compiler, MvarInitValue};
 use nostos_jit::{JitCompiler, JitConfig};
 use nostos_source::SourceManager;
 use crate::CallGraph;
@@ -13,6 +13,7 @@ use crate::session::extract_dependencies_from_fn;
 use nostos_syntax::ast::{Item, Pattern};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::parallel::{ParallelVM, ParallelConfig, InspectReceiver, InspectEntry, OutputReceiver};
+use nostos_vm::process::ThreadSafeValue;
 
 /// An item in the browser
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -988,6 +989,11 @@ impl ReplEngine {
         for (name, type_val) in self.compiler.get_vm_types() {
             self.vm.register_type(&name, type_val);
         }
+        // Register mvars (module-level mutable variables)
+        for (name, info) in self.compiler.get_mvars() {
+            let initial_value = Self::mvar_init_to_thread_safe(&info.initial_value);
+            self.vm.register_mvar(name, initial_value);
+        }
 
         if self.config.enable_jit {
             let function_list = self.compiler.get_function_list();
@@ -1006,6 +1012,54 @@ impl ReplEngine {
                             // ... (abbreviated for now, assume single function call if refactored)
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /// Convert MvarInitValue to ThreadSafeValue for VM registration
+    fn mvar_init_to_thread_safe(init: &MvarInitValue) -> ThreadSafeValue {
+        match init {
+            MvarInitValue::Unit => ThreadSafeValue::Unit,
+            MvarInitValue::Bool(b) => ThreadSafeValue::Bool(*b),
+            MvarInitValue::Int(n) => ThreadSafeValue::Int64(*n),
+            MvarInitValue::Float(f) => ThreadSafeValue::Float64(*f),
+            MvarInitValue::String(s) => ThreadSafeValue::String(s.clone()),
+            MvarInitValue::Char(c) => ThreadSafeValue::Char(*c),
+            MvarInitValue::EmptyList => ThreadSafeValue::List(vec![]),
+            MvarInitValue::IntList(ints) => ThreadSafeValue::List(
+                ints.iter().map(|n| ThreadSafeValue::Int64(*n)).collect()
+            ),
+            MvarInitValue::StringList(strings) => ThreadSafeValue::List(
+                strings.iter().map(|s| ThreadSafeValue::String(s.clone())).collect()
+            ),
+            MvarInitValue::FloatList(floats) => ThreadSafeValue::List(
+                floats.iter().map(|f| ThreadSafeValue::Float64(*f)).collect()
+            ),
+            MvarInitValue::BoolList(bools) => ThreadSafeValue::List(
+                bools.iter().map(|b| ThreadSafeValue::Bool(*b)).collect()
+            ),
+            MvarInitValue::Tuple(items) => ThreadSafeValue::Tuple(
+                items.iter().map(|item| Self::mvar_init_to_thread_safe(item)).collect()
+            ),
+            MvarInitValue::List(items) => ThreadSafeValue::List(
+                items.iter().map(|item| Self::mvar_init_to_thread_safe(item)).collect()
+            ),
+            MvarInitValue::Record(type_name, fields) => {
+                let field_names: Vec<String> = fields.iter()
+                    .enumerate()
+                    .map(|(i, (name, _))| {
+                        if name.is_empty() { format!("_{}", i) } else { name.clone() }
+                    })
+                    .collect();
+                let values: Vec<ThreadSafeValue> = fields.iter()
+                    .map(|(_, val)| Self::mvar_init_to_thread_safe(val))
+                    .collect();
+                ThreadSafeValue::Record {
+                    type_name: type_name.clone(),
+                    field_names,
+                    fields: values,
+                    mutable_fields: vec![false; fields.len()],
                 }
             }
         }
