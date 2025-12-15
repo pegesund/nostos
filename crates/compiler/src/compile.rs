@@ -8060,9 +8060,18 @@ impl Compiler {
 
         // Register pending function signatures FIRST (pre-built in compile_all_collecting_errors)
         // These have proper type info, unlike placeholders in self.functions
+        // Register both qualified name (e.g., "utils.bar") and local name (e.g., "bar")
+        // so that functions in the same module can reference each other
         for (fn_name, fn_type) in &self.pending_fn_signatures {
             if !env.functions.contains_key(fn_name) {
                 env.functions.insert(fn_name.clone(), fn_type.clone());
+            }
+            // Also register with just the local name for intra-module calls
+            if let Some(dot_pos) = fn_name.rfind('.') {
+                let local_name = &fn_name[dot_pos + 1..];
+                if !env.functions.contains_key(local_name) {
+                    env.functions.insert(local_name.to_string(), fn_type.clone());
+                }
             }
         }
 
