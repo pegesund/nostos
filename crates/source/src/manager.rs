@@ -698,6 +698,12 @@ impl SourceManager {
         }
     }
 
+    /// Get the full generated source for a module
+    /// Returns all types, traits, functions, variables with proper together grouping
+    pub fn get_module_generated_source(&self, module_name: &str) -> Option<String> {
+        self.modules.get(module_name).map(|module| module.generate_file_content())
+    }
+
     /// Save module metadata (together directives etc.)
     /// Parses together directives from content and updates the module
     pub fn save_module_metadata(&mut self, module_name: &str, content: &str) -> Result<(), String> {

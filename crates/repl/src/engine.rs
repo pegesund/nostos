@@ -1423,14 +1423,24 @@ impl ReplEngine {
     pub fn get_module_source(&self, module_path: &[String]) -> String {
         let module_name = module_path.join(".");
 
-        // First, try to read from source file if available
+        // First, try SourceManager's generated source (for project directories)
+        // This uses Module::generate_file_content() which properly handles together groups
+        // Must check this BEFORE module_sources because project directories store each
+        // function separately in defs/, so module_sources points to just one file.
+        if let Some(ref sm) = self.source_manager {
+            if let Some(source) = sm.get_module_generated_source(&module_name) {
+                return source;
+            }
+        }
+
+        // Next, try to read from source file (for file-backed modules like demo/*.nos)
         if let Some(file_path) = self.module_sources.get(&module_name) {
             if let Ok(source) = std::fs::read_to_string(file_path) {
                 return source;
             }
         }
 
-        // Fall back to combining individual item sources
+        // Fall back to combining individual item sources from compiler
         let items = self.get_browser_items(module_path);
         let prefix = if module_path.is_empty() {
             String::new()
@@ -1445,46 +1455,66 @@ impl ReplEngine {
             source.push_str(&format!("# Module: {}\n\n", module_name));
         }
 
-        for item in &items {
-            match item {
-                BrowserItem::Function { name, .. } => {
-                    let full_name = format!("{}{}", prefix, name);
-                    let item_source = self.get_source(&full_name);
-                    if !item_source.starts_with("Not found:") {
-                        source.push_str(&item_source);
-                        source.push_str("\n\n");
-                    }
+        // Collect metadata first
+        if let Some(ref sm) = self.source_manager {
+            if let Some(meta) = sm.get_module_metadata(&module_name) {
+                if !meta.trim().is_empty() {
+                    source.push_str("# Metadata\n");
+                    source.push_str(&meta);
+                    source.push_str("\n\n");
                 }
-                BrowserItem::Type { name } => {
-                    let full_name = format!("{}{}", prefix, name);
-                    let item_source = self.get_source(&full_name);
-                    if !item_source.starts_with("Not found:") {
-                        source.push_str(&item_source);
-                        source.push_str("\n\n");
-                    }
-                }
-                BrowserItem::Trait { name } => {
-                    let full_name = format!("{}{}", prefix, name);
-                    let item_source = self.get_source(&full_name);
-                    if !item_source.starts_with("Not found:") {
-                        source.push_str(&item_source);
-                        source.push_str("\n\n");
-                    }
-                }
-                BrowserItem::Variable { name, mutable } => {
-                    // For mvars, show the declaration
-                    let full_name = format!("{}{}", prefix, name);
-                    if let Some(info) = self.compiler.get_mvars().get(&full_name) {
-                        if *mutable {
-                            source.push_str(&format!("mvar {}: {} = {:?}\n\n", name, info.type_name, info.initial_value));
-                        }
-                    }
-                }
-                _ => {}
             }
         }
 
-        if source.is_empty() {
+        // Add types first
+        for item in &items {
+            if let BrowserItem::Type { name } = item {
+                let full_name = format!("{}{}", prefix, name);
+                let item_source = self.get_source(&full_name);
+                if !item_source.starts_with("Not found:") {
+                    source.push_str(&item_source);
+                    source.push_str("\n\n");
+                }
+            }
+        }
+
+        // Add traits
+        for item in &items {
+            if let BrowserItem::Trait { name } = item {
+                let full_name = format!("{}{}", prefix, name);
+                let item_source = self.get_source(&full_name);
+                if !item_source.starts_with("Not found:") {
+                    source.push_str(&item_source);
+                    source.push_str("\n\n");
+                }
+            }
+        }
+
+        // Add mvars
+        for item in &items {
+            if let BrowserItem::Variable { name, mutable } = item {
+                let full_name = format!("{}{}", prefix, name);
+                if *mutable {
+                    if let Some(info) = self.compiler.get_mvars().get(&full_name) {
+                        source.push_str(&format!("mvar {}: {} = {:?}\n\n", name, info.type_name, info.initial_value));
+                    }
+                }
+            }
+        }
+
+        // Add functions
+        for item in &items {
+            if let BrowserItem::Function { name, .. } = item {
+                let full_name = format!("{}{}", prefix, name);
+                let item_source = self.get_source(&full_name);
+                if !item_source.starts_with("Not found:") {
+                    source.push_str(&item_source);
+                    source.push_str("\n\n");
+                }
+            }
+        }
+
+        if source.is_empty() || source.trim() == format!("# Module: {}", module_name) {
             format!("# Empty module: {}", module_name)
         } else {
             source
