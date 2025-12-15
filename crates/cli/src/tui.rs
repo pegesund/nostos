@@ -1693,7 +1693,52 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     }
     drop(engine_ref);
 
-    // Handle selection
+    // Handle selection change - update preview pane
+    let path_for_preview = path.clone();
+    let engine_for_preview = engine.clone();
+    select.set_on_select(move |s: &mut Cursive, item: &BrowserItem| {
+        let engine = engine_for_preview.clone();
+        let current_path = path_for_preview.clone();
+
+        let preview_text = match item {
+            BrowserItem::Function { .. } => {
+                let full_name = engine.borrow().get_full_name(&current_path, item);
+                engine.borrow().get_source(&full_name)
+            }
+            BrowserItem::Type { .. } => {
+                let full_name = engine.borrow().get_full_name(&current_path, item);
+                engine.borrow().get_source(&full_name)
+            }
+            BrowserItem::Trait { .. } => {
+                let full_name = engine.borrow().get_full_name(&current_path, item);
+                engine.borrow().get_source(&full_name)
+            }
+            BrowserItem::Module(name) if name == ".." => {
+                "(parent directory)".to_string()
+            }
+            BrowserItem::Module(name) => {
+                format!("Module: {}", name)
+            }
+            BrowserItem::Variable { name, .. } => {
+                if let Some(value) = engine.borrow_mut().get_var_value_raw(name) {
+                    format!("{} = {}", name, value)
+                } else {
+                    format!("{} = <unavailable>", name)
+                }
+            }
+            BrowserItem::Metadata { module } => {
+                let full_name = format!("{}._meta", module);
+                engine.borrow().get_source(&full_name)
+            }
+        };
+
+        // Update preview text
+        s.call_on_name("browser_preview", |v: &mut TextView| {
+            v.set_content(preview_text);
+        });
+    });
+
+    // Handle submit (Enter key)
     let path_for_select = path.clone();
     let engine_for_select = engine.clone();
     select.set_on_submit(move |s, item: &BrowserItem| {
@@ -1772,13 +1817,25 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let select_scroll = select
         .with_name("browser_select")
         .scrollable()
-        .fixed_size((60, 20));
+        .fixed_size((45, 20));
+
+    // Create preview pane (read-only code view)
+    let preview = TextView::new("Select an item to preview")
+        .with_name("browser_preview");
+    let preview_scroll = preview
+        .scrollable()
+        .fixed_size((50, 20));
+
+    // Create horizontal split: browser on left, preview on right
+    let split_view = LinearLayout::horizontal()
+        .child(Panel::new(select_scroll).title("Items"))
+        .child(Panel::new(preview_scroll).title("Preview"));
 
     // Create dialog with navigation hints
     let dialog = Dialog::around(
         LinearLayout::vertical()
-            .child(select_scroll)
-            .child(TextView::new("Enter: Select | n: New | r: Rename | d: Delete | e: Error | g: Graph | Esc: Close"))
+            .child(split_view)
+            .child(TextView::new("Enter: Open | n: New | r: Rename | d: Delete | e: Error | g: Graph | Esc: Close"))
     )
     .title(&title);
 
