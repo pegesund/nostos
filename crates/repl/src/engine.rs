@@ -1418,6 +1418,79 @@ impl ReplEngine {
         format!("Not found: {}", name)
     }
 
+    /// Get all source code for a module
+    /// Returns the combined source of all items in the module
+    pub fn get_module_source(&self, module_path: &[String]) -> String {
+        let module_name = module_path.join(".");
+
+        // First, try to read from source file if available
+        if let Some(file_path) = self.module_sources.get(&module_name) {
+            if let Ok(source) = std::fs::read_to_string(file_path) {
+                return source;
+            }
+        }
+
+        // Fall back to combining individual item sources
+        let items = self.get_browser_items(module_path);
+        let prefix = if module_path.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", module_name)
+        };
+
+        let mut source = String::new();
+
+        // Add header comment
+        if !module_name.is_empty() {
+            source.push_str(&format!("# Module: {}\n\n", module_name));
+        }
+
+        for item in &items {
+            match item {
+                BrowserItem::Function { name, .. } => {
+                    let full_name = format!("{}{}", prefix, name);
+                    let item_source = self.get_source(&full_name);
+                    if !item_source.starts_with("Not found:") {
+                        source.push_str(&item_source);
+                        source.push_str("\n\n");
+                    }
+                }
+                BrowserItem::Type { name } => {
+                    let full_name = format!("{}{}", prefix, name);
+                    let item_source = self.get_source(&full_name);
+                    if !item_source.starts_with("Not found:") {
+                        source.push_str(&item_source);
+                        source.push_str("\n\n");
+                    }
+                }
+                BrowserItem::Trait { name } => {
+                    let full_name = format!("{}{}", prefix, name);
+                    let item_source = self.get_source(&full_name);
+                    if !item_source.starts_with("Not found:") {
+                        source.push_str(&item_source);
+                        source.push_str("\n\n");
+                    }
+                }
+                BrowserItem::Variable { name, mutable } => {
+                    // For mvars, show the declaration
+                    let full_name = format!("{}{}", prefix, name);
+                    if let Some(info) = self.compiler.get_mvars().get(&full_name) {
+                        if *mutable {
+                            source.push_str(&format!("mvar {}: {} = {:?}\n\n", name, info.type_name, info.initial_value));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if source.is_empty() {
+            format!("# Empty module: {}", module_name)
+        } else {
+            source
+        }
+    }
+
     /// Load a project directory with SourceManager
     pub fn load_directory(&mut self, path: &str) -> Result<(), String> {
         let path_buf = PathBuf::from(path);

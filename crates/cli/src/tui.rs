@@ -1921,7 +1921,7 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let dialog = Dialog::around(
         LinearLayout::vertical()
             .child(split_view)
-            .child(TextView::new("Enter: Open | n: New | r: Rename | d: Delete | e: Error | g: Graph | Esc: Close"))
+            .child(TextView::new("Enter: Open | a: All | n: New | r: Rename | d: Delete | e: Error | g: Graph | Esc: Close"))
     )
     .title(&title);
 
@@ -1953,11 +1953,11 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
         .on_event('g', move |s| {
              let engine = engine_for_graph.clone();
              let path = path_for_graph.clone();
-             
+
              let selected = s.call_on_name("browser_select", |v: &mut SelectView<BrowserItem>| {
                  v.selection().map(|rc| (*rc).clone())
              }).flatten();
-             
+
              if let Some(item) = selected {
                  if let BrowserItem::Function { .. } = item {
                      let full_name = engine.borrow().get_full_name(&path, &item);
@@ -1967,6 +1967,20 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                      log_to_repl(s, "Call graph only available for functions");
                  }
              }
+        })
+        .on_event('a', {
+            let engine = engine.clone();
+            let path = path.clone();
+            move |s| {
+                // Show all module source in a view-only dialog
+                let source = engine.borrow().get_module_source(&path);
+                let module_name = if path.is_empty() {
+                    "root".to_string()
+                } else {
+                    path.join(".")
+                };
+                show_module_view_dialog(s, &module_name, &source);
+            }
         })
         .on_event('n', move |s| {
             // Show dialog to enter new function name
@@ -2172,6 +2186,34 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
         });
 
     s.add_layer(dialog_with_keys);
+}
+
+/// Show a read-only view of module source code with syntax highlighting
+fn show_module_view_dialog(s: &mut Cursive, module_name: &str, source: &str) {
+    // Apply syntax highlighting
+    let styled_content = syntax_highlight_code(source);
+
+    // Create a TextView with the styled content
+    let text_view = TextView::new(styled_content);
+
+    // Wrap in ScrollView with both horizontal and vertical scrolling
+    let scroll_view = text_view
+        .scrollable()
+        .scroll_x(true)  // Enable horizontal scrolling
+        .scroll_y(true); // Enable vertical scrolling
+
+    // Create dialog with fixed size to show scrollbars
+    let dialog = Dialog::around(
+        scroll_view.fixed_size((80, 30))
+    )
+    .title(format!("Module: {} (view only)", module_name))
+    .button("Close", |s| { s.pop_layer(); });
+
+    // Wrap in OnEventView for Esc to close
+    let dialog_with_esc = OnEventView::new(dialog)
+        .on_event(Key::Esc, |s| { s.pop_layer(); });
+
+    s.add_layer(dialog_with_esc);
 }
 
 /// Open the value inspector dialog
