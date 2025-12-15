@@ -1,0 +1,11 @@
+# expect_error: String does not implement Num
+# Test that adding Int to String is caught as type error
+
+bar() = 5
+
+bar3() = {
+    print("Hello")
+    bar() + 3 + "ffffff"
+}
+
+main() = bar3()
