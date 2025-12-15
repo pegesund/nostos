@@ -573,6 +573,12 @@ fn main() -> ExitCode {
             MvarInitValue::String(s) => ThreadSafeValue::String(s.clone()),
             MvarInitValue::Char(c) => ThreadSafeValue::Char(*c),
             MvarInitValue::EmptyList => ThreadSafeValue::List(vec![]),
+            MvarInitValue::IntList(ints) => ThreadSafeValue::List(
+                ints.iter().map(|n| ThreadSafeValue::Int64(*n)).collect()
+            ),
+            MvarInitValue::StringList(strings) => ThreadSafeValue::List(
+                strings.iter().map(|s| ThreadSafeValue::String(s.clone())).collect()
+            ),
         };
         vm.register_mvar(name, initial_value);
     }

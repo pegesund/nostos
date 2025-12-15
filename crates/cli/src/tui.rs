@@ -793,18 +793,70 @@ fn create_repl_panel_view(engine: &Rc<RefCell<ReplEngine>>, repl_id: usize, hist
     ActiveWindow::new(panel_with_events, &format!("REPL #{}", repl_id)).full_width()
 }
 
-/// Open a test Nostos-defined panel
+/// Open a test Nostos-defined panel using mvars for state
 fn open_nostos_test_panel(s: &mut Cursive) {
     let engine = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         state.borrow().engine.clone()
     }).unwrap();
 
-    // Define the panel's functions in Nostos
-    // For now, use a simple static test - state management needs more work
+    // Define mvars for panel state and functions in Nostos
+    // This demonstrates an interactive list selector using mvars
     let definitions = [
-        r#"testPanelView() = "Nostos Panel Test\n\nThis panel is rendered by Nostos code!\n\nPress UP or DOWN to test handlers\nPress ESC to close""#,
-        r#"testPanelUp() = println("UP pressed from Nostos handler!")"#,
-        r#"testPanelDown() = println("DOWN pressed from Nostos handler!")"#,
+        // State: current selection index
+        r#"mvar panelCursor: Int = 0"#,
+        // State: list of items
+        r#"mvar panelItems: List[String] = ["First item", "Second item", "Third item", "Fourth item", "Fifth item"]"#,
+
+        // Helper: get item count (fixed for this demo)
+        r#"panelItemCount() = 5"#,
+
+        // Helper: get cursor position (leaf function)
+        r#"panelGetCursor() = panelCursor"#,
+
+        // Helper: get items (leaf function)
+        r#"panelGetItems() = panelItems"#,
+
+        // Move cursor up
+        r#"panelUp() = {
+            if panelCursor > 0 then {
+                panelCursor = panelCursor - 1
+                panelCursor
+            } else {
+                panelCursor
+            }
+        }"#,
+
+        // Move cursor down
+        r#"panelDown() = {
+            count = panelItemCount()
+            if panelCursor < count - 1 then {
+                panelCursor = panelCursor + 1
+                panelCursor
+            } else {
+                panelCursor
+            }
+        }"#,
+
+        // Render a single item with selection indicator
+        r#"panelRenderItem(idx, item, cursor) =
+            if idx == cursor then "> " ++ item else "  " ++ item"#,
+
+        // Render the list (recursive helper)
+        r#"panelRenderList(items, idx, cursor) = match items
+            [] -> ""
+            [item | rest] -> panelRenderItem(idx, item, cursor) ++ "\n" ++ panelRenderList(rest, idx + 1, cursor)
+        end"#,
+
+        // Main view function - reads mvars to render
+        r#"panelView() = {
+            header = "Nostos Panel with Mvars\n"
+            header2 = "=======================\n\n"
+            items = panelGetItems()
+            cursor = panelGetCursor()
+            list = panelRenderList(items, 0, cursor)
+            footer = "\n[UP/DOWN to move, ESC to close]"
+            header ++ header2 ++ list ++ footer
+        }"#,
     ];
 
     for code in &definitions {
@@ -814,18 +866,18 @@ fn open_nostos_test_panel(s: &mut Cursive) {
         }
     }
 
-    // Create the NostosPanel
-    let panel = NostosPanel::new(engine.clone(), "testPanelView", "Nostos Test Panel")
-        .on_key("up", "testPanelUp")
-        .on_key("down", "testPanelDown");
+    // Create the NostosPanel with mvar-based handlers
+    let panel = NostosPanel::new(engine.clone(), "panelView", "Mvar Panel")
+        .on_key("up", "panelUp")
+        .on_key("down", "panelDown");
 
     // Wrap in a dialog with ESC to close
-    let dialog = Dialog::around(panel.min_size((40, 10)))
-        .title("Nostos Panel Test")
+    let dialog = Dialog::around(panel.min_size((40, 15)))
+        .title("Nostos Mvar Panel")
         .dismiss_button("Close");
 
     s.add_layer(dialog);
-    log_to_repl(s, "Opened Nostos test panel (Alt+T). Press UP/DOWN to test.");
+    log_to_repl(s, "Opened Nostos mvar panel (Alt+T). Use UP/DOWN to navigate.");
 }
 
 /// Open a new REPL panel
