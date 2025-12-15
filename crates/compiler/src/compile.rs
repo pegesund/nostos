@@ -504,6 +504,8 @@ pub struct Compiler {
     known_modules: HashSet<String>,
     /// REPL mode: bypass visibility checks for interactive exploration
     repl_mode: bool,
+    /// Prelude functions: qualified names that bypass visibility checks (stdlib)
+    prelude_functions: HashSet<String>,
     /// Module-level mutable variables (mvars): qualified name -> MvarInfo
     /// These are thread-safe shared state with automatic RwLock
     mvars: HashMap<String, MvarInfo>,
@@ -652,6 +654,7 @@ impl Compiler {
             type_defs: HashMap::new(),
             known_modules: builtin_modules,
             repl_mode: false,
+            prelude_functions: HashSet::new(),
             mvars: HashMap::new(),
             fn_mvar_access: HashMap::new(),
             fn_calls: HashMap::new(),
@@ -840,6 +843,7 @@ impl Compiler {
             type_defs: HashMap::new(),
             known_modules: builtin_modules,
             repl_mode: false,
+            prelude_functions: HashSet::new(),
             mvars: HashMap::new(),
             fn_mvar_access: HashMap::new(),
             fn_calls: HashMap::new(),
@@ -852,6 +856,14 @@ impl Compiler {
     /// Enable REPL mode - bypasses visibility checks for interactive exploration
     pub fn set_repl_mode(&mut self, enabled: bool) {
         self.repl_mode = enabled;
+    }
+
+    /// Add a prelude import - maps a local name to a qualified name.
+    /// This allows stdlib functions to be available without prefix.
+    /// Also marks the qualified function as a prelude function to bypass visibility checks.
+    pub fn add_prelude_import(&mut self, local_name: String, qualified_name: String) {
+        self.prelude_functions.insert(qualified_name.clone());
+        self.imports.insert(local_name, qualified_name);
     }
 
     /// Convert a byte offset to a line number (1-indexed).
@@ -6040,6 +6052,13 @@ impl Compiler {
     fn check_visibility(&self, qualified_name: &str, span: Span) -> Result<(), CompileError> {
         // REPL mode bypasses all visibility checks for interactive exploration
         if self.repl_mode {
+            return Ok(());
+        }
+
+        // Prelude functions (stdlib) bypass visibility checks
+        // Strip signature suffix (e.g., "stdlib.list.reverse/_" -> "stdlib.list.reverse")
+        let base_name = qualified_name.split('/').next().unwrap_or(qualified_name);
+        if self.prelude_functions.contains(base_name) {
             return Ok(());
         }
 

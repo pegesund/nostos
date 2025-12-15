@@ -190,17 +190,46 @@ impl ReplEngine {
             let mut stdlib_files = Vec::new();
             visit_dirs(path, &mut stdlib_files)?;
 
+            // Track all stdlib function names for prelude imports
+            let mut stdlib_functions: Vec<(String, String)> = Vec::new();
+
             for file_path in &stdlib_files {
                 let source = fs::read_to_string(file_path)
                     .map_err(|e| format!("Failed to read {}: {}", file_path.display(), e))?;
                 let (module_opt, _) = parse(&source);
                 if let Some(module) = module_opt {
-                    // Add stdlib functions to root namespace (no prefix needed)
-                    // This allows calling map(), filter(), etc. directly
-                    self.compiler.add_module(&module, vec![], Arc::new(source.clone()), file_path.to_str().unwrap().to_string())
+                    // Build module path: stdlib.list, stdlib.json, etc.
+                    let relative = file_path.strip_prefix(path).unwrap();
+                    let mut components: Vec<String> = vec!["stdlib".to_string()];
+                    for component in relative.components() {
+                        let s = component.as_os_str().to_string_lossy().to_string();
+                        if s.ends_with(".nos") {
+                            components.push(s.trim_end_matches(".nos").to_string());
+                        } else {
+                            components.push(s);
+                        }
+                    }
+                    let module_prefix = components.join(".");
+
+                    // Collect function names from this module for prelude imports
+                    for item in &module.items {
+                        if let nostos_syntax::ast::Item::FnDef(fn_def) = item {
+                            let local_name = fn_def.name.node.clone();
+                            let qualified_name = format!("{}.{}", module_prefix, local_name);
+                            stdlib_functions.push((local_name, qualified_name));
+                        }
+                    }
+
+                    self.compiler.add_module(&module, components, Arc::new(source.clone()), file_path.to_str().unwrap().to_string())
                         .map_err(|e| format!("Failed to compile stdlib: {}", e))?;
                 }
             }
+
+            // Register prelude imports so stdlib functions are available without prefix
+            for (local_name, qualified_name) in stdlib_functions {
+                self.compiler.add_prelude_import(local_name, qualified_name);
+            }
+
             self.stdlib_path = stdlib_path;
         }
 
