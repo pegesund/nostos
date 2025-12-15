@@ -866,14 +866,23 @@ fn open_nostos_test_panel(s: &mut Cursive) {
         }
     }
 
-    // Create the NostosPanel with mvar-based handlers
-    // The panel handles up/down internally via on_key
-    let panel = NostosPanel::new(engine.clone(), "panelView", "Mvar Panel")
-        .on_key("up", "panelUp")
-        .on_key("down", "panelDown");
+    // Create the NostosPanel (handlers managed externally via OnEventView)
+    let panel = NostosPanel::new(engine.clone(), "panelView", "Mvar Panel");
+    let panel_with_name = panel.with_name("nostos_mvar_panel");
 
-    // Wrap with OnEventView for ESC handling, then add directly as layer (no Dialog)
-    let panel_view = OnEventView::new(panel.min_size((40, 15)))
+    let engine_up = engine.clone();
+    let engine_down = engine.clone();
+
+    // Handle all events through OnEventView using on_event (same pattern as working ESC)
+    let panel_view = OnEventView::new(panel_with_name.min_size((40, 15)))
+        .on_event(Key::Up, move |s| {
+            let _ = engine_up.borrow_mut().eval("panelUp()");
+            s.call_on_name("nostos_mvar_panel", |p: &mut NostosPanel| p.refresh());
+        })
+        .on_event(Key::Down, move |s| {
+            let _ = engine_down.borrow_mut().eval("panelDown()");
+            s.call_on_name("nostos_mvar_panel", |p: &mut NostosPanel| p.refresh());
+        })
         .on_event(Key::Esc, |s| {
             s.pop_layer();
         });
