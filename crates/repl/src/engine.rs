@@ -339,6 +339,11 @@ impl ReplEngine {
     pub fn is_var_binding(input: &str) -> Option<(String, bool, String)> {
         let input = input.trim();
 
+        // Skip mvar declarations - these are module-level definitions
+        if input.starts_with("mvar ") {
+            return None;
+        }
+
         // Check for "var name = expr" pattern
         if input.starts_with("var ") {
             let rest = input[4..].trim();
