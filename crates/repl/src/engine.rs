@@ -118,6 +118,8 @@ pub struct ReplEngine {
     inspect_receiver: Option<InspectReceiver>,
     /// Receiver for output (println) from all VM processes
     output_receiver: Option<OutputReceiver>,
+    /// Track which mvars have been registered (to avoid resetting their values)
+    registered_mvars: HashSet<String>,
 }
 
 impl ReplEngine {
@@ -151,6 +153,7 @@ impl ReplEngine {
             last_known_signatures: HashMap::new(),
             inspect_receiver,
             output_receiver,
+            registered_mvars: HashSet::new(),
         }
     }
 
@@ -990,9 +993,13 @@ impl ReplEngine {
             self.vm.register_type(&name, type_val);
         }
         // Register mvars (module-level mutable variables)
+        // Only register NEW mvars - don't reset existing ones!
         for (name, info) in self.compiler.get_mvars() {
-            let initial_value = Self::mvar_init_to_thread_safe(&info.initial_value);
-            self.vm.register_mvar(name, initial_value);
+            if !self.registered_mvars.contains(name) {
+                let initial_value = Self::mvar_init_to_thread_safe(&info.initial_value);
+                self.vm.register_mvar(name, initial_value);
+                self.registered_mvars.insert(name.clone());
+            }
         }
 
         if self.config.enable_jit {

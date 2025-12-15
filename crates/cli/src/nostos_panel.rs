@@ -6,13 +6,10 @@ use cursive::event::{Event, EventResult, Key};
 use cursive::view::{View, CannotFocus};
 use cursive::direction::Direction;
 use cursive::{Printer, Vec2, Rect};
-use cursive::theme::{Color, ColorStyle};
 use nostos_repl::ReplEngine;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 /// View description returned from Nostos code
 #[derive(Debug, Clone)]
@@ -140,35 +137,16 @@ impl NostosPanel {
 
 impl View for NostosPanel {
     fn draw(&self, printer: &Printer) {
-        // Draw border
-        let style = if printer.focused {
-            ColorStyle::new(Color::Rgb(255, 255, 0), Color::TerminalDefault)
-        } else {
-            ColorStyle::new(Color::Rgb(100, 100, 100), Color::TerminalDefault)
-        };
-
-        printer.with_color(style, |p| {
-            p.print_box((0, 0), p.size, true);
-            p.print((2, 0), &format!(" {} ", self.title));
-        });
-
-        // Draw content inside border
-        let inner_size = printer.size.saturating_sub((2, 2));
-        if inner_size.x > 0 && inner_size.y > 0 {
-            let inner_printer = printer.windowed(Rect::from_size((1, 1), inner_size));
-
-            // Draw each line of content
-            for (i, line) in self.cached_content.lines().enumerate() {
-                if i >= inner_size.y {
-                    break;
-                }
-                inner_printer.print((0, i), line);
+        // Draw content directly (no border - ActiveWindow handles that)
+        for (i, line) in self.cached_content.lines().enumerate() {
+            if i >= printer.size.y {
+                break;
             }
+            printer.print((0, i), line);
         }
     }
 
     fn required_size(&mut self, constraint: Vec2) -> Vec2 {
-        // Add border size
         let lines = self.cached_content.lines().count().max(1);
         let max_width = self.cached_content.lines()
             .map(|l| l.len())
@@ -176,8 +154,8 @@ impl View for NostosPanel {
             .unwrap_or(10);
 
         Vec2::new(
-            (max_width + 2).min(constraint.x),
-            (lines + 2).min(constraint.y)
+            max_width.min(constraint.x),
+            lines.min(constraint.y)
         )
     }
 
@@ -186,12 +164,25 @@ impl View for NostosPanel {
     }
 
     fn on_event(&mut self, event: Event) -> EventResult {
-        // Ignore Shift+Tab for global cycling
-        if let Event::Shift(Key::Tab) = event {
-            return EventResult::Ignored;
+        match &event {
+            Event::Key(Key::Up) | Event::Char('k') => {
+                let _ = self.engine.borrow_mut().eval("panelUp()");
+                self.refresh();
+                return EventResult::Consumed(None);
+            }
+            Event::Key(Key::Down) | Event::Char('j') => {
+                let _ = self.engine.borrow_mut().eval("panelDown()");
+                self.refresh();
+                return EventResult::Consumed(None);
+            }
+            // Ignore Shift+Tab for global window cycling
+            Event::Shift(Key::Tab) => {
+                return EventResult::Ignored;
+            }
+            _ => {}
         }
 
-        // Check if we have a handler for this event
+        // Check registered key handlers for other events
         if let Some(key_str) = Self::event_to_key_string(&event) {
             if let Some(handler_fn) = self.key_handlers.get(&key_str).cloned() {
                 self.call_handler(&handler_fn);

@@ -803,16 +803,15 @@ fn create_repl_panel_view(engine: &Rc<RefCell<ReplEngine>>, repl_id: usize, hist
 }
 
 /// Create the Nostos panel view (like create_repl_panel_view)
-/// Event handling (up/down) is done by NostosPanel via .on_key() - pure Nostos integration
 fn create_nostos_panel_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
-    // Panel handles up/down internally via Nostos functions
+    // Use NostosPanel's built-in .on_key() - handlers are Nostos function names
     let panel = NostosPanel::new(engine.clone(), "panelView", "Mvar Panel")
         .on_key("up", "panelUp")
         .on_key("down", "panelDown");
 
     let panel_with_name = panel.with_name("nostos_mvar_panel");
 
-    // Only handle close events in Rust
+    // Only need OnEventView for close actions (these affect TUI state, not Nostos state)
     let panel_with_events = OnEventView::new(panel_with_name)
         .on_event(Event::CtrlChar('w'), |s| {
             close_nostos_panel(s);
