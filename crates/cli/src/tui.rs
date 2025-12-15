@@ -867,38 +867,19 @@ fn open_nostos_test_panel(s: &mut Cursive) {
     }
 
     // Create the NostosPanel with mvar-based handlers
+    // The panel handles up/down internally via on_key
     let panel = NostosPanel::new(engine.clone(), "panelView", "Mvar Panel")
         .on_key("up", "panelUp")
         .on_key("down", "panelDown");
 
-    let panel_with_name = panel.with_name("nostos_mvar_panel");
-    let engine_up = engine.clone();
-    let engine_down = engine.clone();
-
-    // Simple dialog without buttons (no Tab stealing)
-    let dialog = Dialog::around(panel_with_name.min_size((40, 15)))
-        .title("Nostos Mvar Panel [ESC to close]");
-
-    // Wrap dialog in OnEventView with on_pre_event to intercept BEFORE dialog processes
-    let dialog_with_events = OnEventView::new(dialog)
-        .on_pre_event(Key::Up, move |s| {
-            if let Err(e) = engine_up.borrow_mut().eval("panelUp()") {
-                log_to_repl(s, &format!("Error: {}", e));
-            }
-            s.call_on_name("nostos_mvar_panel", |p: &mut NostosPanel| p.refresh());
-        })
-        .on_pre_event(Key::Down, move |s| {
-            if let Err(e) = engine_down.borrow_mut().eval("panelDown()") {
-                log_to_repl(s, &format!("Error: {}", e));
-            }
-            s.call_on_name("nostos_mvar_panel", |p: &mut NostosPanel| p.refresh());
-        })
-        .on_pre_event(Key::Esc, |s| {
+    // Wrap with OnEventView for ESC handling, then add directly as layer (no Dialog)
+    let panel_view = OnEventView::new(panel.min_size((40, 15)))
+        .on_event(Key::Esc, |s| {
             s.pop_layer();
         });
 
-    s.add_layer(dialog_with_events);
-    log_to_repl(s, "Opened Nostos mvar panel (Alt+T). Use UP/DOWN to navigate, ESC to close.");
+    s.add_layer(panel_view);
+    log_to_repl(s, "Opened Nostos mvar panel (Alt+T). UP/DOWN to navigate, ESC to close.");
 }
 
 /// Open a new REPL panel
