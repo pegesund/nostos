@@ -632,9 +632,9 @@ impl View for CodeEditor {
                     Token::UpperIdent(_) => Color::Rgb(255, 255, 0),
                     Token::LowerIdent(_) => Color::Rgb(255, 255, 255),
 
-                    Token::Underscore => Color::Rgb(100, 100, 100),
+                    Token::Underscore => Color::Rgb(150, 150, 150), // Lighter gray - visible on dark backgrounds
                     Token::Newline => Color::Rgb(255, 255, 255),
-                    Token::Comment | Token::MultiLineComment => Color::Rgb(128, 128, 128),
+                    Token::Comment | Token::MultiLineComment => Color::Rgb(150, 150, 150), // Lighter gray
                     _ => Color::Rgb(255, 255, 255),
                 };
 

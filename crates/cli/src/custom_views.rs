@@ -43,8 +43,8 @@ impl<V: View> ViewWrapper for ActiveWindow<V> {
             // Active color (Orange/Yellow)
             ColorStyle::new(Color::Rgb(255, 255, 0), Color::TerminalDefault)
         } else {
-            // Inactive color (Grey)
-            ColorStyle::new(Color::Rgb(100, 100, 100), Color::TerminalDefault)
+            // Inactive color (lighter grey for visibility)
+            ColorStyle::new(Color::Rgb(150, 150, 150), Color::TerminalDefault)
         };
 
         printer.with_color(style, |p| {

@@ -576,7 +576,7 @@ impl View for InspectorPanel {
                 let color_field = ColorStyle::new(Color::Rgb(80, 200, 255), Color::TerminalDefault); // Light Blue
                 let color_type = ColorStyle::new(Color::Rgb(100, 255, 120), Color::TerminalDefault); // Light Green
                 let color_value = ColorStyle::new(Color::Rgb(220, 220, 220), Color::TerminalDefault); // Off-white
-                let color_punct = ColorStyle::new(Color::Rgb(100, 100, 100), Color::TerminalDefault); // Dark Grey
+                let color_punct = ColorStyle::new(Color::Rgb(150, 150, 150), Color::TerminalDefault); // Lighter grey for visibility
                 
                 // Selection colors
                 let bg_selected = Color::Rgb(40, 40, 60);

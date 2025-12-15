@@ -89,7 +89,7 @@ impl Highlighter for NostosHighlighter {
                 Token::AndAnd | Token::OrOr | Token::Bang | Token::PlusPlus | Token::PipeRight |
                 Token::Eq | Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq |
                 Token::LeftArrow | Token::RightArrow | Token::FatArrow | Token::Caret | Token::Dollar | Token::Question =>
-                    Style::new().fg(Color::Cyan),
+                    Style::new().fg(Color::Rgb(255, 165, 0)), // Orange - visible on dark backgrounds
 
                 // Delimiters
                 Token::LParen | Token::RParen | Token::LBracket | Token::RBracket |
@@ -101,9 +101,9 @@ impl Highlighter for NostosHighlighter {
                 Token::UpperIdent(_) => Style::new().fg(Color::Yellow), // Types/Constructors
                 Token::LowerIdent(_) => Style::new().fg(Color::White),  // Variables/Functions
                 
-                Token::Underscore => Style::new().fg(Color::DarkGray),
+                Token::Underscore => Style::new().fg(Color::Rgb(150, 150, 150)), // Lighter gray - visible on dark backgrounds
                 Token::Newline => Style::new(),
-                Token::Comment | Token::MultiLineComment => Style::new().fg(Color::DarkGray),
+                Token::Comment | Token::MultiLineComment => Style::new().fg(Color::Rgb(150, 150, 150)), // Lighter gray
             };
 
             styled.push((style, line[span.clone()].to_string()));

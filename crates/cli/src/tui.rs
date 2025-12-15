@@ -81,8 +81,8 @@ fn syntax_highlight_code(source: &str) -> StyledString {
                 Token::UpperIdent(_) => Color::Rgb(255, 255, 0),  // Types: yellow
                 Token::LowerIdent(_) => Color::Rgb(255, 255, 255),  // Identifiers: white
 
-                Token::Underscore => Color::Rgb(100, 100, 100),
-                Token::Comment | Token::MultiLineComment => Color::Rgb(128, 128, 128),  // Comments: gray
+                Token::Underscore => Color::Rgb(150, 150, 150), // Lighter gray - visible on dark backgrounds
+                Token::Comment | Token::MultiLineComment => Color::Rgb(150, 150, 150), // Lighter gray
                 _ => Color::Rgb(255, 255, 255),
             };
 
@@ -517,7 +517,8 @@ pub fn run_tui(args: &[String]) -> ExitCode {
     theme.palette[PaletteColor::View] = Color::TerminalDefault;
     theme.palette[PaletteColor::Primary] = Color::Rgb(0, 255, 0); // Green text
     theme.palette[PaletteColor::TitlePrimary] = Color::Rgb(255, 255, 255); // White titles
-    theme.palette[PaletteColor::Highlight] = Color::Rgb(255, 255, 0); // Yellow highlight
+    theme.palette[PaletteColor::Highlight] = Color::Rgb(60, 60, 100); // Dark blue highlight background
+    theme.palette[PaletteColor::HighlightText] = Color::Rgb(255, 255, 255); // White text on highlight
     theme.palette[PaletteColor::Secondary] = Color::TerminalDefault;
     siv.set_theme(theme);
 
@@ -2749,9 +2750,9 @@ fn style_input(text: &str) -> StyledString {
             Token::UpperIdent(_) => Color::Rgb(255, 255, 0),
             Token::LowerIdent(_) => Color::Rgb(255, 255, 255),
 
-            Token::Underscore => Color::Rgb(100, 100, 100),
+            Token::Underscore => Color::Rgb(150, 150, 150), // Lighter gray - visible on dark backgrounds
             Token::Newline => Color::TerminalDefault,
-            Token::Comment | Token::MultiLineComment => Color::Rgb(128, 128, 128),
+            Token::Comment | Token::MultiLineComment => Color::Rgb(150, 150, 150), // Lighter gray
         };
 
         styled.append_styled(&text[span.clone()], color);
