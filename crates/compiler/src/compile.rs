@@ -3443,8 +3443,23 @@ impl Compiler {
                 self.compile_lambda(params, body)
             }
 
-            // Field access
+            // Field access - or mvar read if the path is a known mvar
             Expr::FieldAccess(obj, field, _) => {
+                // Check if this is an mvar access (e.g., demo.panel.panelCursor)
+                // by extracting the full path and checking if it's a registered mvar
+                if let Some(module_path) = self.extract_module_path(obj) {
+                    let full_path = format!("{}.{}", module_path, field.node);
+                    if self.mvars.contains_key(&full_path) {
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new(full_path.clone())));
+                        self.chunk.emit(Instruction::MvarRead(dst, name_idx), line);
+                        // Track mvar read for deadlock detection
+                        self.current_fn_mvar_reads.insert(full_path);
+                        return Ok(dst);
+                    }
+                }
+
+                // Regular field access on a record
                 let obj_reg = self.compile_expr_tail(obj, false)?;
                 let dst = self.alloc_reg();
                 let field_idx = self.chunk.add_constant(Value::String(Arc::new(field.node.clone())));
@@ -5865,10 +5880,11 @@ impl Compiler {
     fn extract_module_path(&self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Var(ident) => {
-                // Check if the identifier is a known module OR if there are functions with this prefix
+                // Check if the identifier is a known module OR if there are functions/mvars with this prefix
                 let prefix = format!("{}.", ident.node);
                 if self.known_modules.contains(&ident.node)
-                    || self.functions.keys().any(|k| k.starts_with(&prefix)) {
+                    || self.functions.keys().any(|k| k.starts_with(&prefix))
+                    || self.mvars.keys().any(|k| k.starts_with(&prefix)) {
                     Some(ident.node.clone())
                 } else {
                     None
@@ -5892,10 +5908,11 @@ impl Compiler {
                 // or Type.Trait prefix like Box.Doubler
                 if let Some(base) = self.extract_module_path(target) {
                     let combined = format!("{}.{}", base, field.node);
-                    // Check if the combined path is a known module OR if there are functions with this prefix
+                    // Check if the combined path is a known module OR if there are functions/mvars with this prefix
                     let prefix = format!("{}.", combined);
                     if self.known_modules.contains(&combined)
-                        || self.functions.keys().any(|k| k.starts_with(&prefix)) {
+                        || self.functions.keys().any(|k| k.starts_with(&prefix))
+                        || self.mvars.keys().any(|k| k.starts_with(&prefix)) {
                         Some(combined)
                     } else {
                         None
