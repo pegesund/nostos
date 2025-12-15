@@ -889,13 +889,13 @@ impl Compiler {
         if name.contains('.') {
             return name.to_string();
         }
-        // Otherwise, check if it's a known function or type or constructor in the current module
+        // Otherwise, check if it's a known function, type, constructor, or mvar in the current module
         let qualified = self.qualify_name(name);
-        if self.has_function_with_base(&qualified) || self.types.contains_key(&qualified) || self.known_constructors.contains(&qualified) {
+        if self.has_function_with_base(&qualified) || self.types.contains_key(&qualified) || self.known_constructors.contains(&qualified) || self.mvars.contains_key(&qualified) {
             return qualified;
         }
         // Check if it's in the global scope
-        if self.has_function_with_base(name) || self.types.contains_key(name) || self.known_constructors.contains(name) {
+        if self.has_function_with_base(name) || self.types.contains_key(name) || self.known_constructors.contains(name) || self.mvars.contains_key(name) {
             return name.to_string();
         }
         // Return the original name (will error later if not found)
