@@ -1837,32 +1837,18 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 open_editor(s, &full_name);
             }
             BrowserItem::Type { name } => {
-                // Show type info
+                // Open type in editor directly (preview pane shows info)
                 let full_name = engine.borrow().get_full_name(&new_path, item);
-                let info = engine.borrow().get_info(&full_name);
-                let name_owned = name.clone();
+                debug_log(&format!("Browser: selected Type: {} -> full_name: {}", name, full_name));
                 s.pop_layer();
-                s.add_layer(
-                    Dialog::text(info)
-                        .title(format!("Type: {}", name_owned))
-                        .button("Edit", move |s| {
-                            s.pop_layer();
-                            open_editor(s, &full_name);
-                        })
-                        .button("Close", |s| { s.pop_layer(); })
-                );
+                open_editor(s, &full_name);
             }
             BrowserItem::Trait { name } => {
-                // Show trait info
+                // Open trait in editor directly (preview pane shows info)
                 let full_name = engine.borrow().get_full_name(&new_path, item);
-                let info = engine.borrow().get_info(&full_name);
-                let name_owned = name.clone();
+                debug_log(&format!("Browser: selected Trait: {} -> full_name: {}", name, full_name));
                 s.pop_layer();
-                s.add_layer(
-                    Dialog::text(info)
-                        .title(format!("Trait: {}", name_owned))
-                        .button("Close", |s| { s.pop_layer(); })
-                );
+                open_editor(s, &full_name);
             }
             BrowserItem::Variable { name, mutable: _ } => {
                 // Get variable value and open in inspector
