@@ -16,26 +16,30 @@ panelItemCount() = 5
 panelGetCursor() = panelCursor
 panelGetItems() = panelItems
 
-# Move cursor up
-panelUp() = {
-    if panelCursor > 0 then {
-        panelCursor = panelCursor - 1
-        panelCursor
-    } else {
-        panelCursor
+# Handle keyboard input - single entry point for all keys
+# This is the Nostos-native way: pattern match on key name
+panelHandleKey(key) = match key
+    "up" -> {
+        if panelCursor > 0 then {
+            panelCursor = panelCursor - 1
+            panelCursor
+        } else {
+            panelCursor
+        }
     }
-}
-
-# Move cursor down
-panelDown() = {
-    count = panelItemCount()
-    if panelCursor < count - 1 then {
-        panelCursor = panelCursor + 1
-        panelCursor
-    } else {
-        panelCursor
+    "down" -> {
+        count = panelItemCount()
+        if panelCursor < count - 1 then {
+            panelCursor = panelCursor + 1
+            panelCursor
+        } else {
+            panelCursor
+        }
     }
-}
+    "k" -> panelHandleKey("up")    # vim binding
+    "j" -> panelHandleKey("down")  # vim binding
+    _ -> ()  # ignore other keys
+end
 
 # Render a single item with cursor indicator
 panelRenderItem(idx, item, cursor) =

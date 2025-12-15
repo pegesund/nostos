@@ -164,31 +164,18 @@ impl View for NostosPanel {
     }
 
     fn on_event(&mut self, event: Event) -> EventResult {
-        match &event {
-            Event::Key(Key::Up) | Event::Char('k') => {
-                // Try qualified name first, fall back to unqualified
-                let _ = self.engine.borrow_mut().eval("demo.panel.panelUp()");
-                self.refresh();
-                return EventResult::Consumed(None);
-            }
-            Event::Key(Key::Down) | Event::Char('j') => {
-                let _ = self.engine.borrow_mut().eval("demo.panel.panelDown()");
-                self.refresh();
-                return EventResult::Consumed(None);
-            }
-            // Ignore Shift+Tab for global window cycling
-            Event::Shift(Key::Tab) => {
-                return EventResult::Ignored;
-            }
-            _ => {}
+        // Ignore Shift+Tab for global window cycling
+        if let Event::Shift(Key::Tab) = event {
+            return EventResult::Ignored;
         }
 
-        // Check registered key handlers for other events
+        // Convert event to key string and pass to Nostos handler
         if let Some(key_str) = Self::event_to_key_string(&event) {
-            if let Some(handler_fn) = self.key_handlers.get(&key_str).cloned() {
-                self.call_handler(&handler_fn);
-                return EventResult::Consumed(None);
-            }
+            // Call the single Nostos key handler with the key name
+            let call = format!("demo.panel.panelHandleKey(\"{}\")", key_str);
+            let _ = self.engine.borrow_mut().eval(&call);
+            self.refresh();
+            return EventResult::Consumed(None);
         }
 
         EventResult::Ignored

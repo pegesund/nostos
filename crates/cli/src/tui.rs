@@ -804,10 +804,8 @@ fn create_repl_panel_view(engine: &Rc<RefCell<ReplEngine>>, repl_id: usize, hist
 
 /// Create the Nostos panel view (like create_repl_panel_view)
 fn create_nostos_panel_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
-    // Use qualified function name from demo.panel module
-    let panel = NostosPanel::new(engine.clone(), "demo.panel.panelView", "Demo Panel")
-        .on_key("up", "demo.panel.panelUp")
-        .on_key("down", "demo.panel.panelDown");
+    // All key handling is done by demo.panel.panelHandleKey() in Nostos
+    let panel = NostosPanel::new(engine.clone(), "demo.panel.panelView", "Demo Panel");
 
     let panel_with_name = panel.with_name("nostos_mvar_panel");
 
