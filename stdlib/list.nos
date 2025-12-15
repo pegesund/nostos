@@ -1,0 +1,210 @@
+# List Standard Library
+# Functional list operations for Nostos
+
+# Get last element of a list
+last([x]) = x
+last([_ | rest]) = last(rest)
+
+# Get all elements except the last
+init([_]) = []
+init([x | rest]) = [x | init(rest)]
+
+# Get element at index (0-based)
+nth(list, 0) = head(list)
+nth(list, n) = nth(tail(list), n - 1)
+
+# Alias for nth
+get(list, idx) = nth(list, idx)
+
+# Set element at index, returns new list
+set([], _, _) = []
+set([_ | rest], 0, val) = [val | rest]
+set([x | rest], idx, val) = [x | set(rest, idx - 1, val)]
+
+# Append element to end of list
+push([], x) = [x]
+push([h | t], x) = [h | push(t, x)]
+
+# Remove and return last element as (list, element) tuple
+pop([x]) = ([], x)
+pop([h | t]) = {
+    (rest, last) = pop(t)
+    ([h | rest], last)
+}
+
+# Get sublist from start to end index (exclusive)
+slice(list, start, end) = take(end - start, drop(start, list))
+
+# Concatenate two lists
+concat([], ys) = ys
+concat([x | xs], ys) = [x | concat(xs, ys)]
+
+# Reverse a list
+reverse(list) = reverseAcc(list, [])
+reverseAcc([], acc) = acc
+reverseAcc([x | xs], acc) = reverseAcc(xs, [x | acc])
+
+# Sort a list (quicksort)
+sort([]) = []
+sort([pivot | rest]) = {
+    lesser = filter(\x -> x < pivot, rest)
+    greater = filter(\x -> x >= pivot, rest)
+    concat(sort(lesser), [pivot | sort(greater)])
+}
+
+# Apply function to each element
+map(_, []) = []
+map(f, [x | xs]) = [f(x) | map(f, xs)]
+
+# Keep elements that satisfy predicate
+filter(_, []) = []
+filter(pred, [x | xs]) = if pred(x) then [x | filter(pred, xs)] else filter(pred, xs)
+
+# Reduce list to single value (left fold)
+fold(_, acc, []) = acc
+fold(f, acc, [x | xs]) = fold(f, f(acc, x), xs)
+
+# Right fold
+foldr(_, acc, []) = acc
+foldr(f, acc, [x | xs]) = f(x, foldr(f, acc, xs))
+
+# True if any element satisfies predicate
+any(_, []) = false
+any(pred, [x | xs]) = if pred(x) then true else any(pred, xs)
+
+# True if all elements satisfy predicate
+all(_, []) = true
+all(pred, [x | xs]) = if pred(x) then all(pred, xs) else false
+
+# Find first element satisfying predicate
+find(_, []) = None
+find(pred, [x | xs]) = if pred(x) then Some(x) else find(pred, xs)
+
+# Find index of first match
+position(_, []) = None
+position(pred, list) = positionAcc(pred, list, 0)
+positionAcc(_, [], _) = None
+positionAcc(pred, [x | xs], idx) = if pred(x) then Some(idx) else positionAcc(pred, xs, idx + 1)
+
+# Remove duplicate elements (keeps first occurrence)
+unique([]) = []
+unique([x | xs]) = [x | unique(filter(\y -> y != x, xs))]
+
+# Flatten nested list one level
+flatten([]) = []
+flatten([x | xs]) = concat(x, flatten(xs))
+
+# Pair up elements from two lists
+zip([], _) = []
+zip(_, []) = []
+zip([x | xs], [y | ys]) = [(x, y) | zip(xs, ys)]
+
+# Split list of pairs into two lists
+unzip([]) = ([], [])
+unzip([(a, b) | rest]) = {
+    (as, bs) = unzip(rest)
+    ([a | as], [b | bs])
+}
+
+# Take first n elements
+take(0, _) = []
+take(_, []) = []
+take(n, [x | xs]) = [x | take(n - 1, xs)]
+
+# Drop first n elements
+drop(0, list) = list
+drop(_, []) = []
+drop(n, [_ | xs]) = drop(n - 1, xs)
+
+# Create list of n copies of a value
+replicate(0, _) = []
+replicate(n, x) = [x | replicate(n - 1, x)]
+
+# Check if element is in list
+elem(_, []) = false
+elem(x, [y | ys]) = if x == y then true else elem(x, ys)
+
+# Remove first occurrence of element
+remove(_, []) = []
+remove(x, [y | ys]) = if x == y then ys else [y | remove(x, ys)]
+
+# Remove element at index
+removeAt(_, []) = []
+removeAt(0, [_ | xs]) = xs
+removeAt(idx, [x | xs]) = [x | removeAt(idx - 1, xs)]
+
+# Insert element at index
+insertAt(x, 0, list) = [x | list]
+insertAt(x, _, []) = [x]
+insertAt(x, idx, [h | t]) = [h | insertAt(x, idx - 1, t)]
+
+# Partition list by predicate into (matching, non-matching)
+partition(_, []) = ([], [])
+partition(pred, [x | xs]) = {
+    (yes, no) = partition(pred, xs)
+    if pred(x) then ([x | yes], no) else (yes, [x | no])
+}
+
+# Take elements while predicate is true
+takeWhile(_, []) = []
+takeWhile(pred, [x | xs]) = if pred(x) then [x | takeWhile(pred, xs)] else []
+
+# Drop elements while predicate is true
+dropWhile(_, []) = []
+dropWhile(pred, [x | xs]) = if pred(x) then dropWhile(pred, xs) else [x | xs]
+
+# Split list at index
+splitAt(0, list) = ([], list)
+splitAt(_, []) = ([], [])
+splitAt(n, [x | xs]) = {
+    (left, right) = splitAt(n - 1, xs)
+    ([x | left], right)
+}
+
+# Interleave two lists
+interleave([], ys) = ys
+interleave(xs, []) = xs
+interleave([x | xs], ys) = [x | interleave(ys, xs)]
+
+# Group consecutive equal elements
+group([]) = []
+group([x | xs]) = groupAcc(xs, x, [x], [])
+groupAcc([], _, current, acc) = reverse([reverse(current) | acc])
+groupAcc([x | xs], prev, current, acc) =
+    if x == prev
+    then groupAcc(xs, x, [x | current], acc)
+    else groupAcc(xs, x, [x], [reverse(current) | acc])
+
+# Scan (like fold but returns all intermediate values)
+scanl(_, acc, []) = [acc]
+scanl(f, acc, [x | xs]) = [acc | scanl(f, f(acc, x), xs)]
+
+# Zip with custom function
+zipWith(_, [], _) = []
+zipWith(_, _, []) = []
+zipWith(f, [x | xs], [y | ys]) = [f(x, y) | zipWith(f, xs, ys)]
+
+# Get indices where predicate is true
+findIndices(pred, list) = findIndicesAcc(pred, list, 0)
+findIndicesAcc(_, [], _) = []
+findIndicesAcc(pred, [x | xs], idx) =
+    if pred(x)
+    then [idx | findIndicesAcc(pred, xs, idx + 1)]
+    else findIndicesAcc(pred, xs, idx + 1)
+
+# Count elements satisfying predicate
+count(pred, list) = fold(\acc, x -> if pred(x) then acc + 1 else acc, 0, list)
+
+# Maximum element (requires non-empty list)
+maximum([x]) = x
+maximum([x | xs]) = {
+    m = maximum(xs)
+    if x > m then x else m
+}
+
+# Minimum element (requires non-empty list)
+minimum([x]) = x
+minimum([x | xs]) = {
+    m = minimum(xs)
+    if x < m then x else m
+}
