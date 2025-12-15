@@ -1788,7 +1788,22 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 StyledString::plain(format!("Module: {}", name))
             }
             BrowserItem::Variable { name, .. } => {
-                if let Some(value) = engine.borrow_mut().get_var_value_raw(name) {
+                // Try REPL binding first, then mvar with qualified name
+                let value_opt = {
+                    let mut eng = engine.borrow_mut();
+                    if let Some(val) = eng.get_var_value_raw(name) {
+                        Some(val)
+                    } else {
+                        // Build qualified name for mvar
+                        let qualified = if current_path.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{}.{}", current_path.join("."), name)
+                        };
+                        eng.get_mvar_value_raw(&qualified)
+                    }
+                };
+                if let Some(value) = value_opt {
                     // Highlight variable value as code
                     let source = format!("{} = {}", name, value);
                     syntax_highlight_code(&source)
@@ -1852,9 +1867,23 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
             }
             BrowserItem::Variable { name, mutable: _ } => {
                 // Get variable value and open in inspector
-                // Don't pop browser - keep it underneath so Left at root returns to browser
+                // Try REPL binding first, then mvar with qualified name
                 let var_name = name.clone();
-                if let Some(value) = engine.borrow_mut().get_var_value_raw(&var_name) {
+                let value_opt = {
+                    let mut eng = engine.borrow_mut();
+                    if let Some(val) = eng.get_var_value_raw(&var_name) {
+                        Some(val)
+                    } else {
+                        // Build qualified name for mvar
+                        let qualified = if new_path.is_empty() {
+                            var_name.clone()
+                        } else {
+                            format!("{}.{}", new_path.join("."), var_name)
+                        };
+                        eng.get_mvar_value_raw(&qualified)
+                    }
+                };
+                if let Some(value) = value_opt {
                     open_inspector(s, &var_name, value);
                 } else {
                     log_to_repl(s, &format!("Unable to evaluate variable: {}", var_name));

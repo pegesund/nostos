@@ -2125,6 +2125,7 @@ impl ReplEngine {
         let mut functions: BTreeSet<(String, String, Option<String>)> = BTreeSet::new();
         let mut types: BTreeSet<String> = BTreeSet::new();
         let mut traits: BTreeSet<String> = BTreeSet::new();
+        let mut mvars: BTreeSet<String> = BTreeSet::new();
 
         // Process functions
         for name in self.compiler.get_function_names() {
@@ -2202,7 +2203,25 @@ impl ReplEngine {
             }
         }
 
-        // Build result list: modules first, then metadata, then variables (at root), then types, traits, functions
+        // Process mvars (module-level mutable variables)
+        for name in self.compiler.get_mvars().keys() {
+            if prefix.is_empty() {
+                if let Some(dot_pos) = name.find('.') {
+                    modules.insert(name[..dot_pos].to_string());
+                } else {
+                    mvars.insert(name.to_string());
+                }
+            } else if name.starts_with(&prefix) {
+                let rest = &name[prefix_len..];
+                if let Some(dot_pos) = rest.find('.') {
+                    modules.insert(rest[..dot_pos].to_string());
+                } else {
+                    mvars.insert(rest.to_string());
+                }
+            }
+        }
+
+        // Build result list: modules first, then metadata, then variables/mvars, then types, traits, functions
         let mut items = Vec::new();
 
         // Modules first
@@ -2216,8 +2235,9 @@ impl ReplEngine {
             items.push(BrowserItem::Metadata { module: module_name });
         }
 
-        // Variables second (at root level only) - so user's REPL bindings are visible
+        // Variables: REPL bindings at root level, mvars at any level
         if path.is_empty() {
+            // REPL variable bindings (at root only)
             let mut var_names: Vec<_> = self.var_bindings.keys().collect();
             var_names.sort();
             for name in var_names {
@@ -2227,6 +2247,14 @@ impl ReplEngine {
                     mutable: binding.mutable,
                 });
             }
+        }
+
+        // Mvars (module-level mutable variables) - at any level
+        for name in &mvars {
+            items.push(BrowserItem::Variable {
+                name: name.clone(),
+                mutable: true,  // mvars are always mutable
+            });
         }
 
         // Types
@@ -2278,12 +2306,46 @@ impl ReplEngine {
     }
 
     /// Get the raw Value of a variable for inspection
+    /// Works for both REPL bindings and mvars
     pub fn get_var_value_raw(&mut self, name: &str) -> Option<nostos_vm::Value> {
-        let binding = self.var_bindings.get(name)?.clone();
-        let func = self.compiler.get_function(&binding.thunk_name)?;
+        // First try REPL bindings
+        if let Some(binding) = self.var_bindings.get(name).cloned() {
+            let func = self.compiler.get_function(&binding.thunk_name)?;
+            return match self.vm.run(func) {
+                Ok(result) => result.value.map(|v| v.to_value()),
+                Err(_) => None,
+            };
+        }
 
-        match self.vm.run(func) {
-            Ok(result) => result.value.map(|v| v.to_value()),
+        // Not a REPL binding - try as an mvar by evaluating directly
+        None
+    }
+
+    /// Get the raw Value of an mvar for inspection
+    /// `qualified_name` should be the full path like "demo.panel.panelCursor"
+    pub fn get_mvar_value_raw(&mut self, qualified_name: &str) -> Option<nostos_vm::Value> {
+        // Check if this mvar exists
+        if !self.compiler.get_mvars().contains_key(qualified_name) {
+            return None;
+        }
+
+        // Evaluate the mvar name to get its current value
+        // This creates a simple expression that reads the mvar
+        match self.eval(qualified_name) {
+            Ok(_formatted) => {
+                // The eval returns a formatted string, but we need the raw value
+                // Re-run to get the actual Value
+                let source = format!("__mvar_read_temp() = {}", qualified_name);
+                let _ = self.eval(&source);
+                if let Some(func) = self.compiler.get_function("__mvar_read_temp") {
+                    match self.vm.run(func) {
+                        Ok(result) => result.value.map(|v| v.to_value()),
+                        Err(_) => None,
+                    }
+                } else {
+                    None
+                }
+            }
             Err(_) => None,
         }
     }
