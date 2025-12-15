@@ -803,22 +803,17 @@ fn create_repl_panel_view(engine: &Rc<RefCell<ReplEngine>>, repl_id: usize, hist
 }
 
 /// Create the Nostos panel view (like create_repl_panel_view)
+/// Event handling (up/down) is done by NostosPanel via .on_key() - pure Nostos integration
 fn create_nostos_panel_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
-    let panel = NostosPanel::new(engine.clone(), "panelView", "Mvar Panel");
+    // Panel handles up/down internally via Nostos functions
+    let panel = NostosPanel::new(engine.clone(), "panelView", "Mvar Panel")
+        .on_key("up", "panelUp")
+        .on_key("down", "panelDown");
+
     let panel_with_name = panel.with_name("nostos_mvar_panel");
 
-    let engine_up = engine.clone();
-    let engine_down = engine.clone();
-
+    // Only handle close events in Rust
     let panel_with_events = OnEventView::new(panel_with_name)
-        .on_event(Key::Up, move |s| {
-            let _ = engine_up.borrow_mut().eval("panelUp()");
-            s.call_on_name("nostos_mvar_panel", |p: &mut NostosPanel| p.refresh());
-        })
-        .on_event(Key::Down, move |s| {
-            let _ = engine_down.borrow_mut().eval("panelDown()");
-            s.call_on_name("nostos_mvar_panel", |p: &mut NostosPanel| p.refresh());
-        })
         .on_event(Event::CtrlChar('w'), |s| {
             close_nostos_panel(s);
         })
@@ -861,11 +856,38 @@ fn open_nostos_test_panel(s: &mut Cursive) {
         r#"panelItemCount() = 5"#,
         r#"panelGetCursor() = panelCursor"#,
         r#"panelGetItems() = panelItems"#,
-        r#"panelUp() = { if panelCursor > 0 then { panelCursor = panelCursor - 1; panelCursor } else { panelCursor } }"#,
-        r#"panelDown() = { count = panelItemCount(); if panelCursor < count - 1 then { panelCursor = panelCursor + 1; panelCursor } else { panelCursor } }"#,
-        r#"panelRenderItem(idx, item, cursor) = if idx == cursor then "> " ++ item else "  " ++ item"#,
-        r#"panelRenderList(items, idx, cursor) = match items [] -> "" [item | rest] -> panelRenderItem(idx, item, cursor) ++ "\n" ++ panelRenderList(rest, idx + 1, cursor) end"#,
-        r#"panelView() = { header = "Nostos Panel with Mvars\n=======================\n\n"; items = panelGetItems(); cursor = panelGetCursor(); list = panelRenderList(items, 0, cursor); footer = "\n[UP/DOWN to move, Ctrl+W/ESC to close]"; header ++ list ++ footer }"#,
+        r#"panelUp() = {
+            if panelCursor > 0 then {
+                panelCursor = panelCursor - 1
+                panelCursor
+            } else {
+                panelCursor
+            }
+        }"#,
+        r#"panelDown() = {
+            count = panelItemCount()
+            if panelCursor < count - 1 then {
+                panelCursor = panelCursor + 1
+                panelCursor
+            } else {
+                panelCursor
+            }
+        }"#,
+        r#"panelRenderItem(idx, item, cursor) =
+            if idx == cursor then "> " ++ item else "  " ++ item"#,
+        r#"panelRenderList(items, idx, cursor) = match items
+            [] -> ""
+            [item | rest] -> panelRenderItem(idx, item, cursor) ++ "\n" ++ panelRenderList(rest, idx + 1, cursor)
+        end"#,
+        r#"panelView() = {
+            header = "Nostos Panel with Mvars\n"
+            header2 = "=======================\n\n"
+            items = panelGetItems()
+            cursor = panelGetCursor()
+            list = panelRenderList(items, 0, cursor)
+            footer = "\n[UP/DOWN to move, Ctrl+W/ESC to close]"
+            header ++ header2 ++ list ++ footer
+        }"#,
     ];
 
     for code in &definitions {
