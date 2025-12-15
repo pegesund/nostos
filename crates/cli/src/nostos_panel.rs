@@ -166,12 +166,13 @@ impl View for NostosPanel {
     fn on_event(&mut self, event: Event) -> EventResult {
         match &event {
             Event::Key(Key::Up) | Event::Char('k') => {
-                let _ = self.engine.borrow_mut().eval("panelUp()");
+                // Try qualified name first, fall back to unqualified
+                let _ = self.engine.borrow_mut().eval("demo.panel.panelUp()");
                 self.refresh();
                 return EventResult::Consumed(None);
             }
             Event::Key(Key::Down) | Event::Char('j') => {
-                let _ = self.engine.borrow_mut().eval("panelDown()");
+                let _ = self.engine.borrow_mut().eval("demo.panel.panelDown()");
                 self.refresh();
                 return EventResult::Consumed(None);
             }

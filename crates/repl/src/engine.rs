@@ -2408,17 +2408,23 @@ impl ReplEngine {
 
         for demo_path in demo_paths {
             if demo_path.exists() && demo_path.is_dir() {
-                // Load all .nos files from demo folder
+                // Load all .nos files from demo folder with "demo" module prefix
                 let mut loaded = Vec::new();
                 if let Ok(entries) = std::fs::read_dir(&demo_path) {
                     for entry in entries.flatten() {
                         let path = entry.path();
                         if path.extension().map(|e| e == "nos").unwrap_or(false) {
-                            match self.load_file(path.to_str().unwrap_or("")) {
+                            let module_name = path.file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("unknown");
+
+                            // Load with module path ["demo", "filename"]
+                            match self.load_file_with_module(
+                                path.to_str().unwrap_or(""),
+                                vec!["demo".to_string(), module_name.to_string()]
+                            ) {
                                 Ok(_) => {
-                                    if let Some(name) = path.file_stem() {
-                                        loaded.push(name.to_string_lossy().to_string());
-                                    }
+                                    loaded.push(format!("demo.{}", module_name));
                                 }
                                 Err(e) => return Err(format!("Error loading {:?}: {}", path, e)),
                             }
@@ -2428,11 +2434,49 @@ impl ReplEngine {
                 if loaded.is_empty() {
                     return Ok("Demo folder found but no .nos files to load.".to_string());
                 }
-                return Ok(format!("Loaded demo modules: {}. Browse with :b or call functions like panelDemo().", loaded.join(", ")));
+                return Ok(format!("Loaded: {}. Browse with :b or call demo.panel.panelDemo().", loaded.join(", ")));
             }
         }
 
         Err("Demo folder not found. Make sure 'demo/' exists in the current directory.".to_string())
+    }
+
+    /// Load a file with a specific module path
+    fn load_file_with_module(&mut self, path_str: &str, module_path: Vec<String>) -> Result<(), String> {
+        let path = PathBuf::from(path_str);
+
+        if !path.exists() {
+            return Err(format!("File not found: {}", path_str));
+        }
+
+        let source = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+
+        let (module_opt, errors) = parse(&source);
+        if !errors.is_empty() {
+            return Err("Parse errors (check console/logs)".to_string());
+        }
+
+        let module = module_opt.ok_or("Failed to parse file")?;
+
+        // Add to compiler with the specified module path
+        self.compiler.add_module(&module, module_path.clone(), Arc::new(source.clone()), path_str.to_string())
+            .map_err(|e| format!("Compilation error: {}", e))?;
+
+        // Compile all bodies
+        if let Err((e, _filename, _source)) = self.compiler.compile_all() {
+            return Err(format!("Compilation error: {}", e));
+        }
+
+        // Update VM
+        self.sync_vm();
+
+        // Track loaded file
+        if !self.loaded_files.contains(&path) {
+            self.loaded_files.push(path);
+        }
+
+        Ok(())
     }
 
     /// Help text for REPL commands
