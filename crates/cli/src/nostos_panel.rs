@@ -164,9 +164,12 @@ impl View for NostosPanel {
     }
 
     fn on_event(&mut self, event: Event) -> EventResult {
-        // Ignore Shift+Tab for global window cycling
-        if let Event::Shift(Key::Tab) = event {
-            return EventResult::Ignored;
+        // Let these events bubble up to OnEventView wrapper for close/navigation
+        match &event {
+            Event::Shift(Key::Tab) => return EventResult::Ignored,  // Window cycling
+            Event::Key(Key::Esc) => return EventResult::Ignored,     // Close panel
+            Event::CtrlChar('w') => return EventResult::Ignored,     // Close panel
+            _ => {}
         }
 
         // Convert event to key string and pass to Nostos handler

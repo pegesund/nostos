@@ -2390,17 +2390,41 @@ fn close_viewer(s: &mut Cursive, viewer_name: &str) {
 fn cycle_window(s: &mut Cursive) {
     let target = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let mut state = state.borrow_mut();
-        let mut windows = vec!["repl_log".to_string()];
+        let mut windows = Vec::new();
 
+        // Console (always first if open)
+        if state.console_open {
+            windows.push("repl_log".to_string());
+        }
+
+        // Editors
         for name in &state.open_editors {
             windows.push(format!("editor_{}", name));
+        }
+
+        // REPL panels
+        for id in &state.open_repls {
+            windows.push(format!("repl_panel_{}", id));
+        }
+
+        // Inspector
+        if state.inspector_open {
+            windows.push("inspector_panel".to_string());
+        }
+
+        // Nostos panel
+        if state.nostos_panel_open {
+            windows.push("nostos_mvar_panel".to_string());
+        }
+
+        if windows.is_empty() {
+            return "repl_log".to_string();
         }
 
         state.active_window_idx = (state.active_window_idx + 1) % windows.len();
         windows[state.active_window_idx].clone()
     }).unwrap();
 
-    // Now console is focusable via FocusableConsole wrapper
     s.focus_name(&target).ok();
 }
 
