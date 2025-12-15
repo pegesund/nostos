@@ -1,0 +1,67 @@
+# Panel Demo - A simple list panel with keyboard navigation
+#
+# This demonstrates mvars (module-level mutable variables) for UI state.
+# The panel shows a list of items with a cursor that can be moved with Up/Down.
+#
+# Usage: Call panelDemo() from the REPL after loading with :demo
+
+# Panel state using mvars
+mvar panelCursor: Int = 0
+mvar panelItems: List[String] = ["First item", "Second item", "Third item", "Fourth item", "Fifth item"]
+
+# Get total item count
+panelItemCount() = 5
+
+# Accessor functions (leaf functions for mvar safety)
+panelGetCursor() = panelCursor
+panelGetItems() = panelItems
+
+# Move cursor up
+panelUp() = {
+    if panelCursor > 0 then {
+        panelCursor = panelCursor - 1
+        panelCursor
+    } else {
+        panelCursor
+    }
+}
+
+# Move cursor down
+panelDown() = {
+    count = panelItemCount()
+    if panelCursor < count - 1 then {
+        panelCursor = panelCursor + 1
+        panelCursor
+    } else {
+        panelCursor
+    }
+}
+
+# Render a single item with cursor indicator
+panelRenderItem(idx, item, cursor) =
+    if idx == cursor then "> " ++ item else "  " ++ item
+
+# Render the full list recursively
+panelRenderList(items, idx, cursor) = match items
+    [] -> ""
+    [item | rest] -> panelRenderItem(idx, item, cursor) ++ "\n" ++ panelRenderList(rest, idx + 1, cursor)
+end
+
+# Main view function - returns the panel content as a string
+panelView() = {
+    header = "Nostos Panel Demo\n"
+    header2 = "=================\n\n"
+    items = panelGetItems()
+    cursor = panelGetCursor()
+    list = panelRenderList(items, 0, cursor)
+    footer = "\n[UP/DOWN or j/k to move, Ctrl+W/ESC to close]"
+    header ++ header2 ++ list ++ footer
+}
+
+# Entry point - activates the panel in the TUI
+# Call this from the REPL: panelDemo()
+panelDemo() = {
+    # The TUI will detect this function and open the panel
+    # For now, just return a message
+    "Panel demo loaded. Press Alt+T to open the panel."
+}

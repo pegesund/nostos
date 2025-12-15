@@ -678,6 +678,11 @@ impl ReplEngine {
     pub fn eval_in_module(&mut self, input: &str, module_name: Option<&str>) -> Result<String, String> {
         let input = input.trim();
 
+        // Handle REPL commands
+        if input.starts_with(':') {
+            return self.handle_command(input);
+        }
+
         // Check for tuple destructuring binding like (a, b) = expr
         if let Some((names, expr)) = Self::is_tuple_binding(input) {
             return self.define_tuple_binding(&names, &expr);
@@ -2371,6 +2376,79 @@ impl ReplEngine {
 
         // Default: not a project function
         false
+    }
+
+    /// Handle REPL commands (starting with :)
+    fn handle_command(&mut self, input: &str) -> Result<String, String> {
+        let parts: Vec<&str> = input.splitn(2, char::is_whitespace).collect();
+        let cmd = parts[0];
+        let args = parts.get(1).map(|s| s.trim()).unwrap_or("");
+
+        match cmd {
+            ":demo" => self.load_demo(),
+            ":help" | ":h" | ":?" => Ok(self.help_text()),
+            ":load" | ":l" => {
+                if args.is_empty() {
+                    Err("Usage: :load <file.nos>".to_string())
+                } else {
+                    self.load_file(args).map(|_| format!("Loaded {}", args))
+                }
+            }
+            _ => Err(format!("Unknown command: {}. Type :help for available commands.", cmd)),
+        }
+    }
+
+    /// Load the demo folder
+    fn load_demo(&mut self) -> Result<String, String> {
+        // Try to find demo folder relative to current directory or executable
+        let demo_paths = vec![
+            PathBuf::from("demo"),
+            PathBuf::from("../demo"),
+        ];
+
+        for demo_path in demo_paths {
+            if demo_path.exists() && demo_path.is_dir() {
+                // Load all .nos files from demo folder
+                let mut loaded = Vec::new();
+                if let Ok(entries) = std::fs::read_dir(&demo_path) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().map(|e| e == "nos").unwrap_or(false) {
+                            match self.load_file(path.to_str().unwrap_or("")) {
+                                Ok(_) => {
+                                    if let Some(name) = path.file_stem() {
+                                        loaded.push(name.to_string_lossy().to_string());
+                                    }
+                                }
+                                Err(e) => return Err(format!("Error loading {:?}: {}", path, e)),
+                            }
+                        }
+                    }
+                }
+                if loaded.is_empty() {
+                    return Ok("Demo folder found but no .nos files to load.".to_string());
+                }
+                return Ok(format!("Loaded demo modules: {}. Browse with :b or call functions like panelDemo().", loaded.join(", ")));
+            }
+        }
+
+        Err("Demo folder not found. Make sure 'demo/' exists in the current directory.".to_string())
+    }
+
+    /// Help text for REPL commands
+    fn help_text(&self) -> String {
+        "REPL Commands:
+  :help, :h, :?    Show this help
+  :demo            Load demo folder (demo/*.nos)
+  :load <file>     Load a .nos file
+  :quit, :q        Exit (TUI only)
+
+Keyboard shortcuts (TUI):
+  Tab              Switch windows
+  Alt+B            Open browser
+  Alt+T            Open test panel
+  Ctrl+W           Close current window
+  Esc              Close editor/panel".to_string()
     }
 }
 

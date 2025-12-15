@@ -832,7 +832,8 @@ fn close_nostos_panel(s: &mut Cursive) {
     log_to_repl(s, "Closed Nostos panel");
 }
 
-/// Open a test Nostos-defined panel using mvars for state
+/// Open a Nostos-defined panel using mvars for state
+/// Requires demo to be loaded first (:demo command)
 fn open_nostos_test_panel(s: &mut Cursive) {
     // Check if already open
     let already_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
@@ -848,52 +849,12 @@ fn open_nostos_test_panel(s: &mut Cursive) {
         state.borrow().engine.clone()
     }).unwrap();
 
-    // Define mvars for panel state and functions in Nostos
-    let definitions = [
-        r#"mvar panelCursor: Int = 0"#,
-        r#"mvar panelItems: List[String] = ["First item", "Second item", "Third item", "Fourth item", "Fifth item"]"#,
-        r#"panelItemCount() = 5"#,
-        r#"panelGetCursor() = panelCursor"#,
-        r#"panelGetItems() = panelItems"#,
-        r#"panelUp() = {
-            if panelCursor > 0 then {
-                panelCursor = panelCursor - 1
-                panelCursor
-            } else {
-                panelCursor
-            }
-        }"#,
-        r#"panelDown() = {
-            count = panelItemCount()
-            if panelCursor < count - 1 then {
-                panelCursor = panelCursor + 1
-                panelCursor
-            } else {
-                panelCursor
-            }
-        }"#,
-        r#"panelRenderItem(idx, item, cursor) =
-            if idx == cursor then "> " ++ item else "  " ++ item"#,
-        r#"panelRenderList(items, idx, cursor) = match items
-            [] -> ""
-            [item | rest] -> panelRenderItem(idx, item, cursor) ++ "\n" ++ panelRenderList(rest, idx + 1, cursor)
-        end"#,
-        r#"panelView() = {
-            header = "Nostos Panel with Mvars\n"
-            header2 = "=======================\n\n"
-            items = panelGetItems()
-            cursor = panelGetCursor()
-            list = panelRenderList(items, 0, cursor)
-            footer = "\n[UP/DOWN to move, Ctrl+W/ESC to close]"
-            header ++ header2 ++ list ++ footer
-        }"#,
-    ];
+    // Check if required panel functions exist (from :demo)
+    let has_panel = engine.borrow_mut().eval("panelView()").is_ok();
 
-    for code in &definitions {
-        if let Err(e) = engine.borrow_mut().eval(code) {
-            log_to_repl(s, &format!("Error setting up Nostos panel: {}", e));
-            return;
-        }
+    if !has_panel {
+        log_to_repl(s, "Panel not loaded. Run :demo first to load demo/panel.nos");
+        return;
     }
 
     // Mark panel as open and rebuild workspace
