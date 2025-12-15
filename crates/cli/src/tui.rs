@@ -799,20 +799,19 @@ fn open_nostos_test_panel(s: &mut Cursive) {
         state.borrow().engine.clone()
     }).unwrap();
 
-    // Define the panel's view function and state in Nostos
-    let setup_code = r#"
-_testPanelCount = 0
+    // Define the panel's state and functions in Nostos (one at a time for proper binding)
+    let definitions = [
+        "_testPanelCount = 0",
+        r#"testPanelView() = "Counter: {_testPanelCount}\n\nPress UP/DOWN to change\nPress ESC to close""#,
+        "testPanelUp() = { _testPanelCount = _testPanelCount + 1 }",
+        "testPanelDown() = { _testPanelCount = _testPanelCount - 1 }",
+    ];
 
-testPanelView() = "Counter: {_testPanelCount}\n\nPress UP/DOWN to change\nPress ESC to close"
-
-testPanelUp() = { _testPanelCount = _testPanelCount + 1 }
-testPanelDown() = { _testPanelCount = _testPanelCount - 1 }
-    "#;
-
-    // Evaluate the setup code
-    if let Err(e) = engine.borrow_mut().eval(setup_code) {
-        log_to_repl(s, &format!("Error setting up Nostos panel: {}", e));
-        return;
+    for code in &definitions {
+        if let Err(e) = engine.borrow_mut().eval(code) {
+            log_to_repl(s, &format!("Error setting up Nostos panel: {}", e));
+            return;
+        }
     }
 
     // Create the NostosPanel
