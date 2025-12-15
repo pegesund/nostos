@@ -438,6 +438,7 @@ struct TuiState {
     engine: Rc<RefCell<ReplEngine>>,
     inspector_open: bool,
     console_open: bool,
+    nostos_panel_open: bool,
 }
 
 pub fn run_tui(args: &[String]) -> ExitCode {
@@ -491,6 +492,7 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         engine: engine.clone(),
         inspector_open: false,
         console_open: true,
+        nostos_panel_open: false,
     })));
 
     // Components
@@ -625,9 +627,9 @@ fn poll_inspect_entries(s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>) {
 /// - 1-3 windows: single row, equal width
 /// - 4-6 windows: two rows, top row has 3 windows, bottom row has rest
 fn rebuild_workspace(s: &mut Cursive) {
-    let (editor_names, repl_ids, engine, inspector_open, console_open) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+    let (editor_names, repl_ids, engine, inspector_open, console_open, nostos_panel_open) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let state = state.borrow();
-        (state.open_editors.clone(), state.open_repls.clone(), state.engine.clone(), state.inspector_open, state.console_open)
+        (state.open_editors.clone(), state.open_repls.clone(), state.engine.clone(), state.inspector_open, state.console_open, state.nostos_panel_open)
     }).unwrap();
 
     // Get console content BEFORE clearing workspace
@@ -656,9 +658,10 @@ fn rebuild_workspace(s: &mut Cursive) {
         ws.clear();
     });
 
-    // Total windows = Console + editors + REPL panels + (inspector if open)
+    // Total windows = Console + editors + REPL panels + (inspector if open) + (nostos panel if open)
     let inspector_count = if inspector_open { 1 } else { 0 };
-    let total_windows = 1 + editor_names.len() + repl_ids.len() + inspector_count;
+    let nostos_panel_count = if nostos_panel_open { 1 } else { 0 };
+    let total_windows = 1 + editor_names.len() + repl_ids.len() + inspector_count + nostos_panel_count;
 
     let repl_log = FocusableConsole::new(
         TextView::new(repl_log_content).scrollable()
@@ -710,6 +713,12 @@ fn rebuild_workspace(s: &mut Cursive) {
     for &repl_id in &repl_ids {
         let repl_view = create_repl_panel_view(&engine, repl_id, repl_histories.remove(&repl_id));
         windows.push(Box::new(repl_view));
+    }
+
+    // Add Nostos panel if open
+    if nostos_panel_open {
+        let nostos_view = create_nostos_panel_view(&engine);
+        windows.push(Box::new(nostos_view));
     }
 
     if windows.is_empty() {
@@ -793,70 +802,70 @@ fn create_repl_panel_view(engine: &Rc<RefCell<ReplEngine>>, repl_id: usize, hist
     ActiveWindow::new(panel_with_events, &format!("REPL #{}", repl_id)).full_width()
 }
 
+/// Create the Nostos panel view (like create_repl_panel_view)
+fn create_nostos_panel_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
+    let panel = NostosPanel::new(engine.clone(), "panelView", "Mvar Panel");
+    let panel_with_name = panel.with_name("nostos_mvar_panel");
+
+    let engine_up = engine.clone();
+    let engine_down = engine.clone();
+
+    let panel_with_events = OnEventView::new(panel_with_name)
+        .on_event(Key::Up, move |s| {
+            let _ = engine_up.borrow_mut().eval("panelUp()");
+            s.call_on_name("nostos_mvar_panel", |p: &mut NostosPanel| p.refresh());
+        })
+        .on_event(Key::Down, move |s| {
+            let _ = engine_down.borrow_mut().eval("panelDown()");
+            s.call_on_name("nostos_mvar_panel", |p: &mut NostosPanel| p.refresh());
+        })
+        .on_event(Event::CtrlChar('w'), |s| {
+            close_nostos_panel(s);
+        })
+        .on_event(Key::Esc, |s| {
+            close_nostos_panel(s);
+        });
+
+    ActiveWindow::new(panel_with_events, "Nostos Panel").full_width()
+}
+
+/// Close the Nostos panel
+fn close_nostos_panel(s: &mut Cursive) {
+    s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow_mut().nostos_panel_open = false;
+    });
+    rebuild_workspace(s);
+    log_to_repl(s, "Closed Nostos panel");
+}
+
 /// Open a test Nostos-defined panel using mvars for state
 fn open_nostos_test_panel(s: &mut Cursive) {
+    // Check if already open
+    let already_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().nostos_panel_open
+    }).unwrap();
+
+    if already_open {
+        log_to_repl(s, "Nostos panel already open");
+        return;
+    }
+
     let engine = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         state.borrow().engine.clone()
     }).unwrap();
 
     // Define mvars for panel state and functions in Nostos
-    // This demonstrates an interactive list selector using mvars
     let definitions = [
-        // State: current selection index
         r#"mvar panelCursor: Int = 0"#,
-        // State: list of items
         r#"mvar panelItems: List[String] = ["First item", "Second item", "Third item", "Fourth item", "Fifth item"]"#,
-
-        // Helper: get item count (fixed for this demo)
         r#"panelItemCount() = 5"#,
-
-        // Helper: get cursor position (leaf function)
         r#"panelGetCursor() = panelCursor"#,
-
-        // Helper: get items (leaf function)
         r#"panelGetItems() = panelItems"#,
-
-        // Move cursor up
-        r#"panelUp() = {
-            if panelCursor > 0 then {
-                panelCursor = panelCursor - 1
-                panelCursor
-            } else {
-                panelCursor
-            }
-        }"#,
-
-        // Move cursor down
-        r#"panelDown() = {
-            count = panelItemCount()
-            if panelCursor < count - 1 then {
-                panelCursor = panelCursor + 1
-                panelCursor
-            } else {
-                panelCursor
-            }
-        }"#,
-
-        // Render a single item with selection indicator
-        r#"panelRenderItem(idx, item, cursor) =
-            if idx == cursor then "> " ++ item else "  " ++ item"#,
-
-        // Render the list (recursive helper)
-        r#"panelRenderList(items, idx, cursor) = match items
-            [] -> ""
-            [item | rest] -> panelRenderItem(idx, item, cursor) ++ "\n" ++ panelRenderList(rest, idx + 1, cursor)
-        end"#,
-
-        // Main view function - reads mvars to render
-        r#"panelView() = {
-            header = "Nostos Panel with Mvars\n"
-            header2 = "=======================\n\n"
-            items = panelGetItems()
-            cursor = panelGetCursor()
-            list = panelRenderList(items, 0, cursor)
-            footer = "\n[UP/DOWN to move, ESC to close]"
-            header ++ header2 ++ list ++ footer
-        }"#,
+        r#"panelUp() = { if panelCursor > 0 then { panelCursor = panelCursor - 1; panelCursor } else { panelCursor } }"#,
+        r#"panelDown() = { count = panelItemCount(); if panelCursor < count - 1 then { panelCursor = panelCursor + 1; panelCursor } else { panelCursor } }"#,
+        r#"panelRenderItem(idx, item, cursor) = if idx == cursor then "> " ++ item else "  " ++ item"#,
+        r#"panelRenderList(items, idx, cursor) = match items [] -> "" [item | rest] -> panelRenderItem(idx, item, cursor) ++ "\n" ++ panelRenderList(rest, idx + 1, cursor) end"#,
+        r#"panelView() = { header = "Nostos Panel with Mvars\n=======================\n\n"; items = panelGetItems(); cursor = panelGetCursor(); list = panelRenderList(items, 0, cursor); footer = "\n[UP/DOWN to move, Ctrl+W/ESC to close]"; header ++ list ++ footer }"#,
     ];
 
     for code in &definitions {
@@ -866,29 +875,15 @@ fn open_nostos_test_panel(s: &mut Cursive) {
         }
     }
 
-    // Create the NostosPanel (handlers managed externally via OnEventView)
-    let panel = NostosPanel::new(engine.clone(), "panelView", "Mvar Panel");
-    let panel_with_name = panel.with_name("nostos_mvar_panel");
+    // Mark panel as open and rebuild workspace
+    s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow_mut().nostos_panel_open = true;
+    });
+    rebuild_workspace(s);
 
-    let engine_up = engine.clone();
-    let engine_down = engine.clone();
-
-    // Handle all events through OnEventView using on_event (same pattern as working ESC)
-    let panel_view = OnEventView::new(panel_with_name.min_size((40, 15)))
-        .on_event(Key::Up, move |s| {
-            let _ = engine_up.borrow_mut().eval("panelUp()");
-            s.call_on_name("nostos_mvar_panel", |p: &mut NostosPanel| p.refresh());
-        })
-        .on_event(Key::Down, move |s| {
-            let _ = engine_down.borrow_mut().eval("panelDown()");
-            s.call_on_name("nostos_mvar_panel", |p: &mut NostosPanel| p.refresh());
-        })
-        .on_event(Key::Esc, |s| {
-            s.pop_layer();
-        });
-
-    s.add_layer(panel_view);
-    log_to_repl(s, "Opened Nostos mvar panel (Alt+T). UP/DOWN to navigate, ESC to close.");
+    // Focus the panel
+    s.focus_name("nostos_mvar_panel").ok();
+    log_to_repl(s, "Opened Nostos panel (Alt+T). UP/DOWN to navigate, Ctrl+W/ESC to close.");
 }
 
 /// Open a new REPL panel
