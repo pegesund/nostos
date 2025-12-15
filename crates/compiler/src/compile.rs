@@ -4895,14 +4895,20 @@ impl Compiler {
                         self.chunk.emit(Instruction::ListTail(dst, arg_regs[0]), 0);
                         return Ok(dst);
                     }
-                    "isEmpty" if arg_regs.len() == 1 => {
+                    "isEmpty" | "empty" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ListIsEmpty(dst, arg_regs[0]), 0);
                         return Ok(dst);
                     }
-                    "listSum" if arg_regs.len() == 1 => {
+                    "listSum" | "sum" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ListSum(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "product" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("product".to_string())));
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_regs[0]].into()), 0);
                         return Ok(dst);
                     }
                     "rangeList" if arg_regs.len() == 1 => {
@@ -4910,7 +4916,14 @@ impl Compiler {
                         self.chunk.emit(Instruction::RangeList(dst, arg_regs[0]), 0);
                         return Ok(dst);
                     }
-                    "length" if arg_regs.len() == 1 => {
+                    "range" if arg_regs.len() == 2 => {
+                        // range(start, end) - create list [start..end)
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("range".to_string())));
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_regs[0], arg_regs[1]].into()), 0);
+                        return Ok(dst);
+                    }
+                    "length" | "len" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::Length(dst, arg_regs[0]), 0);
                         return Ok(dst);
@@ -4968,6 +4981,87 @@ impl Compiler {
                     "sqrt" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::SqrtFloat(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "sin" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::SinFloat(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "cos" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::CosFloat(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "tan" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::TanFloat(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "floor" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::FloorFloat(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "ceil" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::CeilFloat(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "round" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::RoundFloat(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "log" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::LogFloat(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "log10" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::Log10Float(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "pow" if arg_regs.len() == 2 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::PowFloat(dst, arg_regs[0], arg_regs[1]), 0);
+                        return Ok(dst);
+                    }
+                    "min" if arg_regs.len() == 2 => {
+                        let dst = self.alloc_reg();
+                        // Check if we can infer type from the first argument
+                        let arg_type = self.infer_expr_type(&args[0]);
+                        match arg_type {
+                            Some(InferredType::Int) => {
+                                self.chunk.emit(Instruction::MinInt(dst, arg_regs[0], arg_regs[1]), 0);
+                            }
+                            Some(InferredType::Float) => {
+                                self.chunk.emit(Instruction::MinFloat(dst, arg_regs[0], arg_regs[1]), 0);
+                            }
+                            None => {
+                                // Fallback: emit MinInt (most common case)
+                                self.chunk.emit(Instruction::MinInt(dst, arg_regs[0], arg_regs[1]), 0);
+                            }
+                        }
+                        return Ok(dst);
+                    }
+                    "max" if arg_regs.len() == 2 => {
+                        let dst = self.alloc_reg();
+                        // Check if we can infer type from the first argument
+                        let arg_type = self.infer_expr_type(&args[0]);
+                        match arg_type {
+                            Some(InferredType::Int) => {
+                                self.chunk.emit(Instruction::MaxInt(dst, arg_regs[0], arg_regs[1]), 0);
+                            }
+                            Some(InferredType::Float) => {
+                                self.chunk.emit(Instruction::MaxFloat(dst, arg_regs[0], arg_regs[1]), 0);
+                            }
+                            None => {
+                                // Fallback: emit MaxInt (most common case)
+                                self.chunk.emit(Instruction::MaxInt(dst, arg_regs[0], arg_regs[1]), 0);
+                            }
+                        }
                         return Ok(dst);
                     }
                     "toFloat" | "toFloat64" if arg_regs.len() == 1 => {

@@ -3009,6 +3009,164 @@ impl Worker {
                 set_reg!(dst, result);
             }
 
+            Instruction::MinInt(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                let result = match (va, vb) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Int64(x.min(y)),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::MaxInt(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                let result = match (va, vb) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Int64(x.max(y)),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::MinFloat(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                let result = match (va, vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x.min(y)),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x.min(y)),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::MaxFloat(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                let result = match (va, vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x.max(y)),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x.max(y)),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::SinFloat(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Float64(v) => GcValue::Float64(v.sin()),
+                    GcValue::Float32(v) => GcValue::Float32(v.sin()),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::CosFloat(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Float64(v) => GcValue::Float64(v.cos()),
+                    GcValue::Float32(v) => GcValue::Float32(v.cos()),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::TanFloat(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Float64(v) => GcValue::Float64(v.tan()),
+                    GcValue::Float32(v) => GcValue::Float32(v.tan()),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::FloorFloat(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Float64(v) => GcValue::Int64(v.floor() as i64),
+                    GcValue::Float32(v) => GcValue::Int64(v.floor() as i64),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::CeilFloat(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Float64(v) => GcValue::Int64(v.ceil() as i64),
+                    GcValue::Float32(v) => GcValue::Int64(v.ceil() as i64),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::RoundFloat(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Float64(v) => GcValue::Int64(v.round() as i64),
+                    GcValue::Float32(v) => GcValue::Int64(v.round() as i64),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::LogFloat(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Float64(v) => GcValue::Float64(v.ln()),
+                    GcValue::Float32(v) => GcValue::Float32(v.ln()),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::Log10Float(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Float64(v) => GcValue::Float64(v.log10()),
+                    GcValue::Float32(v) => GcValue::Float32(v.log10()),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
             Instruction::NegFloat(dst, src) => {
                 let val = get_reg!(src);
                 let result = match val {

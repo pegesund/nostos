@@ -725,6 +725,30 @@ pub enum Instruction {
     AbsFloat(Reg, Reg),
     /// Square root: dst = sqrt(src) for Float
     SqrtFloat(Reg, Reg),
+    /// Minimum of two Ints: dst = min(a, b)
+    MinInt(Reg, Reg, Reg),
+    /// Maximum of two Ints: dst = max(a, b)
+    MaxInt(Reg, Reg, Reg),
+    /// Minimum of two Floats: dst = min(a, b)
+    MinFloat(Reg, Reg, Reg),
+    /// Maximum of two Floats: dst = max(a, b)
+    MaxFloat(Reg, Reg, Reg),
+    /// Sine: dst = sin(src) for Float (radians)
+    SinFloat(Reg, Reg),
+    /// Cosine: dst = cos(src) for Float (radians)
+    CosFloat(Reg, Reg),
+    /// Tangent: dst = tan(src) for Float (radians)
+    TanFloat(Reg, Reg),
+    /// Floor: dst = floor(src) - round down to Int
+    FloorFloat(Reg, Reg),
+    /// Ceiling: dst = ceil(src) - round up to Int
+    CeilFloat(Reg, Reg),
+    /// Round: dst = round(src) - round to nearest Int
+    RoundFloat(Reg, Reg),
+    /// Natural logarithm: dst = log(src) for Float
+    LogFloat(Reg, Reg),
+    /// Base-10 logarithm: dst = log10(src) for Float
+    Log10Float(Reg, Reg),
 
     // === Type conversions (compile-time resolved) ===
     /// Int to Float: dst = toFloat(src)
