@@ -871,8 +871,27 @@ fn open_nostos_test_panel(s: &mut Cursive) {
         .on_key("up", "panelUp")
         .on_key("down", "panelDown");
 
+    // Wrap in OnEventView to handle keys before Dialog consumes them
+    let panel_with_name = panel.with_name("nostos_mvar_panel");
+    let engine_up = engine.clone();
+    let engine_down = engine.clone();
+
+    let panel_with_events = OnEventView::new(panel_with_name)
+        .on_event(Key::Up, move |s| {
+            if let Err(e) = engine_up.borrow_mut().eval("panelUp()") {
+                log_to_repl(s, &format!("Error: {}", e));
+            }
+            s.call_on_name("nostos_mvar_panel", |p: &mut NostosPanel| p.refresh());
+        })
+        .on_event(Key::Down, move |s| {
+            if let Err(e) = engine_down.borrow_mut().eval("panelDown()") {
+                log_to_repl(s, &format!("Error: {}", e));
+            }
+            s.call_on_name("nostos_mvar_panel", |p: &mut NostosPanel| p.refresh());
+        });
+
     // Wrap in a dialog with ESC to close
-    let dialog = Dialog::around(panel.min_size((40, 15)))
+    let dialog = Dialog::around(panel_with_events.min_size((40, 15)))
         .title("Nostos Mvar Panel")
         .dismiss_button("Close");
 
