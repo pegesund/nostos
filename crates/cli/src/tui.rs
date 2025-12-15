@@ -18,6 +18,7 @@ use std::io::Write;
 
 use crate::repl_panel::ReplPanel;
 use crate::inspector_panel::InspectorPanel;
+use crate::nostos_panel::NostosPanel;
 
 /// Debug logging to /tmp/nostos_tui_debug.log
 fn debug_log(msg: &str) {
@@ -574,6 +575,11 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         show_help_dialog(s);
     });
 
+    // Global Alt+T to open test Nostos panel
+    siv.set_on_pre_event(Event::AltChar('t'), |s| {
+        open_nostos_test_panel(s);
+    });
+
     siv.run();
     ExitCode::SUCCESS
 }
@@ -787,6 +793,45 @@ fn create_repl_panel_view(engine: &Rc<RefCell<ReplEngine>>, repl_id: usize, hist
     ActiveWindow::new(panel_with_events, &format!("REPL #{}", repl_id)).full_width()
 }
 
+/// Open a test Nostos-defined panel
+fn open_nostos_test_panel(s: &mut Cursive) {
+    let engine = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().engine.clone()
+    }).unwrap();
+
+    // Define the panel's view function and state in Nostos
+    let setup_code = r#"
+        // Mutable counter state
+        _testPanelCount = 0
+
+        // View function - returns what to display
+        testPanelView() = "Counter: {_testPanelCount}\n\nPress UP/DOWN to change\nPress ESC to close"
+
+        // Event handlers
+        testPanelUp() = { _testPanelCount = _testPanelCount + 1 }
+        testPanelDown() = { _testPanelCount = _testPanelCount - 1 }
+    "#;
+
+    // Evaluate the setup code
+    if let Err(e) = engine.borrow_mut().eval(setup_code) {
+        log_to_repl(s, &format!("Error setting up Nostos panel: {}", e));
+        return;
+    }
+
+    // Create the NostosPanel
+    let panel = NostosPanel::new(engine.clone(), "testPanelView", "Nostos Test Panel")
+        .on_key("up", "testPanelUp")
+        .on_key("down", "testPanelDown");
+
+    // Wrap in a dialog with ESC to close
+    let dialog = Dialog::around(panel.min_size((40, 10)))
+        .title("Nostos Panel Test")
+        .dismiss_button("Close");
+
+    s.add_layer(dialog);
+    log_to_repl(s, "Opened Nostos test panel (Alt+T). Press UP/DOWN to test.");
+}
+
 /// Open a new REPL panel
 fn open_repl_panel(s: &mut Cursive) {
     let can_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
@@ -931,6 +976,7 @@ fn show_help_dialog(s: &mut Cursive) {
         ("Ctrl+R", "Open new REPL panel"),
         ("Alt+I / F9", "Toggle inspector panel"),
         ("Alt+C", "Toggle console"),
+        ("Alt+T", "Open Nostos test panel"),
         ("Shift+Tab", "Cycle focus between windows"),
     ], header_style, key_style);
 
