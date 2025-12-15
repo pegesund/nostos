@@ -718,3 +718,68 @@ mod concurrency {
     #[test]
     fn multiple_spawns() { run_category_test("multiple_spawns"); }
 }
+
+/// Tests for source code display (multi-clause functions)
+mod source_display {
+    use super::*;
+
+    #[test]
+    fn multi_clause_source_includes_all_clauses() {
+        let source = r#"
+# Multi-clause function
+filter(_, []) = []
+filter(pred, [x | xs]) = if pred(x) then [x | filter(pred, xs)] else filter(pred, xs)
+
+main() = filter(x => x > 2, [1,2,3,4,5])
+"#;
+
+        let (module_opt, errors) = parse(source);
+        assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+        let module = module_opt.expect("No module");
+
+        let compiler = compile_module(&module, source).expect("Compile failed");
+
+        // Get source for filter - should include BOTH clauses
+        let filter_source = compiler.get_all_function_sources("filter")
+            .expect("No source found for filter");
+
+        println!("=== Filter source ===\n{}", filter_source);
+
+        // Verify both clauses are present
+        assert!(filter_source.contains("filter(_, [])"),
+            "Missing first clause (empty list base case). Source:\n{}", filter_source);
+        assert!(filter_source.contains("filter(pred, [x | xs])"),
+            "Missing second clause (recursive case). Source:\n{}", filter_source);
+    }
+
+    #[test]
+    fn multiple_clauses_with_different_patterns() {
+        let source = r#"
+# Multiple clauses with different patterns
+describe([]) = "empty"
+describe([x]) = "single"
+describe([x, y | rest]) = "many"
+
+main() = describe([1,2,3])
+"#;
+
+        let (module_opt, errors) = parse(source);
+        assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+        let module = module_opt.expect("No module");
+
+        let compiler = compile_module(&module, source).expect("Compile failed");
+
+        let describe_source = compiler.get_all_function_sources("describe")
+            .expect("No source found for describe");
+
+        println!("=== Describe source ===\n{}", describe_source);
+
+        // Verify all three clauses are present
+        assert!(describe_source.contains("describe([])"),
+            "Missing empty list clause. Source:\n{}", describe_source);
+        assert!(describe_source.contains("describe([x])"),
+            "Missing single element clause. Source:\n{}", describe_source);
+        assert!(describe_source.contains("describe([x, y | rest])"),
+            "Missing multiple elements clause. Source:\n{}", describe_source);
+    }
+}

@@ -230,6 +230,11 @@ impl ReplEngine {
                 self.compiler.add_prelude_import(local_name, qualified_name);
             }
 
+            // Compile all stdlib functions to populate source_code fields
+            if let Err((e, _, _)) = self.compiler.compile_all() {
+                return Err(format!("Failed to compile stdlib: {}", e));
+            }
+
             self.stdlib_path = stdlib_path;
         }
 
