@@ -871,32 +871,34 @@ fn open_nostos_test_panel(s: &mut Cursive) {
         .on_key("up", "panelUp")
         .on_key("down", "panelDown");
 
-    // Wrap in OnEventView to handle keys before Dialog consumes them
     let panel_with_name = panel.with_name("nostos_mvar_panel");
     let engine_up = engine.clone();
     let engine_down = engine.clone();
 
-    let panel_with_events = OnEventView::new(panel_with_name)
-        .on_event(Key::Up, move |s| {
+    // Simple dialog without buttons (no Tab stealing)
+    let dialog = Dialog::around(panel_with_name.min_size((40, 15)))
+        .title("Nostos Mvar Panel [ESC to close]");
+
+    // Wrap dialog in OnEventView with on_pre_event to intercept BEFORE dialog processes
+    let dialog_with_events = OnEventView::new(dialog)
+        .on_pre_event(Key::Up, move |s| {
             if let Err(e) = engine_up.borrow_mut().eval("panelUp()") {
                 log_to_repl(s, &format!("Error: {}", e));
             }
             s.call_on_name("nostos_mvar_panel", |p: &mut NostosPanel| p.refresh());
         })
-        .on_event(Key::Down, move |s| {
+        .on_pre_event(Key::Down, move |s| {
             if let Err(e) = engine_down.borrow_mut().eval("panelDown()") {
                 log_to_repl(s, &format!("Error: {}", e));
             }
             s.call_on_name("nostos_mvar_panel", |p: &mut NostosPanel| p.refresh());
+        })
+        .on_pre_event(Key::Esc, |s| {
+            s.pop_layer();
         });
 
-    // Wrap in a dialog with ESC to close
-    let dialog = Dialog::around(panel_with_events.min_size((40, 15)))
-        .title("Nostos Mvar Panel")
-        .dismiss_button("Close");
-
-    s.add_layer(dialog);
-    log_to_repl(s, "Opened Nostos mvar panel (Alt+T). Use UP/DOWN to navigate.");
+    s.add_layer(dialog_with_events);
+    log_to_repl(s, "Opened Nostos mvar panel (Alt+T). Use UP/DOWN to navigate, ESC to close.");
 }
 
 /// Open a new REPL panel
