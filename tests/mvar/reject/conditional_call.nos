@@ -1,0 +1,22 @@
+# expect: error
+# Conditional call to mvar-accessing function - still UNSAFE
+
+mvar flag: Bool = false
+
+set_flag() = {
+    flag = true
+    flag
+}
+
+check_and_set(condition) = {
+    # UNSAFE: even conditional access is detected
+    if condition then {
+        set_flag()
+    } else {
+        flag
+    }
+}
+
+main() = {
+    check_and_set(true)
+}

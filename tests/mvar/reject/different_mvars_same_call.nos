@@ -1,0 +1,20 @@
+# expect: error
+# Different mvars but same function called - still UNSAFE if one overlaps
+
+mvar x: Int = 0
+mvar y: Int = 0
+
+update_x() = {
+    x = x + 1
+    x
+}
+
+both() = {
+    # UNSAFE: reads x and calls update_x which writes x
+    update_x()
+    x + y
+}
+
+main() = {
+    both()
+}

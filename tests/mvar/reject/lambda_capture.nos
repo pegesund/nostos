@@ -1,0 +1,16 @@
+# expect: error
+# Lambda that captures mvar - UNSAFE
+
+mvar value: Int = 0
+
+get_value() = value
+
+make_adder() = {
+    # UNSAFE: lambda reads value, and calls get_value which also reads value
+    x => x + get_value() + value
+}
+
+main() = {
+    f = make_adder()
+    f(10)
+}

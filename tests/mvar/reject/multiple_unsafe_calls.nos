@@ -1,0 +1,25 @@
+# expect: error
+# Multiple unsafe calls in same function
+
+mvar counter: Int = 0
+
+inc() = {
+    counter = counter + 1
+    counter
+}
+
+dec() = {
+    counter = counter - 1
+    counter
+}
+
+both_ops() = {
+    # UNSAFE: reads counter and calls both inc and dec
+    inc()
+    dec()
+    counter
+}
+
+main() = {
+    both_ops()
+}

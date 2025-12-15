@@ -1,0 +1,56 @@
+# expect: ()
+# Multiple readers and writers accessing shared mvar
+# Tests that read/write locking works correctly
+
+mvar shared: Int = 0
+
+write_value(n) = {
+    shared = n
+    shared
+}
+
+read_value() = shared
+
+do_writes(vs) = match vs
+    [] -> ()
+    [v | rest] -> {
+        write_value(v)
+        do_writes(rest)
+    }
+end
+
+do_reads(n, sum) = if n <= 0 then sum else {
+    v = read_value()
+    do_reads(n - 1, sum + v)
+}
+
+writer(parent, values) = {
+    do_writes(values)
+    parent <- "writer_done"
+}
+
+reader(parent, count) = {
+    total = do_reads(count, 0)
+    parent <- total
+}
+
+main() = {
+    me = self()
+
+    # Spawn writer with values
+    spawn { writer(me, [1, 2, 3, 4, 5]) }
+
+    # Spawn readers
+    spawn { reader(me, 5) }
+    spawn { reader(me, 5) }
+
+    # Wait for writer
+    receive "writer_done" -> () end
+
+    # Wait for readers
+    receive _ -> () end
+    receive _ -> () end
+
+    # Final value should be 5
+    assert_eq(5, read_value())
+}

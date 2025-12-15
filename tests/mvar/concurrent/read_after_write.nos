@@ -1,0 +1,50 @@
+# expect: ()
+# Verify that reads see completed writes (no stale values)
+
+mvar value: Int = 0
+mvar sequence: Int = 0
+
+write_value(n) = {
+    value = n
+    sequence = sequence + 1
+    n
+}
+
+read_value() = value
+
+do_writes(n) = if n <= 0 then () else {
+    write_value(n)
+    do_writes(n - 1)
+}
+
+writer(parent, n) = {
+    do_writes(n)
+    parent <- "write_done"
+}
+
+reader(parent) = {
+    v = read_value()
+    parent <- v
+}
+
+main() = {
+    me = self()
+
+    # Start writer
+    spawn { writer(me, 100) }
+
+    # Wait for writer to finish
+    receive "write_done" -> () end
+
+    # Now spawn readers - they should all see the final value
+    spawn { reader(me) }
+    spawn { reader(me) }
+    spawn { reader(me) }
+    spawn { reader(me) }
+
+    # All readers should see 1 (the last write was write_value(1))
+    receive v -> assert_eq(1, v) end
+    receive v -> assert_eq(1, v) end
+    receive v -> assert_eq(1, v) end
+    receive v -> assert_eq(1, v) end
+}

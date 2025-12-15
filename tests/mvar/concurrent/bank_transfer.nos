@@ -1,0 +1,61 @@
+# expect: ()
+# Simulates concurrent bank transfers between accounts
+# Tests that total balance is preserved
+
+mvar account_a: Int = 1000
+mvar account_b: Int = 1000
+
+get_a() = account_a
+get_b() = account_b
+
+transfer_a_to_b(amount) = {
+    account_a = account_a - amount
+    account_b = account_b + amount
+    true
+}
+
+transfer_b_to_a(amount) = {
+    account_b = account_b - amount
+    account_a = account_a + amount
+    true
+}
+
+do_transfers_ab(n) = if n <= 0 then () else {
+    transfer_a_to_b(10)
+    do_transfers_ab(n - 1)
+}
+
+do_transfers_ba(n) = if n <= 0 then () else {
+    transfer_b_to_a(10)
+    do_transfers_ba(n - 1)
+}
+
+worker_ab(parent, n) = {
+    do_transfers_ab(n)
+    parent <- "ab_done"
+}
+
+worker_ba(parent, n) = {
+    do_transfers_ba(n)
+    parent <- "ba_done"
+}
+
+main() = {
+    me = self()
+
+    # Spawn workers transferring in both directions
+    spawn { worker_ab(me, 20) }
+    spawn { worker_ba(me, 20) }
+    spawn { worker_ab(me, 20) }
+    spawn { worker_ba(me, 20) }
+
+    # Wait for all
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+
+    # Total should still be 2000
+    total = get_a() + get_b()
+    assert_eq(2000, total)
+}

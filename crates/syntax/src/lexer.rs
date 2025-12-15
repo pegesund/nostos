@@ -22,8 +22,8 @@ pub enum Token {
     Type,
     #[token("var")]
     Var,
-    #[token("mod")]
-    Mod,
+    #[token("mvar")]
+    Mvar,
     #[token("if")]
     If,
     #[token("then")]
@@ -389,7 +389,7 @@ impl fmt::Display for Token {
         match self {
             Token::Type => write!(f, "type"),
             Token::Var => write!(f, "var"),
-            Token::Mod => write!(f, "mod"),
+            Token::Mvar => write!(f, "mvar"),
             Token::If => write!(f, "if"),
             Token::Then => write!(f, "then"),
             Token::Else => write!(f, "else"),
@@ -504,9 +504,9 @@ mod tests {
 
     #[test]
     fn test_keywords() {
-        let tokens: Vec<_> = lex("type var mod if then else match when").map(|(t, _)| t).collect();
+        let tokens: Vec<_> = lex("type var mvar if then else match when").map(|(t, _)| t).collect();
         assert_eq!(tokens, vec![
-            Token::Type, Token::Var, Token::Mod, Token::If, Token::Then,
+            Token::Type, Token::Var, Token::Mvar, Token::If, Token::Then,
             Token::Else, Token::Match, Token::When,
         ]);
     }

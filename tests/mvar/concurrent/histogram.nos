@@ -1,0 +1,53 @@
+# expect: ()
+# Build a simple histogram (count of values in ranges)
+
+mvar low_count: Int = 0    # values < 50
+mvar high_count: Int = 0   # values >= 50
+
+inc_low() = {
+    low_count = low_count + 1
+    low_count
+}
+
+inc_high() = {
+    high_count = high_count + 1
+    high_count
+}
+
+get_low() = low_count
+get_high() = high_count
+
+categorize(v) = if v < 50 then inc_low() else inc_high()
+
+process_values(vals) = match vals
+    [] -> ()
+    [v | rest] -> {
+        categorize(v)
+        process_values(rest)
+    }
+end
+
+worker(parent, vals) = {
+    process_values(vals)
+    parent <- true
+}
+
+main() = {
+    me = self()
+
+    # Spawn workers with mixed values
+    spawn { worker(me, [10, 60, 30, 70]) }  # 2 low, 2 high
+    spawn { worker(me, [40, 80, 20, 90]) }  # 2 low, 2 high
+    spawn { worker(me, [50, 55, 45, 35]) }  # 2 low, 2 high
+    spawn { worker(me, [15, 85, 25, 75]) }  # 2 low, 2 high
+
+    # Wait for all
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+
+    # Should have 8 low and 8 high
+    assert_eq(8, get_low())
+    assert_eq(8, get_high())
+}

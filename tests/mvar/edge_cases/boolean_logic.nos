@@ -1,0 +1,44 @@
+# expect: ()
+# Boolean mvar with logical operations
+
+mvar enabled: Bool = true
+mvar active: Bool = false
+
+is_enabled() = enabled
+is_active() = active
+
+toggle_enabled() = {
+    enabled = !enabled
+    enabled
+}
+
+toggle_active() = {
+    active = !active
+    active
+}
+
+both_on() = is_enabled() && is_active()
+either_on() = is_enabled() || is_active()
+
+main() = {
+    # Initially: enabled=true, active=false
+    assert_eq(true, is_enabled())
+    assert_eq(false, is_active())
+    assert_eq(false, both_on())
+    assert_eq(true, either_on())
+
+    # Toggle active
+    toggle_active()
+    assert_eq(true, both_on())
+    assert_eq(true, either_on())
+
+    # Toggle enabled
+    toggle_enabled()
+    assert_eq(false, both_on())
+    assert_eq(true, either_on())
+
+    # Toggle active
+    toggle_active()
+    assert_eq(false, both_on())
+    assert_eq(false, either_on())
+}

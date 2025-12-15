@@ -1,0 +1,16 @@
+# expect: ()
+# Separate reader functions
+
+mvar value: Int = 100
+
+get_value() = value
+
+get_double() = value * 2
+
+get_triple() = value * 3
+
+main() = {
+    assert_eq(100, get_value())
+    assert_eq(200, get_double())
+    assert_eq(300, get_triple())
+}

@@ -1,0 +1,47 @@
+# expect: ()
+# Track minimum value seen across workers
+
+mvar min_val: Int = 999999
+
+update_min(n) = {
+    if n < min_val then {
+        min_val = n
+        true
+    } else {
+        false
+    }
+}
+
+get_min() = min_val
+
+check_values(vals) = match vals
+    [] -> ()
+    [v | rest] -> {
+        update_min(v)
+        check_values(rest)
+    }
+end
+
+worker(parent, vals) = {
+    check_values(vals)
+    parent <- true
+}
+
+main() = {
+    me = self()
+
+    # Each worker checks different values
+    spawn { worker(me, [50, 30, 70]) }
+    spawn { worker(me, [40, 20, 60]) }
+    spawn { worker(me, [35, 25, 45]) }
+    spawn { worker(me, [100, 5, 80]) }  # Contains the minimum: 5
+
+    # Wait for all
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+
+    # Minimum should be 5
+    assert_eq(5, get_min())
+}

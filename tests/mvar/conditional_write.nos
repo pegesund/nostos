@@ -1,0 +1,22 @@
+# expect: ()
+# Conditional mvar write
+
+mvar value: Int = 0
+
+set_if_positive(n) = {
+    if n > 0 then {
+        value = n
+        true
+    } else {
+        false
+    }
+}
+
+get_value() = value
+
+main() = {
+    assert_eq(false, set_if_positive(-5))
+    assert_eq(0, get_value())
+    assert_eq(true, set_if_positive(10))
+    assert_eq(10, get_value())
+}

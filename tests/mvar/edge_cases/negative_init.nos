@@ -1,0 +1,25 @@
+# expect: ()
+# Mvar starting at zero and going negative
+
+mvar balance: Int = 0
+
+get_balance() = balance
+
+add(n) = {
+    balance = balance + n
+    balance
+}
+
+sub(n) = {
+    balance = balance - n
+    balance
+}
+
+main() = {
+    assert_eq(0, get_balance())
+    # Go negative
+    assert_eq(0 - 100, sub(100))
+    assert_eq(0 - 50, add(50))
+    assert_eq(0, add(50))
+    assert_eq(100, add(100))
+}

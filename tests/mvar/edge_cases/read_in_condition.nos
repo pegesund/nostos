@@ -1,0 +1,14 @@
+# expect: ()
+# Read mvar in condition
+
+mvar threshold: Int = 50
+
+get_threshold() = threshold
+
+check(n) = if n > get_threshold() then "above" else "below"
+
+main() = {
+    assert_eq("below", check(25))
+    assert_eq("below", check(50))
+    assert_eq("above", check(75))
+}

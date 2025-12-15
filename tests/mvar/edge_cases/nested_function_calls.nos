@@ -1,0 +1,17 @@
+# expect: ()
+# Nested function calls with mvar access
+
+mvar base: Int = 10
+
+get_base() = base
+
+add_base(n) = n + get_base()
+
+double_add_base(n) = add_base(add_base(n))
+
+main() = {
+    # add_base(5) = 5 + 10 = 15
+    assert_eq(15, add_base(5))
+    # double_add_base(0) = add_base(add_base(0)) = add_base(10) = 20
+    assert_eq(20, double_add_base(0))
+}

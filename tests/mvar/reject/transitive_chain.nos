@@ -1,0 +1,23 @@
+# expect: error
+# Transitive call chain A -> B -> C where A and C both access mvar
+
+mvar data: Int = 0
+
+c_writes() = {
+    data = 100
+    data
+}
+
+b_calls_c() = {
+    c_writes()
+}
+
+a_reads_and_calls_b() = {
+    # UNSAFE: A reads data, calls B which calls C which writes data
+    b_calls_c()
+    data
+}
+
+main() = {
+    a_reads_and_calls_b()
+}

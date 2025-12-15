@@ -1,0 +1,19 @@
+# expect: ()
+# List mvar
+
+mvar items: List[Int] = []
+
+get_items() = items
+
+add_item(x) = {
+    items = x :: items
+    items
+}
+
+main() = {
+    assert_eq([], get_items())
+    add_item(1)
+    add_item(2)
+    add_item(3)
+    assert_eq([3, 2, 1], get_items())
+}

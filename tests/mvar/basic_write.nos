@@ -1,0 +1,13 @@
+# expect: ()
+# Basic mvar write
+
+mvar counter: Int = 0
+
+set_counter(n) = {
+    counter = n
+    counter
+}
+
+main() = {
+    assert_eq(100, set_counter(100))
+}
