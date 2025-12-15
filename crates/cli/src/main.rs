@@ -466,17 +466,9 @@ fn main() -> ExitCode {
              let source = fs::read_to_string(path).expect("Failed to read stdlib file");
              let (module_opt, _) = parse(&source);
              if let Some(module) = module_opt {
-                 let relative = path.strip_prefix(&stdlib_path).unwrap();
-                 let mut components: Vec<String> = relative.components()
-                    .map(|c| c.as_os_str().to_string_lossy().to_string())
-                    .collect();
-                 if let Some(last) = components.last_mut() {
-                    if last.ends_with(".nos") {
-                        *last = last.trim_end_matches(".nos").to_string();
-                    }
-                 }
-                 
-                 compiler.add_module(&module, components, std::sync::Arc::new(source.clone()), path.to_str().unwrap().to_string()).expect("Failed to compile stdlib");
+                 // Add stdlib functions to root namespace (no prefix needed)
+                 // This allows calling map(), filter(), etc. directly
+                 compiler.add_module(&module, vec![], std::sync::Arc::new(source.clone()), path.to_str().unwrap().to_string()).expect("Failed to compile stdlib");
              }
         }
     }

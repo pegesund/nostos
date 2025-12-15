@@ -1,6 +1,9 @@
 # List Standard Library
 # Functional list operations for Nostos
 
+# Option type for functions that may not return a value
+type Option[T] = Some(T) | None
+
 # Get last element of a list
 last([x]) = x
 last([_ | rest]) = last(rest)
@@ -32,8 +35,8 @@ pop([h | t]) = {
     ([h | rest], last)
 }
 
-# Get sublist from start to end index (exclusive)
-slice(list, start, end) = take(end - start, drop(start, list))
+# Get sublist from start to stop index (exclusive)
+slice(list, start, stop) = take(stop - start, drop(start, list))
 
 # Concatenate two lists
 concat([], ys) = ys
@@ -47,8 +50,8 @@ reverseAcc([x | xs], acc) = reverseAcc(xs, [x | acc])
 # Sort a list (quicksort)
 sort([]) = []
 sort([pivot | rest]) = {
-    lesser = filter(\x -> x < pivot, rest)
-    greater = filter(\x -> x >= pivot, rest)
+    lesser = filter(x => x < pivot, rest)
+    greater = filter(x => x >= pivot, rest)
     concat(sort(lesser), [pivot | sort(greater)])
 }
 
@@ -88,7 +91,7 @@ positionAcc(pred, [x | xs], idx) = if pred(x) then Some(idx) else positionAcc(pr
 
 # Remove duplicate elements (keeps first occurrence)
 unique([]) = []
-unique([x | xs]) = [x | unique(filter(\y -> y != x, xs))]
+unique([x | xs]) = [x | unique(filter(y => y != x, xs))]
 
 # Flatten nested list one level
 flatten([]) = []
@@ -193,7 +196,7 @@ findIndicesAcc(pred, [x | xs], idx) =
     else findIndicesAcc(pred, xs, idx + 1)
 
 # Count elements satisfying predicate
-count(pred, list) = fold(\acc, x -> if pred(x) then acc + 1 else acc, 0, list)
+count(pred, list) = fold((acc, x) => if pred(x) then acc + 1 else acc, 0, list)
 
 # Maximum element (requires non-empty list)
 maximum([x]) = x

@@ -195,17 +195,9 @@ impl ReplEngine {
                     .map_err(|e| format!("Failed to read {}: {}", file_path.display(), e))?;
                 let (module_opt, _) = parse(&source);
                 if let Some(module) = module_opt {
-                    let relative = file_path.strip_prefix(path).unwrap();
-                    let mut components: Vec<String> = relative.components()
-                        .map(|c| c.as_os_str().to_string_lossy().to_string())
-                        .collect();
-                    if let Some(last) = components.last_mut() {
-                        if last.ends_with(".nos") {
-                            *last = last.trim_end_matches(".nos").to_string();
-                        }
-                    }
-
-                    self.compiler.add_module(&module, components, Arc::new(source.clone()), file_path.to_str().unwrap().to_string())
+                    // Add stdlib functions to root namespace (no prefix needed)
+                    // This allows calling map(), filter(), etc. directly
+                    self.compiler.add_module(&module, vec![], Arc::new(source.clone()), file_path.to_str().unwrap().to_string())
                         .map_err(|e| format!("Failed to compile stdlib: {}", e))?;
                 }
             }
