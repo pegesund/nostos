@@ -799,12 +799,12 @@ fn open_nostos_test_panel(s: &mut Cursive) {
         state.borrow().engine.clone()
     }).unwrap();
 
-    // Define the panel's state and functions in Nostos (one at a time for proper binding)
+    // Define the panel's functions in Nostos
+    // For now, use a simple static test - state management needs more work
     let definitions = [
-        "_testPanelCount = 0",
-        r#"testPanelView() = "Counter: {_testPanelCount}\n\nPress UP/DOWN to change\nPress ESC to close""#,
-        "testPanelUp() = { _testPanelCount = _testPanelCount + 1 }",
-        "testPanelDown() = { _testPanelCount = _testPanelCount - 1 }",
+        r#"testPanelView() = "Nostos Panel Test\n\nThis panel is rendered by Nostos code!\n\nPress UP or DOWN to test handlers\nPress ESC to close""#,
+        r#"testPanelUp() = println("UP pressed from Nostos handler!")"#,
+        r#"testPanelDown() = println("DOWN pressed from Nostos handler!")"#,
     ];
 
     for code in &definitions {
