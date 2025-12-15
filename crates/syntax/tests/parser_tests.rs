@@ -799,3 +799,72 @@ mod signatures {
         assert_eq!(sig, "a -> a -> a");
     }
 }
+
+// =============================================================================
+// Module-level Mutable Variable Tests
+// =============================================================================
+
+mod mod_vars {
+    use super::*;
+    use nostos_syntax::ast::{Item, Visibility};
+
+    #[test]
+    fn test_mod_var_basic() {
+        let module = parse_ok("mod counter: Int = 0");
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0] {
+            Item::ModVarDef(def) => {
+                assert_eq!(def.name.node, "counter");
+                assert_eq!(def.visibility, Visibility::Private);
+            }
+            _ => panic!("Expected ModVarDef"),
+        }
+    }
+
+    #[test]
+    fn test_mod_var_public() {
+        let module = parse_ok("pub mod counter: Int = 0");
+        match &module.items[0] {
+            Item::ModVarDef(def) => {
+                assert_eq!(def.name.node, "counter");
+                assert_eq!(def.visibility, Visibility::Public);
+            }
+            _ => panic!("Expected ModVarDef"),
+        }
+    }
+
+    #[test]
+    fn test_mod_var_with_expr() {
+        let module = parse_ok("mod total: Int = 1 + 2 + 3");
+        match &module.items[0] {
+            Item::ModVarDef(def) => {
+                assert_eq!(def.name.node, "total");
+            }
+            _ => panic!("Expected ModVarDef"),
+        }
+    }
+
+    #[test]
+    fn test_mod_var_list_type() {
+        let module = parse_ok("mod items: List[String] = []");
+        match &module.items[0] {
+            Item::ModVarDef(def) => {
+                assert_eq!(def.name.node, "items");
+            }
+            _ => panic!("Expected ModVarDef"),
+        }
+    }
+
+    #[test]
+    fn test_multiple_mod_vars() {
+        let module = parse_ok("mod a: Int = 0\nmod b: String = \"hello\"");
+        assert_eq!(module.items.len(), 2);
+        match (&module.items[0], &module.items[1]) {
+            (Item::ModVarDef(a), Item::ModVarDef(b)) => {
+                assert_eq!(a.name.node, "a");
+                assert_eq!(b.name.node, "b");
+            }
+            _ => panic!("Expected two ModVarDefs"),
+        }
+    }
+}
