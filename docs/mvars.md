@@ -26,17 +26,43 @@ Mvars are thread-safe, module-level mutable variables that can be safely accesse
 Mvars are declared at module level using the `mvar` keyword with a type annotation:
 
 ```nostos
+# Primitive types
 mvar counter: Int = 0
 mvar name: String = "default"
 mvar flag: Bool = false
 mvar balance: Float = 100.0
-mvar items: List[Int] = []
+mvar letter: Char = 'A'
+
+# Lists (homogeneous)
+mvar numbers: List[Int] = [1, 2, 3]
+mvar names: List[String] = ["Alice", "Bob"]
+mvar scores: List[Float] = [9.5, 8.7, 10.0]
+mvar flags: List[Bool] = [true, false, true]
+mvar empty: List[Int] = []
+
+# Nested lists
+mvar matrix: List[List[Int]] = [[1, 2], [3, 4], [5, 6]]
+
+# Tuples
+mvar point: (Int, Int) = (10, 20)
+mvar config: (String, Int, Bool) = ("debug", 42, true)
+
+# Custom record types
+type User = { name: String, age: Int }
+mvar currentUser: User = User("Alice", 30)
 ```
 
 **Requirements:**
 - Type annotation is required (for thread-safe shared state)
-- Initial value must be a constant literal
+- Initial value must be a compile-time constant literal
 - Mvars are module-scoped (visible within the module)
+
+**Supported initial value types:**
+- Primitives: `Int`, `Float`, `Bool`, `String`, `Char`, `()`
+- Lists of primitives: `List[Int]`, `List[String]`, etc.
+- Nested lists: `List[List[Int]]`, etc.
+- Tuples: `(Int, String)`, `(Bool, Float, Int)`, etc.
+- Custom record types with positional constructors
 
 ### Reading and Writing
 

@@ -540,6 +540,14 @@ pub enum MvarInitValue {
     EmptyList,
     IntList(Vec<i64>),
     StringList(Vec<String>),
+    FloatList(Vec<f64>),
+    BoolList(Vec<bool>),
+    /// Tuple of constant values
+    Tuple(Vec<MvarInitValue>),
+    /// Generic list of constant values (for nested or mixed lists)
+    List(Vec<MvarInitValue>),
+    /// Record/struct constructor: (type_name, fields as (name, value) pairs)
+    Record(String, Vec<(String, MvarInitValue)>),
 }
 
 /// Mvar access information for a function (for deadlock detection).
@@ -1249,31 +1257,79 @@ impl Compiler {
             Expr::Char(c, _) => Some(MvarInitValue::Char(*c)),
             Expr::List(items, None, _) if items.is_empty() => Some(MvarInitValue::EmptyList),
             Expr::List(items, None, _) => {
-                // Try to parse as list of ints
-                let mut ints = Vec::new();
-                let mut is_int_list = true;
-                for item in items {
-                    if let Expr::Int(n, _) = item {
-                        ints.push(*n);
-                    } else {
-                        is_int_list = false;
-                        break;
-                    }
-                }
-                if is_int_list {
+                // Try to parse as homogeneous list of primitives first (more efficient)
+
+                // Check for int list
+                if items.iter().all(|item| matches!(item, Expr::Int(_, _))) {
+                    let ints: Vec<i64> = items.iter()
+                        .filter_map(|item| if let Expr::Int(n, _) = item { Some(*n) } else { None })
+                        .collect();
                     return Some(MvarInitValue::IntList(ints));
                 }
 
-                // Try to parse as list of strings
-                let mut strings = Vec::new();
+                // Check for float list
+                if items.iter().all(|item| matches!(item, Expr::Float(_, _))) {
+                    let floats: Vec<f64> = items.iter()
+                        .filter_map(|item| if let Expr::Float(f, _) = item { Some(*f) } else { None })
+                        .collect();
+                    return Some(MvarInitValue::FloatList(floats));
+                }
+
+                // Check for bool list
+                if items.iter().all(|item| matches!(item, Expr::Bool(_, _))) {
+                    let bools: Vec<bool> = items.iter()
+                        .filter_map(|item| if let Expr::Bool(b, _) = item { Some(*b) } else { None })
+                        .collect();
+                    return Some(MvarInitValue::BoolList(bools));
+                }
+
+                // Check for string list
+                if items.iter().all(|item| matches!(item, Expr::String(StringLit::Plain(_), _))) {
+                    let strings: Vec<String> = items.iter()
+                        .filter_map(|item| {
+                            if let Expr::String(StringLit::Plain(s), _) = item {
+                                Some(s.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    return Some(MvarInitValue::StringList(strings));
+                }
+
+                // Generic list - recursively evaluate all items
+                let mut values = Vec::new();
                 for item in items {
-                    if let Expr::String(StringLit::Plain(s), _) = item {
-                        strings.push(s.clone());
-                    } else {
-                        return None; // Not a homogeneous list of constants
+                    values.push(self.eval_const_expr(item)?);
+                }
+                Some(MvarInitValue::List(values))
+            }
+            // Tuple literals
+            Expr::Tuple(items, _) => {
+                let mut values = Vec::new();
+                for item in items {
+                    values.push(self.eval_const_expr(item)?);
+                }
+                Some(MvarInitValue::Tuple(values))
+            }
+            // Record constructor: TypeName { field1: val1, field2: val2 }
+            // or positional: TypeName(val1, val2)
+            Expr::Record(type_name, fields, _) => {
+                let mut field_values = Vec::new();
+                for field in fields {
+                    match field {
+                        RecordField::Named(name, ref val) => {
+                            let value = self.eval_const_expr(val)?;
+                            field_values.push((name.node.clone(), value));
+                        }
+                        RecordField::Positional(ref val) => {
+                            // Use empty string for positional fields (index-based)
+                            let value = self.eval_const_expr(val)?;
+                            field_values.push((String::new(), value));
+                        }
                     }
                 }
-                Some(MvarInitValue::StringList(strings))
+                Some(MvarInitValue::Record(type_name.node.clone(), field_values))
             }
             _ => None,
         }
