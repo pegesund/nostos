@@ -132,6 +132,20 @@ pub struct FunctionType {
     pub ret: Box<Type>,
 }
 
+impl FunctionType {
+    /// Find the maximum type variable ID in this function type, or None if no type variables.
+    pub fn max_var_id(&self) -> Option<TypeVarId> {
+        let param_max = self.params.iter().filter_map(|t| t.max_var_id()).max();
+        let ret_max = self.ret.max_var_id();
+        match (param_max, ret_max) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
+    }
+}
+
 /// A type parameter with optional constraints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeParam {
@@ -325,6 +339,29 @@ impl TypeEnv {
         self.types.get(name)
     }
 
+    /// Look up the field types for a variant constructor.
+    /// Given a type name (e.g., "Expr") and constructor name (e.g., "Add"),
+    /// returns the concrete field types from the type definition.
+    pub fn lookup_variant_field_types(&self, type_name: &str, ctor_name: &str) -> Option<Vec<Type>> {
+        if let Some(TypeDef::Variant { constructors, .. }) = self.types.get(type_name) {
+            for ctor in constructors {
+                match ctor {
+                    Constructor::Unit(name) if name == ctor_name => {
+                        return Some(vec![]);
+                    }
+                    Constructor::Positional(name, field_types) if name == ctor_name => {
+                        return Some(field_types.clone());
+                    }
+                    Constructor::Named(name, fields) if name == ctor_name => {
+                        return Some(fields.iter().map(|(_, ty)| ty.clone()).collect());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None
+    }
+
     /// Add a type definition.
     pub fn define_type(&mut self, name: String, def: TypeDef) {
         self.types.insert(name, def);
@@ -406,6 +443,31 @@ impl Type {
             }
             Type::Named { args, .. } => args.iter().any(|t| t.contains_var(var_id)),
             _ => false,
+        }
+    }
+
+    /// Find the maximum type variable ID in this type, or None if no type variables.
+    pub fn max_var_id(&self) -> Option<TypeVarId> {
+        match self {
+            Type::Var(id) => Some(*id),
+            Type::Tuple(elems) => elems.iter().filter_map(|t| t.max_var_id()).max(),
+            Type::List(elem) | Type::Array(elem) | Type::Set(elem) | Type::IO(elem) => {
+                elem.max_var_id()
+            }
+            Type::Map(k, v) => {
+                let k_max = k.max_var_id();
+                let v_max = v.max_var_id();
+                match (k_max, v_max) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                    (Some(a), None) => Some(a),
+                    (None, Some(b)) => Some(b),
+                    (None, None) => None,
+                }
+            }
+            Type::Record(rec) => rec.fields.iter().filter_map(|(_, t, _)| t.max_var_id()).max(),
+            Type::Function(f) => f.max_var_id(),
+            Type::Named { args, .. } => args.iter().filter_map(|t| t.max_var_id()).max(),
+            _ => None,
         }
     }
 

@@ -1293,10 +1293,31 @@ impl<'a> InferCtx<'a> {
                         VariantPatternFields::Positional(pats) => {
                             // Constructor should be a function from fields to the type
                             if let Type::Function(f) = &ctor_ty {
-                                for (pat, param_ty) in pats.iter().zip(f.params.iter()) {
-                                    self.infer_pattern(pat, param_ty)?;
-                                }
+                                // Unify expected with the constructor's return type
                                 self.unify(expected.clone(), (*f.ret).clone());
+
+                                // Try to get concrete field types from the constructor's return type
+                                // This enables proper type narrowing through pattern matching
+                                // The return type is the variant type (e.g., Expr for Add constructor)
+                                let concrete_field_types = if let Type::Named { name: type_name, .. } = &*f.ret {
+                                    self.env.lookup_variant_field_types(type_name, &name.node)
+                                } else {
+                                    None
+                                };
+
+                                if let Some(field_types) = concrete_field_types {
+                                    // Use concrete field types from the type definition
+                                    // This is key for type narrowing: when matching Add(e1, e2) on Expr,
+                                    // we know e1 and e2 are Expr, not just type variables
+                                    for (pat, field_ty) in pats.iter().zip(field_types.iter()) {
+                                        self.infer_pattern(pat, field_ty)?;
+                                    }
+                                } else {
+                                    // Fall back to constructor params (may be type variables)
+                                    for (pat, param_ty) in pats.iter().zip(f.params.iter()) {
+                                        self.infer_pattern(pat, param_ty)?;
+                                    }
+                                }
                             } else {
                                 self.unify(expected.clone(), ctor_ty);
                             }
