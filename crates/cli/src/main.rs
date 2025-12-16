@@ -614,52 +614,70 @@ fn main() -> ExitCode {
     vm.setup_eval();
     vm.set_eval_callback(|code: &str| {
         use nostos_syntax::parse;
+        use nostos_syntax::ast::Item;
 
-        // Create a minimal compiler for expression evaluation
+        // Create a minimal compiler for evaluation
         let mut eval_compiler = Compiler::new_empty();
 
-        // Wrap the expression in a function
-        let wrapper = format!("__eval_result__() = {}", code);
+        // First, try to parse as a definition (function, type, etc.)
+        let (direct_module_opt, direct_errors) = parse(code);
 
-        // Parse the wrapper
-        let (module_opt, errors) = parse(&wrapper);
-        if !errors.is_empty() {
-            return Err(format!("Parse error: {:?}", errors));
-        }
-        let module = module_opt.ok_or_else(|| "Failed to parse expression".to_string())?;
+        // Check if it's a definition (has function definitions, type definitions, etc.)
+        let is_definition = direct_module_opt.as_ref().map(|m| {
+            m.items.iter().any(|item| matches!(item, Item::FnDef(_) | Item::TypeDef(_) | Item::TraitDef(_) | Item::TraitImpl(_) | Item::MvarDef(_)))
+        }).unwrap_or(false);
 
-        // Add module to compiler
-        eval_compiler.add_module(&module, vec![], std::sync::Arc::new(wrapper.clone()), "<eval>".to_string())
-            .map_err(|e| format!("{}", e))?;
+        if is_definition && direct_errors.is_empty() {
+            // It's a definition - compile it directly
+            let module = direct_module_opt.unwrap();
+            eval_compiler.add_module(&module, vec![], std::sync::Arc::new(code.to_string()), "<eval>".to_string())
+                .map_err(|e| format!("{}", e))?;
 
-        // Compile all
-        if let Err((e, _, _)) = eval_compiler.compile_all() {
-            return Err(format!("Compilation error: {}", e));
-        }
-
-        // Get the compiled function
-        let func = eval_compiler.get_function("__eval_result__")
-            .ok_or_else(|| "Failed to compile expression".to_string())?;
-
-        // Create a minimal VM to run it
-        let mut eval_vm = ParallelVM::new(ParallelConfig::default());
-        eval_vm.register_default_natives();
-        eval_vm.setup_eval();
-        // Note: Nested eval callback not set - nested eval() calls will fail
-        // This is intentional to prevent deep recursion
-        eval_vm.register_function("__eval_result__", func.clone());
-        eval_vm.set_function_list(vec![func.clone()]);
-
-        // Run and get result
-        match eval_vm.run(func) {
-            Ok(result) => {
-                if let Some(val) = result.value {
-                    Ok(val.display())
-                } else {
-                    Ok("()".to_string())
-                }
+            if let Err((e, _, _)) = eval_compiler.compile_all() {
+                return Err(format!("Compilation error: {}", e));
             }
-            Err(e) => Err(format!("{}", e)),
+
+            // For definitions, just return success message
+            Ok("defined".to_string())
+        } else {
+            // It's an expression - wrap it in a function
+            let wrapper = format!("__eval_result__() = {}", code);
+
+            let (module_opt, errors) = parse(&wrapper);
+            if !errors.is_empty() {
+                return Err(format!("Parse error: {:?}", errors));
+            }
+            let module = module_opt.ok_or_else(|| "Failed to parse expression".to_string())?;
+
+            eval_compiler.add_module(&module, vec![], std::sync::Arc::new(wrapper.clone()), "<eval>".to_string())
+                .map_err(|e| format!("{}", e))?;
+
+            if let Err((e, _, _)) = eval_compiler.compile_all() {
+                return Err(format!("Compilation error: {}", e));
+            }
+
+            // Get the compiled function
+            let func = eval_compiler.get_function("__eval_result__")
+                .ok_or_else(|| "Failed to compile expression".to_string())?;
+
+            // Create a minimal VM to run it
+            let mut eval_vm = ParallelVM::new(ParallelConfig::default());
+            eval_vm.register_default_natives();
+            eval_vm.setup_eval();
+            eval_vm.register_function("__eval_result__", func.clone());
+            eval_vm.set_function_list(vec![func.clone()]);
+
+            // Run and get result
+            match eval_vm.run(func) {
+                Ok(result) => {
+                    if let Some(val) = result.value {
+                        Ok(val.display())
+                    } else {
+                        Ok("()".to_string())
+                    }
+                }
+                Err(e) => Err(format!("{}", e)),
+            }
         }
     });
 
