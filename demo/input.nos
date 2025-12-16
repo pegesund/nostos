@@ -11,31 +11,49 @@ mvar inputPanelId: Int = 0
 mvar inputBuffer: String = ""
 mvar inputItems: List[String] = []
 
-# Handle all keys
+# Leaf functions for mvar access
+inputGetBuffer() = inputBuffer
+inputGetItems() = inputItems
+inputSetBuffer(val) = { inputBuffer = val }
+inputAddItem(item) = { inputItems = push(inputItems, item) }
+
+# Handle backspace - leaf function
+inputDoBackspace() = {
+    len = String.length(inputBuffer)
+    if len > 0 then {
+        inputBuffer = String.substring(inputBuffer, 0, len - 1)
+    } else ()
+}
+
+# Handle enter - leaf function
+inputDoEnter() = {
+    if String.length(inputBuffer) > 0 then {
+        inputItems = push(inputItems, inputBuffer)
+        inputBuffer = ""
+    } else ()
+}
+
+# Handle char input - leaf function
+inputDoChar(c) = {
+    inputBuffer = inputBuffer ++ c
+}
+
+# Handle all keys - dispatches to leaf functions then updates view
 inputHandleKey(key) = {
     match key
-        "backspace" -> {
-            len = String.length(inputBuffer)
-            if len > 0 then {
-                inputBuffer = String.substring(inputBuffer, 0, len - 1)
-            } else ()
-        }
-        "enter" -> {
-            # Add input to items list
-            if String.length(inputBuffer) > 0 then {
-                inputItems = push(inputItems, inputBuffer)
-                inputBuffer = ""
-            } else ()
-        }
+        "backspace" -> inputDoBackspace()
+        "enter" -> inputDoEnter()
         "escape" -> Panel.hide(inputPanelId)
         _ -> {
-            # Single printable characters get appended
             if String.length(key) == 1 then {
-                inputBuffer = inputBuffer ++ key
+                inputDoChar(key)
             } else ()
         }
     end
-    Panel.setContent(inputPanelId, inputView())
+    # Get current state and update panel
+    items = inputGetItems()
+    buffer = inputGetBuffer()
+    Panel.setContent(inputPanelId, inputViewWith(items, buffer))
 }
 
 # Render items list
@@ -51,16 +69,19 @@ inputRenderItems(items) = {
     result
 }
 
-# Main view function
-inputView() = {
+# Main view function - takes values as parameters to avoid mvar deadlock
+inputViewWith(items, buffer) = {
     header = "=== Input Demo ===\n\n"
-    itemList = if length(inputItems) == 0
+    itemList = if length(items) == 0
         then "(no items yet)\n"
-        else inputRenderItems(inputItems)
-    prompt = "\n> " ++ inputBuffer ++ "_\n"
+        else inputRenderItems(items)
+    prompt = "\n> " ++ buffer ++ "_\n"
     footer = "\n[Type to add, Enter to submit, Esc to close]"
     header ++ itemList ++ prompt ++ footer
 }
+
+# Leaf function to get current view
+inputView() = inputViewWith(inputItems, inputBuffer)
 
 # Show the panel
 inputShow() = {
