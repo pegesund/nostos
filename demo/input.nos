@@ -41,12 +41,15 @@ inputHandleKey(key) = {
 # Render items list
 inputRenderItem(item, idx) = show(idx) ++ ". " ++ item ++ "\n"
 
-inputRenderItemsAcc(lst, idx, acc) = match lst
-    [] -> acc
-    [x | rest] -> inputRenderItemsAcc(rest, idx + 1, acc ++ inputRenderItem(x, idx))
-end
+inputRenderWithIdx(acc_idx, item) = {
+    (acc, idx) = acc_idx
+    (acc ++ inputRenderItem(item, idx), idx + 1)
+}
 
-inputRenderItems(lst) = inputRenderItemsAcc(lst, 1, "")
+inputRenderItems(items) = {
+    (result, _) = fold(inputRenderWithIdx, ("", 1), items)
+    result
+}
 
 # Main view function
 inputView() = {
