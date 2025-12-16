@@ -247,9 +247,59 @@ impl ReplEngine {
             // Transform to a function so user can access via name()
             let code = {
                 let trimmed = code.trim();
-                if let Some(var_binding) = Self::is_var_binding_static(trimmed) {
+                // Inline variable binding detection (can't call Self:: from closure)
+                let var_binding: Option<(String, String)> = {
+                    // Skip mvar declarations
+                    if trimmed.starts_with("mvar ") {
+                        None
+                    } else if trimmed.starts_with("var ") {
+                        // "var name = expr" pattern
+                        let rest = trimmed[4..].trim();
+                        if let Some(eq_pos) = rest.find('=') {
+                            let name = rest[..eq_pos].trim();
+                            let expr = rest[eq_pos + 1..].trim();
+                            if !name.contains('(') && !name.is_empty() && !expr.is_empty() {
+                                Some((name.to_string(), expr.to_string()))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else if let Some(eq_pos) = trimmed.find('=') {
+                        // "name = expr" pattern
+                        let before_eq = if eq_pos > 0 { trimmed.chars().nth(eq_pos - 1) } else { None };
+                        let after_eq = trimmed.chars().nth(eq_pos + 1);
+                        let is_comparison = matches!(before_eq, Some('!' | '<' | '>' | '='))
+                            || matches!(after_eq, Some('=') | Some('>'));
+                        if eq_pos > 0 && !is_comparison {
+                            let name = trimmed[..eq_pos].trim();
+                            let expr = trimmed[eq_pos + 1..].trim();
+                            if !name.contains('(') && !name.contains('{') && !name.contains('[')
+                               && !name.is_empty() && !expr.is_empty() {
+                                if let Some(first_char) = name.chars().next() {
+                                    if first_char.is_lowercase() || first_char == '_' {
+                                        Some((name.to_string(), expr.to_string()))
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some((name, expr)) = var_binding {
                     // Transform "pt = expr" to "pt() = expr"
-                    format!("{}() = {}", var_binding.0, var_binding.1)
+                    format!("{}() = {}", name, expr)
                 } else {
                     code.to_string()
                 }
@@ -358,6 +408,14 @@ impl ReplEngine {
                     }
                 }
                 eval_vm.register_function("__eval_result__", func.clone());
+
+                // Register dynamic types
+                {
+                    let dyn_types = dynamic_types.read();
+                    for (name, t) in dyn_types.iter() {
+                        eval_vm.register_type(name, t.clone());
+                    }
+                }
 
                 // Build function list for indexed calls
                 let mut func_list: Vec<_> = eval_compiler.get_function_list();
