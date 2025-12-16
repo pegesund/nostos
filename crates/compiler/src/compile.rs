@@ -122,6 +122,14 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Process.info", signature: "Pid -> ProcessInfo", doc: "Get process info: { status, mailbox, uptime }" },
     BuiltinInfo { name: "Process.kill", signature: "Pid -> Bool", doc: "Kill a process (returns true if successful)" },
 
+    // === Panel (TUI) ===
+    BuiltinInfo { name: "Panel.create", signature: "String -> Int", doc: "Create a panel with title, returns panel ID" },
+    BuiltinInfo { name: "Panel.setContent", signature: "Int -> String -> ()", doc: "Set panel content by ID" },
+    BuiltinInfo { name: "Panel.show", signature: "Int -> ()", doc: "Show a panel by ID" },
+    BuiltinInfo { name: "Panel.hide", signature: "Int -> ()", doc: "Hide a panel by ID" },
+    BuiltinInfo { name: "Panel.onKey", signature: "Int -> String -> ()", doc: "Register key handler function for panel" },
+    BuiltinInfo { name: "Panel.registerHotkey", signature: "String -> String -> ()", doc: "Register global hotkey to trigger callback" },
+
     // === External Process Execution ===
     // All Exec functions return (status, result) tuples where status is "ok" or "error"
     BuiltinInfo { name: "Exec.run", signature: "(String, [String]) -> (String, { exitCode: Int, stdout: String, stderr: String })", doc: "Run command and wait for completion. Returns (status, { exitCode, stdout, stderr })" },
@@ -623,7 +631,7 @@ impl Compiler {
             "String", "File", "Dir", "List", "Option", "Result", "Char", "Int", "Float",
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
-            "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path",
+            "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -898,7 +906,7 @@ impl Compiler {
             "String", "File", "Dir", "List", "Option", "Result", "Char", "Int", "Float",
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
-            "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path",
+            "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -4165,6 +4173,52 @@ impl Compiler {
                             self.chunk.emit(Instruction::ProcessKill(dst, pid_reg), line);
                             return Ok(dst);
                         }
+                        // === Panel (TUI) functions ===
+                        "Panel.create" if args.len() == 1 => {
+                            let title_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.create".to_string())));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![title_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        "Panel.setContent" if args.len() == 2 => {
+                            let id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let content_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.setContent".to_string())));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![id_reg, content_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        "Panel.show" if args.len() == 1 => {
+                            let id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.show".to_string())));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![id_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        "Panel.hide" if args.len() == 1 => {
+                            let id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.hide".to_string())));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![id_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        "Panel.onKey" if args.len() == 2 => {
+                            let id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handler_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.onKey".to_string())));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![id_reg, handler_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        "Panel.registerHotkey" if args.len() == 2 => {
+                            let key_reg = self.compile_expr_tail(&args[0], false)?;
+                            let callback_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.registerHotkey".to_string())));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![key_reg, callback_reg].into()), line);
+                            return Ok(dst);
+                        }
                         // === External process execution ===
                         "Exec.run" if args.len() == 2 => {
                             let cmd_reg = self.compile_expr_tail(&args[0], false)?;
@@ -5031,6 +5085,43 @@ impl Compiler {
                         // inspect(value, name) - call native function
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("inspect".to_string())));
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        return Ok(dst);
+                    }
+                    // === Panel (TUI) functions ===
+                    "Panel.create" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.create".to_string())));
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        return Ok(dst);
+                    }
+                    "Panel.setContent" if arg_regs.len() == 2 => {
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.setContent".to_string())));
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        return Ok(dst);
+                    }
+                    "Panel.show" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.show".to_string())));
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        return Ok(dst);
+                    }
+                    "Panel.hide" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.hide".to_string())));
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        return Ok(dst);
+                    }
+                    "Panel.onKey" if arg_regs.len() == 2 => {
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.onKey".to_string())));
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        return Ok(dst);
+                    }
+                    "Panel.registerHotkey" if arg_regs.len() == 2 => {
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.registerHotkey".to_string())));
                         self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
                         return Ok(dst);
                     }

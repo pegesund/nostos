@@ -26,6 +26,7 @@ pub use parallel::{
     SendableValue, SendableRecord, SendableVariant, SendableMapKey,
     InspectEntry, InspectSender, InspectReceiver,
     OutputSender, OutputReceiver,
+    PanelCommand, PanelCommandSender, PanelCommandReceiver,
     JitIntFn, JitIntFn0, JitIntFn2, JitIntFn3, JitIntFn4, JitLoopArrayFn,
 };
 pub use process::*;

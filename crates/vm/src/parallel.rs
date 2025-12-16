@@ -47,6 +47,28 @@ pub type OutputSender = crossbeam::channel::Sender<String>;
 /// Type alias for the output receiver channel
 pub type OutputReceiver = crossbeam::channel::Receiver<String>;
 
+/// Panel command - sent from Panel.* native functions to the TUI
+#[derive(Clone, Debug)]
+pub enum PanelCommand {
+    /// Create a new panel with given ID and title
+    Create { id: u64, title: String },
+    /// Set the content of a panel
+    SetContent { id: u64, content: String },
+    /// Show a panel
+    Show { id: u64 },
+    /// Hide a panel
+    Hide { id: u64 },
+    /// Register a key handler for a panel
+    OnKey { id: u64, handler_fn: String },
+    /// Register a global hotkey that triggers a callback
+    RegisterHotkey { key: String, callback_fn: String },
+}
+
+/// Type alias for the panel command sender channel
+pub type PanelCommandSender = crossbeam::channel::Sender<PanelCommand>;
+/// Type alias for the panel command receiver channel
+pub type PanelCommandReceiver = crossbeam::channel::Receiver<PanelCommand>;
+
 // JIT function pointer types (moved from runtime.rs)
 pub type JitIntFn = fn(i64) -> i64;
 pub type JitIntFn0 = fn() -> i64;
@@ -146,6 +168,8 @@ pub struct SharedState {
     pub inspect_sender: Option<InspectSender>,
     /// Output sender (for println from any process to TUI console)
     pub output_sender: Option<OutputSender>,
+    /// Panel command sender (for Panel.* calls from Nostos code)
+    pub panel_command_sender: Option<PanelCommandSender>,
     /// Module-level mutable variables (mvars) - shared across threads with RwLock.
     /// Key is "module_name.var_name", value is ThreadSafeValue protected by RwLock.
     pub mvars: HashMap<String, Arc<RwLock<ThreadSafeValue>>>,
@@ -619,6 +643,7 @@ impl ParallelVM {
             io_sender: Some(io_sender),
             inspect_sender: None,
             output_sender: None,
+            panel_command_sender: None,
             mvars: HashMap::new(),
         });
 
@@ -2402,6 +2427,129 @@ impl ParallelVM {
         Arc::get_mut(&mut self.shared)
             .expect("Cannot setup output after threads started")
             .output_sender = Some(sender);
+
+        receiver
+    }
+
+    /// Set up the panel channel and register all Panel.* native functions.
+    /// Returns a receiver that will receive PanelCommand messages.
+    pub fn setup_panel(&mut self) -> PanelCommandReceiver {
+        let (sender, receiver) = channel::unbounded();
+
+        // Store sender in shared state
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot setup panel after threads started")
+            .panel_command_sender = Some(sender.clone());
+
+        // Create a separate atomic counter for panel IDs
+        // This must be Arc so it can be shared with the closure without borrowing self.shared
+        let next_panel_id = Arc::new(AtomicU64::new(1));
+
+        // Helper to extract string from GcValue
+        fn get_string(val: &GcValue, heap: &Heap, name: &str) -> Result<String, RuntimeError> {
+            match val {
+                GcValue::String(ptr) => {
+                    if let Some(s) = heap.get_string(*ptr) {
+                        Ok(s.data.clone())
+                    } else {
+                        Err(RuntimeError::Panic(format!("Invalid string pointer for {}", name)))
+                    }
+                }
+                _ => Err(RuntimeError::TypeError {
+                    expected: "String".to_string(),
+                    found: "other".to_string(),
+                }),
+            }
+        }
+
+        // Helper to extract Int64 from GcValue
+        fn get_int(val: &GcValue, _name: &str) -> Result<u64, RuntimeError> {
+            match val {
+                GcValue::Int64(n) => Ok(*n as u64),
+                _ => Err(RuntimeError::TypeError {
+                    expected: "Int".to_string(),
+                    found: "other".to_string(),
+                }),
+            }
+        }
+
+        // Panel.create(title: String) -> Int
+        // Allocates a panel ID and sends Create command
+        let next_id_for_create = Arc::clone(&next_panel_id);
+        let sender_create = sender.clone();
+        self.register_native("Panel.create", Arc::new(GcNativeFn {
+            name: "Panel.create".to_string(),
+            arity: 1,
+            func: Box::new(move |args, heap| {
+                let title = get_string(&args[0], heap, "title")?;
+                let id = next_id_for_create.fetch_add(1, Ordering::SeqCst);
+                let _ = sender_create.send(PanelCommand::Create { id, title });
+                Ok(GcValue::Int64(id as i64))
+            }),
+        }));
+
+        // Panel.setContent(id: Int, content: String) -> ()
+        let sender_content = sender.clone();
+        self.register_native("Panel.setContent", Arc::new(GcNativeFn {
+            name: "Panel.setContent".to_string(),
+            arity: 2,
+            func: Box::new(move |args, heap| {
+                let id = get_int(&args[0], "id")?;
+                let content = get_string(&args[1], heap, "content")?;
+                let _ = sender_content.send(PanelCommand::SetContent { id, content });
+                Ok(GcValue::Unit)
+            }),
+        }));
+
+        // Panel.show(id: Int) -> ()
+        let sender_show = sender.clone();
+        self.register_native("Panel.show", Arc::new(GcNativeFn {
+            name: "Panel.show".to_string(),
+            arity: 1,
+            func: Box::new(move |args, _heap| {
+                let id = get_int(&args[0], "id")?;
+                let _ = sender_show.send(PanelCommand::Show { id });
+                Ok(GcValue::Unit)
+            }),
+        }));
+
+        // Panel.hide(id: Int) -> ()
+        let sender_hide = sender.clone();
+        self.register_native("Panel.hide", Arc::new(GcNativeFn {
+            name: "Panel.hide".to_string(),
+            arity: 1,
+            func: Box::new(move |args, _heap| {
+                let id = get_int(&args[0], "id")?;
+                let _ = sender_hide.send(PanelCommand::Hide { id });
+                Ok(GcValue::Unit)
+            }),
+        }));
+
+        // Panel.onKey(id: Int, handlerFn: String) -> ()
+        let sender_onkey = sender.clone();
+        self.register_native("Panel.onKey", Arc::new(GcNativeFn {
+            name: "Panel.onKey".to_string(),
+            arity: 2,
+            func: Box::new(move |args, heap| {
+                let id = get_int(&args[0], "id")?;
+                let handler_fn = get_string(&args[1], heap, "handlerFn")?;
+                let _ = sender_onkey.send(PanelCommand::OnKey { id, handler_fn });
+                Ok(GcValue::Unit)
+            }),
+        }));
+
+        // Panel.registerHotkey(key: String, callbackFn: String) -> ()
+        let sender_hotkey = sender.clone();
+        self.register_native("Panel.registerHotkey", Arc::new(GcNativeFn {
+            name: "Panel.registerHotkey".to_string(),
+            arity: 2,
+            func: Box::new(move |args, heap| {
+                let key = get_string(&args[0], heap, "key")?;
+                let callback_fn = get_string(&args[1], heap, "callbackFn")?;
+                let _ = sender_hotkey.send(PanelCommand::RegisterHotkey { key, callback_fn });
+                Ok(GcValue::Unit)
+            }),
+        }));
 
         receiver
     }

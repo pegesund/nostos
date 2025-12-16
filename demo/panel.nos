@@ -1,17 +1,13 @@
 # Panel Demo - A simple list panel with keyboard navigation
 #
-# This demonstrates mvars (module-level mutable variables) for UI state.
+# This demonstrates the new Panel.* API for creating TUI panels.
 # The panel shows a list of items with a cursor that can be moved with Up/Down.
 #
-# Usage: Call panelDemo() from the REPL after loading with :demo
-
-# Panel activation state - must call panelDemo() to activate
-mvar panelActivated: Bool = false
-
-# Key registration - the TUI checks this after each eval
-mvar panelKeyBinding: String = ""
+# Usage: Call panelInit() from the REPL after loading with :demo
+#        Then press Alt+T to open the panel
 
 # Panel state using mvars
+mvar panelId: Int = 0
 mvar panelCursor: Int = 0
 mvar panelItems: List[String] = ["First item", "Second item", "Third item", "Fourth item", "Fifth item"]
 
@@ -24,13 +20,17 @@ panelGetItems() = panelItems
 
 # Handle keyboard input - single entry point for all keys
 # This is the Nostos-native way: pattern match on key name
-panelHandleKey(key) = match key
-    "up" -> panelMoveUp()
-    "down" -> panelMoveDown()
-    "k" -> panelMoveUp()    # vim binding
-    "j" -> panelMoveDown()  # vim binding
-    _ -> ()  # ignore other keys
-end
+panelHandleKey(key) = {
+    match key
+        "up" -> panelMoveUp()
+        "down" -> panelMoveDown()
+        "k" -> panelMoveUp()    # vim binding
+        "j" -> panelMoveDown()  # vim binding
+        _ -> ()  # ignore other keys
+    end
+    # Update panel content after handling key
+    Panel.setContent(panelId, panelView())
+}
 
 # Leaf functions for mvar-safe cursor movement
 panelMoveUp() = {
@@ -71,19 +71,17 @@ panelView() = {
     header ++ header2 ++ list ++ footer
 }
 
-# Activate the panel - must be called before Alt+T will work
-activatePanel() = {
-    panelActivated = true
-    panelActivated
+# Show the panel (called when Alt+T is pressed)
+panelShow() = {
+    Panel.setContent(panelId, panelView())
+    Panel.show(panelId)
 }
 
-# Check if panel is activated
-isActivated() = panelActivated
-
-# Entry point - activates the panel and registers the keybinding
-# Call this from the REPL: demo.panel.panelDemo()
-panelDemo() = {
-    activatePanel()
-    panelKeyBinding = "alt+t"
-    "Panel activated! Press Alt+T to open."
+# Initialize the panel
+# Call this once to create the panel and register the hotkey
+panelInit() = {
+    panelId = Panel.create("Demo Panel")
+    Panel.onKey(panelId, "demo.panel.panelHandleKey")
+    Panel.registerHotkey("alt+t", "demo.panel.panelShow")
+    "Panel initialized. Press Alt+T to open."
 }

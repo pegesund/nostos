@@ -12,7 +12,7 @@ use crate::CallGraph;
 use crate::session::extract_dependencies_from_fn;
 use nostos_syntax::ast::{Item, Pattern};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
-use nostos_vm::parallel::{ParallelVM, ParallelConfig, InspectReceiver, InspectEntry, OutputReceiver};
+use nostos_vm::parallel::{ParallelVM, ParallelConfig, InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver};
 use nostos_vm::process::ThreadSafeValue;
 
 /// An item in the browser
@@ -106,6 +106,34 @@ pub struct SearchResult {
     pub match_end: usize,
 }
 
+/// Registered panel information
+/// Panels are registered from Nostos code via Panel.register()
+#[derive(Debug, Clone)]
+/// Old-style panel info (for backward compatibility during transition)
+pub struct PanelInfo {
+    /// Activation key (e.g., "alt+t")
+    pub key: String,
+    /// Fully qualified name of view function (returns String)
+    pub view_fn: String,
+    /// Fully qualified name of key handler function (receives key name as String)
+    pub key_handler_fn: String,
+    /// Panel title
+    pub title: String,
+}
+
+/// State of a panel (new Panel.* API)
+#[derive(Clone, Debug)]
+pub struct PanelState {
+    /// Panel title
+    pub title: String,
+    /// Current content (rendered text)
+    pub content: String,
+    /// Key handler function (receives key name as String)
+    pub key_handler_fn: Option<String>,
+    /// Whether the panel is currently visible
+    pub visible: bool,
+}
+
 /// The REPL state
 pub struct ReplEngine {
     compiler: Compiler,
@@ -133,10 +161,16 @@ pub struct ReplEngine {
     inspect_receiver: Option<InspectReceiver>,
     /// Receiver for output (println) from all VM processes
     output_receiver: Option<OutputReceiver>,
+    /// Receiver for panel commands from VM (Panel.* calls)
+    panel_receiver: Option<PanelCommandReceiver>,
     /// Track which mvars have been registered (to avoid resetting their values)
     registered_mvars: HashSet<String>,
-    /// Global key handlers: key string (e.g., "alt+t") -> handler function name
-    global_key_handlers: HashMap<String, String>,
+    /// Registered panels: key (e.g., "alt+t") -> PanelInfo (old API, for transition)
+    registered_panels: HashMap<String, PanelInfo>,
+    /// Panel states: panel ID -> PanelState (new Panel.* API)
+    panel_states: HashMap<u64, PanelState>,
+    /// Hotkey callbacks: hotkey -> callback function name
+    hotkey_callbacks: HashMap<String, String>,
 }
 
 impl ReplEngine {
@@ -152,6 +186,7 @@ impl ReplEngine {
         vm.register_default_natives();
         let inspect_receiver = Some(vm.setup_inspect());
         let output_receiver = Some(vm.setup_output());
+        let panel_receiver = Some(vm.setup_panel());
 
         Self {
             compiler,
@@ -170,8 +205,11 @@ impl ReplEngine {
             last_known_signatures: HashMap::new(),
             inspect_receiver,
             output_receiver,
+            panel_receiver,
             registered_mvars: HashSet::new(),
-            global_key_handlers: HashMap::new(),
+            registered_panels: HashMap::new(),
+            panel_states: HashMap::new(),
+            hotkey_callbacks: HashMap::new(),
         }
     }
 
@@ -743,13 +781,6 @@ impl ReplEngine {
             return self.handle_command(input);
         }
 
-        // Intercept registerGlobalKey("key", "handler") calls
-        if input.starts_with("registerGlobalKey(") {
-            if let Some((key, handler)) = Self::parse_register_key_args(input) {
-                self.register_global_key(key.clone(), handler.clone());
-                return Ok(format!("Registered key '{}' -> '{}'", key, handler));
-            }
-        }
 
         // Check for tuple destructuring binding like (a, b) = expr
         if let Some((names, expr)) = Self::is_tuple_binding(input) {
@@ -1044,9 +1075,20 @@ impl ReplEngine {
                     }
 
                     // Add return value (if not Unit)
-                    if let Some(val) = result.value {
+                    if let Some(ref val) = result.value {
                         if !val.is_unit() {
                             output.push_str(&val.display());
+                        }
+                    }
+
+                    // Poll for any panel registrations that happened during evaluation
+                    let registrations = self.poll_panel_registrations();
+                    if !registrations.is_empty() {
+                        for (key, title) in registrations {
+                            if !output.is_empty() {
+                                output.push('\n');
+                            }
+                            output.push_str(&format!("Panel '{}' registered on {}", title, key));
                         }
                     }
 
@@ -2835,47 +2877,95 @@ impl ReplEngine {
         Ok(())
     }
 
-    /// Register a global key handler
-    /// Called from Nostos code via registerGlobalKey("alt+t", "myHandler")
-    pub fn register_global_key(&mut self, key: String, handler: String) {
-        self.global_key_handlers.insert(key, handler);
+    /// Register a panel (old API for transition)
+    /// Called internally when processing panel registrations from the VM channel
+    pub fn register_panel(&mut self, info: PanelInfo) {
+        self.registered_panels.insert(info.key.clone(), info);
     }
 
-    /// Parse arguments from registerGlobalKey("key", "handler") call
-    fn parse_register_key_args(input: &str) -> Option<(String, String)> {
-        // Expected format: registerGlobalKey("key", "handler")
-        let input = input.trim();
-        if !input.starts_with("registerGlobalKey(") || !input.ends_with(')') {
-            return None;
+    /// Drain all pending panel commands from the VM channel.
+    /// Returns a list of commands that affect panel visibility (for TUI to process).
+    pub fn drain_panel_commands(&mut self) -> Vec<PanelCommand> {
+        let mut commands = Vec::new();
+        if let Some(receiver) = &self.panel_receiver {
+            while let Ok(cmd) = receiver.try_recv() {
+                // Process the command and update internal state
+                match &cmd {
+                    PanelCommand::Create { id, title } => {
+                        self.panel_states.insert(*id, PanelState {
+                            title: title.clone(),
+                            content: String::new(),
+                            key_handler_fn: None,
+                            visible: false,
+                        });
+                    }
+                    PanelCommand::SetContent { id, content } => {
+                        if let Some(state) = self.panel_states.get_mut(id) {
+                            state.content = content.clone();
+                        }
+                    }
+                    PanelCommand::Show { id } => {
+                        if let Some(state) = self.panel_states.get_mut(id) {
+                            state.visible = true;
+                        }
+                    }
+                    PanelCommand::Hide { id } => {
+                        if let Some(state) = self.panel_states.get_mut(id) {
+                            state.visible = false;
+                        }
+                    }
+                    PanelCommand::OnKey { id, handler_fn } => {
+                        if let Some(state) = self.panel_states.get_mut(id) {
+                            state.key_handler_fn = Some(handler_fn.clone());
+                        }
+                    }
+                    PanelCommand::RegisterHotkey { key, callback_fn } => {
+                        self.hotkey_callbacks.insert(key.clone(), callback_fn.clone());
+                    }
+                }
+                commands.push(cmd);
+            }
         }
-
-        // Extract the part between parentheses
-        let inner = &input[18..input.len() - 1]; // Skip "registerGlobalKey(" and ")"
-
-        // Split by comma and parse the two string arguments
-        let parts: Vec<&str> = inner.split(',').collect();
-        if parts.len() != 2 {
-            return None;
-        }
-
-        let key = parts[0].trim().trim_matches('"').to_string();
-        let handler = parts[1].trim().trim_matches('"').to_string();
-
-        if key.is_empty() || handler.is_empty() {
-            return None;
-        }
-
-        Some((key, handler))
+        commands
     }
 
-    /// Get the handler for a global key, if registered
-    pub fn get_global_key_handler(&self, key: &str) -> Option<&String> {
-        self.global_key_handlers.get(key)
+    /// Poll for pending panel registrations from the VM channel (old API).
+    /// Returns a list of (key, title) pairs for panels that were registered.
+    /// NOTE: This is deprecated - use drain_panel_commands() instead.
+    pub fn poll_panel_registrations(&mut self) -> Vec<(String, String)> {
+        // In the new API, we don't have the old-style registrations
+        // This method is kept for backward compatibility but returns empty
+        Vec::new()
     }
 
-    /// Get all registered global key handlers
-    pub fn get_global_key_handlers(&self) -> &HashMap<String, String> {
-        &self.global_key_handlers
+    /// Get a panel by its activation key (old API)
+    pub fn get_panel_for_key(&self, key: &str) -> Option<&PanelInfo> {
+        self.registered_panels.get(key)
+    }
+
+    /// Get all registered panels (old API)
+    pub fn get_registered_panels(&self) -> &HashMap<String, PanelInfo> {
+        &self.registered_panels
+    }
+
+    /// Get a panel state by ID (new API)
+    pub fn get_panel_state(&self, id: u64) -> Option<&PanelState> {
+        self.panel_states.get(&id)
+    }
+
+    /// Get all panel states (new API)
+    pub fn get_panel_states(&self) -> &HashMap<u64, PanelState> {
+        &self.panel_states
+    }
+
+    /// Get callback function for a hotkey
+    pub fn get_hotkey_callback(&self, key: &str) -> Option<&String> {
+        self.hotkey_callbacks.get(key)
+    }
+
+    /// Get all hotkey callbacks
+    pub fn get_hotkey_callbacks(&self) -> &HashMap<String, String> {
+        &self.hotkey_callbacks
     }
 
     /// Help text for REPL commands

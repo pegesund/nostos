@@ -623,6 +623,9 @@ fn main() -> ExitCode {
     // Register default native functions
     vm.register_default_natives();
 
+    // Setup panel native function (ignore receiver - CLI doesn't use panels)
+    let _ = vm.setup_panel();
+
     // Register functions
     for (name, func) in compiler.get_all_functions() {
         vm.register_function(&name, func.clone());
