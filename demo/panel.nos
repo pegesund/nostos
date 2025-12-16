@@ -8,6 +8,9 @@
 # Panel activation state - must call panelDemo() to activate
 mvar panelActivated: Bool = false
 
+# Key registration - the TUI checks this after each eval
+mvar panelKeyBinding: String = ""
+
 # Panel state using mvars
 mvar panelCursor: Int = 0
 mvar panelItems: List[String] = ["First item", "Second item", "Third item", "Fourth item", "Fifth item"]
@@ -22,27 +25,30 @@ panelGetItems() = panelItems
 # Handle keyboard input - single entry point for all keys
 # This is the Nostos-native way: pattern match on key name
 panelHandleKey(key) = match key
-    "up" -> {
-        if panelCursor > 0 then {
-            panelCursor = panelCursor - 1
-            panelCursor
-        } else {
-            panelCursor
-        }
-    }
-    "down" -> {
-        count = panelItemCount()
-        if panelCursor < count - 1 then {
-            panelCursor = panelCursor + 1
-            panelCursor
-        } else {
-            panelCursor
-        }
-    }
-    "k" -> panelHandleKey("up")    # vim binding
-    "j" -> panelHandleKey("down")  # vim binding
+    "up" -> panelMoveUp()
+    "down" -> panelMoveDown()
+    "k" -> panelMoveUp()    # vim binding
+    "j" -> panelMoveDown()  # vim binding
     _ -> ()  # ignore other keys
 end
+
+# Leaf functions for mvar-safe cursor movement
+panelMoveUp() = {
+    if panelCursor > 0 then {
+        panelCursor = panelCursor - 1
+    } else {
+        ()
+    }
+}
+
+panelMoveDown() = {
+    count = panelItemCount()
+    if panelCursor < count - 1 then {
+        panelCursor = panelCursor + 1
+    } else {
+        ()
+    }
+}
 
 # Render a single item with cursor indicator
 panelRenderItem(idx, item, cursor) =
@@ -74,9 +80,10 @@ activatePanel() = {
 # Check if panel is activated
 isActivated() = panelActivated
 
-# Entry point - activates the panel and returns instructions
+# Entry point - activates the panel and registers the keybinding
 # Call this from the REPL: demo.panel.panelDemo()
 panelDemo() = {
     activatePanel()
+    panelKeyBinding = "alt+t"
     "Panel activated! Press Alt+T to open."
 }

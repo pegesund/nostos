@@ -120,6 +120,8 @@ pub struct ReplEngine {
     output_receiver: Option<OutputReceiver>,
     /// Track which mvars have been registered (to avoid resetting their values)
     registered_mvars: HashSet<String>,
+    /// Global key handlers: key string (e.g., "alt+t") -> handler function name
+    global_key_handlers: HashMap<String, String>,
 }
 
 impl ReplEngine {
@@ -154,7 +156,22 @@ impl ReplEngine {
             inspect_receiver,
             output_receiver,
             registered_mvars: HashSet::new(),
+            global_key_handlers: HashMap::new(),
         }
+    }
+
+    /// Convert a byte offset to a line number (1-indexed).
+    fn offset_to_line(source: &str, offset: usize) -> usize {
+        let mut line = 1;
+        for (i, c) in source.char_indices() {
+            if i >= offset {
+                break;
+            }
+            if c == '\n' {
+                line += 1;
+            }
+        }
+        line
     }
 
     /// Load the standard library
@@ -299,8 +316,10 @@ impl ReplEngine {
             .map_err(|e| format!("Compilation error: {}", e))?;
 
         // Compile all bodies
-        if let Err((e, _filename, _source)) = self.compiler.compile_all() {
-            return Err(format!("Compilation error: {}", e));
+        if let Err((e, filename, source)) = self.compiler.compile_all() {
+            let span = e.span();
+            let line = Self::offset_to_line(&source, span.start);
+            return Err(format!("{}:{}: {}", filename, line, e));
         }
 
         // Now create thunk functions for each binding
@@ -709,6 +728,14 @@ impl ReplEngine {
             return self.handle_command(input);
         }
 
+        // Intercept registerGlobalKey("key", "handler") calls
+        if input.starts_with("registerGlobalKey(") {
+            if let Some((key, handler)) = Self::parse_register_key_args(input) {
+                self.register_global_key(key.clone(), handler.clone());
+                return Ok(format!("Registered key '{}' -> '{}'", key, handler));
+            }
+        }
+
         // Check for tuple destructuring binding like (a, b) = expr
         if let Some((names, expr)) = Self::is_tuple_binding(input) {
             return self.define_tuple_binding(&names, &expr);
@@ -820,7 +847,7 @@ impl ReplEngine {
             let errors = self.compiler.compile_all_collecting_errors();
 
             // Collect set of error function names for quick lookup
-            let error_fn_names: HashSet<String> = errors.iter().map(|(n, _)| n.clone()).collect();
+            let error_fn_names: HashSet<String> = errors.iter().map(|(n, _, _, _)| n.clone()).collect();
 
             // Collect all successfully compiled functions to mark (using base name for consistency)
             let all_functions: Vec<String> = self.compiler.get_function_names().iter().map(|s| s.to_string()).collect();
@@ -864,7 +891,7 @@ impl ReplEngine {
             }
 
             // Now mark functions with errors and their dependents as stale
-            for (fn_name, error) in &errors {
+            for (fn_name, error, _, _) in &errors {
                 let error_msg = format!("{}", error);
                 self.set_compile_status(fn_name, CompileStatus::CompileError(error_msg.clone()));
                 // Mark dependents as stale (they were just marked Compiled above, so this works)
@@ -883,9 +910,11 @@ impl ReplEngine {
 
             self.sync_vm();
 
-            // If there were errors, return the first one
-            if let Some((_fn_name, error)) = errors.into_iter().next() {
-                return Err(format!("Compilation error: {}", error));
+            // If there were errors, return the first one with filename and line number
+            if let Some((_fn_name, error, filename, source)) = errors.into_iter().next() {
+                let span = error.span();
+                let line = Self::offset_to_line(&source, span.start);
+                return Err(format!("{}:{}: {}", filename, line, error));
             }
 
             let mut output = String::new();
@@ -1720,7 +1749,7 @@ impl ReplEngine {
         let errors = self.compiler.compile_all_collecting_errors();
 
         // Collect set of error function names for quick lookup
-        let error_fn_names: HashSet<String> = errors.iter().map(|(n, _)| n.clone()).collect();
+        let error_fn_names: HashSet<String> = errors.iter().map(|(n, _, _, _)| n.clone()).collect();
 
         // Collect all function base names to mark as Compiled (clone to avoid borrow issues)
         let successful_fns: Vec<String> = self.compiler.get_function_names()
@@ -1743,7 +1772,7 @@ impl ReplEngine {
         }
 
         // Now mark functions with errors and their dependents as stale
-        for (fn_name, error) in &errors {
+        for (fn_name, error, _, _) in &errors {
             let error_msg = format!("{}", error);
             self.set_compile_status(fn_name, CompileStatus::CompileError(error_msg.clone()));
             // Mark dependents as stale (they were just marked Compiled above, so this works)
@@ -2640,6 +2669,7 @@ impl ReplEngine {
                 if loaded.is_empty() {
                     return Ok("Demo folder found but no .nos files to load.".to_string());
                 }
+
                 return Ok(format!("Loaded: {}. Browse with :b or call demo.panel.panelDemo().", loaded.join(", ")));
             }
         }
@@ -2697,8 +2727,10 @@ impl ReplEngine {
             .map_err(|e| format!("Compilation error: {}", e))?;
 
         // Compile all bodies
-        if let Err((e, _filename, _source)) = self.compiler.compile_all() {
-            return Err(format!("Compilation error: {}", e));
+        if let Err((e, filename, source)) = self.compiler.compile_all() {
+            let span = e.span();
+            let line = Self::offset_to_line(&source, span.start);
+            return Err(format!("{}:{}: {}", filename, line, e));
         }
 
         // Update VM
@@ -2716,6 +2748,49 @@ impl ReplEngine {
         }
 
         Ok(())
+    }
+
+    /// Register a global key handler
+    /// Called from Nostos code via registerGlobalKey("alt+t", "myHandler")
+    pub fn register_global_key(&mut self, key: String, handler: String) {
+        self.global_key_handlers.insert(key, handler);
+    }
+
+    /// Parse arguments from registerGlobalKey("key", "handler") call
+    fn parse_register_key_args(input: &str) -> Option<(String, String)> {
+        // Expected format: registerGlobalKey("key", "handler")
+        let input = input.trim();
+        if !input.starts_with("registerGlobalKey(") || !input.ends_with(')') {
+            return None;
+        }
+
+        // Extract the part between parentheses
+        let inner = &input[18..input.len() - 1]; // Skip "registerGlobalKey(" and ")"
+
+        // Split by comma and parse the two string arguments
+        let parts: Vec<&str> = inner.split(',').collect();
+        if parts.len() != 2 {
+            return None;
+        }
+
+        let key = parts[0].trim().trim_matches('"').to_string();
+        let handler = parts[1].trim().trim_matches('"').to_string();
+
+        if key.is_empty() || handler.is_empty() {
+            return None;
+        }
+
+        Some((key, handler))
+    }
+
+    /// Get the handler for a global key, if registered
+    pub fn get_global_key_handler(&self, key: &str) -> Option<&String> {
+        self.global_key_handlers.get(key)
+    }
+
+    /// Get all registered global key handlers
+    pub fn get_global_key_handlers(&self) -> &HashMap<String, String> {
+        &self.global_key_handlers
     }
 
     /// Help text for REPL commands

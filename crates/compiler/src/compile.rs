@@ -475,6 +475,8 @@ pub struct Compiler {
     /// Function ASTs for monomorphization: function name -> FnDef
     /// Used to recompile functions with different type contexts
     fn_asts: HashMap<String, FnDef>,
+    /// Source info for each function: function name -> (source_name, source_code)
+    fn_sources: HashMap<String, (String, Arc<String>)>,
     /// Function type parameters with bounds: function name -> type parameters
     /// Used to check trait bounds at call sites
     fn_type_params: HashMap<String, Vec<TypeParam>>,
@@ -644,6 +646,7 @@ impl Compiler {
             local_types: HashMap::new(),
             param_types: HashMap::new(),
             fn_asts: HashMap::new(),
+            fn_sources: HashMap::new(),
             fn_type_params: HashMap::new(),
             polymorphic_fns: HashSet::new(),
             current_function_name: None,
@@ -668,25 +671,27 @@ impl Compiler {
     }
 
     /// Compile all pending functions.
-    pub fn compile_all(&mut self) -> Result<(), (CompileError, String, String)> {
+    /// Returns (error, source_filename, source_code) on failure.
+    pub fn compile_all(&mut self) -> Result<(), (CompileError, String, Arc<String>)> {
         let errors = self.compile_all_collecting_errors();
-        if let Some((fn_name, error)) = errors.into_iter().next() {
-            Err((error, fn_name, String::new()))
+        if let Some((fn_name, error, source_name, source)) = errors.into_iter().next() {
+            let _ = fn_name; // We include source_name instead of fn_name now
+            Err((error, source_name, source))
         } else {
             Ok(())
         }
     }
 
     /// Compile all pending functions, collecting all errors.
-    /// Returns a vec of (function_name, error) for functions that failed to compile.
+    /// Returns a vec of (function_name, error, source_filename, source_code) for functions that failed to compile.
     /// Functions that compile successfully get their signatures set.
     ///
     /// This uses two passes to handle dependencies:
     /// 1. First pass: compile all functions (some may get placeholder type 'a' for dependencies)
     /// 2. Second pass: re-run HM inference for functions with 'a' in their signatures
-    pub fn compile_all_collecting_errors(&mut self) -> Vec<(String, CompileError)> {
+    pub fn compile_all_collecting_errors(&mut self) -> Vec<(String, CompileError, String, Arc<String>)> {
         let pending = std::mem::take(&mut self.pending_functions);
-        let mut errors: Vec<(String, CompileError)> = Vec::new();
+        let mut errors: Vec<(String, CompileError, String, Arc<String>)> = Vec::new();
 
         // Pre-build function signatures for type checking (done once, not per-function)
         self.pending_fn_signatures.clear();
@@ -752,7 +757,7 @@ impl Compiler {
 
             // Continue compiling other functions even if one fails
             if let Err(e) = self.compile_fn_def(&fn_def) {
-                errors.push((fn_name, e));
+                errors.push((fn_name, e, source_name.clone(), source.clone()));
             }
 
             self.module_path = saved_path;
@@ -829,7 +834,11 @@ impl Compiler {
                 if should_report {
                     // Use base function name without signature for error reporting
                     let base_name = fn_name.split('/').next().unwrap_or(fn_name).to_string();
-                    errors.push((base_name, e));
+                    // Get source info from fn_sources for proper error reporting
+                    let (source_name, source) = self.fn_sources.get(fn_name)
+                        .cloned()
+                        .unwrap_or_else(|| ("unknown".to_string(), Arc::new(String::new())));
+                    errors.push((base_name, e, source_name, source));
                 }
             }
         }
@@ -912,6 +921,7 @@ impl Compiler {
             local_types: HashMap::new(),
             param_types: HashMap::new(),
             fn_asts: HashMap::new(),
+            fn_sources: HashMap::new(),
             fn_type_params: HashMap::new(),
             polymorphic_fns: HashSet::new(),
             current_function_name: None,
@@ -2989,6 +2999,11 @@ impl Compiler {
 
         // Store AST for potential monomorphization
         self.fn_asts.insert(name.clone(), def.clone());
+
+        // Store source info for error reporting
+        if let (Some(source_name), Some(source)) = (&self.current_source_name, &self.current_source) {
+            self.fn_sources.insert(name.clone(), (source_name.clone(), source.clone()));
+        }
 
         // Invalidate any existing monomorphized variants of this function
         // We replace them with stale markers so CallDirect indices remain valid.

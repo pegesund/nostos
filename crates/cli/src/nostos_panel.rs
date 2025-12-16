@@ -30,7 +30,9 @@ pub struct NostosPanel {
     engine: Rc<RefCell<ReplEngine>>,
     /// Name of the Nostos function that returns the view
     view_fn: String,
-    /// Map of key events to Nostos handler function names
+    /// Name of the Nostos function that handles key events (receives key name as string)
+    key_handler_fn: String,
+    /// Map of key events to Nostos handler function names (unused for now)
     key_handlers: HashMap<String, String>,
     /// Cached rendered content
     cached_content: String,
@@ -46,11 +48,13 @@ impl NostosPanel {
     /// # Arguments
     /// * `engine` - Reference to the ReplEngine
     /// * `view_fn` - Name of the Nostos function that returns view content
+    /// * `key_handler_fn` - Name of the Nostos function that handles keys (receives key name)
     /// * `title` - Panel title
-    pub fn new(engine: Rc<RefCell<ReplEngine>>, view_fn: &str, title: &str) -> Self {
+    pub fn new(engine: Rc<RefCell<ReplEngine>>, view_fn: &str, key_handler_fn: &str, title: &str) -> Self {
         let mut panel = Self {
             engine,
             view_fn: view_fn.to_string(),
+            key_handler_fn: key_handler_fn.to_string(),
             key_handlers: HashMap::new(),
             cached_content: String::new(),
             needs_refresh: true,
@@ -174,8 +178,8 @@ impl View for NostosPanel {
 
         // Convert event to key string and pass to Nostos handler
         if let Some(key_str) = Self::event_to_key_string(&event) {
-            // Call the single Nostos key handler with the key name
-            let call = format!("demo.panel.panelHandleKey(\"{}\")", key_str);
+            // Call the Nostos key handler with the key name
+            let call = format!("{}(\"{}\")", self.key_handler_fn, key_str);
             let _ = self.engine.borrow_mut().eval(&call);
             self.refresh();
             return EventResult::Consumed(None);

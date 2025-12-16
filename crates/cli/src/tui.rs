@@ -6,7 +6,7 @@ use cursive::views::{Dialog, EditView, LinearLayout, ScrollView, TextView, OnEve
 use cursive::theme::{Color, PaletteColor, Theme, BorderStyle, Style};
 use cursive::view::Resizable;
 use cursive::utils::markup::StyledString;
-use cursive::event::{Event, EventResult, Key};
+use cursive::event::{Event, EventResult, EventTrigger, Key};
 use nostos_repl::{ReplEngine, ReplConfig, BrowserItem, SaveCompileResult, CompileStatus};
 use nostos_vm::{Value, Inspector, Slot, SlotInfo};
 use nostos_syntax::lexer::{Token, lex};
@@ -643,10 +643,39 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         show_help_dialog(s);
     });
 
-    // Global Alt+T to open test Nostos panel
-    siv.set_on_pre_event(Event::AltChar('t'), |s| {
-        open_nostos_test_panel(s);
-    });
+    // Dynamic global keybindings - set up by Nostos code via mvars
+    // When Alt+<letter> is pressed, check if any panel has registered that key
+    // Skip letters that have dedicated handlers (i=inspector, c=console)
+    for c in 'a'..='z' {
+        if c == 'i' || c == 'c' {
+            continue;  // These have dedicated handlers above
+        }
+        let engine_for_key = engine.clone();
+        let key_char = c;
+        siv.set_on_pre_event(Event::AltChar(c), move |s| {
+            let key_str = format!("alt+{}", key_char);
+
+            // Check if demo.panel has this key registered
+            let registered_key = engine_for_key.borrow_mut()
+                .eval("demo.panel.panelKeyBinding")
+                .map(|s| s.trim().trim_matches('"').to_string())
+                .unwrap_or_default();
+
+            if registered_key == key_str {
+                // Check if panel is activated
+                let is_activated = engine_for_key.borrow_mut()
+                    .eval("demo.panel.isActivated()")
+                    .map(|s| s.trim() == "true")
+                    .unwrap_or(false);
+
+                if is_activated {
+                    open_nostos_panel_dynamic(s, "demo.panel");
+                } else {
+                    log_to_repl(s, "Panel not activated. Run demo.panel.panelDemo() first.");
+                }
+            }
+        });
+    }
 
     siv.run();
     ExitCode::SUCCESS
@@ -869,9 +898,14 @@ fn create_repl_panel_view(engine: &Rc<RefCell<ReplEngine>>, repl_id: usize, hist
 }
 
 /// Create the Nostos panel view (like create_repl_panel_view)
+/// Uses demo.panel conventions for view and key handler functions
 fn create_nostos_panel_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
-    // All key handling is done by demo.panel.panelHandleKey() in Nostos
-    let panel = NostosPanel::new(engine.clone(), "demo.panel.panelView", "Demo Panel");
+    // Use standard naming convention for demo.panel
+    let view_fn = "demo.panel.panelView";
+    let key_handler_fn = "demo.panel.panelHandleKey";
+    let title = "Demo Panel";
+
+    let panel = NostosPanel::new(engine.clone(), view_fn, key_handler_fn, title);
 
     let panel_with_name = panel.with_name("nostos_mvar_panel");
 
@@ -884,7 +918,7 @@ fn create_nostos_panel_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
             close_nostos_panel(s);
         });
 
-    ActiveWindow::new(panel_with_events, "Nostos Panel").full_width()
+    ActiveWindow::new(panel_with_events, title).full_width()
 }
 
 /// Close the Nostos panel
@@ -896,7 +930,49 @@ fn close_nostos_panel(s: &mut Cursive) {
     log_to_repl(s, "Closed Nostos panel");
 }
 
-/// Open a Nostos-defined panel using mvars for state
+/// Open a Nostos panel dynamically using configuration from Nostos code
+/// panel_module is e.g. "demo.panel" - we query panelViewFn(), panelKeyHandlerFn(), panelTitle()
+fn open_nostos_panel_dynamic(s: &mut Cursive, panel_module: &str) {
+    // Check if already open
+    let already_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().nostos_panel_open
+    }).unwrap();
+
+    if already_open {
+        log_to_repl(s, "Nostos panel already open");
+        return;
+    }
+
+    let engine = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().engine.clone()
+    }).unwrap();
+
+    // Query panel configuration from Nostos code
+    let view_fn = engine.borrow_mut()
+        .eval(&format!("{}.panelViewFn()", panel_module))
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .unwrap_or_else(|_| format!("{}.panelView", panel_module));
+
+    let key_handler_fn = engine.borrow_mut()
+        .eval(&format!("{}.panelKeyHandlerFn()", panel_module))
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .unwrap_or_else(|_| format!("{}.panelHandleKey", panel_module));
+
+    let title = engine.borrow_mut()
+        .eval(&format!("{}.panelTitle()", panel_module))
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .unwrap_or_else(|_| "Nostos Panel".to_string());
+
+    // Mark panel as open and rebuild workspace
+    s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow_mut().nostos_panel_open = true;
+    });
+    rebuild_workspace(s);
+
+    log_to_repl(s, &format!("Opened {} (view: {}, keys: {})", title, view_fn, key_handler_fn));
+}
+
+/// Open a Nostos-defined panel using mvars for state (legacy - hardcoded demo.panel)
 /// Requires demo to be loaded first (:demo command)
 fn open_nostos_test_panel(s: &mut Cursive) {
     // Check if already open
@@ -1907,11 +1983,12 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
         .fixed_size((45, 20));
 
     // Create preview pane (read-only code view)
+    // Text wraps automatically for readability
     let preview = TextView::new("Select an item to preview")
         .with_name("browser_preview");
     let preview_scroll = preview
         .scrollable()
-        .fixed_size((50, 20));
+        .fixed_size((60, 20));
 
     // Create horizontal split: browser on left, preview on right
     let split_view = LinearLayout::horizontal()
