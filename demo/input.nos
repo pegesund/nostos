@@ -39,17 +39,21 @@ inputHandleKey(key) = {
 }
 
 # Render items list
-inputRenderItems(lst, idx) = match lst
-    [] -> ""
-    [x | rest] -> show(idx) ++ ". " ++ x ++ "\n" ++ inputRenderItems(rest, idx + 1)
+inputRenderItem(item, idx) = show(idx) ++ ". " ++ item ++ "\n"
+
+inputRenderItemsAcc(lst, idx, acc) = match lst
+    [] -> acc
+    [x | rest] -> inputRenderItemsAcc(rest, idx + 1, acc ++ inputRenderItem(x, idx))
 end
+
+inputRenderItems(lst) = inputRenderItemsAcc(lst, 1, "")
 
 # Main view function
 inputView() = {
     header = "=== Input Demo ===\n\n"
     itemList = if length(inputItems) == 0
         then "(no items yet)\n"
-        else inputRenderItems(inputItems, 1)
+        else inputRenderItems(inputItems)
     prompt = "\n> " ++ inputBuffer ++ "_\n"
     footer = "\n[Type to add, Enter to submit, Esc to close]"
     header ++ itemList ++ prompt ++ footer
