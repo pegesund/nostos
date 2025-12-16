@@ -1755,7 +1755,7 @@ impl ReplEngine {
 
     /// Get all source code for a module
     /// Returns the combined source of all items in the module
-    pub fn get_module_source(&self, module_path: &[String]) -> String {
+    pub fn get_module_source(&mut self, module_path: &[String]) -> String {
         let module_name = module_path.join(".");
 
         // First, try SourceManager's generated source (for project directories)
@@ -2621,7 +2621,9 @@ impl ReplEngine {
 
     /// Get browser items at a given module path
     /// If path is empty, returns top-level modules and items
-    pub fn get_browser_items(&self, path: &[String]) -> Vec<BrowserItem> {
+    pub fn get_browser_items(&mut self, path: &[String]) -> Vec<BrowserItem> {
+        // Sync any dynamic functions from VM's eval() before building the list
+        self.sync_dynamic_functions();
         let prefix = if path.is_empty() {
             String::new()
         } else {

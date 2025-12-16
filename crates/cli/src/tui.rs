@@ -1921,8 +1921,10 @@ fn open_browser(s: &mut Cursive) {
 
 /// Show the browser dialog at a given path
 fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: Vec<String>) {
+    // Get browser items with mutable borrow (syncs dynamic functions)
+    let items = engine.borrow_mut().get_browser_items(&path);
+    // Now borrow immutably for the rest
     let engine_ref = engine.borrow();
-    let items = engine_ref.get_browser_items(&path);
 
     // Build title with status summary
     let mut title = if path.is_empty() {
@@ -2231,7 +2233,7 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
             let path = path.clone();
             move |s| {
                 // Show all module source in a view-only dialog
-                let source = engine.borrow().get_module_source(&path);
+                let source = engine.borrow_mut().get_module_source(&path);
                 let module_name = if path.is_empty() {
                     "root".to_string()
                 } else {
