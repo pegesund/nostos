@@ -20,9 +20,9 @@ use nostos_vm::process::ThreadSafeValue;
 pub enum BrowserItem {
     Module(String),
     Function { name: String, signature: String, doc: Option<String>, eval_created: bool },
-    Type { name: String },
-    Trait { name: String },
-    Variable { name: String, mutable: bool },
+    Type { name: String, eval_created: bool },
+    Trait { name: String, eval_created: bool },
+    Variable { name: String, mutable: bool, eval_created: bool },
     /// Module metadata (_meta.nos) - contains together directives etc.
     Metadata { module: String },
 }
@@ -175,6 +175,10 @@ pub struct ReplEngine {
     dynamic_functions: Arc<parking_lot::RwLock<HashMap<String, Arc<nostos_vm::value::FunctionValue>>>>,
     /// Track which dynamic functions have been synced to compiler
     synced_dynamic_functions: HashSet<String>,
+    /// Dynamic types from eval - shared with VM
+    dynamic_types: Arc<parking_lot::RwLock<HashMap<String, Arc<nostos_vm::value::TypeValue>>>>,
+    /// Track which dynamic types have been synced to compiler
+    synced_dynamic_types: HashSet<String>,
 }
 
 impl ReplEngine {
@@ -197,8 +201,13 @@ impl ReplEngine {
         let dynamic_functions = vm.get_dynamic_functions();
         let dynamic_functions_for_self = dynamic_functions.clone();
 
+        // Get dynamic_types for eval to register/lookup types
+        let dynamic_types = vm.get_dynamic_types();
+        let dynamic_types_for_self = dynamic_types.clone();
+
         // Get stdlib_functions, function list, and prelude_imports for eval to access all REPL compiler functions
         let stdlib_functions = vm.get_stdlib_functions();
+        let stdlib_types = vm.get_stdlib_types();
         let stdlib_function_list = vm.get_stdlib_function_list();
         let prelude_imports = vm.get_prelude_imports();
 
@@ -275,6 +284,29 @@ impl ReplEngine {
                     let mut dyn_funcs = dynamic_functions.write();
                     for (name, func) in new_funcs {
                         dyn_funcs.insert(name, func);
+                    }
+                }
+
+                // Store ONLY newly defined types in dynamic_types for future evals
+                {
+                    let dyn_types_read = dynamic_types.read();
+                    let stdlib_types_read = stdlib_types.read();
+
+                    // Collect new types (those not in stdlib or already in dynamic_types)
+                    let new_types: Vec<_> = eval_compiler.get_vm_types()
+                        .into_iter()
+                        .filter(|(name, _)| {
+                            !stdlib_types_read.contains_key(name.as_str()) &&
+                            !dyn_types_read.contains_key(name.as_str())
+                        })
+                        .collect();
+                    drop(dyn_types_read);
+                    drop(stdlib_types_read);
+
+                    // Now insert the new types
+                    let mut dyn_types = dynamic_types.write();
+                    for (name, type_val) in new_types {
+                        dyn_types.insert(name, type_val);
                     }
                 }
 
@@ -356,6 +388,8 @@ impl ReplEngine {
             hotkey_callbacks: HashMap::new(),
             dynamic_functions: dynamic_functions_for_self,
             synced_dynamic_functions: HashSet::new(),
+            dynamic_types: dynamic_types_for_self,
+            synced_dynamic_types: HashSet::new(),
         }
     }
 
@@ -1270,6 +1304,16 @@ impl ReplEngine {
         }
     }
 
+    /// Sync dynamic types (from eval) - just track which ones are from eval.
+    fn sync_dynamic_types(&mut self) {
+        let dyn_types = self.dynamic_types.read();
+        for name in dyn_types.keys() {
+            if !self.synced_dynamic_types.contains(name) {
+                self.synced_dynamic_types.insert(name.to_string());
+            }
+        }
+    }
+
     /// Check if a function was created via eval (dynamic function)
     pub fn is_eval_function(&self, full_name: &str) -> bool {
         // Check if the function name (with any signature suffix) is in our set
@@ -1298,6 +1342,11 @@ impl ReplEngine {
         false
     }
 
+    /// Check if a type was created via eval (dynamic type)
+    pub fn is_eval_type(&self, type_name: &str) -> bool {
+        self.synced_dynamic_types.contains(type_name)
+    }
+
     fn sync_vm(&mut self) {
         // First sync any dynamic functions from eval to the compiler
         self.sync_dynamic_functions();
@@ -1314,6 +1363,7 @@ impl ReplEngine {
         self.vm.set_stdlib_functions(
             self.compiler.get_all_functions().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
         );
+        self.vm.set_stdlib_types(self.compiler.get_vm_types());
         self.vm.set_stdlib_function_list(self.compiler.get_function_list_names().to_vec());
         self.vm.set_prelude_imports(
             self.compiler.get_prelude_imports().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
@@ -1803,7 +1853,7 @@ impl ReplEngine {
 
         // Add types first
         for item in &items {
-            if let BrowserItem::Type { name } = item {
+            if let BrowserItem::Type { name, .. } = item {
                 let full_name = format!("{}{}", prefix, name);
                 let item_source = self.get_source(&full_name);
                 if !item_source.starts_with("Not found:") {
@@ -1815,7 +1865,7 @@ impl ReplEngine {
 
         // Add traits
         for item in &items {
-            if let BrowserItem::Trait { name } = item {
+            if let BrowserItem::Trait { name, .. } = item {
                 let full_name = format!("{}{}", prefix, name);
                 let item_source = self.get_source(&full_name);
                 if !item_source.starts_with("Not found:") {
@@ -1827,7 +1877,7 @@ impl ReplEngine {
 
         // Add mvars
         for item in &items {
-            if let BrowserItem::Variable { name, mutable } = item {
+            if let BrowserItem::Variable { name, mutable, .. } = item {
                 let full_name = format!("{}{}", prefix, name);
                 if *mutable {
                     if let Some(info) = self.compiler.get_mvars().get(&full_name) {
@@ -2622,8 +2672,9 @@ impl ReplEngine {
     /// Get browser items at a given module path
     /// If path is empty, returns top-level modules and items
     pub fn get_browser_items(&mut self, path: &[String]) -> Vec<BrowserItem> {
-        // Sync any dynamic functions from VM's eval() before building the list
+        // Sync any dynamic items from VM's eval() before building the list
         self.sync_dynamic_functions();
+        self.sync_dynamic_types();
         let prefix = if path.is_empty() {
             String::new()
         } else {
@@ -2634,8 +2685,9 @@ impl ReplEngine {
         let mut modules: BTreeSet<String> = BTreeSet::new();
         // (name, signature, doc, eval_created)
         let mut functions: BTreeSet<(String, String, Option<String>, bool)> = BTreeSet::new();
-        let mut types: BTreeSet<String> = BTreeSet::new();
-        let mut traits: BTreeSet<String> = BTreeSet::new();
+        // (name, eval_created)
+        let mut types: BTreeSet<(String, bool)> = BTreeSet::new();
+        let mut traits: BTreeSet<(String, bool)> = BTreeSet::new();
         let mut mvars: BTreeSet<String> = BTreeSet::new();
 
         // Process functions
@@ -2683,36 +2735,37 @@ impl ReplEngine {
 
         // Process types
         for name in self.compiler.get_type_names() {
+            let is_eval = self.is_eval_type(name);
             if prefix.is_empty() {
                 if let Some(dot_pos) = name.find('.') {
                     modules.insert(name[..dot_pos].to_string());
                 } else {
-                    types.insert(name.to_string());
+                    types.insert((name.to_string(), is_eval));
                 }
             } else if name.starts_with(&prefix) {
                 let rest = &name[prefix_len..];
                 if let Some(dot_pos) = rest.find('.') {
                     modules.insert(rest[..dot_pos].to_string());
                 } else {
-                    types.insert(rest.to_string());
+                    types.insert((rest.to_string(), is_eval));
                 }
             }
         }
 
-        // Process traits
+        // Process traits (eval-created traits not supported yet, always false)
         for name in self.compiler.get_trait_names() {
             if prefix.is_empty() {
                 if let Some(dot_pos) = name.find('.') {
                     modules.insert(name[..dot_pos].to_string());
                 } else {
-                    traits.insert(name.to_string());
+                    traits.insert((name.to_string(), false));
                 }
             } else if name.starts_with(&prefix) {
                 let rest = &name[prefix_len..];
                 if let Some(dot_pos) = rest.find('.') {
                     modules.insert(rest[..dot_pos].to_string());
                 } else {
-                    traits.insert(rest.to_string());
+                    traits.insert((rest.to_string(), false));
                 }
             }
         }
@@ -2759,6 +2812,7 @@ impl ReplEngine {
                 items.push(BrowserItem::Variable {
                     name: name.clone(),
                     mutable: binding.mutable,
+                    eval_created: false,  // REPL bindings are not from eval
                 });
             }
         }
@@ -2768,17 +2822,18 @@ impl ReplEngine {
             items.push(BrowserItem::Variable {
                 name: name.clone(),
                 mutable: true,  // mvars are always mutable
+                eval_created: false,  // TODO: track eval-created mvars
             });
         }
 
         // Types
-        for t in types {
-            items.push(BrowserItem::Type { name: t });
+        for (name, eval_created) in types {
+            items.push(BrowserItem::Type { name, eval_created });
         }
 
         // Traits
-        for t in traits {
-            items.push(BrowserItem::Trait { name: t });
+        for (name, eval_created) in traits {
+            items.push(BrowserItem::Trait { name, eval_created });
         }
 
         // Functions last
@@ -2799,8 +2854,8 @@ impl ReplEngine {
         match item {
             BrowserItem::Module(name) => format!("{}{}", prefix, name),
             BrowserItem::Function { name, .. } => format!("{}{}", prefix, name),
-            BrowserItem::Type { name } => format!("{}{}", prefix, name),
-            BrowserItem::Trait { name } => format!("{}{}", prefix, name),
+            BrowserItem::Type { name, .. } => format!("{}{}", prefix, name),
+            BrowserItem::Trait { name, .. } => format!("{}{}", prefix, name),
             BrowserItem::Variable { name, .. } => name.clone(),
             BrowserItem::Metadata { module } => format!("{}._meta", module),
         }
