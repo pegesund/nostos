@@ -747,13 +747,13 @@ fn rebuild_workspace(s: &mut Cursive) {
     debug_log(&format!("rebuild_workspace: preserved {} chars of console content", repl_log_content.len()));
 
     // Preserve REPL panel histories before clearing
-    let mut repl_histories: std::collections::HashMap<usize, Vec<crate::repl_panel::ReplEntry>> = std::collections::HashMap::new();
+    let mut repl_histories: std::collections::HashMap<usize, (Vec<crate::repl_panel::ReplEntry>, Vec<Vec<String>>)> = std::collections::HashMap::new();
     for &repl_id in &repl_ids {
         let panel_id = format!("repl_panel_{}", repl_id);
-        if let Some(history) = s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
-            panel.get_history()
+        if let Some((history, command_history)) = s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
+            (panel.get_history(), panel.get_command_history())
         }) {
-            repl_histories.insert(repl_id, history);
+            repl_histories.insert(repl_id, (history, command_history));
         }
     }
 
@@ -904,10 +904,11 @@ fn rebuild_workspace(s: &mut Cursive) {
 }
 
 /// Create a REPL panel view
-fn create_repl_panel_view(engine: &Rc<RefCell<ReplEngine>>, repl_id: usize, history: Option<Vec<crate::repl_panel::ReplEntry>>) -> impl View {
+fn create_repl_panel_view(engine: &Rc<RefCell<ReplEngine>>, repl_id: usize, histories: Option<(Vec<crate::repl_panel::ReplEntry>, Vec<Vec<String>>)>) -> impl View {
     let mut panel = ReplPanel::new(engine.clone(), repl_id);
-    if let Some(h) = history {
-        panel.set_history(h);
+    if let Some((history, command_history)) = histories {
+        panel.set_history(history);
+        panel.set_command_history(command_history);
     }
     let panel_id = format!("repl_panel_{}", repl_id);
     let panel_id_copy = panel_id.clone();

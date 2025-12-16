@@ -314,6 +314,9 @@ impl ReplPanel {
         self.history_index = None;
         self.stash_current = None;
 
+        // Auto-save history to disk
+        self.save_history_to_disk();
+
         // Update autocomplete cache after evaluation (new definitions may be available)
         {
             let eng = self.engine.borrow();
@@ -1092,6 +1095,16 @@ impl ReplPanel {
     /// Set the history (restore after rebuild)
     pub fn set_history(&mut self, history: Vec<ReplEntry>) {
         self.history = history;
+    }
+
+    /// Get the command history for preservation across rebuilds (used for arrow-key navigation)
+    pub fn get_command_history(&self) -> Vec<Vec<String>> {
+        self.command_history.clone()
+    }
+
+    /// Set the command history (restore after rebuild)
+    pub fn set_command_history(&mut self, command_history: Vec<Vec<String>>) {
+        self.command_history = command_history;
     }
 
 
