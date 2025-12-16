@@ -1,0 +1,70 @@
+# Input Demo - A panel with text input field
+#
+# This demonstrates building an input field using the Panel.* API.
+# Type to enter text, press Enter to add to list, Esc to close.
+#
+# Usage: Call inputInit() from the REPL after loading with :demo
+#        Then press Alt+I to open the panel
+
+# Panel state using mvars
+mvar inputPanelId: Int = 0
+mvar inputBuffer: String = ""
+mvar inputItems: List[String] = []
+
+# Handle all keys
+inputHandleKey(key) = {
+    match key
+        "backspace" -> {
+            len = String.length(inputBuffer)
+            if len > 0 then {
+                inputBuffer = String.take(inputBuffer, len - 1)
+            } else ()
+        }
+        "enter" -> {
+            # Add input to items list
+            if String.length(inputBuffer) > 0 then {
+                inputItems = List.append(inputItems, [inputBuffer])
+                inputBuffer = ""
+            } else ()
+        }
+        "escape" -> Panel.hide(inputPanelId)
+        _ -> {
+            # Single printable characters get appended
+            if String.length(key) == 1 then {
+                inputBuffer = inputBuffer ++ key
+            } else ()
+        }
+    end
+    Panel.setContent(inputPanelId, inputView())
+}
+
+# Render items list
+inputRenderItems(lst, idx) = match lst
+    [] -> ""
+    [x | rest] -> show(idx) ++ ". " ++ x ++ "\n" ++ inputRenderItems(rest, idx + 1)
+end
+
+# Main view function
+inputView() = {
+    header = "=== Input Demo ===\n\n"
+    itemList = if List.length(inputItems) == 0
+        then "(no items yet)\n"
+        else inputRenderItems(inputItems, 1)
+    prompt = "\n> " ++ inputBuffer ++ "_\n"
+    footer = "\n[Type to add, Enter to submit, Esc to close]"
+    header ++ itemList ++ prompt ++ footer
+}
+
+# Show the panel
+inputShow() = {
+    Panel.setContent(inputPanelId, inputView())
+    Panel.show(inputPanelId)
+}
+
+# Initialize the input demo
+inputInit() = {
+    inputPanelId = Panel.create("Input Demo")
+    Panel.onKey(inputPanelId, "demo.input.inputHandleKey")
+    Panel.registerHotkey("alt+i", "demo.input.inputShow")
+    "Input demo ready. Press Alt+I to open."
+}

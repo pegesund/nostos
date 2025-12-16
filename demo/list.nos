@@ -1,0 +1,75 @@
+# List Demo - A simple list panel with keyboard navigation
+#
+# This demonstrates the Panel.* API for creating TUI panels.
+# The panel shows a list of items with a cursor that can be moved with Up/Down.
+#
+# Usage: Call listInit() from the REPL after loading with :demo
+#        Then press Alt+L to open the panel
+
+# Panel state using mvars
+mvar listPanelId: Int = 0
+mvar listCursor: Int = 0
+mvar listItems: List[String] = ["First item", "Second item", "Third item", "Fourth item", "Fifth item"]
+
+# Get total item count
+listItemCount() = List.length(listItems)
+
+# Handle keyboard input - single entry point for all keys
+listHandleKey(key) = {
+    match key
+        "up" -> listMoveUp()
+        "down" -> listMoveDown()
+        "k" -> listMoveUp()    # vim binding
+        "j" -> listMoveDown()  # vim binding
+        "escape" -> Panel.hide(listPanelId)
+        _ -> ()  # ignore other keys
+    end
+    # Update panel content after handling key
+    Panel.setContent(listPanelId, listView())
+}
+
+# Cursor movement
+listMoveUp() = {
+    if listCursor > 0 then {
+        listCursor = listCursor - 1
+    } else ()
+}
+
+listMoveDown() = {
+    count = listItemCount()
+    if listCursor < count - 1 then {
+        listCursor = listCursor + 1
+    } else ()
+}
+
+# Render a single item with cursor indicator
+listRenderItem(idx, item, cursor) =
+    if idx == cursor then "> " ++ item else "  " ++ item
+
+# Render the full list recursively
+listRenderList(items, idx, cursor) = match items
+    [] -> ""
+    [item | rest] -> listRenderItem(idx, item, cursor) ++ "\n" ++ listRenderList(rest, idx + 1, cursor)
+end
+
+# Main view function - returns the panel content as a string
+listView() = {
+    header = "=== List Demo ===\n\n"
+    list = listRenderList(listItems, 0, listCursor)
+    footer = "\n[UP/DOWN or j/k to move, ESC to close]"
+    header ++ list ++ footer
+}
+
+# Show the panel
+listShow() = {
+    Panel.setContent(listPanelId, listView())
+    Panel.show(listPanelId)
+}
+
+# Initialize the list demo
+listInit() = {
+    listPanelId = Panel.create("List Demo")
+    Panel.onKey(listPanelId, "demo.list.listHandleKey")
+    Panel.registerHotkey("alt+l", "demo.list.listShow")
+    "List demo ready. Press Alt+L to open."
+}
