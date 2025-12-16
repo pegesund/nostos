@@ -159,6 +159,8 @@ pub struct CodeEditor {
     ac_state: AutocompleteState,
     /// Module name being edited (e.g., "Math" when editing "Math.add")
     module_name: Option<String>,
+    /// Whether editor is in read-only mode (for eval'd functions)
+    read_only: bool,
 }
 
 impl CodeEditor {
@@ -176,6 +178,7 @@ impl CodeEditor {
             autocomplete: Autocomplete::new(),
             ac_state: AutocompleteState::new(),
             module_name: None,
+            read_only: false,
         }
     }
 
@@ -185,6 +188,17 @@ impl CodeEditor {
         self.module_name = extract_module_from_editor_name(name);
         eprintln!("[Editor] with_function_name({:?}) -> module_name={:?}", name, self.module_name);
         self
+    }
+
+    /// Set read-only mode (for viewing eval'd functions)
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// Check if editor is in read-only mode
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     /// Adjust scroll to keep cursor visible
@@ -715,6 +729,24 @@ impl View for CodeEditor {
     }
 
     fn on_event(&mut self, event: Event) -> EventResult {
+        // In read-only mode, ignore all editing events but allow navigation
+        if self.read_only {
+            match event {
+                // Navigation is allowed
+                Event::Key(Key::Left) | Event::Key(Key::Right) |
+                Event::Key(Key::Up) | Event::Key(Key::Down) |
+                Event::Key(Key::Home) | Event::Key(Key::End) |
+                Event::Key(Key::PageUp) | Event::Key(Key::PageDown) |
+                Event::Key(Key::Esc) => { /* fall through to normal handling */ }
+                // Editing is blocked
+                Event::Char(_) | Event::Key(Key::Enter) | Event::Key(Key::Backspace) |
+                Event::Key(Key::Del) | Event::Key(Key::Tab) => {
+                    return EventResult::Consumed(None); // Consume but do nothing
+                }
+                _ => { /* other events fall through */ }
+            }
+        }
+
         let result = match event {
             // Tab: accept completion or cycle through candidates
             Event::Key(Key::Tab) => {

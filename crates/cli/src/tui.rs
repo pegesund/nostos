@@ -815,7 +815,8 @@ fn rebuild_workspace(s: &mut Cursive) {
     }
 
     for name in &editor_names {
-        let editor_view = create_editor_view(s, &engine, name);
+        let read_only = engine.borrow().is_eval_function(name);
+        let editor_view = create_editor_view(s, &engine, name, read_only);
         windows.push(Box::new(editor_view));
     }
 
@@ -1435,13 +1436,17 @@ fn create_inspector_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
 }
 
 /// Create an editor view for a given name
-fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: &str) -> impl View {
+/// If read_only is true, the editor will be in view-only mode (for eval'd functions)
+fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: &str, read_only: bool) -> impl View {
     let source = engine.borrow().get_source(name);
     let is_new_definition = source.starts_with("Not found");
-    let source = if is_new_definition {
+    let source = if is_new_definition && !read_only {
         // Use simple name (without module prefix) for the placeholder
         let simple_name = name.rsplit('.').next().unwrap_or(name);
         format!("{}() = {{\n    \n}}", simple_name)
+    } else if is_new_definition {
+        // For read-only but not found, show a message
+        format!("# Source not available for: {}", name)
     } else {
         source
     };
@@ -1451,7 +1456,8 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
 
     let editor = CodeEditor::new(source)
         .with_function_name(name)  // Set module context for autocomplete
-        .with_engine(engine.clone());
+        .with_engine(engine.clone())
+        .with_read_only(read_only);
     let editor_id = format!("editor_{}", name);
 
     let name_for_save = name.to_string();
@@ -1803,8 +1809,13 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
             Some(EventResult::Consumed(None))
         });
 
-    // Wrap in ActiveWindow with just the function name as title
-    ActiveWindow::new(editor_with_events.full_height(), name).full_width()
+    // Wrap in ActiveWindow with title - add [VIEW ONLY] for read-only editors
+    let title = if read_only {
+        format!("{} [VIEW ONLY]", name)
+    } else {
+        name.to_string()
+    };
+    ActiveWindow::new(editor_with_events.full_height(), &title).full_width()
 }
 
 fn open_editor(s: &mut Cursive, name: &str) {
@@ -1955,7 +1966,7 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
             }
             BrowserItem::Type { name } => StyledString::plain(format!("📦 {}", name)),
             BrowserItem::Trait { name } => StyledString::plain(format!("🔷 {}", name)),
-            BrowserItem::Function { name, signature, doc } => {
+            BrowserItem::Function { name, signature, doc, eval_created } => {
                 // Check compile status for this function
                 let qualified_name = format!("{}{}", module_prefix, name);
                 let status_indicator = match engine_ref.get_compile_status(&qualified_name) {
@@ -1966,10 +1977,19 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 };
                 // Build styled string with doc comment in different color
                 let mut styled = StyledString::new();
+                // Add [eval] prefix for eval-created functions (view-only)
+                let eval_prefix = if *eval_created { "[eval] " } else { "" };
                 if signature.is_empty() {
-                    styled.append_plain(format!("ƒ  {}{}", name, status_indicator));
+                    styled.append_plain(format!("ƒ  {}{}{}", eval_prefix, name, status_indicator));
                 } else {
-                    styled.append_plain(format!("ƒ  {} :: {}{}", name, signature, status_indicator));
+                    styled.append_plain(format!("ƒ  {}{} :: {}{}", eval_prefix, name, signature, status_indicator));
+                }
+                // Style eval functions differently (muted cyan)
+                if *eval_created {
+                    styled = StyledString::styled(
+                        styled.source(),
+                        Style::from(Color::Rgb(100, 180, 200))  // Muted cyan for eval
+                    );
                 }
                 // Add doc comment in a muted green/cyan color
                 if let Some(doc_text) = doc.as_ref().and_then(|d| d.lines().next()) {
@@ -2853,7 +2873,8 @@ fn rebuild_workspace_with_viewer(s: &mut Cursive, viewer_name: &str, viewer_cont
                 // Existing viewer - skip for now (would need stored content)
                 continue;
             } else {
-                let editor_view = create_editor_view(s, &engine, name);
+                let read_only = engine.borrow().is_eval_function(name);
+                let editor_view = create_editor_view(s, &engine, name, read_only);
                 row.add_child(editor_view);
             }
         }
@@ -2866,12 +2887,13 @@ fn rebuild_workspace_with_viewer(s: &mut Cursive, viewer_name: &str, viewer_cont
         let mut row1 = LinearLayout::horizontal();
 
         for (i, name) in editor_names.iter().enumerate() {
+            let read_only = engine.borrow().is_eval_function(name);
             let view: Box<dyn View> = if name == viewer_name {
                 Box::new(create_variable_viewer(name, viewer_content))
             } else if name.starts_with("var_") {
                 continue;
             } else {
-                Box::new(create_editor_view(s, &engine, name))
+                Box::new(create_editor_view(s, &engine, name, read_only))
             };
 
             if i < 2 {

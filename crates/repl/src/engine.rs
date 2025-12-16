@@ -19,7 +19,7 @@ use nostos_vm::process::ThreadSafeValue;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BrowserItem {
     Module(String),
-    Function { name: String, signature: String, doc: Option<String> },
+    Function { name: String, signature: String, doc: Option<String>, eval_created: bool },
     Type { name: String },
     Trait { name: String },
     Variable { name: String, mutable: bool },
@@ -1255,6 +1255,34 @@ impl ReplEngine {
                 self.synced_dynamic_functions.insert(name.to_string());
             }
         }
+    }
+
+    /// Check if a function was created via eval (dynamic function)
+    pub fn is_eval_function(&self, full_name: &str) -> bool {
+        // Check if the function name (with any signature suffix) is in our set
+        // The synced_dynamic_functions contains names like "add/_" or "mult/Int,Int"
+        if self.synced_dynamic_functions.contains(full_name) {
+            return true;
+        }
+        // Also check with signature suffix patterns
+        for eval_name in &self.synced_dynamic_functions {
+            // Extract base name from eval_name (e.g., "add" from "add/_")
+            let eval_base = if let Some(slash_pos) = eval_name.find('/') {
+                &eval_name[..slash_pos]
+            } else {
+                eval_name.as_str()
+            };
+            // Extract base name from full_name
+            let full_base = if let Some(slash_pos) = full_name.find('/') {
+                &full_name[..slash_pos]
+            } else {
+                full_name
+            };
+            if eval_base == full_base {
+                return true;
+            }
+        }
+        false
     }
 
     fn sync_vm(&mut self) {
@@ -2589,7 +2617,8 @@ impl ReplEngine {
         let prefix_len = prefix.len();
 
         let mut modules: BTreeSet<String> = BTreeSet::new();
-        let mut functions: BTreeSet<(String, String, Option<String>)> = BTreeSet::new();
+        // (name, signature, doc, eval_created)
+        let mut functions: BTreeSet<(String, String, Option<String>, bool)> = BTreeSet::new();
         let mut types: BTreeSet<String> = BTreeSet::new();
         let mut traits: BTreeSet<String> = BTreeSet::new();
         let mut mvars: BTreeSet<String> = BTreeSet::new();
@@ -2600,6 +2629,9 @@ impl ReplEngine {
             if name.starts_with("__") {
                 continue;
             }
+
+            // Check if this is an eval-created function
+            let is_eval = self.is_eval_function(name);
 
             // Extract base name (without signature suffix)
             let base_name = if let Some(slash_pos) = name.find('/') {
@@ -2617,7 +2649,7 @@ impl ReplEngine {
                     // Direct function at root
                     let sig = self.compiler.get_function_signature(name).unwrap_or_default();
                     let doc = self.compiler.get_function_doc(name);
-                    functions.insert((base_name.to_string(), sig, doc));
+                    functions.insert((base_name.to_string(), sig, doc, is_eval));
                 }
             } else if base_name.starts_with(&prefix) {
                 // Under our path
@@ -2629,7 +2661,7 @@ impl ReplEngine {
                     // Direct function in this module
                     let sig = self.compiler.get_function_signature(name).unwrap_or_default();
                     let doc = self.compiler.get_function_doc(name);
-                    functions.insert((rest.to_string(), sig, doc));
+                    functions.insert((rest.to_string(), sig, doc, is_eval));
                 }
             }
         }
@@ -2735,8 +2767,8 @@ impl ReplEngine {
         }
 
         // Functions last
-        for (name, sig, doc) in functions {
-            items.push(BrowserItem::Function { name, signature: sig, doc });
+        for (name, sig, doc, eval_created) in functions {
+            items.push(BrowserItem::Function { name, signature: sig, doc, eval_created });
         }
 
         items
