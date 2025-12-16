@@ -610,14 +610,46 @@ fn main() -> ExitCode {
     // Setup panel native function (ignore receiver - CLI doesn't use panels)
     let _ = vm.setup_panel();
 
+    // Populate stdlib functions, function list, and prelude imports for eval
+    vm.set_stdlib_functions(compiler.get_all_functions().iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+    vm.set_stdlib_function_list(compiler.get_function_list_names().to_vec());
+    vm.set_prelude_imports(compiler.get_prelude_imports().iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+
     // Setup eval native function with callback
     vm.setup_eval();
-    vm.set_eval_callback(|code: &str| {
+    let dynamic_functions = vm.get_dynamic_functions();
+    let stdlib_functions = vm.get_stdlib_functions();
+    let stdlib_function_list = vm.get_stdlib_function_list();
+    let prelude_imports = vm.get_prelude_imports();
+    vm.set_eval_callback(move |code: &str| {
         use nostos_syntax::parse;
         use nostos_syntax::ast::Item;
 
-        // Create a minimal compiler for evaluation
+        // Create a compiler for evaluation
         let mut eval_compiler = Compiler::new_empty();
+
+        // Pre-populate compiler with stdlib functions, preserving indices for CallDirect
+        {
+            let stdlib_funcs = stdlib_functions.read();
+            let func_list = stdlib_function_list.read();
+            eval_compiler.register_external_functions_with_list(&stdlib_funcs, &func_list);
+        }
+
+        // Pre-populate compiler with prelude imports (local name -> qualified name mappings)
+        {
+            let imports = prelude_imports.read();
+            for (local_name, qualified_name) in imports.iter() {
+                eval_compiler.add_prelude_import(local_name.clone(), qualified_name.clone());
+            }
+        }
+
+        // Pre-populate compiler with previously eval'd functions (appended after stdlib)
+        {
+            let dyn_funcs = dynamic_functions.read();
+            for (name, func) in dyn_funcs.iter() {
+                eval_compiler.register_external_function(name, func.clone());
+            }
+        }
 
         // First, try to parse as a definition (function, type, etc.)
         let (direct_module_opt, direct_errors) = parse(code);
@@ -637,7 +669,16 @@ fn main() -> ExitCode {
                 return Err(format!("Compilation error: {}", e));
             }
 
-            // For definitions, just return success message
+            // Store newly defined functions in dynamic_functions for future evals
+            {
+                let mut dyn_funcs = dynamic_functions.write();
+                for (name, func) in eval_compiler.get_all_functions() {
+                    if !name.starts_with("__") {
+                        dyn_funcs.insert(name.clone(), func.clone());
+                    }
+                }
+            }
+
             Ok("defined".to_string())
         } else {
             // It's an expression - wrap it in a function
@@ -660,12 +701,23 @@ fn main() -> ExitCode {
             let func = eval_compiler.get_function("__eval_result__")
                 .ok_or_else(|| "Failed to compile expression".to_string())?;
 
-            // Create a minimal VM to run it
+            // Create a minimal VM to run it with all dynamic functions available
             let mut eval_vm = ParallelVM::new(ParallelConfig::default());
             eval_vm.register_default_natives();
             eval_vm.setup_eval();
+
+            // Register all functions (dynamic + the eval wrapper)
+            {
+                let dyn_funcs = dynamic_functions.read();
+                for (name, f) in dyn_funcs.iter() {
+                    eval_vm.register_function(name, f.clone());
+                }
+            }
             eval_vm.register_function("__eval_result__", func.clone());
-            eval_vm.set_function_list(vec![func.clone()]);
+
+            // Build function list for indexed calls
+            let func_list: Vec<_> = eval_compiler.get_function_list();
+            eval_vm.set_function_list(func_list);
 
             // Run and get result
             match eval_vm.run(func) {

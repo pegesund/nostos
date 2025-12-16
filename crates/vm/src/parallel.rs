@@ -195,6 +195,14 @@ pub struct SharedState {
     /// Eval callback for synchronous code evaluation (set by engine)
     /// Wrapped in RwLock so the native function can read it at call time
     pub eval_callback: Arc<RwLock<Option<Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>>>>,
+    /// Dynamically added functions (from eval) - can be modified at runtime
+    pub dynamic_functions: Arc<RwLock<HashMap<String, Arc<FunctionValue>>>>,
+    /// Stdlib functions (from main compiler) - available to eval
+    pub stdlib_functions: Arc<RwLock<HashMap<String, Arc<FunctionValue>>>>,
+    /// Stdlib function list (ordered names) - preserves indices for CallDirect
+    pub stdlib_function_list: Arc<RwLock<Vec<String>>>,
+    /// Prelude imports (local name -> qualified name) - for eval to resolve unqualified function names
+    pub prelude_imports: Arc<RwLock<HashMap<String, String>>>,
     /// Module-level mutable variables (mvars) - shared across threads with RwLock.
     /// Key is "module_name.var_name", value is ThreadSafeValue protected by RwLock.
     pub mvars: HashMap<String, Arc<RwLock<ThreadSafeValue>>>,
@@ -670,6 +678,10 @@ impl ParallelVM {
             output_sender: None,
             panel_command_sender: None,
             eval_callback: Arc::new(RwLock::new(None)),
+            dynamic_functions: Arc::new(RwLock::new(HashMap::new())),
+            stdlib_functions: Arc::new(RwLock::new(HashMap::new())),
+            stdlib_function_list: Arc::new(RwLock::new(Vec::new())),
+            prelude_imports: Arc::new(RwLock::new(HashMap::new())),
             mvars: HashMap::new(),
         });
 
@@ -766,6 +778,49 @@ impl ParallelVM {
             .expect("Cannot register mvars after threads started")
             .mvars
             .insert(name.to_string(), Arc::new(RwLock::new(initial_value)));
+    }
+
+    /// Get a clone of the dynamic_functions Arc for runtime function registration.
+    /// This is used by eval() to add functions that persist during the VM run.
+    pub fn get_dynamic_functions(&self) -> Arc<RwLock<HashMap<String, Arc<FunctionValue>>>> {
+        self.shared.dynamic_functions.clone()
+    }
+
+    /// Get a clone of the stdlib_functions Arc.
+    /// This allows eval() to access functions from the main compiler (stdlib).
+    pub fn get_stdlib_functions(&self) -> Arc<RwLock<HashMap<String, Arc<FunctionValue>>>> {
+        self.shared.stdlib_functions.clone()
+    }
+
+    /// Set the stdlib functions from the main compiler.
+    /// This should be called after the main compiler has loaded stdlib.
+    pub fn set_stdlib_functions(&self, functions: HashMap<String, Arc<FunctionValue>>) {
+        let mut stdlib = self.shared.stdlib_functions.write();
+        *stdlib = functions;
+    }
+
+    /// Get a clone of the stdlib_function_list Arc.
+    pub fn get_stdlib_function_list(&self) -> Arc<RwLock<Vec<String>>> {
+        self.shared.stdlib_function_list.clone()
+    }
+
+    /// Set the stdlib function list from the main compiler.
+    /// This preserves function indices for CallDirect instructions.
+    pub fn set_stdlib_function_list(&self, list: Vec<String>) {
+        let mut stdlib_list = self.shared.stdlib_function_list.write();
+        *stdlib_list = list;
+    }
+
+    /// Get a clone of the prelude_imports Arc.
+    pub fn get_prelude_imports(&self) -> Arc<RwLock<HashMap<String, String>>> {
+        self.shared.prelude_imports.clone()
+    }
+
+    /// Set the prelude imports from the main compiler.
+    /// This maps local names (e.g., "map") to qualified names (e.g., "stdlib.list.map").
+    pub fn set_prelude_imports(&self, imports: HashMap<String, String>) {
+        let mut prelude = self.shared.prelude_imports.write();
+        *prelude = imports;
     }
 
     /// Read a module-level mutable variable (mvar).

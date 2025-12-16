@@ -171,6 +171,10 @@ pub struct ReplEngine {
     panel_states: HashMap<u64, PanelState>,
     /// Hotkey callbacks: hotkey -> callback function name
     hotkey_callbacks: HashMap<String, String>,
+    /// Dynamic functions from eval - shared with VM
+    dynamic_functions: Arc<parking_lot::RwLock<HashMap<String, Arc<nostos_vm::value::FunctionValue>>>>,
+    /// Track which dynamic functions have been synced to compiler
+    synced_dynamic_functions: HashSet<String>,
 }
 
 impl ReplEngine {
@@ -189,14 +193,46 @@ impl ReplEngine {
         let panel_receiver = Some(vm.setup_panel());
         vm.setup_eval();
 
+        // Get dynamic_functions for eval to register/lookup functions
+        let dynamic_functions = vm.get_dynamic_functions();
+        let dynamic_functions_for_self = dynamic_functions.clone();
+
+        // Get stdlib_functions, function list, and prelude_imports for eval to access all REPL compiler functions
+        let stdlib_functions = vm.get_stdlib_functions();
+        let stdlib_function_list = vm.get_stdlib_function_list();
+        let prelude_imports = vm.get_prelude_imports();
+
         // Set up eval callback that creates a fresh evaluation context for each call
-        // This is safe for reentrant calls since each eval gets its own compiler/VM
-        vm.set_eval_callback(|code: &str| {
+        // Functions defined in eval persist in dynamic_functions for subsequent evals
+        vm.set_eval_callback(move |code: &str| {
             use nostos_syntax::parse;
             use nostos_syntax::ast::Item;
 
-            // Create a minimal compiler for evaluation
+            // Create a compiler for evaluation
             let mut eval_compiler = Compiler::new_empty();
+
+            // Pre-populate compiler with REPL's compiled functions, preserving indices for CallDirect
+            {
+                let stdlib_funcs = stdlib_functions.read();
+                let func_list = stdlib_function_list.read();
+                eval_compiler.register_external_functions_with_list(&stdlib_funcs, &func_list);
+            }
+
+            // Pre-populate compiler with prelude imports (local name -> qualified name mappings)
+            {
+                let imports = prelude_imports.read();
+                for (local_name, qualified_name) in imports.iter() {
+                    eval_compiler.add_prelude_import(local_name.clone(), qualified_name.clone());
+                }
+            }
+
+            // Pre-populate compiler with previously eval'd functions (appended after stdlib)
+            {
+                let dyn_funcs = dynamic_functions.read();
+                for (name, func) in dyn_funcs.iter() {
+                    eval_compiler.register_external_function(name, func.clone());
+                }
+            }
 
             // First, try to parse as a definition (function, type, etc.)
             let (direct_module_opt, direct_errors) = parse(code);
@@ -216,7 +252,19 @@ impl ReplEngine {
                     return Err(format!("Compilation error: {}", e));
                 }
 
-                // For definitions, just return success message
+                // Store newly defined functions in dynamic_functions for future evals
+                // Use the ACTUAL function name from the compiler (includes signature like "double/_")
+                {
+                    let mut dyn_funcs = dynamic_functions.write();
+                    // Get all functions that were just compiled and add them
+                    for (name, func) in eval_compiler.get_all_functions() {
+                        // Skip internal functions like __eval_result__
+                        if !name.starts_with("__") {
+                            dyn_funcs.insert(name.clone(), func.clone());
+                        }
+                    }
+                }
+
                 Ok("defined".to_string())
             } else {
                 // It's an expression - wrap it in a function
@@ -239,12 +287,23 @@ impl ReplEngine {
                 let func = eval_compiler.get_function("__eval_result__")
                     .ok_or_else(|| "Failed to compile expression".to_string())?;
 
-                // Create a minimal VM to run it
+                // Create a minimal VM to run it with all dynamic functions available
                 let mut eval_vm = ParallelVM::new(ParallelConfig::default());
                 eval_vm.register_default_natives();
                 eval_vm.setup_eval();
+
+                // Register all functions (dynamic + the eval wrapper)
+                {
+                    let dyn_funcs = dynamic_functions.read();
+                    for (name, f) in dyn_funcs.iter() {
+                        eval_vm.register_function(name, f.clone());
+                    }
+                }
                 eval_vm.register_function("__eval_result__", func.clone());
-                eval_vm.set_function_list(vec![func.clone()]);
+
+                // Build function list for indexed calls
+                let mut func_list: Vec<_> = eval_compiler.get_function_list();
+                eval_vm.set_function_list(func_list);
 
                 // Run and get result
                 match eval_vm.run(func) {
@@ -282,6 +341,8 @@ impl ReplEngine {
             registered_panels: HashMap::new(),
             panel_states: HashMap::new(),
             hotkey_callbacks: HashMap::new(),
+            dynamic_functions: dynamic_functions_for_self,
+            synced_dynamic_functions: HashSet::new(),
         }
     }
 
@@ -376,6 +437,15 @@ impl ReplEngine {
             if let Err((e, _, _)) = self.compiler.compile_all() {
                 return Err(format!("Failed to compile stdlib: {}", e));
             }
+
+            // Sync stdlib functions, function list, and prelude imports to VM for eval to access
+            self.vm.set_stdlib_functions(
+                self.compiler.get_all_functions().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            );
+            self.vm.set_stdlib_function_list(self.compiler.get_function_list_names().to_vec());
+            self.vm.set_prelude_imports(
+                self.compiler.get_prelude_imports().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            );
 
             self.stdlib_path = stdlib_path;
         }
@@ -853,6 +923,9 @@ impl ReplEngine {
             return self.handle_command(input);
         }
 
+        // Sync any dynamic functions from eval() to the compiler
+        // so they can be called from code compiled in this REPL session
+        self.sync_dynamic_functions();
 
         // Check for tuple destructuring binding like (a, b) = expr
         if let Some((names, expr)) = Self::is_tuple_binding(input) {
@@ -1173,7 +1246,21 @@ impl ReplEngine {
         }
     }
 
+    /// Sync dynamic functions (from eval) to the compiler so they can be called.
+    fn sync_dynamic_functions(&mut self) {
+        let dyn_funcs = self.dynamic_functions.read();
+        for (name, func) in dyn_funcs.iter() {
+            if !self.synced_dynamic_functions.contains(name) {
+                self.compiler.register_external_function(name, func.clone());
+                self.synced_dynamic_functions.insert(name.to_string());
+            }
+        }
+    }
+
     fn sync_vm(&mut self) {
+        // First sync any dynamic functions from eval to the compiler
+        self.sync_dynamic_functions();
+
         for (name, func) in self.compiler.get_all_functions() {
             self.vm.register_function(&name, func.clone());
         }
@@ -1181,6 +1268,15 @@ impl ReplEngine {
         for (name, type_val) in self.compiler.get_vm_types() {
             self.vm.register_type(&name, type_val);
         }
+
+        // Sync compiler functions, function list, and prelude imports for eval to access
+        self.vm.set_stdlib_functions(
+            self.compiler.get_all_functions().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        );
+        self.vm.set_stdlib_function_list(self.compiler.get_function_list_names().to_vec());
+        self.vm.set_prelude_imports(
+            self.compiler.get_prelude_imports().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        );
         // Register mvars (module-level mutable variables)
         // Only register NEW mvars - don't reset existing ones!
         for (name, info) in self.compiler.get_mvars() {
