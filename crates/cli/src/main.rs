@@ -610,6 +610,10 @@ fn main() -> ExitCode {
     // Setup panel native function (ignore receiver - CLI doesn't use panels)
     let _ = vm.setup_panel();
 
+    // Setup eval native function (ignore receiver - CLI doesn't process eval commands)
+    // Note: eval() won't work in CLI mode since there's no main thread to process commands
+    let _ = vm.setup_eval();
+
     // Register functions
     for (name, func) in compiler.get_all_functions() {
         vm.register_function(&name, func.clone());

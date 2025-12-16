@@ -12,7 +12,7 @@ use crate::CallGraph;
 use crate::session::extract_dependencies_from_fn;
 use nostos_syntax::ast::{Item, Pattern};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
-use nostos_vm::parallel::{ParallelVM, ParallelConfig, InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver};
+use nostos_vm::parallel::{ParallelVM, ParallelConfig, InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver, EvalCommand, EvalResult, EvalCommandReceiver};
 use nostos_vm::process::ThreadSafeValue;
 
 /// An item in the browser
@@ -163,6 +163,8 @@ pub struct ReplEngine {
     output_receiver: Option<OutputReceiver>,
     /// Receiver for panel commands from VM (Panel.* calls)
     panel_receiver: Option<PanelCommandReceiver>,
+    /// Receiver for eval commands from VM (eval() calls)
+    eval_receiver: Option<EvalCommandReceiver>,
     /// Track which mvars have been registered (to avoid resetting their values)
     registered_mvars: HashSet<String>,
     /// Registered panels: key (e.g., "alt+t") -> PanelInfo (old API, for transition)
@@ -187,6 +189,7 @@ impl ReplEngine {
         let inspect_receiver = Some(vm.setup_inspect());
         let output_receiver = Some(vm.setup_output());
         let panel_receiver = Some(vm.setup_panel());
+        let eval_receiver = Some(vm.setup_eval());
 
         Self {
             compiler,
@@ -206,6 +209,7 @@ impl ReplEngine {
             inspect_receiver,
             output_receiver,
             panel_receiver,
+            eval_receiver,
             registered_mvars: HashSet::new(),
             registered_panels: HashMap::new(),
             panel_states: HashMap::new(),
@@ -2950,6 +2954,27 @@ impl ReplEngine {
         // In the new API, we don't have the old-style registrations
         // This method is kept for backward compatibility but returns empty
         Vec::new()
+    }
+
+    /// Process all pending eval commands from the VM channel.
+    /// Each command evaluates code and sends the result back via the reply channel.
+    /// Returns the number of commands processed.
+    pub fn process_eval_commands(&mut self) -> usize {
+        let mut count = 0;
+        if let Some(receiver) = &self.eval_receiver {
+            // Collect commands first to avoid borrow issues
+            let commands: Vec<EvalCommand> = receiver.try_iter().collect();
+            for cmd in commands {
+                let result = match self.eval(&cmd.code) {
+                    Ok(value) => EvalResult::Ok(value),
+                    Err(e) => EvalResult::Err(e),
+                };
+                // Send the result back (ignore send errors - caller may have timed out)
+                let _ = cmd.reply.send(result);
+                count += 1;
+            }
+        }
+        count
     }
 
     /// Get a panel by its activation key (old API)

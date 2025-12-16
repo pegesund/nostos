@@ -130,6 +130,9 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Panel.onKey", signature: "Int -> String -> ()", doc: "Register key handler function for panel" },
     BuiltinInfo { name: "Panel.registerHotkey", signature: "String -> String -> ()", doc: "Register global hotkey to trigger callback" },
 
+    // === Eval ===
+    BuiltinInfo { name: "eval", signature: "String -> String", doc: "Evaluate code at runtime, returns result as string or error message" },
+
     // === External Process Execution ===
     // All Exec functions return (status, result) tuples where status is "ok" or "error"
     BuiltinInfo { name: "Exec.run", signature: "(String, [String]) -> (String, { exitCode: Int, stdout: String, stderr: String })", doc: "Run command and wait for completion. Returns (status, { exitCode, stdout, stderr })" },
@@ -4218,6 +4221,14 @@ impl Compiler {
                             self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![key_reg, callback_reg].into()), line);
                             return Ok(dst);
                         }
+                        // === Eval ===
+                        "eval" if args.len() == 1 => {
+                            let code_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new("eval".to_string())));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![code_reg].into()), line);
+                            return Ok(dst);
+                        }
                         // === External process execution ===
                         "Exec.run" if args.len() == 2 => {
                             let cmd_reg = self.compile_expr_tail(&args[0], false)?;
@@ -5121,6 +5132,13 @@ impl Compiler {
                     "Panel.registerHotkey" if arg_regs.len() == 2 => {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.registerHotkey".to_string())));
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        return Ok(dst);
+                    }
+                    // === Eval ===
+                    "eval" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("eval".to_string())));
                         self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
                         return Ok(dst);
                     }

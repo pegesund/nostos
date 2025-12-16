@@ -69,6 +69,28 @@ pub type PanelCommandSender = crossbeam::channel::Sender<PanelCommand>;
 /// Type alias for the panel command receiver channel
 pub type PanelCommandReceiver = crossbeam::channel::Receiver<PanelCommand>;
 
+/// Command for evaluating code from Nostos via the main thread (which has the compiler).
+/// Uses a request-response pattern with a reply channel.
+pub struct EvalCommand {
+    /// The code to evaluate
+    pub code: String,
+    /// Channel to send the result back to the caller
+    pub reply: crossbeam::channel::Sender<EvalResult>,
+}
+
+/// Result of an eval command
+pub enum EvalResult {
+    /// Successful evaluation with string representation of the result
+    Ok(String),
+    /// Compilation or runtime error message
+    Err(String),
+}
+
+/// Type alias for the eval command sender channel
+pub type EvalCommandSender = crossbeam::channel::Sender<EvalCommand>;
+/// Type alias for the eval command receiver channel
+pub type EvalCommandReceiver = crossbeam::channel::Receiver<EvalCommand>;
+
 // JIT function pointer types (moved from runtime.rs)
 pub type JitIntFn = fn(i64) -> i64;
 pub type JitIntFn0 = fn() -> i64;
@@ -170,6 +192,8 @@ pub struct SharedState {
     pub output_sender: Option<OutputSender>,
     /// Panel command sender (for Panel.* calls from Nostos code)
     pub panel_command_sender: Option<PanelCommandSender>,
+    /// Eval command sender (for eval() calls from Nostos code)
+    pub eval_command_sender: Option<EvalCommandSender>,
     /// Module-level mutable variables (mvars) - shared across threads with RwLock.
     /// Key is "module_name.var_name", value is ThreadSafeValue protected by RwLock.
     pub mvars: HashMap<String, Arc<RwLock<ThreadSafeValue>>>,
@@ -644,6 +668,7 @@ impl ParallelVM {
             inspect_sender: None,
             output_sender: None,
             panel_command_sender: None,
+            eval_command_sender: None,
             mvars: HashMap::new(),
         });
 
@@ -2548,6 +2573,81 @@ impl ParallelVM {
                 let callback_fn = get_string(&args[1], heap, "callbackFn")?;
                 let _ = sender_hotkey.send(PanelCommand::RegisterHotkey { key, callback_fn });
                 Ok(GcValue::Unit)
+            }),
+        }));
+
+        receiver
+    }
+
+    /// Setup the eval command channel and register the eval native function.
+    /// Returns the receiver that the main thread should poll to process eval requests.
+    pub fn setup_eval(&mut self) -> EvalCommandReceiver {
+        let (sender, receiver) = channel::unbounded();
+
+        // Store sender in shared state
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot setup eval after threads started")
+            .eval_command_sender = Some(sender.clone());
+
+        // Helper to extract string from GcValue
+        fn get_string(val: &GcValue, heap: &Heap, name: &str) -> Result<String, RuntimeError> {
+            match val {
+                GcValue::String(ptr) => {
+                    if let Some(s) = heap.get_string(*ptr) {
+                        Ok(s.data.clone())
+                    } else {
+                        Err(RuntimeError::Panic(format!("Invalid string pointer for {}", name)))
+                    }
+                }
+                _ => Err(RuntimeError::TypeError {
+                    expected: "String".to_string(),
+                    found: "other".to_string(),
+                }),
+            }
+        }
+
+        // eval(code: String) -> String
+        // Sends code to main thread for evaluation, blocks waiting for result
+        // NOTE: Due to synchronous VM execution, eval() can only work when called
+        // from a context where the main thread is not blocked (e.g., async callbacks).
+        // When called from synchronous Nostos code, this will timeout.
+        self.register_native("eval", Arc::new(GcNativeFn {
+            name: "eval".to_string(),
+            arity: 1,
+            func: Box::new(move |args, heap| {
+                let code = get_string(&args[0], heap, "code")?;
+
+                // Create a one-shot reply channel
+                let (reply_tx, reply_rx) = channel::bounded(1);
+
+                // Send the eval request
+                if sender.send(EvalCommand { code, reply: reply_tx }).is_err() {
+                    return Err(RuntimeError::Panic("Eval channel disconnected - eval() requires a running event loop".to_string()));
+                }
+
+                // Block waiting for the result with a short timeout
+                // If the main thread is blocked (synchronous execution), this will timeout
+                use std::time::Duration;
+                match reply_rx.recv_timeout(Duration::from_millis(100)) {
+                    Ok(EvalResult::Ok(result)) => {
+                        // Return the result as a string
+                        Ok(GcValue::String(heap.alloc_string(result)))
+                    }
+                    Ok(EvalResult::Err(err)) => {
+                        // Return the error as a string (prefixed to distinguish)
+                        Ok(GcValue::String(heap.alloc_string(format!("Error: {}", err))))
+                    }
+                    Err(crossbeam::channel::RecvTimeoutError::Timeout) => {
+                        Err(RuntimeError::Panic(
+                            "eval() timeout - cannot eval from within synchronous code. \
+                            eval() only works in async contexts (e.g., panel key handlers with async event loop)."
+                            .to_string()
+                        ))
+                    }
+                    Err(crossbeam::channel::RecvTimeoutError::Disconnected) => {
+                        Err(RuntimeError::Panic("Eval reply channel disconnected".to_string()))
+                    }
+                }
             }),
         }));
 
