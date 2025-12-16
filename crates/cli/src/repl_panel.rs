@@ -107,9 +107,14 @@ struct AutocompleteState {
     candidates: Vec<CompletionItem>,
     /// Selected index in candidates
     selected: usize,
+    /// Scroll offset (first visible item index)
+    scroll_offset: usize,
     /// The context (prefix info)
     context: Option<CompletionContext>,
 }
+
+/// Maximum visible items in autocomplete popup
+const AC_MAX_VISIBLE: usize = 10;
 
 impl AutocompleteState {
     fn new() -> Self {
@@ -117,6 +122,7 @@ impl AutocompleteState {
             active: false,
             candidates: Vec::new(),
             selected: 0,
+            scroll_offset: 0,
             context: None,
         }
     }
@@ -125,7 +131,43 @@ impl AutocompleteState {
         self.active = false;
         self.candidates.clear();
         self.selected = 0;
+        self.scroll_offset = 0;
         self.context = None;
+    }
+
+    /// Move selection up, adjusting scroll if needed
+    fn select_prev(&mut self) {
+        if self.candidates.is_empty() {
+            return;
+        }
+        if self.selected == 0 {
+            self.selected = self.candidates.len() - 1;
+            // Scroll to show the last item
+            if self.selected >= AC_MAX_VISIBLE {
+                self.scroll_offset = self.selected - AC_MAX_VISIBLE + 1;
+            }
+        } else {
+            self.selected -= 1;
+            // Scroll up if selection goes above visible area
+            if self.selected < self.scroll_offset {
+                self.scroll_offset = self.selected;
+            }
+        }
+    }
+
+    /// Move selection down, adjusting scroll if needed
+    fn select_next(&mut self) {
+        if self.candidates.is_empty() {
+            return;
+        }
+        self.selected = (self.selected + 1) % self.candidates.len();
+        if self.selected == 0 {
+            // Wrapped to beginning
+            self.scroll_offset = 0;
+        } else if self.selected >= self.scroll_offset + AC_MAX_VISIBLE {
+            // Scroll down if selection goes below visible area
+            self.scroll_offset = self.selected - AC_MAX_VISIBLE + 1;
+        }
     }
 }
 
@@ -425,6 +467,7 @@ impl ReplPanel {
             self.ac_state.active = true;
             self.ac_state.candidates = candidates;
             self.ac_state.selected = 0;
+            self.ac_state.scroll_offset = 0;
             self.ac_state.context = Some(context);
         } else {
             self.ac_state.reset();
@@ -536,9 +579,14 @@ impl ReplPanel {
         }
 
         let prompt_width = 4;
-        let max_items = 6.min(self.ac_state.candidates.len());
+        let total_candidates = self.ac_state.candidates.len();
+        let visible_count = AC_MAX_VISIBLE.min(total_candidates);
+        let scroll_offset = self.ac_state.scroll_offset;
+
+        // Calculate popup width based on visible items
         let popup_width = self.ac_state.candidates.iter()
-            .take(max_items)
+            .skip(scroll_offset)
+            .take(visible_count)
             .map(|c| c.label.len() + 6) // +6 for kind prefix "[fn] "
             .max()
             .unwrap_or(20)
@@ -554,14 +602,19 @@ impl ReplPanel {
             Color::Rgb(40, 40, 60)
         ));
 
-        // Draw items
-        for (i, item) in self.ac_state.candidates.iter().take(max_items).enumerate() {
-            let y = popup_y + i;
+        // Draw visible items (starting from scroll_offset)
+        for (display_idx, item) in self.ac_state.candidates.iter()
+            .skip(scroll_offset)
+            .take(visible_count)
+            .enumerate()
+        {
+            let y = popup_y + display_idx;
             if y >= printer.size.y {
                 break;
             }
 
-            let is_selected = i == self.ac_state.selected;
+            let actual_idx = scroll_offset + display_idx;
+            let is_selected = actual_idx == self.ac_state.selected;
             let (r, g, b) = item.kind.color();
             let kind_color = Color::Rgb(r, g, b);
             let style = if is_selected {
@@ -587,12 +640,21 @@ impl ReplPanel {
             });
         }
 
-        // Show scroll indicator if more items
-        let status_y = popup_y + max_items;
-        if self.ac_state.candidates.len() > max_items {
-            let more = format!("... +{} more", self.ac_state.candidates.len() - max_items);
+        // Show scroll indicator if there are hidden items
+        let status_y = popup_y + visible_count;
+        let items_above = scroll_offset;
+        let items_below = total_candidates.saturating_sub(scroll_offset + visible_count);
+
+        if items_above > 0 || items_below > 0 {
+            let indicator = if items_above > 0 && items_below > 0 {
+                format!("↑{} ↓{} ({}/{})", items_above, items_below, self.ac_state.selected + 1, total_candidates)
+            } else if items_above > 0 {
+                format!("↑{} ({}/{})", items_above, self.ac_state.selected + 1, total_candidates)
+            } else {
+                format!("↓{} ({}/{})", items_below, self.ac_state.selected + 1, total_candidates)
+            };
             printer.with_style(bg_style, |p| {
-                p.print((popup_x, status_y), &more);
+                p.print((popup_x, status_y), &indicator);
             });
         }
 
@@ -763,8 +825,8 @@ impl View for ReplPanel {
                     if self.ac_state.candidates.len() == 1 {
                         self.accept_completion();
                     } else {
-                        // Cycle to next
-                        self.ac_state.selected = (self.ac_state.selected + 1) % self.ac_state.candidates.len();
+                        // Cycle to next (with scroll support)
+                        self.ac_state.select_next();
                     }
                     return EventResult::Consumed(None);
                 }
@@ -773,11 +835,7 @@ impl View for ReplPanel {
             // Shift+Tab: cycle backwards
             Event::Shift(Key::Tab) => {
                 if self.ac_state.active && self.ac_state.candidates.len() > 1 {
-                    if self.ac_state.selected == 0 {
-                        self.ac_state.selected = self.ac_state.candidates.len() - 1;
-                    } else {
-                        self.ac_state.selected -= 1;
-                    }
+                    self.ac_state.select_prev();
                     return EventResult::Consumed(None);
                 }
                 EventResult::Ignored
@@ -865,11 +923,7 @@ impl View for ReplPanel {
             Event::Key(Key::Up) => {
                 // If autocomplete is active, navigate up
                 if self.ac_state.active && self.ac_state.candidates.len() > 1 {
-                    if self.ac_state.selected == 0 {
-                        self.ac_state.selected = self.ac_state.candidates.len() - 1;
-                    } else {
-                        self.ac_state.selected -= 1;
-                    }
+                    self.ac_state.select_prev();
                     return EventResult::Consumed(None);
                 }
                 
@@ -909,7 +963,7 @@ impl View for ReplPanel {
             Event::Key(Key::Down) => {
                 // If autocomplete is active, navigate down
                 if self.ac_state.active && self.ac_state.candidates.len() > 1 {
-                    self.ac_state.selected = (self.ac_state.selected + 1) % self.ac_state.candidates.len();
+                    self.ac_state.select_next();
                     return EventResult::Consumed(None);
                 }
 

@@ -810,13 +810,15 @@ fn rebuild_workspace(s: &mut Cursive) {
         windows.push(Box::new(repl_view));
     }
 
-    // Add Nostos panel if open
-    if nostos_panel_open {
-        let nostos_view = create_nostos_panel_view(&engine);
-        windows.push(Box::new(nostos_view));
-    }
+    // Nostos panel gets its own row at the bottom (if open)
+    // This ensures other windows (Console, REPL, editors) share the top row(s)
+    let nostos_view: Option<Box<dyn View>> = if nostos_panel_open {
+        Some(Box::new(create_nostos_panel_view(&engine)))
+    } else {
+        None
+    };
 
-    if windows.is_empty() {
+    if windows.is_empty() && nostos_view.is_none() {
         // Empty workspace - maybe show a hint
         s.call_on_name("workspace", |ws: &mut LinearLayout| {
              ws.add_child(
@@ -829,10 +831,19 @@ fn rebuild_workspace(s: &mut Cursive) {
         return;
     }
 
+    // Build main window rows (without NostosPanel)
     let total_windows = windows.len();
 
-    if total_windows <= 3 {
-        // Single row layout
+    if total_windows == 0 {
+        // Only NostosPanel is open
+        if let Some(nostos) = nostos_view {
+            s.call_on_name("workspace", |ws: &mut LinearLayout| {
+                let row = LinearLayout::horizontal().child(nostos);
+                ws.add_child(row.full_width().full_height().with_name("workspace_row_0"));
+            });
+        }
+    } else if total_windows <= 3 {
+        // Single row layout for main windows
         let mut row = LinearLayout::horizontal();
 
         for window in windows {
@@ -841,12 +852,17 @@ fn rebuild_workspace(s: &mut Cursive) {
 
         s.call_on_name("workspace", |ws: &mut LinearLayout| {
             ws.add_child(row.full_width().full_height().with_name("workspace_row_0"));
+            // Add NostosPanel as its own row below
+            if let Some(nostos) = nostos_view {
+                let panel_row = LinearLayout::horizontal().child(nostos);
+                ws.add_child(panel_row.full_width().full_height().with_name("workspace_row_panel"));
+            }
         });
     } else {
         // Two row layout: first 2 or 3 windows on top, rest on bottom
         // If we have 4 windows, do 2x2. If 5, 2x3. If 6, 3x3.
         let split_idx = if total_windows >= 6 { 3 } else { 2 };
-        
+
         let mut row0 = LinearLayout::horizontal();
         let mut row1 = LinearLayout::horizontal();
 
@@ -861,6 +877,11 @@ fn rebuild_workspace(s: &mut Cursive) {
         s.call_on_name("workspace", |ws: &mut LinearLayout| {
             ws.add_child(row0.full_width().full_height().with_name("workspace_row_0"));
             ws.add_child(row1.full_width().full_height().with_name("workspace_row_1"));
+            // Add NostosPanel as its own row below
+            if let Some(nostos) = nostos_view {
+                let panel_row = LinearLayout::horizontal().child(nostos);
+                ws.add_child(panel_row.full_width().full_height().with_name("workspace_row_panel"));
+            }
         });
     }
 }
