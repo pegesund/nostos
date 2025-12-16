@@ -7531,6 +7531,43 @@ impl Compiler {
         self.function_list.push(name.to_string());
     }
 
+    /// Register an externally defined type (e.g., from a previous eval).
+    pub fn register_external_type(&mut self, name: &str, type_val: &Arc<TypeValue>) {
+        if self.types.contains_key(name) {
+            return;
+        }
+        use nostos_vm::value::TypeKind;
+        let kind = match &type_val.kind {
+            TypeKind::Record { mutable } => {
+                let fields = type_val.fields.iter()
+                    .map(|f| (f.name.clone(), f.type_name.clone()))
+                    .collect();
+                TypeInfoKind::Record { fields, mutable: *mutable }
+            }
+            TypeKind::Variant => {
+                let constructors = type_val.constructors.iter()
+                    .map(|c| (c.name.clone(), c.fields.iter().map(|f| f.type_name.clone()).collect()))
+                    .collect();
+                TypeInfoKind::Variant { constructors }
+            }
+            TypeKind::Primitive | TypeKind::Alias { .. } => return,
+        };
+        let type_info = TypeInfo { name: name.to_string(), kind };
+        self.types.insert(name.to_string(), type_info);
+        self.known_constructors.insert(name.to_string());
+    }
+
+    /// Register a dynamic mvar (from eval) with the compiler.
+    /// This allows the compiler to emit MvarRead instructions for the variable.
+    pub fn register_dynamic_mvar(&mut self, name: &str) {
+        if !self.mvars.contains_key(name) {
+            self.mvars.insert(name.to_string(), MvarInfo {
+                type_name: "Any".to_string(),
+                initial_value: MvarInitValue::Unit,
+            });
+        }
+    }
+
     /// Register all external functions at once, preserving their indices.
     /// This is important for eval because compiled bytecode contains CallDirect
     /// instructions with hardcoded function indices that must be preserved.

@@ -179,6 +179,10 @@ pub struct ReplEngine {
     dynamic_types: Arc<parking_lot::RwLock<HashMap<String, Arc<nostos_vm::value::TypeValue>>>>,
     /// Track which dynamic types have been synced to compiler
     synced_dynamic_types: HashSet<String>,
+    /// Dynamic mvars from eval - shared with VM
+    dynamic_mvars: Arc<parking_lot::RwLock<HashMap<String, Arc<parking_lot::RwLock<nostos_vm::ThreadSafeValue>>>>>,
+    /// Track which dynamic mvars have been synced to compiler
+    synced_dynamic_mvars: HashSet<String>,
 }
 
 impl ReplEngine {
@@ -204,6 +208,10 @@ impl ReplEngine {
         // Get dynamic_types for eval to register/lookup types
         let dynamic_types = vm.get_dynamic_types();
         let dynamic_types_for_self = dynamic_types.clone();
+
+        // Get dynamic_mvars for eval to store variable bindings
+        let dynamic_mvars = vm.get_dynamic_mvars();
+        let dynamic_mvars_for_self = dynamic_mvars.clone();
 
         // Get stdlib_functions, function list, and prelude_imports for eval to access all REPL compiler functions
         let stdlib_functions = vm.get_stdlib_functions();
@@ -235,11 +243,35 @@ impl ReplEngine {
                 }
             }
 
+            // Pre-populate compiler with stdlib types
+            {
+                let types = stdlib_types.read();
+                for (name, type_val) in types.iter() {
+                    eval_compiler.register_external_type(name, type_val);
+                }
+            }
+
             // Pre-populate compiler with previously eval'd functions (appended after stdlib)
             {
                 let dyn_funcs = dynamic_functions.read();
                 for (name, func) in dyn_funcs.iter() {
                     eval_compiler.register_external_function(name, func.clone());
+                }
+            }
+
+            // Pre-populate compiler with previously eval'd types
+            {
+                let dyn_types = dynamic_types.read();
+                for (name, type_val) in dyn_types.iter() {
+                    eval_compiler.register_external_type(name, type_val);
+                }
+            }
+
+            // Pre-populate compiler with dynamic mvars (from previous evals)
+            {
+                let mvars = dynamic_mvars.read();
+                for name in mvars.keys() {
+                    eval_compiler.register_dynamic_mvar(name);
                 }
             }
 
@@ -249,8 +281,13 @@ impl ReplEngine {
                 let trimmed = code.trim();
                 // Inline variable binding detection (can't call Self:: from closure)
                 let var_binding: Option<(String, String)> = {
-                    // Skip mvar declarations
-                    if trimmed.starts_with("mvar ") {
+                    // Skip definitions that are not variable bindings
+                    if trimmed.starts_with("mvar ") ||
+                       trimmed.starts_with("type ") ||
+                       trimmed.starts_with("trait ") ||
+                       trimmed.starts_with("module ") ||
+                       trimmed.starts_with("pub ") ||
+                       trimmed.starts_with("extern ") {
                         None
                     } else if trimmed.starts_with("var ") {
                         // "var name = expr" pattern
@@ -298,8 +335,68 @@ impl ReplEngine {
                 };
 
                 if let Some((name, expr)) = var_binding {
-                    // Transform "pt = expr" to "pt() = expr"
-                    format!("{}() = {}", name, expr)
+                    // Variable binding: compile and run the expression, store in dynamic_mvars
+                    let wrapper = format!("__eval_var__() = {}", expr);
+                    let (module_opt, errors) = parse(&wrapper);
+                    if !errors.is_empty() {
+                        return Err(format!("Parse error: {:?}", errors));
+                    }
+                    let module = module_opt.ok_or_else(|| "Failed to parse expression".to_string())?;
+
+                    eval_compiler.add_module(&module, vec![], std::sync::Arc::new(wrapper.clone()), "<eval>".to_string())
+                        .map_err(|e| format!("{}", e))?;
+
+                    if let Err((e, _, _)) = eval_compiler.compile_all() {
+                        return Err(format!("Compilation error: {}", e));
+                    }
+
+                    let func = eval_compiler.get_function("__eval_var__")
+                        .ok_or_else(|| "Failed to compile expression".to_string())?;
+
+                    // Create a minimal VM to run the expression
+                    let mut eval_vm = ParallelVM::new(ParallelConfig::default());
+                    eval_vm.register_default_natives();
+                    eval_vm.setup_eval();
+
+                    // Share dynamic_mvars with the eval VM so it can access variables from previous evals
+                    eval_vm.set_dynamic_mvars(dynamic_mvars.clone());
+
+                    // Register all functions
+                    {
+                        let dyn_funcs = dynamic_functions.read();
+                        for (fname, f) in dyn_funcs.iter() {
+                            eval_vm.register_function(fname, f.clone());
+                        }
+                    }
+                    eval_vm.register_function("__eval_var__", func.clone());
+
+                    // Register dynamic types
+                    {
+                        let dyn_types = dynamic_types.read();
+                        for (tname, t) in dyn_types.iter() {
+                            eval_vm.register_type(tname, t.clone());
+                        }
+                    }
+
+                    // Build function list
+                    let func_list: Vec<_> = eval_compiler.get_function_list();
+                    eval_vm.set_function_list(func_list);
+
+                    // Run and get result
+                    match eval_vm.run(func) {
+                        Ok(result) => {
+                            if let Some(val) = result.value {
+                                // Convert to ThreadSafeValue and store in dynamic_mvars
+                                let safe_val = val.to_thread_safe();
+                                let mut mvars = dynamic_mvars.write();
+                                mvars.insert(name.clone(), Arc::new(parking_lot::RwLock::new(safe_val)));
+                                return Ok(format!("{} = {}", name, val.display()));
+                            } else {
+                                return Err("Expression returned no value".to_string());
+                            }
+                        }
+                        Err(e) => return Err(format!("{}", e)),
+                    }
                 } else {
                     code.to_string()
                 }
@@ -400,6 +497,9 @@ impl ReplEngine {
                 eval_vm.register_default_natives();
                 eval_vm.setup_eval();
 
+                // Share dynamic_mvars with the eval VM so it can access variables from previous evals
+                eval_vm.set_dynamic_mvars(dynamic_mvars.clone());
+
                 // Register all functions (dynamic + the eval wrapper)
                 {
                     let dyn_funcs = dynamic_functions.read();
@@ -461,6 +561,8 @@ impl ReplEngine {
             synced_dynamic_functions: HashSet::new(),
             dynamic_types: dynamic_types_for_self,
             synced_dynamic_types: HashSet::new(),
+            dynamic_mvars: dynamic_mvars_for_self,
+            synced_dynamic_mvars: HashSet::new(),
         }
     }
 
@@ -701,8 +803,13 @@ impl ReplEngine {
     pub fn is_var_binding(input: &str) -> Option<(String, bool, String)> {
         let input = input.trim();
 
-        // Skip mvar declarations - these are module-level definitions
-        if input.starts_with("mvar ") {
+        // Skip definitions that are not variable bindings
+        if input.starts_with("mvar ") ||
+           input.starts_with("type ") ||
+           input.starts_with("trait ") ||
+           input.starts_with("module ") ||
+           input.starts_with("pub ") ||
+           input.starts_with("extern ") {
             return None;
         }
 
@@ -1091,6 +1198,14 @@ impl ReplEngine {
         // so they can be called from code compiled in this REPL session
         self.sync_dynamic_functions();
 
+        // Sync any dynamic types from eval() to the compiler
+        // so they can be used in code compiled in this REPL session
+        self.sync_dynamic_types();
+
+        // Sync any dynamic mvars from eval() to the compiler
+        // so they can be accessed from code compiled in this REPL session
+        self.sync_dynamic_mvars();
+
         // Check for tuple destructuring binding like (a, b) = expr
         if let Some((names, expr)) = Self::is_tuple_binding(input) {
             return self.define_tuple_binding(&names, &expr);
@@ -1421,12 +1536,24 @@ impl ReplEngine {
         }
     }
 
-    /// Sync dynamic types (from eval) - just track which ones are from eval.
+    /// Sync dynamic types (from eval) to the compiler so they can be used.
     fn sync_dynamic_types(&mut self) {
         let dyn_types = self.dynamic_types.read();
-        for name in dyn_types.keys() {
+        for (name, type_val) in dyn_types.iter() {
             if !self.synced_dynamic_types.contains(name) {
+                self.compiler.register_external_type(name, type_val);
                 self.synced_dynamic_types.insert(name.to_string());
+            }
+        }
+    }
+
+    /// Sync dynamic mvars (from eval) to the compiler so they can be accessed.
+    fn sync_dynamic_mvars(&mut self) {
+        let dyn_mvars = self.dynamic_mvars.read();
+        for name in dyn_mvars.keys() {
+            if !self.synced_dynamic_mvars.contains(name) {
+                self.compiler.register_dynamic_mvar(name);
+                self.synced_dynamic_mvars.insert(name.to_string());
             }
         }
     }
@@ -1487,8 +1614,9 @@ impl ReplEngine {
         );
         // Register mvars (module-level mutable variables)
         // Only register NEW mvars - don't reset existing ones!
+        // Also skip dynamic mvars from eval - they're accessed via dynamic_mvars, not mvars
         for (name, info) in self.compiler.get_mvars() {
-            if !self.registered_mvars.contains(name) {
+            if !self.registered_mvars.contains(name) && !self.synced_dynamic_mvars.contains(name) {
                 let initial_value = Self::mvar_init_to_thread_safe(&info.initial_value);
                 self.vm.register_mvar(name, initial_value);
                 self.registered_mvars.insert(name.clone());
@@ -4066,6 +4194,146 @@ mod tests {
         let status = engine.get_compile_status("bar23");
         assert!(matches!(status, Some(CompileStatus::Stale { .. })),
                 "bar23 should be stale after bar's signature changed, got: {:?}", status);
+    }
+
+    #[test]
+    fn test_type_definition_not_detected_as_var_binding() {
+        // Type definitions should not be detected as variable bindings
+        assert_eq!(ReplEngine::is_var_binding("type Point = { x: Int, y: Int }"), None);
+        assert_eq!(ReplEngine::is_var_binding("trait Show = { show: Self -> String }"), None);
+        assert_eq!(ReplEngine::is_var_binding("module Foo = { }"), None);
+        assert_eq!(ReplEngine::is_var_binding("pub foo(x) = x"), None);
+        assert_eq!(ReplEngine::is_var_binding("extern fn something"), None);
+    }
+
+    #[test]
+    fn test_type_definition_in_eval() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Define a type
+        let result = engine.eval("type Point = { x: Int, y: Int }");
+        assert!(result.is_ok(), "Should define Point type: {:?}", result);
+
+        // The type should be in the compiler now
+        let types = engine.get_types();
+        assert!(types.contains(&"Point".to_string()), "Point should be in types: {:?}", types);
+    }
+
+    #[test]
+    fn test_type_usage_after_definition() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Define a type
+        let result = engine.eval("type Point = { x: Int, y: Int }");
+        assert!(result.is_ok(), "Should define Point type: {:?}", result);
+
+        // Define a function that uses the type
+        let result = engine.eval("makePoint(a, b) = Point(a, b)");
+        assert!(result.is_ok(), "Should define makePoint: {:?}", result);
+
+        // Create a Point instance
+        let result = engine.eval("makePoint(10, 20)");
+        assert!(result.is_ok(), "Should create Point: {:?}", result);
+        let output = result.unwrap();
+        // Should show as Point { x: 10, y: 20 } or similar
+        assert!(output.contains("Point") || output.contains("10"), "Output should contain Point data: {}", output);
+    }
+
+    #[test]
+    fn test_record_field_names_preserved() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Define a type with named fields
+        let result = engine.eval("type Point = { x: Int, y: Int }");
+        assert!(result.is_ok(), "Should define Point type: {:?}", result);
+
+        // Create a Point and display it
+        let result = engine.eval("Point(10, 20)");
+        assert!(result.is_ok(), "Should create Point: {:?}", result);
+        let output = result.unwrap();
+
+        // The output should contain the named fields, not _0 and _1
+        println!("Point output: {}", output);
+        assert!(output.contains("x:") || output.contains("x ="), "Should show field 'x' not '_0': {}", output);
+        assert!(!output.contains("_0"), "Should NOT show '_0' for named field: {}", output);
+    }
+
+    #[test]
+    fn test_eval_callback_type_persistence() {
+        // This test simulates what the TUI does when calling eval("...")
+        // which goes through the eval callback, creating fresh compilers each time
+
+        use nostos_compiler::compile::Compiler;
+        use nostos_syntax::parse;
+        use parking_lot::RwLock;
+        use std::collections::HashMap;
+        use nostos_vm::value::TypeValue;
+
+        // Simulate the shared storage used by eval callback
+        let dynamic_types: Arc<RwLock<HashMap<String, Arc<TypeValue>>>> = Arc::new(RwLock::new(HashMap::new()));
+
+        // First eval: define a type
+        {
+            let mut eval_compiler = Compiler::new_empty();
+
+            // Register dynamic_types (empty at first)
+            {
+                let dyn_types = dynamic_types.read();
+                for (name, type_val) in dyn_types.iter() {
+                    eval_compiler.register_external_type(name, type_val);
+                }
+            }
+
+            let code = "type Point = { x: Int, y: Int }";
+            let (module_opt, errors) = parse(code);
+            assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+            let module = module_opt.unwrap();
+
+            eval_compiler.add_module(&module, vec![], Arc::new(code.to_string()), "<eval>".to_string())
+                .expect("add_module failed");
+            eval_compiler.compile_all().expect("compile_all failed");
+
+            // Store the new type in dynamic_types
+            let new_types = eval_compiler.get_vm_types();
+            println!("Types after first eval: {:?}", new_types.keys().collect::<Vec<_>>());
+
+            let mut dyn_types = dynamic_types.write();
+            for (name, type_val) in new_types {
+                if !dyn_types.contains_key(&name) {
+                    dyn_types.insert(name, type_val);
+                }
+            }
+        }
+
+        // Second eval: use the type
+        {
+            let mut eval_compiler = Compiler::new_empty();
+
+            // Register dynamic_types (should have Point now)
+            {
+                let dyn_types = dynamic_types.read();
+                println!("Types before second eval: {:?}", dyn_types.keys().collect::<Vec<_>>());
+                for (name, type_val) in dyn_types.iter() {
+                    println!("Registering type: {}", name);
+                    eval_compiler.register_external_type(name, type_val);
+                }
+            }
+
+            // Check that Point is in known_constructors
+            let code = "pt() = Point(10, 20)";
+            let (module_opt, errors) = parse(code);
+            assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+            let module = module_opt.unwrap();
+
+            eval_compiler.add_module(&module, vec![], Arc::new(code.to_string()), "<eval>".to_string())
+                .expect("add_module failed");
+
+            let result = eval_compiler.compile_all();
+            assert!(result.is_ok(), "compile_all failed: {:?}", result);
+        }
     }
 }
 

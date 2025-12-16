@@ -210,6 +210,8 @@ pub struct SharedState {
     /// Module-level mutable variables (mvars) - shared across threads with RwLock.
     /// Key is "module_name.var_name", value is ThreadSafeValue protected by RwLock.
     pub mvars: HashMap<String, Arc<RwLock<ThreadSafeValue>>>,
+    /// Dynamic mvars from eval() - can be added at runtime
+    pub dynamic_mvars: Arc<RwLock<HashMap<String, Arc<RwLock<ThreadSafeValue>>>>>,
 }
 
 /// Configuration for the parallel VM.
@@ -599,6 +601,69 @@ impl SendableValue {
             SendableMapKey::String(s) => MapKey::String(Arc::new(s.clone())),
         }
     }
+
+    /// Convert to ThreadSafeValue for storage in mvars.
+    pub fn to_thread_safe(&self) -> ThreadSafeValue {
+        match self {
+            SendableValue::Unit => ThreadSafeValue::Unit,
+            SendableValue::Bool(b) => ThreadSafeValue::Bool(*b),
+            SendableValue::Char(c) => ThreadSafeValue::Char(*c),
+            SendableValue::Int8(i) => ThreadSafeValue::Int64(*i as i64),
+            SendableValue::Int16(i) => ThreadSafeValue::Int64(*i as i64),
+            SendableValue::Int32(i) => ThreadSafeValue::Int64(*i as i64),
+            SendableValue::Int64(i) => ThreadSafeValue::Int64(*i),
+            SendableValue::UInt8(i) => ThreadSafeValue::Int64(*i as i64),
+            SendableValue::UInt16(i) => ThreadSafeValue::Int64(*i as i64),
+            SendableValue::UInt32(i) => ThreadSafeValue::Int64(*i as i64),
+            SendableValue::UInt64(i) => ThreadSafeValue::Int64(*i as i64),
+            SendableValue::Float32(f) => ThreadSafeValue::Float64(*f as f64),
+            SendableValue::Float64(f) => ThreadSafeValue::Float64(*f),
+            SendableValue::BigInt(_) => ThreadSafeValue::String(self.display()),
+            SendableValue::Decimal(_) => ThreadSafeValue::String(self.display()),
+            SendableValue::Pid(p) => ThreadSafeValue::Pid(*p),
+            SendableValue::String(s) => ThreadSafeValue::String(s.clone()),
+            SendableValue::List(items) => {
+                ThreadSafeValue::List(items.iter().map(|v| v.to_thread_safe()).collect())
+            }
+            SendableValue::Tuple(items) => {
+                ThreadSafeValue::Tuple(items.iter().map(|v| v.to_thread_safe()).collect())
+            }
+            SendableValue::Record(r) => {
+                ThreadSafeValue::Record {
+                    type_name: r.type_name.clone(),
+                    field_names: r.field_names.clone(),
+                    fields: r.fields.iter().map(|v| v.to_thread_safe()).collect(),
+                    mutable_fields: vec![false; r.fields.len()],
+                }
+            }
+            SendableValue::Variant(v) => {
+                ThreadSafeValue::Variant {
+                    type_name: Arc::new(v.type_name.clone()),
+                    constructor: Arc::new(v.constructor.clone()),
+                    fields: v.fields.iter().map(|f| f.to_thread_safe()).collect(),
+                }
+            }
+            SendableValue::Set(items) => {
+                ThreadSafeValue::Set(items.iter().map(|k| Self::sendable_key_to_thread_safe_key(k)).collect())
+            }
+            SendableValue::Map(entries) => {
+                ThreadSafeValue::Map(entries.iter()
+                    .map(|(k, v)| (Self::sendable_key_to_thread_safe_key(k), v.to_thread_safe()))
+                    .collect())
+            }
+            SendableValue::Error(e) => ThreadSafeValue::String(format!("Error: {}", e)),
+        }
+    }
+
+    fn sendable_key_to_thread_safe_key(key: &SendableMapKey) -> ThreadSafeMapKey {
+        match key {
+            SendableMapKey::Unit => ThreadSafeMapKey::Unit,
+            SendableMapKey::Bool(b) => ThreadSafeMapKey::Bool(*b),
+            SendableMapKey::Char(c) => ThreadSafeMapKey::Char(*c),
+            SendableMapKey::Int64(i) => ThreadSafeMapKey::Int64(*i),
+            SendableMapKey::String(s) => ThreadSafeMapKey::String(s.clone()),
+        }
+    }
 }
 
 /// Result from a thread when it finishes.
@@ -689,6 +754,7 @@ impl ParallelVM {
             stdlib_function_list: Arc::new(RwLock::new(Vec::new())),
             prelude_imports: Arc::new(RwLock::new(HashMap::new())),
             mvars: HashMap::new(),
+            dynamic_mvars: Arc::new(RwLock::new(HashMap::new())),
         });
 
         Self {
@@ -809,6 +875,20 @@ impl ParallelVM {
     /// This is used by eval() to add types that persist during the VM run.
     pub fn get_dynamic_types(&self) -> Arc<RwLock<HashMap<String, Arc<TypeValue>>>> {
         self.shared.dynamic_types.clone()
+    }
+
+    /// Get a clone of the dynamic_mvars Arc for runtime mvar registration.
+    /// This is used by eval() to add mvars that persist during the VM run.
+    pub fn get_dynamic_mvars(&self) -> Arc<RwLock<HashMap<String, Arc<RwLock<ThreadSafeValue>>>>> {
+        self.shared.dynamic_mvars.clone()
+    }
+
+    /// Set the dynamic_mvars Arc to share with another VM.
+    /// This allows eval VMs to access mvars defined in previous evals.
+    pub fn set_dynamic_mvars(&mut self, mvars: Arc<RwLock<HashMap<String, Arc<RwLock<ThreadSafeValue>>>>>) {
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot set dynamic_mvars after threads started")
+            .dynamic_mvars = mvars;
     }
 
     /// Get a clone of the stdlib_types Arc.
@@ -7969,9 +8049,14 @@ impl ThreadWorker {
                     Value::String(s) => s.as_str(),
                     _ => return Err(RuntimeError::Panic("MvarRead: name must be a string constant".to_string())),
                 };
-                let var = self.shared.mvars.get(name)
-                    .ok_or_else(|| RuntimeError::Panic(format!("Unknown mvar: {}", name)))?
-                    .clone();  // Clone Arc to release borrow on self.shared
+                // Check static mvars first, then dynamic_mvars from eval
+                let var = if let Some(v) = self.shared.mvars.get(name) {
+                    v.clone()
+                } else if let Some(v) = self.shared.dynamic_mvars.read().get(name) {
+                    v.clone()
+                } else {
+                    return Err(RuntimeError::Panic(format!("Unknown mvar: {}", name)));
+                };
                 // Acquire read lock, read value, release lock (all atomic)
                 let value = var.read().clone();
                 let proc = self.get_process_mut(local_id).unwrap();
@@ -7986,9 +8071,14 @@ impl ThreadWorker {
                     _ => return Err(RuntimeError::Panic("MvarWrite: name must be a string constant".to_string())),
                 };
                 let value = reg!(*src).clone();
-                let var = self.shared.mvars.get(name)
-                    .ok_or_else(|| RuntimeError::Panic(format!("Unknown mvar: {}", name)))?
-                    .clone();  // Clone Arc to release borrow on self.shared
+                // Check static mvars first, then dynamic_mvars from eval
+                let var = if let Some(v) = self.shared.mvars.get(name) {
+                    v.clone()
+                } else if let Some(v) = self.shared.dynamic_mvars.read().get(name) {
+                    v.clone()
+                } else {
+                    return Err(RuntimeError::Panic(format!("Unknown mvar: {}", name)));
+                };
                 let proc = self.get_process(local_id).unwrap();
                 let safe_value = ThreadSafeValue::from_gc_value(&value, &proc.heap)
                     .ok_or_else(|| RuntimeError::Panic(format!("Cannot convert value for mvar: {}", name)))?;
@@ -8214,7 +8304,9 @@ impl ThreadWorker {
                     }),
                 };
                 let fields: Vec<GcValue> = field_regs.iter().map(|&r| reg!(r).clone()).collect();
-                let type_info = self.shared.types.get(&type_name).cloned();
+                // Look up type in static types first, then dynamic_types (eval-defined)
+                let type_info = self.shared.types.get(&type_name).cloned()
+                    .or_else(|| self.shared.dynamic_types.read().get(&type_name).cloned());
                 let field_names: Vec<String> = type_info
                     .as_ref()
                     .map(|t| t.fields.iter().map(|f| f.name.clone()).collect())

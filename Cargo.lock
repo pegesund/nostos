@@ -1587,6 +1587,7 @@ dependencies = [
  "nostos-syntax",
  "nostos-vm",
  "nu-ansi-term",
+ "parking_lot",
  "reedline",
 ]
 

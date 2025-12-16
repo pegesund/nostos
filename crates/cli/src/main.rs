@@ -610,15 +610,19 @@ fn main() -> ExitCode {
     // Setup panel native function (ignore receiver - CLI doesn't use panels)
     let _ = vm.setup_panel();
 
-    // Populate stdlib functions, function list, and prelude imports for eval
+    // Populate stdlib functions, function list, types, and prelude imports for eval
     vm.set_stdlib_functions(compiler.get_all_functions().iter().map(|(k, v)| (k.clone(), v.clone())).collect());
     vm.set_stdlib_function_list(compiler.get_function_list_names().to_vec());
+    vm.set_stdlib_types(compiler.get_vm_types());
     vm.set_prelude_imports(compiler.get_prelude_imports().iter().map(|(k, v)| (k.clone(), v.clone())).collect());
 
     // Setup eval native function with callback
     vm.setup_eval();
     let dynamic_functions = vm.get_dynamic_functions();
+    let dynamic_types = vm.get_dynamic_types();
+    let dynamic_mvars = vm.get_dynamic_mvars();
     let stdlib_functions = vm.get_stdlib_functions();
+    let stdlib_types = vm.get_stdlib_types();
     let stdlib_function_list = vm.get_stdlib_function_list();
     let prelude_imports = vm.get_prelude_imports();
     vm.set_eval_callback(move |code: &str| {
@@ -643,6 +647,14 @@ fn main() -> ExitCode {
             }
         }
 
+        // Pre-populate compiler with stdlib types
+        {
+            let types = stdlib_types.read();
+            for (name, type_val) in types.iter() {
+                eval_compiler.register_external_type(name, type_val);
+            }
+        }
+
         // Pre-populate compiler with previously eval'd functions (appended after stdlib)
         {
             let dyn_funcs = dynamic_functions.read();
@@ -650,6 +662,149 @@ fn main() -> ExitCode {
                 eval_compiler.register_external_function(name, func.clone());
             }
         }
+
+        // Pre-populate compiler with previously eval'd types
+        {
+            let dyn_types = dynamic_types.read();
+            for (name, type_val) in dyn_types.iter() {
+                eval_compiler.register_external_type(name, type_val);
+            }
+        }
+
+        // Pre-populate compiler with dynamic mvars (from previous evals)
+        {
+            let mvars = dynamic_mvars.read();
+            for name in mvars.keys() {
+                eval_compiler.register_dynamic_mvar(name);
+            }
+        }
+
+        // Check for variable binding pattern: "name = expr" or "var name = expr"
+        let code = {
+            let trimmed = code.trim();
+            // Inline variable binding detection
+            let var_binding: Option<(String, String)> = {
+                // Skip definitions that are not variable bindings
+                if trimmed.starts_with("mvar ") ||
+                   trimmed.starts_with("type ") ||
+                   trimmed.starts_with("trait ") ||
+                   trimmed.starts_with("module ") ||
+                   trimmed.starts_with("pub ") ||
+                   trimmed.starts_with("extern ") {
+                    None
+                } else if trimmed.starts_with("var ") {
+                    // "var name = expr" pattern
+                    let rest = trimmed[4..].trim();
+                    if let Some(eq_pos) = rest.find('=') {
+                        let name = rest[..eq_pos].trim();
+                        let expr = rest[eq_pos + 1..].trim();
+                        if !name.contains('(') && !name.is_empty() && !expr.is_empty() {
+                            Some((name.to_string(), expr.to_string()))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else if let Some(eq_pos) = trimmed.find('=') {
+                    // "name = expr" pattern
+                    let before_eq = if eq_pos > 0 { trimmed.chars().nth(eq_pos - 1) } else { None };
+                    let after_eq = trimmed.chars().nth(eq_pos + 1);
+                    let is_comparison = matches!(before_eq, Some('!' | '<' | '>' | '='))
+                        || matches!(after_eq, Some('=') | Some('>'));
+                    if eq_pos > 0 && !is_comparison {
+                        let name = trimmed[..eq_pos].trim();
+                        let expr = trimmed[eq_pos + 1..].trim();
+                        if !name.contains('(') && !name.contains('{') && !name.contains('[')
+                           && !name.is_empty() && !expr.is_empty() {
+                            if let Some(first_char) = name.chars().next() {
+                                if first_char.is_lowercase() || first_char == '_' {
+                                    Some((name.to_string(), expr.to_string()))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
+            if let Some((name, expr)) = var_binding {
+                // Variable binding: compile and run the expression, store in dynamic_mvars
+                let wrapper = format!("__eval_var__() = {}", expr);
+                let (module_opt, errors) = parse(&wrapper);
+                if !errors.is_empty() {
+                    return Err(format!("Parse error: {:?}", errors));
+                }
+                let module = module_opt.ok_or_else(|| "Failed to parse expression".to_string())?;
+
+                eval_compiler.add_module(&module, vec![], std::sync::Arc::new(wrapper.clone()), "<eval>".to_string())
+                    .map_err(|e| format!("{}", e))?;
+
+                if let Err((e, _, _)) = eval_compiler.compile_all() {
+                    return Err(format!("Compilation error: {}", e));
+                }
+
+                let func = eval_compiler.get_function("__eval_var__")
+                    .ok_or_else(|| "Failed to compile expression".to_string())?;
+
+                // Create a minimal VM to run the expression
+                let mut eval_vm = ParallelVM::new(ParallelConfig::default());
+                eval_vm.register_default_natives();
+                eval_vm.setup_eval();
+
+                // Share dynamic_mvars with the eval VM so it can access variables from previous evals
+                eval_vm.set_dynamic_mvars(dynamic_mvars.clone());
+
+                // Register all functions
+                {
+                    let dyn_funcs = dynamic_functions.read();
+                    for (fname, f) in dyn_funcs.iter() {
+                        eval_vm.register_function(fname, f.clone());
+                    }
+                }
+                eval_vm.register_function("__eval_var__", func.clone());
+
+                // Register dynamic types
+                {
+                    let dyn_types = dynamic_types.read();
+                    for (tname, t) in dyn_types.iter() {
+                        eval_vm.register_type(tname, t.clone());
+                    }
+                }
+
+                // Build function list
+                let func_list: Vec<_> = eval_compiler.get_function_list();
+                eval_vm.set_function_list(func_list);
+
+                // Run and get result
+                match eval_vm.run(func) {
+                    Ok(result) => {
+                        if let Some(val) = result.value {
+                            // Convert to ThreadSafeValue and store in dynamic_mvars
+                            let safe_val = val.to_thread_safe();
+                            let mut mvars = dynamic_mvars.write();
+                            mvars.insert(name.clone(), std::sync::Arc::new(parking_lot::RwLock::new(safe_val)));
+                            return Ok(format!("{} = {}", name, val.display()));
+                        } else {
+                            return Err("Expression returned no value".to_string());
+                        }
+                    }
+                    Err(e) => return Err(format!("{}", e)),
+                }
+            } else {
+                code.to_string()
+            }
+        };
+        let code = code.as_str();
 
         // First, try to parse as a definition (function, type, etc.)
         let (direct_module_opt, direct_errors) = parse(code);
@@ -671,11 +826,49 @@ fn main() -> ExitCode {
 
             // Store newly defined functions in dynamic_functions for future evals
             {
+                let dyn_funcs_read = dynamic_functions.read();
+                let stdlib_funcs = stdlib_functions.read();
+
+                // Collect new functions (those not in stdlib or already in dynamic_functions)
+                let new_funcs: Vec<_> = eval_compiler.get_all_functions()
+                    .into_iter()
+                    .filter(|(name, _)| {
+                        !name.starts_with("__") &&
+                        !stdlib_funcs.contains_key(name.as_str()) &&
+                        !dyn_funcs_read.contains_key(name.as_str())
+                    })
+                    .map(|(name, func)| (name.clone(), func.clone()))
+                    .collect();
+                drop(dyn_funcs_read);
+                drop(stdlib_funcs);
+
+                // Now insert the new functions
                 let mut dyn_funcs = dynamic_functions.write();
-                for (name, func) in eval_compiler.get_all_functions() {
-                    if !name.starts_with("__") {
-                        dyn_funcs.insert(name.clone(), func.clone());
-                    }
+                for (name, func) in new_funcs {
+                    dyn_funcs.insert(name, func);
+                }
+            }
+
+            // Store newly defined types in dynamic_types for future evals
+            {
+                let dyn_types_read = dynamic_types.read();
+                let stdlib_types_read = stdlib_types.read();
+
+                // Collect new types (those not in stdlib or already in dynamic_types)
+                let new_types: Vec<_> = eval_compiler.get_vm_types()
+                    .into_iter()
+                    .filter(|(name, _)| {
+                        !stdlib_types_read.contains_key(name.as_str()) &&
+                        !dyn_types_read.contains_key(name.as_str())
+                    })
+                    .collect();
+                drop(dyn_types_read);
+                drop(stdlib_types_read);
+
+                // Now insert the new types
+                let mut dyn_types = dynamic_types.write();
+                for (name, type_val) in new_types {
+                    dyn_types.insert(name, type_val);
                 }
             }
 
@@ -706,6 +899,9 @@ fn main() -> ExitCode {
             eval_vm.register_default_natives();
             eval_vm.setup_eval();
 
+            // Share dynamic_mvars with the eval VM so it can access variables from previous evals
+            eval_vm.set_dynamic_mvars(dynamic_mvars.clone());
+
             // Register all functions (dynamic + the eval wrapper)
             {
                 let dyn_funcs = dynamic_functions.read();
@@ -714,6 +910,20 @@ fn main() -> ExitCode {
                 }
             }
             eval_vm.register_function("__eval_result__", func.clone());
+
+            // Register all types (stdlib + dynamic) for record construction
+            {
+                let stdlib_types_read = stdlib_types.read();
+                for (name, type_val) in stdlib_types_read.iter() {
+                    eval_vm.register_type(name, type_val.clone());
+                }
+            }
+            {
+                let dyn_types = dynamic_types.read();
+                for (name, type_val) in dyn_types.iter() {
+                    eval_vm.register_type(name, type_val.clone());
+                }
+            }
 
             // Build function list for indexed calls
             let func_list: Vec<_> = eval_compiler.get_function_list();
