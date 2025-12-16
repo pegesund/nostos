@@ -1,0 +1,10 @@
+# expect: 126
+# Chain of readers is SAFE with RwLock semantics (multiple readers allowed)
+
+mvar data: Int = 42
+
+readC() = data
+readB() = readC() + data
+readA() = readB() + data
+
+main() = readA()
