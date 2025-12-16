@@ -93,6 +93,6 @@ inputShow() = {
 inputInit() = {
     inputPanelId = Panel.create("Input Demo")
     Panel.onKey(inputPanelId, "demo.input.inputHandleKey")
-    Panel.registerHotkey("alt+i", "demo.input.inputShow")
-    "Input demo ready. Press Alt+I to open."
+    Panel.registerHotkey("alt+t", "demo.input.inputShow")
+    "Input demo ready. Press Alt+T to open."
 }
