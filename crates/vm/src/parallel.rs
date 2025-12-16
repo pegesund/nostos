@@ -7803,7 +7803,7 @@ impl ThreadWorker {
             }
 
             MvarRead(dst, name_idx) => {
-                // Assumes lock is already held via MvarLock
+                // Fine-grained locking: acquire read lock, read, release
                 let name = match &constants[*name_idx as usize] {
                     Value::String(s) => s.as_str(),
                     _ => return Err(RuntimeError::Panic("MvarRead: name must be a string constant".to_string())),
@@ -7811,15 +7811,15 @@ impl ThreadWorker {
                 let var = self.shared.mvars.get(name)
                     .ok_or_else(|| RuntimeError::Panic(format!("Unknown mvar: {}", name)))?
                     .clone();  // Clone Arc to release borrow on self.shared
-                // Access data directly (lock is held by MvarLock)
-                let value = unsafe { &*var.data_ptr() };
+                // Acquire read lock, read value, release lock (all atomic)
+                let value = var.read().clone();
                 let proc = self.get_process_mut(local_id).unwrap();
                 let gc_value = value.to_gc_value(&mut proc.heap);
                 proc.frames.last_mut().unwrap().registers[*dst as usize] = gc_value;
             }
 
             MvarWrite(name_idx, src) => {
-                // Assumes write lock is already held via MvarLock
+                // Fine-grained locking: acquire write lock, write, release
                 let name = match &constants[*name_idx as usize] {
                     Value::String(s) => s.as_str(),
                     _ => return Err(RuntimeError::Panic("MvarWrite: name must be a string constant".to_string())),
@@ -7831,8 +7831,8 @@ impl ThreadWorker {
                 let proc = self.get_process(local_id).unwrap();
                 let safe_value = ThreadSafeValue::from_gc_value(&value, &proc.heap)
                     .ok_or_else(|| RuntimeError::Panic(format!("Cannot convert value for mvar: {}", name)))?;
-                // Write data directly (write lock is held by MvarLock)
-                unsafe { *var.data_ptr() = safe_value; }
+                // Acquire write lock, write value, release lock (all atomic)
+                *var.write() = safe_value;
             }
 
             Panic(msg_reg) => {

@@ -3116,30 +3116,10 @@ impl Compiler {
         // Allocate registers for parameters (0..arity)
         self.next_reg = arity as Reg;
 
-        // === Function-level mvar locking ===
-        // Analyze which mvars this function accesses (pre-analysis before compiling)
-        let (fn_mvar_reads, fn_mvar_writes) = self.analyze_fn_def_mvar_access(def);
-
-        // Determine lock types: write lock if mvar is written, read lock otherwise
-        // Collect all accessed mvars with their lock types
-        let mut mvar_locks: Vec<(String, bool)> = Vec::new(); // (name, is_write)
-        for mvar_name in &fn_mvar_writes {
-            mvar_locks.push((mvar_name.clone(), true)); // write lock
-        }
-        for mvar_name in &fn_mvar_reads {
-            if !fn_mvar_writes.contains(mvar_name) {
-                mvar_locks.push((mvar_name.clone(), false)); // read lock
-            }
-        }
-
-        // Sort by name to ensure consistent lock ordering (prevents deadlocks)
-        mvar_locks.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Emit MvarLock instructions at function entry
-        for (mvar_name, is_write) in &mvar_locks {
-            let name_idx = self.chunk.add_constant(Value::String(Arc::new(mvar_name.clone())));
-            self.chunk.emit(Instruction::MvarLock(name_idx, *is_write), 0);
-        }
+        // === Mvar access analysis (for safety checks, no function-level locking needed) ===
+        // Fine-grained locking: each MvarRead/MvarWrite acquires and releases its own lock
+        // No function-level MvarLock/MvarUnlock needed - deadlock-free by design
+        let (_fn_mvar_reads, _fn_mvar_writes) = self.analyze_fn_def_mvar_access(def);
 
         if needs_dispatch {
             // Multi-clause dispatch: try each clause in order
@@ -3195,11 +3175,7 @@ impl Compiler {
                         return Err(e);
                     }
                 };
-                // Emit MvarUnlock instructions before Return (reverse order)
-                for (mvar_name, is_write) in mvar_locks.iter().rev() {
-                    let name_idx = self.chunk.add_constant(Value::String(Arc::new(mvar_name.clone())));
-                    self.chunk.emit(Instruction::MvarUnlock(name_idx, *is_write), 0);
-                }
+                // No MvarUnlock needed - fine-grained locking releases per-operation
                 self.chunk.emit(Instruction::Return(result_reg), 0);
 
                 // Record where we need to patch for "matched" jumps
@@ -3261,11 +3237,7 @@ impl Compiler {
                 }
                 Err(e) => return Err(e),
             };
-            // Emit MvarUnlock instructions before Return (reverse order)
-            for (mvar_name, is_write) in mvar_locks.iter().rev() {
-                let name_idx = self.chunk.add_constant(Value::String(Arc::new(mvar_name.clone())));
-                self.chunk.emit(Instruction::MvarUnlock(name_idx, *is_write), 0);
-            }
+            // No MvarUnlock needed - fine-grained locking releases per-operation
             self.chunk.emit(Instruction::Return(result_reg), 0);
         }
 
@@ -7545,96 +7517,15 @@ impl Compiler {
     /// With per-instruction locking, these are race conditions (not deadlocks):
     /// - Function A accesses mvar X, then calls function B which also accesses X
     ///   (the locks are released between accesses, so no deadlock, but potential race)
-    /// - Recursive function that accesses the same mvar
+    /// Check for potential mvar deadlocks.
     ///
-    /// With function-level locking (future), these would be actual deadlocks.
+    /// With fine-grained locking (lock per-operation, not per-function), all patterns are safe.
+    /// Each MvarRead/MvarWrite acquires and releases its own lock atomically.
+    /// No deadlocks possible - this check is now a no-op.
     pub fn check_mvar_deadlocks(&self) -> Vec<String> {
-        let mut errors = Vec::new();
-
-        // For each function that accesses mvars
-        for (fn_name, fn_access) in &self.fn_mvar_access {
-            // Check all mvars this function accesses
-            let all_mvars: HashSet<&String> = fn_access.reads.iter()
-                .chain(fn_access.writes.iter())
-                .collect();
-
-            for mvar in all_mvars {
-                // Check if this function calls itself (recursive) and accesses the mvar
-                if let Some(calls) = self.fn_calls.get(fn_name) {
-                    if calls.contains(fn_name) {
-                        // Self-recursive and accesses mvar
-                        let access_type = if fn_access.writes.contains(mvar) {
-                            "writes to"
-                        } else {
-                            "reads"
-                        };
-                        errors.push(format!(
-                            "Potential deadlock: recursive function `{}` {} mvar `{}`",
-                            fn_name.split('/').next().unwrap_or(fn_name),
-                            access_type,
-                            mvar
-                        ));
-                    }
-                }
-
-                // Check transitively called functions
-                let mut visited = HashSet::new();
-                let mut stack = Vec::new();
-                if let Some(calls) = self.fn_calls.get(fn_name) {
-                    for callee in calls {
-                        if callee != fn_name {
-                            stack.push(callee.clone());
-                        }
-                    }
-                }
-
-                while let Some(callee) = stack.pop() {
-                    if visited.contains(&callee) {
-                        continue;
-                    }
-                    visited.insert(callee.clone());
-
-                    // Check mvar access patterns for deadlocks
-                    // RwLock semantics: multiple readers OK, writer needs exclusive access
-                    // Since locks are held for entire function duration:
-                    // - Caller READS + Callee READS -> Safe (multiple readers allowed)
-                    // - Caller WRITES + Callee READS/WRITES -> Unsafe (writer blocks all)
-                    // - Caller READS + Callee WRITES -> Unsafe (reader blocks writer)
-                    if let Some(callee_access) = self.fn_mvar_access.get(&callee) {
-                        let caller_writes = fn_access.writes.contains(mvar);
-                        let callee_reads = callee_access.reads.contains(mvar);
-                        let callee_writes = callee_access.writes.contains(mvar);
-
-                        // Only safe case: both caller and callee only READ
-                        let is_unsafe = caller_writes || callee_writes;
-
-                        if is_unsafe && (callee_reads || callee_writes) {
-                            let caller_access = if caller_writes { "writes to" } else { "reads" };
-                            let callee_access_type = if callee_writes { "writes to" } else { "reads" };
-                            errors.push(format!(
-                                "Potential deadlock: `{}` {} mvar `{}` and calls `{}` which {} the same mvar",
-                                fn_name.split('/').next().unwrap_or(fn_name),
-                                caller_access,
-                                mvar,
-                                callee.split('/').next().unwrap_or(&callee),
-                                callee_access_type,
-                            ));
-                        }
-                    }
-
-                    // Add callee's callees to the stack
-                    if let Some(callee_calls) = self.fn_calls.get(&callee) {
-                        for next_callee in callee_calls {
-                            if !visited.contains(next_callee) {
-                                stack.push(next_callee.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        errors
+        // Fine-grained locking makes all mvar access patterns safe
+        // No deadlock checking needed
+        Vec::new()
     }
 
     /// Get all types for the VM.
