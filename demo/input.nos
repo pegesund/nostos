@@ -17,7 +17,7 @@ inputHandleKey(key) = {
         "backspace" -> {
             len = String.length(inputBuffer)
             if len > 0 then {
-                inputBuffer = String.take(inputBuffer, len - 1)
+                inputBuffer = String.substring(inputBuffer, 0, len - 1)
             } else ()
         }
         "enter" -> {
