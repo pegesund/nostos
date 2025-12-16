@@ -1010,9 +1010,8 @@ fn create_nostos_panel_view_by_id(engine: &Rc<RefCell<ReplEngine>>, panel_id: u6
             };
 
             if let (Some(key), Some(handler_fn)) = (key_name, key_handler.as_ref()) {
-                // Call the handler function with the key
-                let call_expr = format!("{}(\"{}\")", handler_fn, key);
-                let _ = engine_for_keys.borrow_mut().eval(&call_expr);
+                // Call the handler function directly (no parsing/compiling - much faster)
+                let _ = engine_for_keys.borrow_mut().call_function_with_string_arg(handler_fn, key);
 
                 // Refresh the panel content after handling key
                 let commands = engine_for_keys.borrow_mut().drain_panel_commands();
