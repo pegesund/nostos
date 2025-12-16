@@ -553,26 +553,10 @@ fn main() -> ExitCode {
         }
     }
 
-    // Compile all bodies
+    // Compile all bodies (includes mvar safety check)
     if let Err((e, filename, source)) = compiler.compile_all() {
         let source_error = e.to_source_error();
         source_error.eprint(&filename, &source);
-        return ExitCode::FAILURE;
-    }
-
-    // Check for potential mvar deadlocks (compile-time enforcement of safe pattern)
-    let deadlock_errors = compiler.check_mvar_deadlocks();
-    if !deadlock_errors.is_empty() {
-        eprintln!("\x1b[31mError:\x1b[0m Mvar safety violation detected:");
-        for error in &deadlock_errors {
-            eprintln!("  - {}", error);
-        }
-        eprintln!();
-        eprintln!("Functions that access an mvar cannot call other functions that access");
-        eprintln!("the same mvar. This prevents deadlocks with function-level locking.");
-        eprintln!();
-        eprintln!("To fix: Restructure your code so that mvar-accessing functions are");
-        eprintln!("'leaf' functions that don't call other mvar-accessing functions.");
         return ExitCode::FAILURE;
     }
 

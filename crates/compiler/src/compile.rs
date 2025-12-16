@@ -334,6 +334,9 @@ pub enum CompileError {
 
     #[error("type error: {message}")]
     TypeError { message: String, span: Span },
+
+    #[error("mvar safety violation: {message}")]
+    MvarSafetyViolation { message: String, span: Span },
 }
 
 impl CompileError {
@@ -355,6 +358,7 @@ impl CompileError {
             CompileError::CannotDerive { span, .. } => *span,
             CompileError::TraitBoundNotSatisfied { span, .. } => *span,
             CompileError::TypeError { span, .. } => *span,
+            CompileError::MvarSafetyViolation { span, .. } => *span,
         }
     }
 
@@ -420,6 +424,9 @@ impl CompileError {
             }
             CompileError::TypeError { message, .. } => {
                 SourceError::compile(message.clone(), span)
+            }
+            CompileError::MvarSafetyViolation { message, .. } => {
+                SourceError::compile(format!("mvar safety violation: {}", message), span)
             }
         }
     }
@@ -849,6 +856,26 @@ impl Compiler {
                     errors.push((base_name, e, source_name, source));
                 }
             }
+        }
+
+        // Check for mvar safety violations (prevents runtime deadlocks)
+        let mvar_errors = self.check_mvar_deadlocks();
+        for msg in mvar_errors {
+            // Extract function name from error message if possible
+            let fn_name = msg.split('`').nth(1).unwrap_or("unknown").to_string();
+            let (source_name, source) = self.fn_sources.iter()
+                .find(|(k, _)| k.contains(&fn_name))
+                .map(|(_, v)| v.clone())
+                .unwrap_or_else(|| ("unknown".to_string(), Arc::new(String::new())));
+            errors.push((
+                fn_name,
+                CompileError::MvarSafetyViolation {
+                    message: msg,
+                    span: Span { start: 0, end: 0 }
+                },
+                source_name,
+                source,
+            ));
         }
 
         errors

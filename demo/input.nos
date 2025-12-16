@@ -4,84 +4,92 @@
 # Type to enter text, press Enter to add to list, Esc to close.
 #
 # Usage: Call inputInit() from the REPL after loading with :demo
-#        Then press Alt+I to open the panel
+#        Then press Alt+T to open the panel
 
 # Panel state using mvars
 mvar inputPanelId: Int = 0
 mvar inputBuffer: String = ""
 mvar inputItems: List[String] = []
 
-# Leaf functions for mvar access
-inputGetBuffer() = inputBuffer
-inputGetItems() = inputItems
-inputSetBuffer(val) = { inputBuffer = val }
-inputAddItem(item) = { inputItems = push(inputItems, item) }
+# Movement functions (separate, like listMoveUp/listMoveDown)
+inputIncCounter() = {
+    inputBuffer = inputBuffer ++ "j"
+}
 
-# Handle backspace - leaf function
-inputDoBackspace() = {
+inputDecCounter() = {
     len = String.length(inputBuffer)
     if len > 0 then {
         inputBuffer = String.substring(inputBuffer, 0, len - 1)
     } else ()
 }
 
-# Handle enter - leaf function
-inputDoEnter() = {
+inputAddChar(c) = {
+    inputBuffer = inputBuffer ++ c
+}
+
+inputSubmit() = {
     if String.length(inputBuffer) > 0 then {
         inputItems = push(inputItems, inputBuffer)
         inputBuffer = ""
     } else ()
 }
 
-# Handle char input - leaf function
-inputDoChar(c) = {
-    inputBuffer = inputBuffer ++ c
-}
-
-# Handle all keys - dispatches to leaf functions then updates view
+# Handle keyboard input - calls separate functions like list demo
 inputHandleKey(key) = {
     match key
-        "backspace" -> inputDoBackspace()
-        "enter" -> inputDoEnter()
-        "escape" -> Panel.hide(inputPanelId)
-        _ -> {
-            if String.length(key) == 1 then {
-                inputDoChar(key)
-            } else ()
-        }
+        "backspace" -> inputDecCounter()
+        "enter" -> inputSubmit()
+        "j" -> inputAddChar("j")
+        "k" -> inputAddChar("k")
+        "a" -> inputAddChar("a")
+        "b" -> inputAddChar("b")
+        "c" -> inputAddChar("c")
+        "d" -> inputAddChar("d")
+        "e" -> inputAddChar("e")
+        "f" -> inputAddChar("f")
+        "g" -> inputAddChar("g")
+        "h" -> inputAddChar("h")
+        "i" -> inputAddChar("i")
+        "l" -> inputAddChar("l")
+        "m" -> inputAddChar("m")
+        "n" -> inputAddChar("n")
+        "o" -> inputAddChar("o")
+        "p" -> inputAddChar("p")
+        "q" -> inputAddChar("q")
+        "r" -> inputAddChar("r")
+        "s" -> inputAddChar("s")
+        "t" -> inputAddChar("t")
+        "u" -> inputAddChar("u")
+        "v" -> inputAddChar("v")
+        "w" -> inputAddChar("w")
+        "x" -> inputAddChar("x")
+        "y" -> inputAddChar("y")
+        "z" -> inputAddChar("z")
+        " " -> inputAddChar(" ")
+        _ -> ()
     end
-    # Get current state and update panel
-    items = inputGetItems()
-    buffer = inputGetBuffer()
-    Panel.setContent(inputPanelId, inputViewWith(items, buffer))
+    Panel.setContent(inputPanelId, inputView())
 }
 
-# Render items list
-inputFmtItem(theItem, theIdx) = show(theIdx) ++ ". " ++ theItem ++ "\n"
+# Render a single item with index
+inputRenderItem(idx, item) = show(idx) ++ ". " ++ item
 
-inputFoldHelper(accAndIdx, theItem) = {
-    (theAcc, theIdx) = accAndIdx
-    (theAcc ++ inputFmtItem(theItem, theIdx), theIdx + 1)
-}
+# Render the full list recursively
+inputRenderList(items, idx) = match items
+    [] -> ""
+    [item | rest] -> inputRenderItem(idx, item) ++ "\n" ++ inputRenderList(rest, idx + 1)
+end
 
-inputRenderItems(items) = {
-    (result, _) = fold(inputFoldHelper, ("", 1), items)
-    result
-}
-
-# Main view function - takes values as parameters to avoid mvar deadlock
-inputViewWith(items, buffer) = {
+# Main view function
+inputView() = {
     header = "=== Input Demo ===\n\n"
-    itemList = if length(items) == 0
+    itemList = if length(inputItems) == 0
         then "(no items yet)\n"
-        else inputRenderItems(items)
-    prompt = "\n> " ++ buffer ++ "_\n"
+        else inputRenderList(inputItems, 1)
+    prompt = "\n> " ++ inputBuffer ++ "_\n"
     footer = "\n[Type to add, Enter to submit, Esc to close]"
     header ++ itemList ++ prompt ++ footer
 }
-
-# Leaf function to get current view
-inputView() = inputViewWith(inputItems, inputBuffer)
 
 # Show the panel
 inputShow() = {
@@ -89,7 +97,7 @@ inputShow() = {
     Panel.show(inputPanelId)
 }
 
-# Initialize the input demo
+# Initialize
 inputInit() = {
     inputPanelId = Panel.create("Input Demo")
     Panel.onKey(inputPanelId, "demo.input.inputHandleKey")
