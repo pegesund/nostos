@@ -91,6 +91,21 @@ pub struct SaveCompileResult {
     pub error: Option<String>,
 }
 
+/// Search result for browser search
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    /// Fully qualified function name
+    pub function_name: String,
+    /// The matching line content
+    pub line_content: String,
+    /// Line number (1-indexed, 0 = name match)
+    pub line_number: usize,
+    /// Start position of match in line_content
+    pub match_start: usize,
+    /// End position of match in line_content
+    pub match_end: usize,
+}
+
 /// The REPL state
 pub struct ReplEngine {
     compiler: Compiler,
@@ -1574,6 +1589,76 @@ impl ReplEngine {
         } else {
             source
         }
+    }
+
+    /// Search for a string in functions within a module and its submodules
+    /// Returns a list of matches with function name, line content, and match position
+    pub fn search_in_module(&self, module_path: &[String], query: &str) -> Vec<SearchResult> {
+        let mut results = Vec::new();
+        let query_lower = query.to_lowercase();
+
+        if query_lower.is_empty() {
+            return results;
+        }
+
+        let module_prefix = if module_path.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", module_path.join("."))
+        };
+
+        // Get all function names
+        let all_functions: Vec<String> = self.compiler.get_function_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        // Filter to functions in this module or submodules
+        for func_name in all_functions {
+            // Check if function is in the target module or a submodule
+            let in_scope = if module_prefix.is_empty() {
+                true // Root scope - search all
+            } else {
+                func_name.starts_with(&module_prefix)
+            };
+
+            if !in_scope {
+                continue;
+            }
+
+            // Search in function name
+            let name_lower = func_name.to_lowercase();
+            if let Some(pos) = name_lower.find(&query_lower) {
+                results.push(SearchResult {
+                    function_name: func_name.clone(),
+                    line_content: func_name.clone(),
+                    line_number: 0, // 0 indicates it's a name match
+                    match_start: pos,
+                    match_end: pos + query.len(),
+                });
+            }
+
+            // Search in source code
+            let source = self.get_source(&func_name);
+            if source.starts_with("Not found:") {
+                continue;
+            }
+
+            for (line_idx, line) in source.lines().enumerate() {
+                let line_lower = line.to_lowercase();
+                if let Some(pos) = line_lower.find(&query_lower) {
+                    results.push(SearchResult {
+                        function_name: func_name.clone(),
+                        line_content: line.to_string(),
+                        line_number: line_idx + 1,
+                        match_start: pos,
+                        match_end: pos + query.len(),
+                    });
+                }
+            }
+        }
+
+        results
     }
 
     /// Load a project directory with SourceManager

@@ -3,11 +3,11 @@
 use cursive::Cursive;
 use cursive::traits::*;
 use cursive::views::{Dialog, EditView, LinearLayout, ScrollView, TextView, OnEventView, SelectView, Panel};
-use cursive::theme::{Color, PaletteColor, Theme, BorderStyle, Style};
+use cursive::theme::{Color, PaletteColor, Theme, BorderStyle, Style, ColorStyle};
 use cursive::view::Resizable;
 use cursive::utils::markup::StyledString;
 use cursive::event::{Event, EventResult, EventTrigger, Key};
-use nostos_repl::{ReplEngine, ReplConfig, BrowserItem, SaveCompileResult, CompileStatus};
+use nostos_repl::{ReplEngine, ReplConfig, BrowserItem, SaveCompileResult, CompileStatus, SearchResult};
 use nostos_vm::{Value, Inspector, Slot, SlotInfo};
 use nostos_syntax::lexer::{Token, lex};
 use nostos_syntax::parse;
@@ -2020,7 +2020,7 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let dialog = Dialog::around(
         LinearLayout::vertical()
             .child(split_view)
-            .child(TextView::new("Enter: Open | a: All | n: New | r: Rename | d: Delete | e: Error | g: Graph | Esc: Close"))
+            .child(TextView::new("Enter: Open | a: All | n: New | r: Rename | d: Delete | e: Error | g: Graph | Ctrl+F: Search | Esc: Close"))
     )
     .title(&title);
 
@@ -2030,10 +2030,12 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let path_for_rename = path.clone();
     let path_for_delete = path.clone();
     let path_for_error = path.clone();
+    let path_for_search = path.clone();
     let engine_for_back = engine.clone();
     let engine_for_rename = engine.clone();
     let engine_for_delete = engine.clone();
     let engine_for_error = engine.clone();
+    let engine_for_search = engine.clone();
     let path_for_graph = path.clone();
     let engine_for_graph = engine.clone();
     let dialog_with_keys = OnEventView::new(dialog)
@@ -2282,6 +2284,10 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                     }
                 }
             }
+        })
+        .on_event(Event::CtrlChar('f'), move |s| {
+            // Open search dialog
+            show_search_dialog(s, engine_for_search.clone(), path_for_search.clone());
         });
 
     s.add_layer(dialog_with_keys);
@@ -2322,6 +2328,129 @@ fn show_module_view_dialog(s: &mut Cursive, module_name: &str, source: &str) {
         });
 
     s.add_layer(dialog_with_events);
+}
+
+/// Show search dialog for searching within a module
+fn show_search_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: Vec<String>) {
+    let module_name = if path.is_empty() {
+        "all modules".to_string()
+    } else {
+        path.join(".")
+    };
+
+    // Create search input
+    let engine_for_search = engine.clone();
+    let path_for_search = path.clone();
+
+    let edit_view = EditView::new()
+        .on_submit(move |s, query| {
+            if query.trim().is_empty() {
+                return;
+            }
+
+            // Perform search
+            let results = engine_for_search.borrow().search_in_module(&path_for_search, query);
+
+            if results.is_empty() {
+                log_to_repl(s, &format!("No results found for '{}'", query));
+                return;
+            }
+
+            // Show results dialog
+            show_search_results_dialog(s, engine_for_search.clone(), results, query.to_string());
+        })
+        .with_name("search_input")
+        .fixed_width(40);
+
+    let dialog = Dialog::new()
+        .title(format!("Search in {} [Enter to search, Esc to cancel]", module_name))
+        .content(
+            LinearLayout::vertical()
+                .child(TextView::new("Search query:"))
+                .child(edit_view)
+        );
+
+    let dialog_with_esc = OnEventView::new(dialog)
+        .on_event(Key::Esc, |s| { s.pop_layer(); });
+
+    s.add_layer(dialog_with_esc);
+}
+
+/// Show search results dialog
+fn show_search_results_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, results: Vec<SearchResult>, query: String) {
+    // Close the search input dialog
+    s.pop_layer();
+
+    let result_count = results.len();
+    let mut select = SelectView::<SearchResult>::new();
+
+    for result in results {
+        // Build styled label with highlighted match
+        let mut styled = StyledString::new();
+
+        // Function name in cyan
+        styled.append_styled(
+            &result.function_name,
+            Style::from(Color::Rgb(100, 200, 255))
+        );
+
+        if result.line_number == 0 {
+            // Name match - just show the function name with highlight
+            styled.append_plain(" (name match)");
+        } else {
+            // Line match - show line number and content with highlight
+            styled.append_plain(&format!(":{} ", result.line_number));
+
+            // Show line content with match highlighted
+            let line = &result.line_content;
+            let start = result.match_start;
+            let end = result.match_end;
+
+            // Before match
+            if start > 0 {
+                let before: String = line.chars().take(start).collect();
+                styled.append_plain(&before);
+            }
+
+            // The match itself - highlighted in yellow
+            let match_text: String = line.chars().skip(start).take(end - start).collect();
+            styled.append_styled(
+                &match_text,
+                Style::from(ColorStyle::new(Color::Rgb(0, 0, 0), Color::Rgb(255, 255, 0)))
+            );
+
+            // After match
+            let after: String = line.chars().skip(end).collect();
+            if !after.is_empty() {
+                styled.append_plain(&after);
+            }
+        }
+
+        select.add_item(styled, result);
+    }
+
+    // Handle selection - open function in editor
+    let engine_for_submit = engine.clone();
+    select.set_on_submit(move |s, result: &SearchResult| {
+        let func_name = result.function_name.clone();
+        s.pop_layer(); // Close results dialog
+        s.pop_layer(); // Close browser dialog
+        open_editor(s, &func_name);
+    });
+
+    let select_scroll = select
+        .with_name("search_results")
+        .scrollable()
+        .fixed_size((80, 20));
+
+    let dialog = Dialog::around(select_scroll)
+        .title(format!("Search results for '{}' ({} hits)", query, result_count))
+        .button("Close", |s| { s.pop_layer(); });
+
+    let dialog_with_esc = OnEventView::new(dialog)
+        .on_event(Key::Esc, |s| { s.pop_layer(); });
+
+    s.add_layer(dialog_with_esc);
 }
 
 /// Open the value inspector dialog
