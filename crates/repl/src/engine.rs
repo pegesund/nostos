@@ -12,7 +12,7 @@ use crate::CallGraph;
 use crate::session::extract_dependencies_from_fn;
 use nostos_syntax::ast::{Item, Pattern};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
-use nostos_vm::parallel::{ParallelVM, ParallelConfig, InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver, EvalCommand, EvalResult, EvalCommandReceiver};
+use nostos_vm::parallel::{ParallelVM, ParallelConfig, InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver};
 use nostos_vm::process::ThreadSafeValue;
 
 /// An item in the browser
@@ -163,8 +163,6 @@ pub struct ReplEngine {
     output_receiver: Option<OutputReceiver>,
     /// Receiver for panel commands from VM (Panel.* calls)
     panel_receiver: Option<PanelCommandReceiver>,
-    /// Receiver for eval commands from VM (eval() calls)
-    eval_receiver: Option<EvalCommandReceiver>,
     /// Track which mvars have been registered (to avoid resetting their values)
     registered_mvars: HashSet<String>,
     /// Registered panels: key (e.g., "alt+t") -> PanelInfo (old API, for transition)
@@ -189,7 +187,60 @@ impl ReplEngine {
         let inspect_receiver = Some(vm.setup_inspect());
         let output_receiver = Some(vm.setup_output());
         let panel_receiver = Some(vm.setup_panel());
-        let eval_receiver = Some(vm.setup_eval());
+        vm.setup_eval();
+
+        // Set up eval callback that creates a fresh evaluation context for each call
+        // This is safe for reentrant calls since each eval gets its own compiler/VM
+        vm.set_eval_callback(|code: &str| {
+            use nostos_syntax::parse;
+
+            // Create a minimal compiler for expression evaluation
+            let mut eval_compiler = Compiler::new_empty();
+
+            // Wrap the expression in a function
+            let wrapper = format!("__eval_result__() = {}", code);
+
+            // Parse the wrapper
+            let (module_opt, errors) = parse(&wrapper);
+            if !errors.is_empty() {
+                return Err(format!("Parse error: {:?}", errors));
+            }
+            let module = module_opt.ok_or_else(|| "Failed to parse expression".to_string())?;
+
+            // Add module to compiler
+            eval_compiler.add_module(&module, vec![], std::sync::Arc::new(wrapper.clone()), "<eval>".to_string())
+                .map_err(|e| format!("{}", e))?;
+
+            // Compile all
+            if let Err((e, _, _)) = eval_compiler.compile_all() {
+                return Err(format!("Compilation error: {}", e));
+            }
+
+            // Get the compiled function
+            let func = eval_compiler.get_function("__eval_result__")
+                .ok_or_else(|| "Failed to compile expression".to_string())?;
+
+            // Create a minimal VM to run it
+            let mut eval_vm = ParallelVM::new(ParallelConfig::default());
+            eval_vm.register_default_natives();
+            eval_vm.setup_eval();
+            // Note: Nested eval callback not set - nested eval() calls will fail
+            // This is intentional to prevent deep recursion
+            eval_vm.register_function("__eval_result__", func.clone());
+            eval_vm.set_function_list(vec![func.clone()]);
+
+            // Run and get result
+            match eval_vm.run(func) {
+                Ok(result) => {
+                    if let Some(val) = result.value {
+                        Ok(val.display())
+                    } else {
+                        Ok("()".to_string())
+                    }
+                }
+                Err(e) => Err(format!("{}", e)),
+            }
+        });
 
         Self {
             compiler,
@@ -209,7 +260,6 @@ impl ReplEngine {
             inspect_receiver,
             output_receiver,
             panel_receiver,
-            eval_receiver,
             registered_mvars: HashSet::new(),
             registered_panels: HashMap::new(),
             panel_states: HashMap::new(),
@@ -2954,27 +3004,6 @@ impl ReplEngine {
         // In the new API, we don't have the old-style registrations
         // This method is kept for backward compatibility but returns empty
         Vec::new()
-    }
-
-    /// Process all pending eval commands from the VM channel.
-    /// Each command evaluates code and sends the result back via the reply channel.
-    /// Returns the number of commands processed.
-    pub fn process_eval_commands(&mut self) -> usize {
-        let mut count = 0;
-        if let Some(receiver) = &self.eval_receiver {
-            // Collect commands first to avoid borrow issues
-            let commands: Vec<EvalCommand> = receiver.try_iter().collect();
-            for cmd in commands {
-                let result = match self.eval(&cmd.code) {
-                    Ok(value) => EvalResult::Ok(value),
-                    Err(e) => EvalResult::Err(e),
-                };
-                // Send the result back (ignore send errors - caller may have timed out)
-                let _ = cmd.reply.send(result);
-                count += 1;
-            }
-        }
-        count
     }
 
     /// Get a panel by its activation key (old API)
