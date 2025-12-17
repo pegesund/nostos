@@ -8,6 +8,7 @@
 //! - Erlang-style lightweight processes
 //! - Multi-CPU parallel execution
 
+pub mod async_vm;
 pub mod gc;
 pub mod inspect;
 pub mod io_runtime;

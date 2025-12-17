@@ -13,6 +13,7 @@ use nostos_compiler::compile::{compile_module, Compiler, MvarInitValue};
 use nostos_jit::{JitCompiler, JitConfig};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::parallel::{ParallelVM, ParallelConfig};
+use nostos_vm::async_vm::{AsyncVM, AsyncConfig};
 use nostos_vm::process::ThreadSafeValue;
 use nostos_vm::value::RuntimeError;
 use std::env;
@@ -295,6 +296,86 @@ fn mvar_init_to_thread_safe(init: &MvarInitValue) -> ThreadSafeValue {
     }
 }
 
+/// Run program using the experimental tokio-based AsyncVM.
+fn run_with_async_vm(
+    compiler: &Compiler,
+    entry_point_name: &str,
+) -> ExitCode {
+    eprintln!("[AsyncVM] Using experimental tokio-based async VM");
+
+    let config = AsyncConfig::default();
+    let mut vm = AsyncVM::new(config);
+
+    // Register default native functions
+    vm.register_default_natives();
+
+    // Register all functions from compiler
+    for (name, func) in compiler.get_all_functions().iter() {
+        vm.register_function(name, func.clone());
+    }
+
+    // Set function list for indexed calls
+    let func_list = compiler.get_function_list();
+    vm.set_function_list(func_list);
+
+    // Register all types
+    for (name, type_val) in compiler.get_vm_types().iter() {
+        vm.register_type(name, type_val.clone());
+    }
+
+    // Register mvars (module-level mutable variables)
+    for (name, info) in compiler.get_mvars() {
+        let initial_value = mvar_init_to_thread_safe(&info.initial_value);
+        vm.register_mvar(name, initial_value);
+    }
+
+    // JIT compile suitable functions
+    let function_list = compiler.get_function_list();
+    if let Ok(mut jit) = JitCompiler::new(JitConfig::default()) {
+        for idx in 0..function_list.len() {
+            jit.queue_compilation(idx as u16);
+        }
+        if let Ok(compiled) = jit.process_queue(&function_list) {
+            if compiled > 0 {
+                for (idx, _func) in function_list.iter().enumerate() {
+                    if let Some(jit_fn) = jit.get_int_function_0(idx as u16) {
+                        vm.register_jit_int_function_0(idx as u16, jit_fn);
+                    }
+                    if let Some(jit_fn) = jit.get_int_function(idx as u16) {
+                        vm.register_jit_int_function(idx as u16, jit_fn);
+                    }
+                    if let Some(jit_fn) = jit.get_int_function_2(idx as u16) {
+                        vm.register_jit_int_function_2(idx as u16, jit_fn);
+                    }
+                    if let Some(jit_fn) = jit.get_int_function_3(idx as u16) {
+                        vm.register_jit_int_function_3(idx as u16, jit_fn);
+                    }
+                    if let Some(jit_fn) = jit.get_int_function_4(idx as u16) {
+                        vm.register_jit_int_function_4(idx as u16, jit_fn);
+                    }
+                    if let Some(jit_fn) = jit.get_loop_int64_array_function(idx as u16) {
+                        vm.register_jit_loop_array_function(idx as u16, jit_fn);
+                    }
+                }
+            }
+        }
+    }
+
+    // Run the program
+    match vm.run(entry_point_name) {
+        Ok(result) => {
+            if !result.is_unit() {
+                println!("{}", result.display());
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("Runtime error: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
 
@@ -328,6 +409,7 @@ fn main() -> ExitCode {
     let mut json_errors = false;
     let mut debug_mode = false;
     let mut num_threads: usize = 0; // 0 = auto-detect
+    let mut use_async_vm = false; // Use tokio-based async VM
 
     let mut i = 1;
     while i < args.len() {
@@ -348,6 +430,7 @@ fn main() -> ExitCode {
                 println!("  --debug          Show local variable values in stack traces");
                 println!("  --json-errors    Output errors as JSON (for debugger integration)");
                 println!("  --threads N      Use N worker threads (default: all CPUs)");
+                println!("  --async-vm       Use experimental tokio-based async VM");
                 println!();
                 println!("REPL usage:");
                 println!("  nostos repl              Start interactive REPL");
@@ -383,6 +466,11 @@ fn main() -> ExitCode {
                         continue;
                     }
                 }
+                i += 1;
+                continue;
+            }
+            if arg == "--async-vm" {
+                use_async_vm = true;
                 i += 1;
                 continue;
             }
@@ -595,6 +683,11 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // Use AsyncVM if --async-vm flag was set
+    if use_async_vm {
+        return run_with_async_vm(&compiler, &entry_point_name);
+    }
 
     // Create ParallelVM (always use parallel execution)
     let config = ParallelConfig {
