@@ -8130,21 +8130,44 @@ impl Compiler {
         &self.mvars
     }
 
-    /// Check for potential mvar concurrency issues.
-    /// Returns a list of warning messages if issues are detected.
+    /// Check for potential mvar deadlocks caused by transitive blocking.
     ///
-    /// With per-instruction locking, these are race conditions (not deadlocks):
-    /// - Function A accesses mvar X, then calls function B which also accesses X
-    ///   (the locks are released between accesses, so no deadlock, but potential race)
-    /// Check for potential mvar deadlocks.
-    ///
-    /// With fine-grained locking (lock per-operation, not per-function), all patterns are safe.
-    /// Each MvarRead/MvarWrite acquires and releases its own lock atomically.
-    /// No deadlocks possible - this check is now a no-op.
+    /// With function-level locking for read-modify-write patterns, we need to check
+    /// that functions holding mvar locks don't transitively call blocking operations.
+    /// Direct blocking (receive in same function) is caught during compilation.
+    /// This check catches transitive blocking (calling a function that blocks).
     pub fn check_mvar_deadlocks(&self) -> Vec<String> {
-        // Fine-grained locking makes all mvar access patterns safe
-        // No deadlock checking needed
-        Vec::new()
+        let mut errors = Vec::new();
+
+        // Check for transitive blocking: a function with mvar locks that calls
+        // (directly or transitively) a function that blocks (receive)
+        for (fn_name, access) in &self.fn_mvar_access {
+            // Find mvars that are both read AND written by this function
+            // These are the ones that get function-level locks
+            let mvars_needing_lock: HashSet<_> = access.reads.intersection(&access.writes).collect();
+
+            if !mvars_needing_lock.is_empty() {
+                // This function has function-level locks - check if any called function blocks
+                if let Some(called_fns) = self.fn_calls.get(fn_name) {
+                    for called_fn in called_fns {
+                        let mut visited = HashSet::new();
+                        // Skip checking the current function itself (direct blocking is caught earlier)
+                        visited.insert(fn_name.clone());
+
+                        if self.fn_has_transitive_blocking(called_fn, &mut visited) {
+                            let mvar_name = mvars_needing_lock.iter().next().unwrap();
+                            errors.push(format!(
+                                "function `{}` holds lock on mvar `{}` and calls `{}` which blocks (receive) - this could cause deadlock",
+                                fn_name, mvar_name, called_fn
+                            ));
+                            break; // One error per function is enough
+                        }
+                    }
+                }
+            }
+        }
+
+        errors
     }
 
     /// Get all types for the VM.
