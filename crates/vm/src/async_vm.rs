@@ -1427,6 +1427,14 @@ impl AsyncProcess {
                             false
                         }
                     }
+                    GcValue::Record(ptr) => {
+                        // Records: compare type_name directly
+                        if let Some(rec) = self.heap.get_record(ptr) {
+                            rec.type_name.as_str() == expected_ctor.as_str()
+                        } else {
+                            false
+                        }
+                    }
                     _ => false,
                 };
                 set_reg!(dst, GcValue::Bool(result));
@@ -2080,6 +2088,30 @@ impl AsyncProcess {
                             .ok_or_else(|| RuntimeError::Panic(format!("Record field {} out of bounds", idx)))?
                     }
                     _ => return Err(RuntimeError::Panic("GetVariantField expects variant or record".to_string())),
+                };
+                set_reg!(dst, value);
+            }
+
+            GetVariantFieldByName(dst, src, name_idx) => {
+                let field_name = match get_const!(name_idx) {
+                    Value::String(s) => s.clone(),
+                    _ => return Err(RuntimeError::Panic("GetVariantFieldByName: expected string constant".into())),
+                };
+                let src_val = reg!(src);
+                let value = match src_val {
+                    GcValue::Record(ptr) => {
+                        let record = self.heap.get_record(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid record reference".to_string()))?;
+                        // Find field index by name
+                        // Records store fields in order matching field_names
+                        if let Some(idx) = record.field_names.iter().position(|n| n == field_name.as_str()) {
+                            record.fields.get(idx).cloned()
+                                .ok_or_else(|| RuntimeError::Panic(format!("Record field {} out of bounds", field_name)))?
+                        } else {
+                            return Err(RuntimeError::Panic(format!("Field '{}' not found in record '{}'", field_name, record.type_name)));
+                        }
+                    }
+                    _ => return Err(RuntimeError::Panic("GetVariantFieldByName expects record".to_string())),
                 };
                 set_reg!(dst, value);
             }
