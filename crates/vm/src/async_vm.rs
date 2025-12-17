@@ -458,39 +458,231 @@ impl AsyncProcess {
 
             // === Integer arithmetic ===
             AddInt(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("AddInt: expected Int64".into())) };
-                let vb = match reg!(b) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("AddInt: expected Int64".into())) };
-                set_reg!(dst, GcValue::Int64(va.wrapping_add(vb)));
+                let va = reg!(a);
+                let vb = reg!(b);
+                let result = match (&va, &vb) {
+                    (GcValue::Int8(x), GcValue::Int8(y)) => GcValue::Int8(x.wrapping_add(*y)),
+                    (GcValue::Int16(x), GcValue::Int16(y)) => GcValue::Int16(x.wrapping_add(*y)),
+                    (GcValue::Int32(x), GcValue::Int32(y)) => GcValue::Int32(x.wrapping_add(*y)),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Int64(x.wrapping_add(*y)),
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => GcValue::UInt8(x.wrapping_add(*y)),
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => GcValue::UInt16(x.wrapping_add(*y)),
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => GcValue::UInt32(x.wrapping_add(*y)),
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => GcValue::UInt64(x.wrapping_add(*y)),
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x + y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x + y),
+                    (GcValue::BigInt(px), GcValue::BigInt(py)) => {
+                        let bx = self.heap.get_bigint(*px).unwrap().value.clone();
+                        let by = self.heap.get_bigint(*py).unwrap().value.clone();
+                        let result_ptr = self.heap.alloc_bigint(&bx + &by);
+                        GcValue::BigInt(result_ptr)
+                    }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => GcValue::Decimal(*x + *y),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching numeric types".to_string(),
+                        found: format!("{:?}", va),
+                    }),
+                };
+                set_reg!(dst, result);
             }
             SubInt(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("SubInt: expected Int64".into())) };
-                let vb = match reg!(b) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("SubInt: expected Int64".into())) };
-                set_reg!(dst, GcValue::Int64(va.wrapping_sub(vb)));
+                let va = reg!(a);
+                let vb = reg!(b);
+                let result = match (&va, &vb) {
+                    (GcValue::Int8(x), GcValue::Int8(y)) => GcValue::Int8(x.wrapping_sub(*y)),
+                    (GcValue::Int16(x), GcValue::Int16(y)) => GcValue::Int16(x.wrapping_sub(*y)),
+                    (GcValue::Int32(x), GcValue::Int32(y)) => GcValue::Int32(x.wrapping_sub(*y)),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Int64(x.wrapping_sub(*y)),
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => GcValue::UInt8(x.wrapping_sub(*y)),
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => GcValue::UInt16(x.wrapping_sub(*y)),
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => GcValue::UInt32(x.wrapping_sub(*y)),
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => GcValue::UInt64(x.wrapping_sub(*y)),
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x - y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x - y),
+                    (GcValue::BigInt(px), GcValue::BigInt(py)) => {
+                        let bx = self.heap.get_bigint(*px).unwrap().value.clone();
+                        let by = self.heap.get_bigint(*py).unwrap().value.clone();
+                        let result_ptr = self.heap.alloc_bigint(&bx - &by);
+                        GcValue::BigInt(result_ptr)
+                    }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => GcValue::Decimal(*x - *y),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching numeric types".to_string(),
+                        found: format!("{:?}", va),
+                    }),
+                };
+                set_reg!(dst, result);
             }
             MulInt(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("MulInt: expected Int64".into())) };
-                let vb = match reg!(b) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("MulInt: expected Int64".into())) };
-                set_reg!(dst, GcValue::Int64(va.wrapping_mul(vb)));
+                let va = reg!(a);
+                let vb = reg!(b);
+                let result = match (&va, &vb) {
+                    (GcValue::Int8(x), GcValue::Int8(y)) => GcValue::Int8(x.wrapping_mul(*y)),
+                    (GcValue::Int16(x), GcValue::Int16(y)) => GcValue::Int16(x.wrapping_mul(*y)),
+                    (GcValue::Int32(x), GcValue::Int32(y)) => GcValue::Int32(x.wrapping_mul(*y)),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Int64(x.wrapping_mul(*y)),
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => GcValue::UInt8(x.wrapping_mul(*y)),
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => GcValue::UInt16(x.wrapping_mul(*y)),
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => GcValue::UInt32(x.wrapping_mul(*y)),
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => GcValue::UInt64(x.wrapping_mul(*y)),
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x * y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x * y),
+                    (GcValue::BigInt(px), GcValue::BigInt(py)) => {
+                        let bx = self.heap.get_bigint(*px).unwrap().value.clone();
+                        let by = self.heap.get_bigint(*py).unwrap().value.clone();
+                        let result_ptr = self.heap.alloc_bigint(&bx * &by);
+                        GcValue::BigInt(result_ptr)
+                    }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => GcValue::Decimal(*x * *y),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching numeric types".to_string(),
+                        found: format!("{:?}", va),
+                    }),
+                };
+                set_reg!(dst, result);
             }
             DivInt(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("DivInt: expected Int64".into())) };
-                let vb = match reg!(b) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("DivInt: expected Int64".into())) };
-                if vb == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
-                set_reg!(dst, GcValue::Int64(va / vb));
+                let va = reg!(a);
+                let vb = reg!(b);
+                let result = match (&va, &vb) {
+                    (GcValue::Int8(x), GcValue::Int8(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::Int8(x.wrapping_div(*y))
+                    }
+                    (GcValue::Int16(x), GcValue::Int16(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::Int16(x.wrapping_div(*y))
+                    }
+                    (GcValue::Int32(x), GcValue::Int32(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::Int32(x.wrapping_div(*y))
+                    }
+                    (GcValue::Int64(x), GcValue::Int64(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::Int64(x.wrapping_div(*y))
+                    }
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::UInt8(x.wrapping_div(*y))
+                    }
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::UInt16(x.wrapping_div(*y))
+                    }
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::UInt32(x.wrapping_div(*y))
+                    }
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::UInt64(x.wrapping_div(*y))
+                    }
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x / y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x / y),
+                    (GcValue::BigInt(px), GcValue::BigInt(py)) => {
+                        let bx = self.heap.get_bigint(*px).unwrap().value.clone();
+                        let by = self.heap.get_bigint(*py).unwrap().value.clone();
+                        if by == num_bigint::BigInt::from(0) { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        let result_ptr = self.heap.alloc_bigint(&bx / &by);
+                        GcValue::BigInt(result_ptr)
+                    }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => {
+                        if *y == rust_decimal::Decimal::ZERO { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::Decimal(*x / *y)
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching numeric types".to_string(),
+                        found: format!("{:?}", va),
+                    }),
+                };
+                set_reg!(dst, result);
             }
             ModInt(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("ModInt: expected Int64".into())) };
-                let vb = match reg!(b) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("ModInt: expected Int64".into())) };
-                if vb == 0 { return Err(RuntimeError::Panic("Modulo by zero".into())); }
-                set_reg!(dst, GcValue::Int64(va % vb));
+                let va = reg!(a);
+                let vb = reg!(b);
+                let result = match (&va, &vb) {
+                    (GcValue::Int8(x), GcValue::Int8(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::Int8(x.wrapping_rem(*y))
+                    }
+                    (GcValue::Int16(x), GcValue::Int16(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::Int16(x.wrapping_rem(*y))
+                    }
+                    (GcValue::Int32(x), GcValue::Int32(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::Int32(x.wrapping_rem(*y))
+                    }
+                    (GcValue::Int64(x), GcValue::Int64(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::Int64(x.wrapping_rem(*y))
+                    }
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::UInt8(x.wrapping_rem(*y))
+                    }
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::UInt16(x.wrapping_rem(*y))
+                    }
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::UInt32(x.wrapping_rem(*y))
+                    }
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => {
+                        if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        GcValue::UInt64(x.wrapping_rem(*y))
+                    }
+                    (GcValue::BigInt(px), GcValue::BigInt(py)) => {
+                        let bx = self.heap.get_bigint(*px).unwrap().value.clone();
+                        let by = self.heap.get_bigint(*py).unwrap().value.clone();
+                        if by == num_bigint::BigInt::from(0) { return Err(RuntimeError::Panic("Division by zero".into())); }
+                        let result_ptr = self.heap.alloc_bigint(&bx % &by);
+                        GcValue::BigInt(result_ptr)
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching numeric types".to_string(),
+                        found: format!("{:?}", va),
+                    }),
+                };
+                set_reg!(dst, result);
             }
             NegInt(dst, src) => {
-                let v = match reg!(src) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("NegInt: expected Int64".into())) };
-                set_reg!(dst, GcValue::Int64(-v));
+                let v = reg!(src);
+                let result = match &v {
+                    GcValue::Int8(n) => GcValue::Int8(-n),
+                    GcValue::Int16(n) => GcValue::Int16(-n),
+                    GcValue::Int32(n) => GcValue::Int32(-n),
+                    GcValue::Int64(n) => GcValue::Int64(-n),
+                    GcValue::Float32(n) => GcValue::Float32(-n),
+                    GcValue::Float64(n) => GcValue::Float64(-n),
+                    GcValue::BigInt(ptr) => {
+                        let bi = self.heap.get_bigint(*ptr).unwrap().value.clone();
+                        GcValue::BigInt(self.heap.alloc_bigint(-bi))
+                    }
+                    GcValue::Decimal(d) => GcValue::Decimal(-*d),
+                    _ => return Err(RuntimeError::Panic("NegInt: expected numeric".into())),
+                };
+                set_reg!(dst, result);
             }
             AbsInt(dst, src) => {
-                let v = match reg!(src) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("AbsInt: expected Int64".into())) };
-                set_reg!(dst, GcValue::Int64(v.abs()));
+                let v = reg!(src);
+                let result = match &v {
+                    GcValue::Int8(n) => GcValue::Int8(n.abs()),
+                    GcValue::Int16(n) => GcValue::Int16(n.abs()),
+                    GcValue::Int32(n) => GcValue::Int32(n.abs()),
+                    GcValue::Int64(n) => GcValue::Int64(n.abs()),
+                    GcValue::Float32(n) => GcValue::Float32(n.abs()),
+                    GcValue::Float64(n) => GcValue::Float64(n.abs()),
+                    GcValue::BigInt(ptr) => {
+                        let bi = self.heap.get_bigint(*ptr).unwrap().value.clone();
+                        let abs_bi = if bi < num_bigint::BigInt::from(0) { -bi } else { bi };
+                        GcValue::BigInt(self.heap.alloc_bigint(abs_bi))
+                    }
+                    GcValue::Decimal(d) => GcValue::Decimal(d.abs()),
+                    _ => return Err(RuntimeError::Panic("AbsInt: expected numeric".into())),
+                };
+                set_reg!(dst, result);
             }
             MinInt(dst, a, b) => {
                 let va = match reg!(a) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("MinInt: expected Int64".into())) };
@@ -505,41 +697,81 @@ impl AsyncProcess {
 
             // === Float arithmetic ===
             AddFloat(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("AddFloat: expected Float64".into())) };
-                let vb = match reg!(b) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("AddFloat: expected Float64".into())) };
-                set_reg!(dst, GcValue::Float64(va + vb));
+                let va = reg!(a);
+                let vb = reg!(b);
+                let result = match (&va, &vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x + y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x + y),
+                    _ => return Err(RuntimeError::Panic("AddFloat: expected Float".into())),
+                };
+                set_reg!(dst, result);
             }
             SubFloat(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("SubFloat: expected Float64".into())) };
-                let vb = match reg!(b) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("SubFloat: expected Float64".into())) };
-                set_reg!(dst, GcValue::Float64(va - vb));
+                let va = reg!(a);
+                let vb = reg!(b);
+                let result = match (&va, &vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x - y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x - y),
+                    _ => return Err(RuntimeError::Panic("SubFloat: expected Float".into())),
+                };
+                set_reg!(dst, result);
             }
             MulFloat(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("MulFloat: expected Float64".into())) };
-                let vb = match reg!(b) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("MulFloat: expected Float64".into())) };
-                set_reg!(dst, GcValue::Float64(va * vb));
+                let va = reg!(a);
+                let vb = reg!(b);
+                let result = match (&va, &vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x * y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x * y),
+                    _ => return Err(RuntimeError::Panic("MulFloat: expected Float".into())),
+                };
+                set_reg!(dst, result);
             }
             DivFloat(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("DivFloat: expected Float64".into())) };
-                let vb = match reg!(b) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("DivFloat: expected Float64".into())) };
-                set_reg!(dst, GcValue::Float64(va / vb));
+                let va = reg!(a);
+                let vb = reg!(b);
+                let result = match (&va, &vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x / y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x / y),
+                    _ => return Err(RuntimeError::Panic("DivFloat: expected Float".into())),
+                };
+                set_reg!(dst, result);
             }
             NegFloat(dst, src) => {
-                let v = match reg!(src) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("NegFloat: expected Float64".into())) };
-                set_reg!(dst, GcValue::Float64(-v));
+                let v = reg!(src);
+                let result = match &v {
+                    GcValue::Float64(n) => GcValue::Float64(-n),
+                    GcValue::Float32(n) => GcValue::Float32(-n),
+                    _ => return Err(RuntimeError::Panic("NegFloat: expected Float".into())),
+                };
+                set_reg!(dst, result);
             }
             AbsFloat(dst, src) => {
-                let v = match reg!(src) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("AbsFloat: expected Float64".into())) };
-                set_reg!(dst, GcValue::Float64(v.abs()));
+                let v = reg!(src);
+                let result = match &v {
+                    GcValue::Float64(n) => GcValue::Float64(n.abs()),
+                    GcValue::Float32(n) => GcValue::Float32(n.abs()),
+                    _ => return Err(RuntimeError::Panic("AbsFloat: expected Float".into())),
+                };
+                set_reg!(dst, result);
             }
             SqrtFloat(dst, src) => {
-                let v = match reg!(src) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("SqrtFloat: expected Float64".into())) };
-                set_reg!(dst, GcValue::Float64(v.sqrt()));
+                let v = reg!(src);
+                let result = match &v {
+                    GcValue::Float64(n) => GcValue::Float64(n.sqrt()),
+                    GcValue::Float32(n) => GcValue::Float32(n.sqrt()),
+                    _ => return Err(RuntimeError::Panic("SqrtFloat: expected Float".into())),
+                };
+                set_reg!(dst, result);
             }
             PowFloat(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("PowFloat: expected Float64".into())) };
-                let vb = match reg!(b) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("PowFloat: expected Float64".into())) };
-                set_reg!(dst, GcValue::Float64(va.powf(vb)));
+                let va = reg!(a);
+                let vb = reg!(b);
+                let result = match (&va, &vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x.powf(*y)),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x.powf(*y)),
+                    _ => return Err(RuntimeError::Panic("PowFloat: expected Float".into())),
+                };
+                set_reg!(dst, result);
             }
 
             // === Float comparisons ===
@@ -571,10 +803,28 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             FloatToInt(dst, src) => {
-                let result = match reg!(src) {
-                    GcValue::Float64(v) => GcValue::Int64(v as i64),
-                    GcValue::Float32(v) => GcValue::Int64(v as i64),
-                    GcValue::Int64(v) => GcValue::Int64(v),
+                let val = reg!(src);
+                let result = match &val {
+                    GcValue::Int8(v) => GcValue::Int64(*v as i64),
+                    GcValue::Int16(v) => GcValue::Int64(*v as i64),
+                    GcValue::Int32(v) => GcValue::Int64(*v as i64),
+                    GcValue::Int64(v) => GcValue::Int64(*v),
+                    GcValue::UInt8(v) => GcValue::Int64(*v as i64),
+                    GcValue::UInt16(v) => GcValue::Int64(*v as i64),
+                    GcValue::UInt32(v) => GcValue::Int64(*v as i64),
+                    GcValue::UInt64(v) => GcValue::Int64(*v as i64),
+                    GcValue::Float32(v) => GcValue::Int64(*v as i64),
+                    GcValue::Float64(v) => GcValue::Int64(*v as i64),
+                    GcValue::BigInt(ptr) => {
+                        let bi = self.heap.get_bigint(*ptr).unwrap();
+                        use num_traits::ToPrimitive;
+                        if let Some(i) = bi.value.to_i64() {
+                            GcValue::Int64(i)
+                        } else {
+                            return Err(RuntimeError::Panic("BigInt too large for Int64".into()));
+                        }
+                    }
+                    GcValue::Decimal(d) => GcValue::Int64(d.to_string().parse::<f64>().unwrap_or(0.0) as i64),
                     _ => return Err(RuntimeError::Panic("FloatToInt: expected numeric".into())),
                 };
                 set_reg!(dst, result);
@@ -2094,6 +2344,25 @@ impl AsyncProcess {
                 }
             }
 
+            SetContains(dst, set_reg, val_reg) => {
+                let set_val = reg!(set_reg);
+                let elem_val = reg!(val_reg);
+                let result = if let GcValue::Set(ptr) = &set_val {
+                    if let Some(set) = self.heap.get_set(*ptr) {
+                        if let Some(key) = elem_val.to_gc_map_key(&self.heap) {
+                            set.items.contains(&key)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                set_reg!(dst, GcValue::Bool(result));
+            }
+
             // === String operations ===
             StringDecons(head_dst, tail_dst, str_reg) => {
                 let str_val = reg!(str_reg);
@@ -2434,6 +2703,187 @@ impl AsyncVM {
                     }
                     _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
                 }
+            }),
+        }));
+
+        // hash - compute hash of any value
+        self.register_native("hash", Arc::new(GcNativeFn {
+            name: "hash".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                fn hash_value(val: &GcValue, heap: &Heap) -> Result<u64, RuntimeError> {
+                    const FNV_OFFSET: u64 = 14695981039346656037;
+                    const FNV_PRIME: u64 = 1099511628211;
+
+                    fn fnv1a_hash(bytes: &[u8]) -> u64 {
+                        let mut hash: u64 = FNV_OFFSET;
+                        for byte in bytes {
+                            hash ^= *byte as u64;
+                            hash = hash.wrapping_mul(FNV_PRIME);
+                        }
+                        hash
+                    }
+
+                    fn combine_hash(h1: u64, h2: u64) -> u64 {
+                        h1.wrapping_mul(FNV_PRIME) ^ h2
+                    }
+
+                    match val {
+                        GcValue::Unit => Ok(0),
+                        GcValue::Bool(b) => Ok(if *b { 1 } else { 0 }),
+                        GcValue::Char(c) => Ok(fnv1a_hash(&(*c as u32).to_le_bytes())),
+                        GcValue::Int8(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::Int16(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::Int32(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::Int64(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::UInt8(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::UInt16(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::UInt32(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::UInt64(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::Float32(f) => Ok(fnv1a_hash(&f.to_le_bytes())),
+                        GcValue::Float64(f) => Ok(fnv1a_hash(&f.to_le_bytes())),
+                        GcValue::String(s) => {
+                            if let Some(str_val) = heap.get_string(*s) {
+                                Ok(fnv1a_hash(str_val.data.as_bytes()))
+                            } else {
+                                Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                            }
+                        }
+                        GcValue::List(list) => {
+                            let mut h = fnv1a_hash(b"list");
+                            for item in list.items() {
+                                h = combine_hash(h, hash_value(item, heap)?);
+                            }
+                            Ok(h)
+                        }
+                        GcValue::Tuple(ptr) => {
+                            if let Some(tuple) = heap.get_tuple(*ptr) {
+                                let mut h = fnv1a_hash(b"tuple");
+                                for item in &tuple.items {
+                                    h = combine_hash(h, hash_value(item, heap)?);
+                                }
+                                Ok(h)
+                            } else {
+                                Err(RuntimeError::Panic("Invalid tuple pointer".to_string()))
+                            }
+                        }
+                        GcValue::Record(ptr) => {
+                            if let Some(rec) = heap.get_record(*ptr) {
+                                let mut h = fnv1a_hash(rec.type_name.as_bytes());
+                                for field in &rec.fields {
+                                    h = combine_hash(h, hash_value(field, heap)?);
+                                }
+                                Ok(h)
+                            } else {
+                                Err(RuntimeError::Panic("Invalid record pointer".to_string()))
+                            }
+                        }
+                        GcValue::Variant(ptr) => {
+                            if let Some(var) = heap.get_variant(*ptr) {
+                                let mut h = fnv1a_hash(var.type_name.as_bytes());
+                                h = combine_hash(h, fnv1a_hash(var.constructor.as_bytes()));
+                                for field in &var.fields {
+                                    h = combine_hash(h, hash_value(field, heap)?);
+                                }
+                                Ok(h)
+                            } else {
+                                Err(RuntimeError::Panic("Invalid variant pointer".to_string()))
+                            }
+                        }
+                        GcValue::Map(ptr) => {
+                            if let Some(map) = heap.get_map(*ptr) {
+                                let mut h: u64 = fnv1a_hash(b"map");
+                                for (k, v) in map.entries.iter() {
+                                    let kh = match k {
+                                        crate::gc::GcMapKey::Unit => 0,
+                                        crate::gc::GcMapKey::Bool(b) => if *b { 1 } else { 0 },
+                                        crate::gc::GcMapKey::Char(c) => fnv1a_hash(&(*c as u32).to_le_bytes()),
+                                        crate::gc::GcMapKey::Int8(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::Int16(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::Int32(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::Int64(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt8(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt16(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt32(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt64(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::String(s) => fnv1a_hash(s.as_bytes()),
+                                    };
+                                    let vh = hash_value(v, heap)?;
+                                    h ^= combine_hash(kh, vh);
+                                }
+                                Ok(h)
+                            } else {
+                                Err(RuntimeError::Panic("Invalid map pointer".to_string()))
+                            }
+                        }
+                        GcValue::Set(ptr) => {
+                            if let Some(set) = heap.get_set(*ptr) {
+                                let mut h: u64 = fnv1a_hash(b"set");
+                                for k in set.items.iter() {
+                                    let kh = match k {
+                                        crate::gc::GcMapKey::Unit => 0,
+                                        crate::gc::GcMapKey::Bool(b) => if *b { 1 } else { 0 },
+                                        crate::gc::GcMapKey::Char(c) => fnv1a_hash(&(*c as u32).to_le_bytes()),
+                                        crate::gc::GcMapKey::Int8(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::Int16(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::Int32(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::Int64(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt8(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt16(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt32(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt64(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::String(s) => fnv1a_hash(s.as_bytes()),
+                                    };
+                                    h ^= kh;
+                                }
+                                Ok(h)
+                            } else {
+                                Err(RuntimeError::Panic("Invalid set pointer".to_string()))
+                            }
+                        }
+                        GcValue::BigInt(ptr) => {
+                            if let Some(bi) = heap.get_bigint(*ptr) {
+                                Ok(fnv1a_hash(&bi.value.to_signed_bytes_le()))
+                            } else {
+                                Err(RuntimeError::Panic("Invalid bigint pointer".to_string()))
+                            }
+                        }
+                        GcValue::Decimal(dec) => {
+                            Ok(fnv1a_hash(&dec.serialize()))
+                        }
+                        GcValue::Closure(ptr, _) => Ok(fnv1a_hash(&ptr.as_raw().to_le_bytes())),
+                        GcValue::Function(f) => Ok(fnv1a_hash(f.name.as_bytes())),
+                        GcValue::NativeFunction(f) => Ok(fnv1a_hash(f.name.as_bytes())),
+                        GcValue::Pid(p) => Ok(fnv1a_hash(&p.to_le_bytes())),
+                        GcValue::Ref(r) => Ok(fnv1a_hash(&r.to_le_bytes())),
+                        GcValue::Int64Array(ptr) => {
+                            if let Some(arr) = heap.get_int64_array(*ptr) {
+                                let mut h = fnv1a_hash(b"int64array");
+                                for n in &arr.items {
+                                    h = combine_hash(h, fnv1a_hash(&n.to_le_bytes()));
+                                }
+                                Ok(h)
+                            } else {
+                                Err(RuntimeError::Panic("Invalid array pointer".to_string()))
+                            }
+                        }
+                        GcValue::Float64Array(ptr) => {
+                            if let Some(arr) = heap.get_float64_array(*ptr) {
+                                let mut h = fnv1a_hash(b"float64array");
+                                for f in &arr.items {
+                                    h = combine_hash(h, fnv1a_hash(&f.to_le_bytes()));
+                                }
+                                Ok(h)
+                            } else {
+                                Err(RuntimeError::Panic("Invalid array pointer".to_string()))
+                            }
+                        }
+                        _ => Ok(fnv1a_hash(b"unknown")),
+                    }
+                }
+
+                let hash_val = hash_value(&args[0], heap)?;
+                Ok(GcValue::Int64(hash_val as i64))
             }),
         }));
     }
