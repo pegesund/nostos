@@ -63,19 +63,17 @@ Many tests use spawn/receive (concurrency) and will hang indefinitely without ti
 
 **Run all safe tests with timeout:**
 ```bash
-for f in $(find tests -name "*.nos" ! -path "*/timeout/*" ! -path "*/flaky/*"); do
+for f in $(find tests -name "*.nos" ! -path "*/timeout/*"); do
     timeout 5 ./target/release/nostos "$f" >/dev/null 2>&1 || echo "FAIL: $f"
 done
 ```
 
 **Tests that may hang (avoid in batch runs):**
-- `tests/timeout/` - 2 tests that actually timeout
-- `tests/flaky/` - 10 race condition tests (may fail intermittently)
+- `tests/timeout/` - 2 tests that intentionally test timeout behavior
 
 **Test counts:**
-- 484 safe tests in regular categories (all pass)
-- 2 true timeout tests in `tests/timeout/` (rapid_spawn_die, running_average)
-- 10 flaky race condition tests in `tests/flaky/` (known to fail due to non-atomic mvar operations)
+- 490 tests in regular categories (all pass)
+- 2 timeout tests in `tests/timeout/` (rapid_spawn_die, running_average)
 
 **Common stdlib name collisions to avoid in tests:**
 - `get` -> use `getValue` (stdlib.list.get)
