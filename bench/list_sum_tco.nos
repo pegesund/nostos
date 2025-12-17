@@ -14,8 +14,8 @@ range(n) = [n | range(n - 1)]
 
 main() = {
     lst = range(1000)
-    total = 0
-    i = 0
+    var total = 0
+    var i = 0
     while i < 1000 {
         total = total + sum(lst)
         i = i + 1

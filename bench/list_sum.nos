@@ -2,8 +2,8 @@
 # Tests typed array traversal with JIT compilation
 
 sum(arr) = {
-    acc = 0
-    i = 0
+    var acc = 0
+    var i = 0
     len = length(arr)
     while i < len {
         acc = acc + arr[i]
@@ -15,15 +15,15 @@ sum(arr) = {
 main() = {
     # Create Int64Array with values 1..10000
     arr = newInt64Array(10000)
-    i = 0
+    var i = 0
     while i < 10000 {
         arr[i] = i + 1
         i = i + 1
     }
 
     # Sum 100 times
-    total = 0
-    j = 0
+    var total = 0
+    var j = 0
     while j < 100 {
         total = total + sum(arr)
         j = j + 1
