@@ -409,7 +409,7 @@ fn main() -> ExitCode {
     let mut json_errors = false;
     let mut debug_mode = false;
     let mut num_threads: usize = 0; // 0 = auto-detect
-    let mut use_async_vm = false; // Use tokio-based async VM
+    let mut use_async_vm = true; // Use tokio-based async VM (default)
 
     let mut i = 1;
     while i < args.len() {
@@ -430,7 +430,7 @@ fn main() -> ExitCode {
                 println!("  --debug          Show local variable values in stack traces");
                 println!("  --json-errors    Output errors as JSON (for debugger integration)");
                 println!("  --threads N      Use N worker threads (default: all CPUs)");
-                println!("  --async-vm       Use experimental tokio-based async VM");
+                println!("  --legacy-vm      Use legacy parallel VM (for debugging)");
                 println!();
                 println!("REPL usage:");
                 println!("  nostos repl              Start interactive REPL");
@@ -469,8 +469,8 @@ fn main() -> ExitCode {
                 i += 1;
                 continue;
             }
-            if arg == "--async-vm" {
-                use_async_vm = true;
+            if arg == "--legacy-vm" {
+                use_async_vm = false;
                 i += 1;
                 continue;
             }
@@ -684,12 +684,12 @@ fn main() -> ExitCode {
         }
     };
 
-    // Use AsyncVM if --async-vm flag was set
+    // Use AsyncVM by default (use --legacy-vm to use old ParallelVM)
     if use_async_vm {
         return run_with_async_vm(&compiler, &entry_point_name);
     }
 
-    // Create ParallelVM (always use parallel execution)
+    // Create legacy ParallelVM (only if --legacy-vm flag is set)
     let config = ParallelConfig {
         num_threads,
         ..Default::default()

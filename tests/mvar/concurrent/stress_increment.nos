@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Stress test: many workers incrementing a counter many times
 # Tests atomicity under high contention
 
@@ -46,4 +46,5 @@ main() = {
 
     # Counter should be exactly 400
     assert_eq(400, get_counter())
+    0
 }

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Multiple spawned processes incrementing a shared counter
 # Tests atomicity of mvar operations
 
@@ -36,4 +36,5 @@ main() = {
 
     # Counter should be exactly 100 if locking works
     assert_eq(100, increment() - 1)  # increment returns new value, so subtract 1
+    0
 }

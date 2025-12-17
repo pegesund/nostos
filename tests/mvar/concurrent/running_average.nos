@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Track running sum and count to compute average
 
 mvar total: Int = 0
@@ -45,4 +45,5 @@ main() = {
     # Count: 12
     assert_eq(780, get_total())
     assert_eq(12, get_count())
+    0
 }

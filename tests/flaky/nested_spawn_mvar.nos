@@ -1,0 +1,59 @@
+# expect: 0
+# Test nested spawning where each level accesses MVars
+
+mvar counter: Int = 0
+mvar depth_tracker: Int = 0
+
+increment() = {
+    counter = counter + 1
+    counter
+}
+
+track_depth(d) = {
+    current = depth_tracker
+    _ = if d > current then { depth_tracker = d; () } else ()
+    d
+}
+
+# Level 2: innermost spawned process
+level2_worker(parent, id) = {
+    track_depth(2)
+    increment()
+    increment()
+    parent <- ("done", id, 2)
+}
+
+# Level 1: spawns level 2 workers
+level1_worker(parent, id) = {
+    me = self()
+    track_depth(1)
+    increment()
+
+    # Spawn 2 level-2 workers
+    spawn { level2_worker(me, id * 10 + 1) }
+    spawn { level2_worker(me, id * 10 + 2) }
+
+    # Wait for level-2 workers
+    receive _ -> () end
+    receive _ -> () end
+
+    increment()
+    parent <- ("done", id, 1)
+}
+
+main() = {
+    me = self()
+
+    # Spawn 2 level-1 workers (each spawns 2 level-2 workers = 4 total level-2)
+    spawn { level1_worker(me, 1) }
+    spawn { level1_worker(me, 2) }
+
+    # Wait for level-1 workers
+    receive _ -> () end
+    receive _ -> () end
+
+    # Counter: 2 level-1 workers * 2 increments + 4 level-2 workers * 2 increments = 12
+    assert_eq(12, counter)
+    assert_eq(2, depth_tracker)
+    0
+}

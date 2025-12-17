@@ -1,0 +1,60 @@
+# expect: 0
+# Simple semaphore-like counter with acquire/release
+
+mvar available: Int = 3
+mvar acquired_total: Int = 0
+mvar released_total: Int = 0
+
+acquire() = {
+    if available > 0 then {
+        available = available - 1
+        acquired_total = acquired_total + 1
+        true
+    } else {
+        false
+    }
+}
+
+release() = {
+    available = available + 1
+    released_total = released_total + 1
+    available
+}
+
+get_available() = available
+get_acquired() = acquired_total
+get_released() = released_total
+
+do_acquire_release(n) = if n <= 0 then () else {
+    acquire()
+    release()
+    do_acquire_release(n - 1)
+}
+
+worker(parent, n) = {
+    do_acquire_release(n)
+    parent <- true
+}
+
+main() = {
+    me = self()
+
+    # Spawn workers that acquire and release
+    spawn { worker(me, 10) }
+    spawn { worker(me, 10) }
+    spawn { worker(me, 10) }
+    spawn { worker(me, 10) }
+
+    # Wait for all
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+
+    # Available should be back to 3 (all released)
+    assert_eq(3, get_available())
+    # Total acquired should equal total released = 40
+    assert_eq(40, get_acquired())
+    assert_eq(40, get_released())
+    0
+}

@@ -1,0 +1,67 @@
+# expect: 0
+# Test master-worker pattern with shared state via MVars
+
+mvar task_counter: Int = 0
+mvar result_sum: Int = 0
+mvar workers_done: Int = 0
+
+get_task() = {
+    current = task_counter
+    if current >= 10 then -1
+    else {
+        task_counter = task_counter + 1
+        current + 1
+    }
+}
+
+submit_result(value) = {
+    result_sum = result_sum + value
+    result_sum
+}
+
+mark_done() = {
+    workers_done = workers_done + 1
+    workers_done
+}
+
+# Worker grabs tasks until none left, then signals done
+worker(parent) = {
+    worker_loop(parent)
+}
+
+worker_loop(parent) = {
+    task = get_task()
+    if task < 0 then {
+        mark_done()
+        parent <- "done"
+    } else {
+        # "Process" the task (just square it)
+        result = task * task
+        submit_result(result)
+        worker_loop(parent)
+    }
+}
+
+main() = {
+    me = self()
+
+    # Spawn 4 workers competing for 10 tasks
+    spawn { worker(me) }
+    spawn { worker(me) }
+    spawn { worker(me) }
+    spawn { worker(me) }
+
+    # Wait for all workers to finish
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+
+    # All 10 tasks should be processed
+    assert_eq(10, task_counter)
+    assert_eq(4, workers_done)
+
+    # Sum of squares 1^2 + 2^2 + ... + 10^2 = 385
+    assert_eq(385, result_sum)
+    0
+}

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Verify that reads see completed writes (no stale values)
 
 mvar value: Int = 0
@@ -47,4 +47,5 @@ main() = {
     receive v -> assert_eq(1, v) end
     receive v -> assert_eq(1, v) end
     receive v -> assert_eq(1, v) end
+    0
 }

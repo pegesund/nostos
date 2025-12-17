@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Multiple workers appending to a shared string
 
 mvar result: String = ""
@@ -45,4 +45,5 @@ main() = {
     assert_eq(8, get_count())
     # Result length should be 8 characters
     # (order may vary due to concurrent access)
+    0
 }

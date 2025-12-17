@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Build a simple histogram (count of values in ranges)
 
 mvar low_count: Int = 0    # values < 50
@@ -50,4 +50,5 @@ main() = {
     # Should have 8 low and 8 high
     assert_eq(8, get_low())
     assert_eq(8, get_high())
+    0
 }

@@ -15,6 +15,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
+use imbl::{HashMap as ImblHashMap, HashSet as ImblHashSet};
+
 use tokio::sync::{mpsc, RwLock as TokioRwLock, OwnedRwLockReadGuard, OwnedRwLockWriteGuard};
 use tokio::task::LocalSet;
 
@@ -31,7 +33,7 @@ use crate::parallel::SendableValue;
 use crate::io_runtime::IoRuntime;
 
 /// Reductions per yield (how often we call yield_now for fairness).
-const REDUCTIONS_PER_YIELD: usize = 1000;
+const REDUCTIONS_PER_YIELD: usize = 100; // Reduced for better fairness under lock contention
 
 /// Type for process mailbox sender.
 pub type MailboxSender = mpsc::UnboundedSender<ThreadSafeValue>;
@@ -911,6 +913,8 @@ impl AsyncProcess {
                 };
                 let gc_value = self.mvar_read(&name).await?;
                 set_reg!(dst, gc_value);
+                // Yield after mvar access for fairness
+                tokio::task::yield_now().await;
             }
 
             MvarWrite(name_idx, src) => {
@@ -920,6 +924,8 @@ impl AsyncProcess {
                 };
                 let value = reg!(src);
                 self.mvar_write(&name, value).await?;
+                // Yield after mvar access for fairness
+                tokio::task::yield_now().await;
             }
 
             MvarLock(name_idx, is_write) => {
@@ -945,6 +951,8 @@ impl AsyncProcess {
                     .entry(name)
                     .or_insert_with(Vec::new)
                     .push(guard);
+                // Yield after acquiring lock to let other tasks notice
+                tokio::task::yield_now().await;
             }
 
             MvarUnlock(name_idx, _is_write) => {
@@ -969,6 +977,12 @@ impl AsyncProcess {
                         "MvarUnlock: no lock held on mvar: {}", name
                     )));
                 }
+                // Force multiple yields to give waiting tasks time to wake up and acquire
+                // This helps prevent starvation under high contention (tokio RwLock is not fair)
+                self.instructions_since_yield = REDUCTIONS_PER_YIELD;
+                tokio::task::yield_now().await;
+                tokio::task::yield_now().await;
+                tokio::task::yield_now().await;
             }
 
             // === Print ===
@@ -1760,6 +1774,355 @@ impl AsyncProcess {
                     }
                 }
             }
+
+            // === Type constructors ===
+            MakeVariant(dst, type_idx, ctor_idx, ref field_regs) => {
+                let type_name = match get_const!(type_idx) {
+                    Value::String(s) => Arc::clone(&s),
+                    _ => return Err(RuntimeError::Panic("Variant type must be string".to_string())),
+                };
+                let constructor = match get_const!(ctor_idx) {
+                    Value::String(s) => Arc::clone(&s),
+                    _ => return Err(RuntimeError::Panic("Variant constructor must be string".to_string())),
+                };
+                let fields: Vec<GcValue> = field_regs.iter().map(|&r| reg!(r)).collect();
+                let ptr = self.heap.alloc_variant(type_name, constructor, fields);
+                set_reg!(dst, GcValue::Variant(ptr));
+            }
+
+            MakeRecord(dst, type_idx, ref field_regs) => {
+                let type_name = match get_const!(type_idx) {
+                    Value::String(s) => (*s).clone(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let fields: Vec<GcValue> = field_regs.iter().map(|&r| reg!(r)).collect();
+                // Look up type in static types first, then dynamic_types (eval-defined)
+                let type_info = self.shared.types.get(&type_name).cloned()
+                    .or_else(|| self.shared.dynamic_types.read().unwrap().get(&type_name).cloned());
+                let field_names: Vec<String> = type_info
+                    .as_ref()
+                    .map(|t| t.fields.iter().map(|f| f.name.clone()).collect())
+                    .unwrap_or_else(|| (0..fields.len()).map(|i| format!("_{}", i)).collect());
+                let mutable_fields: Vec<bool> = type_info
+                    .as_ref()
+                    .map(|t| t.fields.iter().map(|f| f.mutable).collect())
+                    .unwrap_or_else(|| vec![false; fields.len()]);
+                let ptr = self.heap.alloc_record(type_name, field_names, fields, mutable_fields);
+                set_reg!(dst, GcValue::Record(ptr));
+            }
+
+            GetVariantField(dst, src, idx) => {
+                let src_val = reg!(src);
+                let value = match src_val {
+                    GcValue::Variant(ptr) => {
+                        let variant = self.heap.get_variant(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid variant reference".to_string()))?;
+                        variant.fields.get(idx as usize).cloned()
+                            .ok_or_else(|| RuntimeError::Panic(format!("Variant field {} out of bounds", idx)))?
+                    }
+                    GcValue::Record(ptr) => {
+                        let record = self.heap.get_record(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid record reference".to_string()))?;
+                        record.fields.get(idx as usize).cloned()
+                            .ok_or_else(|| RuntimeError::Panic(format!("Record field {} out of bounds", idx)))?
+                    }
+                    _ => return Err(RuntimeError::Panic("GetVariantField expects variant or record".to_string())),
+                };
+                set_reg!(dst, value);
+            }
+
+            MakeTuple(dst, ref elements) => {
+                let items: Vec<GcValue> = elements.iter().map(|&r| reg!(r)).collect();
+                let ptr = self.heap.alloc_tuple(items);
+                set_reg!(dst, GcValue::Tuple(ptr));
+            }
+
+            GetTupleField(dst, tuple_reg, idx) => {
+                let ptr = match reg!(tuple_reg) {
+                    GcValue::Tuple(ptr) => ptr,
+                    other => return Err(RuntimeError::TypeError {
+                        expected: "Tuple".to_string(),
+                        found: format!("{:?}", other),
+                    }),
+                };
+                let item = self.heap.get_tuple(ptr)
+                    .and_then(|t| t.items.get(idx as usize).cloned());
+                match item {
+                    Some(val) => set_reg!(dst, val),
+                    None => return Err(RuntimeError::IndexOutOfBounds {
+                        index: idx as i64,
+                        length: 0,
+                    }),
+                }
+            }
+
+            MakeSet(dst, ref elements) => {
+                let mut items = ImblHashSet::new();
+                for &r in elements.iter() {
+                    let val = reg!(r);
+                    if let Some(key) = val.to_gc_map_key(&self.heap) {
+                        items.insert(key);
+                    } else {
+                        return Err(RuntimeError::TypeError {
+                            expected: "hashable type".to_string(),
+                            found: format!("{:?}", val),
+                        });
+                    }
+                }
+                let ptr = self.heap.alloc_set(items);
+                set_reg!(dst, GcValue::Set(ptr));
+            }
+
+            MakeMap(dst, ref entries) => {
+                let mut map = ImblHashMap::new();
+                for (key_reg, val_reg) in entries.iter() {
+                    let key_val = reg!(*key_reg);
+                    let val = reg!(*val_reg);
+                    if let Some(key) = key_val.to_gc_map_key(&self.heap) {
+                        map.insert(key, val);
+                    } else {
+                        return Err(RuntimeError::TypeError {
+                            expected: "hashable type".to_string(),
+                            found: format!("{:?}", key_val),
+                        });
+                    }
+                }
+                let ptr = self.heap.alloc_map(map);
+                set_reg!(dst, GcValue::Map(ptr));
+            }
+
+            // === Exception handling ===
+            PushHandler(offset) => {
+                let frame_index = self.frames.len() - 1;
+                let catch_ip = (self.frames[frame_index].ip as isize + offset as isize) as usize;
+                self.handlers.push(ExceptionHandler {
+                    frame_index,
+                    catch_ip,
+                });
+            }
+
+            PopHandler => {
+                self.handlers.pop();
+            }
+
+            GetException(dst) => {
+                let exception = self.current_exception.clone().unwrap_or(GcValue::Unit);
+                set_reg!(dst, exception);
+            }
+
+            Throw(src) => {
+                let exception = reg!(src);
+                self.current_exception = Some(exception);
+
+                // Find the most recent handler
+                if let Some(handler) = self.handlers.pop() {
+                    // Unwind stack to handler's frame
+                    while self.frames.len() > handler.frame_index + 1 {
+                        self.frames.pop();
+                    }
+                    // Jump to catch block
+                    self.frames[handler.frame_index].ip = handler.catch_ip;
+                } else {
+                    // No handler - propagate as runtime error
+                    let msg = self.heap.display_value(self.current_exception.as_ref().unwrap());
+                    return Err(RuntimeError::Panic(format!("Uncaught exception: {}", msg)));
+                }
+            }
+
+            // === Type checking instructions ===
+            IsMap(dst, src) => {
+                let val = reg!(src);
+                let is_map = matches!(val, GcValue::Map(_));
+                set_reg!(dst, GcValue::Bool(is_map));
+            }
+
+            IsSet(dst, src) => {
+                let val = reg!(src);
+                let is_set = matches!(val, GcValue::Set(_));
+                set_reg!(dst, GcValue::Bool(is_set));
+            }
+
+            // === TailCall (preserve return_reg from current frame) ===
+            TailCall(func_reg, ref args) => {
+                let func_val = reg!(func_reg);
+                let arg_values: Vec<GcValue> = args.iter().map(|&r| reg!(r)).collect();
+                // Preserve return_reg from current frame
+                let return_reg = self.frames.last().unwrap().return_reg;
+
+                match func_val {
+                    GcValue::Function(func) => {
+                        // Pop current frame and push new one (tail call optimization)
+                        self.frames.pop();
+                        let reg_count = func.code.register_count as usize;
+                        let mut registers = vec![GcValue::Unit; reg_count.max(arg_values.len())];
+                        for (i, arg) in arg_values.into_iter().enumerate() {
+                            registers[i] = arg;
+                        }
+                        self.frames.push(CallFrame {
+                            function: func.clone(),
+                            ip: 0,
+                            registers,
+                            captures: Vec::new(),
+                            return_reg,
+                        });
+                    }
+                    GcValue::Closure(ptr, _) => {
+                        let closure = self.heap.get_closure(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid closure".into()))?;
+                        let func = closure.function.clone();
+                        let captures = closure.captures.clone();
+                        self.frames.pop();
+                        let reg_count = func.code.register_count as usize;
+                        let mut registers = vec![GcValue::Unit; reg_count.max(arg_values.len() + captures.len())];
+                        for (i, arg) in arg_values.into_iter().enumerate() {
+                            registers[i] = arg;
+                        }
+                        self.frames.push(CallFrame {
+                            function: func,
+                            ip: 0,
+                            registers,
+                            captures,
+                            return_reg,
+                        });
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Function or Closure".to_string(),
+                        found: format!("{:?}", func_val),
+                    }),
+                }
+            }
+
+            TailCallDirect(func_idx, ref args) => {
+                let func = self.shared.function_list.get(func_idx as usize)
+                    .ok_or_else(|| RuntimeError::Panic(format!("Unknown function index: {}", func_idx)))?
+                    .clone();
+                let arg_values: Vec<GcValue> = args.iter().map(|&r| reg!(r)).collect();
+                let return_reg = self.frames.last().unwrap().return_reg;
+                self.frames.pop();
+                let reg_count = func.code.register_count as usize;
+                let mut registers = vec![GcValue::Unit; reg_count.max(arg_values.len())];
+                for (i, arg) in arg_values.into_iter().enumerate() {
+                    registers[i] = arg;
+                }
+                self.frames.push(CallFrame {
+                    function: func,
+                    ip: 0,
+                    registers,
+                    captures: Vec::new(),
+                    return_reg,
+                });
+            }
+
+            TailCallSelf(ref args) => {
+                let func = self.frames.last()
+                    .ok_or_else(|| RuntimeError::Panic("No frame for TailCallSelf".into()))?
+                    .function.clone();
+                let return_reg = self.frames.last().unwrap().return_reg;
+                let arg_values: Vec<GcValue> = args.iter().map(|&r| reg!(r)).collect();
+                self.frames.pop();
+                let reg_count = func.code.register_count as usize;
+                let mut registers = vec![GcValue::Unit; reg_count.max(arg_values.len())];
+                for (i, arg) in arg_values.into_iter().enumerate() {
+                    registers[i] = arg;
+                }
+                self.frames.push(CallFrame {
+                    function: func,
+                    ip: 0,
+                    registers,
+                    captures: Vec::new(),
+                    return_reg,
+                });
+            }
+
+            // === Type conversions ===
+            ToInt32(dst, src) => {
+                let val = reg!(src);
+                let result = match val {
+                    GcValue::Int64(v) => GcValue::Int32(v as i32),
+                    GcValue::Int32(v) => GcValue::Int32(v),
+                    GcValue::Float64(v) => GcValue::Int32(v as i32),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: format!("{:?}", val),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            // === Map operations ===
+            MapContainsKey(dst, map_reg, key_reg) => {
+                let map_val = reg!(map_reg);
+                let key_val = reg!(key_reg);
+                let result = if let GcValue::Map(ptr) = &map_val {
+                    if let Some(map) = self.heap.get_map(*ptr) {
+                        if let Some(key) = key_val.to_gc_map_key(&self.heap) {
+                            map.entries.contains_key(&key)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                set_reg!(dst, GcValue::Bool(result));
+            }
+
+            MapGet(dst, map_reg, key_reg) => {
+                let map_val = reg!(map_reg);
+                let key_val = reg!(key_reg);
+                let result = if let GcValue::Map(ptr) = &map_val {
+                    if let Some(map) = self.heap.get_map(*ptr) {
+                        if let Some(key) = key_val.to_gc_map_key(&self.heap) {
+                            map.entries.get(&key).cloned()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                match result {
+                    Some(val) => set_reg!(dst, val),
+                    None => return Err(RuntimeError::Panic("Key not found in map".to_string())),
+                }
+            }
+
+            // === String operations ===
+            StringDecons(head_dst, tail_dst, str_reg) => {
+                let str_val = reg!(str_reg);
+                match str_val {
+                    GcValue::String(str_ptr) => {
+                        let s = self.heap.get_string(str_ptr).map(|h| h.data.clone()).unwrap_or_default();
+                        if s.is_empty() {
+                            return Err(RuntimeError::Panic("Cannot decons empty string".to_string()));
+                        }
+                        let mut chars = s.chars();
+                        let head_char = chars.next().unwrap();
+                        let tail_str = chars.as_str();
+                        let head_ptr = self.heap.alloc_string(head_char.to_string());
+                        let tail_ptr = self.heap.alloc_string(tail_str.to_string());
+                        set_reg!(head_dst, GcValue::String(head_ptr));
+                        set_reg!(tail_dst, GcValue::String(tail_ptr));
+                    }
+                    _ => return Err(RuntimeError::Panic("StringDecons expects string".to_string())),
+                }
+            }
+
+            // === Panic ===
+            Panic(msg_reg) => {
+                let msg = reg!(msg_reg);
+                let msg_str = self.heap.display_value(&msg);
+                return Err(RuntimeError::Panic(msg_str));
+            }
+
+            Nop => {}
 
             // Unimplemented instructions - add as needed
             _ => {

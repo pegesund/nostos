@@ -1,0 +1,28 @@
+# expect: 0
+# Test: Rapidly spawning and dying processes
+
+short_lived(parent) = {
+    parent <- 1
+}
+
+spawn_many(parent, n, acc) = {
+    if n == 0 then {
+        parent <- acc
+    } else {
+        me = self()
+        spawn { short_lived(me) }
+        val = receive x -> x end
+        spawn_many(parent, n - 1, acc + val)
+    }
+}
+
+main() = {
+    me = self()
+
+    # Spawn 500 short-lived processes sequentially
+    spawn { spawn_many(me, 500, 0) }
+
+    total = receive x -> x end
+    assert_eq(500, total)
+    0
+}

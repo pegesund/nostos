@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Toggle a boolean flag from multiple workers
 
 mvar flag: Bool = false
@@ -39,4 +39,5 @@ main() = {
 
     # Total toggles should be 100
     assert_eq(100, get_count())
+    0
 }
