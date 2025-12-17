@@ -309,6 +309,8 @@ pub enum Token {
 
     #[token(",")]
     Comma,
+    #[token(";")]
+    Semicolon,
     #[token("::")]
     ColonColon,
     #[token(":")]
@@ -478,6 +480,7 @@ impl fmt::Display for Token {
             Token::LBrace => write!(f, "{{"),
             Token::RBrace => write!(f, "}}"),
             Token::Comma => write!(f, ","),
+            Token::Semicolon => write!(f, ";"),
             Token::ColonColon => write!(f, "::"),
             Token::Colon => write!(f, ":"),
             Token::Dot => write!(f, "."),

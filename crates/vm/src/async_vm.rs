@@ -426,6 +426,7 @@ impl AsyncProcess {
     async fn step(&mut self) -> Result<StepResult, RuntimeError> {
         use crate::value::Instruction::*;
 
+
         // Get frame info without holding mutable borrow
         let (code_len, ip) = {
             let frame = match self.frames.last() {
@@ -1512,7 +1513,8 @@ impl AsyncProcess {
                     }
 
                     frame.ip = 0;
-                    frame.captures.clear();
+                    // NOTE: Do NOT clear captures - closures calling themselves recursively
+                    // still need their captured variables!
                 } else {
                     // Fallback for >8 args (rare)
                     let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r)).collect();
@@ -1526,7 +1528,7 @@ impl AsyncProcess {
                         }
                     }
                     frame.ip = 0;
-                    frame.captures.clear();
+                    // NOTE: Do NOT clear captures - closures need them!
                 }
             }
 
@@ -1588,7 +1590,8 @@ impl AsyncProcess {
                     let value = frame.captures[idx as usize].clone();
                     set_reg!(dst, value);
                 } else {
-                    return Err(RuntimeError::Panic(format!("Capture index {} out of bounds", idx)));
+                    return Err(RuntimeError::Panic(format!("Capture index {} out of bounds (frame has {} captures)",
+                                                           idx, frame.captures.len())));
                 }
             }
 
@@ -1987,7 +1990,7 @@ impl AsyncProcess {
                     }
 
                     process.frames.push(CallFrame {
-                        function: func,
+                        function: func.clone(),
                         ip: 0,
                         registers,
                         captures: gc_captures,
@@ -1995,11 +1998,15 @@ impl AsyncProcess {
                     });
 
                     // Run the process
-                    let _ = process.run().await;
+                    let _result = process.run().await;
 
                     // Unregister on exit
                     shared_clone.unregister_process(child_pid).await;
                 });
+
+                // Yield to allow the spawned task to start running
+                // This is critical for recursive spawns where parent immediately waits
+                tokio::task::yield_now().await;
 
                 set_reg!(dst, GcValue::Pid(child_pid.0));
             }

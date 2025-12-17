@@ -7782,6 +7782,9 @@ impl Compiler {
         let saved_next_reg = self.next_reg;
         let saved_capture_indices = std::mem::take(&mut self.capture_indices);
         let saved_local_types = std::mem::take(&mut self.local_types);
+        // Save current_function_name to prevent self-call optimization inside lambdas
+        // (lambdas are separate functions, not the enclosing function)
+        let saved_current_function_name = self.current_function_name.take();
 
         // Step 4: Create new function for lambda
         self.chunk = Chunk::new();
@@ -7789,6 +7792,7 @@ impl Compiler {
         self.capture_indices = HashMap::new();
         self.local_types = HashMap::new();
         self.next_reg = 0;
+        // Set to None - lambdas don't have a self-call target (they can't TailCallSelf)
 
         let arity = params.len();
         let mut param_names = Vec::new();
@@ -7833,6 +7837,7 @@ impl Compiler {
         self.next_reg = saved_next_reg;
         self.capture_indices = saved_capture_indices;
         self.local_types = saved_local_types;
+        self.current_function_name = saved_current_function_name;
 
         // Step 6: Create closure with captures
         let func = FunctionValue {

@@ -735,11 +735,12 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
 
         let stmt = mutable_binding.or(typed_immutable_binding).or(expr_or_binding);
 
-        // Parse statements separated by newlines, commas, or colons
+        // Parse statements separated by newlines, commas, semicolons, or colons
         // The separator can be any combination of these
         let separator = choice((
             just(Token::Newline),
             just(Token::Comma),
+            just(Token::Semicolon),
             just(Token::Colon),
         )).repeated().at_least(1);
 
