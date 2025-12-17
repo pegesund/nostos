@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Separate writer functions
 
 mvar state: Int = 0
@@ -22,4 +22,5 @@ main() = {
     assert_eq(1, set_to_one())
     assert_eq(2, set_to_two())
     assert_eq(3, set_to_three())
+    0
 }

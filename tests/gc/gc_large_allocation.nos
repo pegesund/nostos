@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles large single allocations
 
 build_large_list(0, acc) = acc
@@ -19,4 +19,5 @@ main() = {
     }
     # Sum of 1..1000 = 500500
     assert_eq(500500, result)
+    0
 }

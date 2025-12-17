@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 type Hashable = Hashable(Int) deriving Hash
 type NotBounded = NotBounded(Int)
 

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Higher-order function with lambda
 
 apply(f, x) = f(x)
@@ -7,4 +7,5 @@ triple(n) = n * 3
 
 main() = {
     assert_eq(15, apply(triple, 5))
+    0
 }

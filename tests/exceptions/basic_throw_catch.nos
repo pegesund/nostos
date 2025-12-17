@@ -1,7 +1,8 @@
-# expect: ()
+# expect: 0
 # Basic throw and catch
 
 main() = {
     result = try throw("error") catch e -> e end
     assert_eq("error", result)
+    0
 }

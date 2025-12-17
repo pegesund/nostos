@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 # Test that variant pattern matching uses exact constructor name comparison,
 # not just discriminant hash. "Full" and "Wb" have the same FNV-1a hash
 # truncated to u16, which was causing incorrect pattern matching.

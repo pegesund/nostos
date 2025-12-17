@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Boolean mvar with logical operations
 
 mvar enabled: Bool = true
@@ -41,4 +41,5 @@ main() = {
     toggle_active()
     assert_eq(false, both_on())
     assert_eq(false, either_on())
+    0
 }

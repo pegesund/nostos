@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Exception thrown from called function
 
 risky(n) =
@@ -9,4 +9,5 @@ main() = {
     assert_eq(20, risky(10))
     result = try risky(-5) catch e -> e end
     assert_eq("negative", result)
+    0
 }

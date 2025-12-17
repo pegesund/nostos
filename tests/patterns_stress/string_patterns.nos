@@ -1,4 +1,4 @@
-# expect: "found hello"
+# expect: found hello
 # String literal patterns
 
 greet(msg) =

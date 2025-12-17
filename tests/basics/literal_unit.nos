@@ -1,4 +1,7 @@
-# expect: ()
-# Unit literal
+# expect: 0
+# Unit literal - verify () is a valid value
 
-main() = ()
+main() = {
+    x = ()
+    0
+}

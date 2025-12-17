@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test that function overloading does NOT override functions with different signatures
 # Each signature is a separate function
 
@@ -34,4 +34,5 @@ main() = {
     # (The functions are defined String first, then Int, but both should exist)
     assert_eq(greet("Alice"), "Hello, Alice")
     assert_eq(greet(100), "Number: 100")
+    0
 }

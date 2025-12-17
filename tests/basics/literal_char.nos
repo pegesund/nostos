@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Char literal
 
 main() = {
     assert_eq('a', 'a')
+    0
 }

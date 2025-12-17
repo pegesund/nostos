@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC preserves record structures with multiple fields
 
 type Person = { name: String, age: Int, score: Int }
@@ -21,4 +21,5 @@ main() = {
     total = sum_scores(people)
     # Sum of 1*10 + 2*10 + ... + 50*10 = 10 * (1+2+...+50) = 10 * 1275 = 12750
     assert_eq(12750, total)
+    0
 }

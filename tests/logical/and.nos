@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Logical AND
 
 main() = {
     assert_eq(true, true && true)
+    0
 }

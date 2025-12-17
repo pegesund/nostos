@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 type H = H(Int) deriving Hash
 type E = E(Int) deriving Eq
 

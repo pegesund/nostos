@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 type Point = { x: Int, y: Int } deriving (Hash + Eq)
 
 hashable[T: Hash](x: T) -> Int = hash(x)

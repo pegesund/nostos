@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Basic addition
 
 main() = {
     assert_eq(7, 3 + 4)
+    0
 }

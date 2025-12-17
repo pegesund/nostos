@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 # Test Hash trait implementation for custom types
 
 type Point = Point(Int, Int)

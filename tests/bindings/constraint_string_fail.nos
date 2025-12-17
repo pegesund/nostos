@@ -1,4 +1,4 @@
-# expect: "not matched"
+# expect: not matched
 # String constraint that doesn't match
 
 main() = {

@@ -1,4 +1,4 @@
-# expect: "match"
+# expect: match
 # Complex guard expressions
 
 check(pair) =

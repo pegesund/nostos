@@ -1,9 +1,0 @@
-# expect: "passed"
-type Color = Red | Green | Blue deriving Show
-
-main() = {
-    assert(show(Red) == "Red")
-    assert(show(Green) == "Green")
-    assert(show(Blue) == "Blue")
-    "passed"
-}

@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 type Val = Val(Int) deriving (Hash + Eq)
 
 hashable[T: Hash](x: T) -> Int = hash(x)

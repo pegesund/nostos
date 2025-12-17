@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Infinity comparison behaviors
 
 main() = {
@@ -16,4 +16,5 @@ main() = {
 
     # Negative infinity < any finite number
     assert_eq(true, neg_inf < -999999999.0)
+    0
 }

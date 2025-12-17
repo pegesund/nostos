@@ -1,4 +1,4 @@
-# expect: "small"
+# expect: small
 # Guard failure falls through until it reaches wildcard
 
 main() = {

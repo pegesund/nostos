@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Integer division
 
 main() = {
     assert_eq(5, 15 / 3)
+    0
 }

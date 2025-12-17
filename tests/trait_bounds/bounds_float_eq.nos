@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 equal[T: Eq](x: T, y: T) -> Bool = x == y
 
 main() = {

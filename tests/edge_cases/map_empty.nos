@@ -1,4 +1,4 @@
-# expect: "not found"
+# expect: not found
 # Empty map operations
 
 main() = {

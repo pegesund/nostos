@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 showable[T: Show](x: T) -> String = show(x)
 
 main() = {

@@ -1,4 +1,4 @@
-# expect: ["a", "b", "c"]
+# expect: [a, b, c]
 # List[String] type
 
 main() = {

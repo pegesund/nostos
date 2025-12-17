@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # List mvar
 
 mvar items: List[Int] = []
@@ -16,4 +16,5 @@ main() = {
     add_item(2)
     add_item(3)
     assert_eq([3, 2, 1], get_items())
+    0
 }

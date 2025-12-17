@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Operations involving zero
 
 main() = {
@@ -15,4 +15,5 @@ main() = {
     neg_zero = -0.0
     pos_zero = 0.0
     assert_eq(true, neg_zero == pos_zero)
+    0
 }

@@ -24,4 +24,5 @@ main() = {
     assert(exitCode2 == 1)
 
     0
+    0
 }

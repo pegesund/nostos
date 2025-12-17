@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 # Test bounds checking when function takes another function
 type Val = Val(Int) deriving Hash
 

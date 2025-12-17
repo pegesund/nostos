@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test Int64Array length function
 
 main() = {
@@ -9,4 +9,5 @@ main() = {
     assert(length(arr1) == 100)
     assert(length(arr2) == 1)
     assert(length(arr3) == 0)
+    0
 }

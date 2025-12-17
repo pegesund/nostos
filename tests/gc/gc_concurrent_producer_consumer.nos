@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles producer-consumer pattern with garbage
 
 producer(consumer, count) = {
@@ -35,4 +35,5 @@ main() = {
 
     # Sum of 1..50 = 1275
     assert_eq(1275, result)
+    0
 }

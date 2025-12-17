@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 # Test bounds checking with lambda-like function
 type Val = Val(Int) deriving Hash
 

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles many small workers each creating some garbage
 
 tiny_worker(parent, id) = {
@@ -25,4 +25,5 @@ main() = {
 
     # Sum of 1..500 = 125250
     assert_eq(125250, total)
+    0
 }

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Simulates concurrent bank transfers between accounts
 # Tests that total balance is preserved
 
@@ -58,4 +58,5 @@ main() = {
     # Total should still be 2000
     total = get_a() + get_b()
     assert_eq(2000, total)
+    0
 }

@@ -1,4 +1,4 @@
-# expect: "hello"
+# expect: hello
 # Type inference for String
 
 main() = {

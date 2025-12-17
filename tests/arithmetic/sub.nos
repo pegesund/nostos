@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Subtraction
 
 main() = {
     assert_eq(7, 10 - 3)
+    0
 }

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC reclaims unreferenced maps
 
 discard_maps(0, count) = count
@@ -11,4 +11,5 @@ discard_maps(n, count) = {
 main() = {
     result = discard_maps(5000, 0)
     assert_eq(5000, result)
+    0
 }

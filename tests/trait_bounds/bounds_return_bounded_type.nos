@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 type Box = Box(Int) deriving (Hash + Eq)
 
 make_and_hash[T: Hash](x: T) -> Int = hash(x)

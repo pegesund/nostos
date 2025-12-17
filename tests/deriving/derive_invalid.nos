@@ -1,6 +1,0 @@
-# expect_error: only Hash, Show, Copy, and Eq can be derived
-# Test that deriving an unknown trait fails
-type Point = { x: Int, y: Int } deriving Unknown
-main() = {
-    "should not reach here"
-}

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles heavy allocation across multiple processes
 
 create_garbage(0) = ()
@@ -35,4 +35,5 @@ main() = {
 
     # 10 * (1 + 2 + ... + 20) = 10 * 210 = 2100
     assert_eq(2100, total)
+    0
 }

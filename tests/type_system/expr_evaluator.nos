@@ -3,14 +3,14 @@
 
 type Expr = Num(Int) | Add(Expr, Expr) | Mul(Expr, Expr)
 
-eval(expr) = match expr
+evaluate(expr) = match expr
     Num(n) -> n
-    Add(e1, e2) -> eval(e1) + eval(e2)
-    Mul(e1, e2) -> eval(e1) * eval(e2)
+    Add(e1, e2) -> evaluate(e1) + evaluate(e2)
+    Mul(e1, e2) -> evaluate(e1) * evaluate(e2)
 end
 
 main() = {
     Expr e = Add(Mul(Num(3), Num(4)), Num(5))
-    Int result = eval(e)
+    Int result = evaluate(e)
     result
 }

@@ -1,4 +1,4 @@
-# expect: "done"
+# expect: done
 # Spawn process that exits immediately
 
 worker() = ()

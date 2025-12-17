@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test Float field comparison in trait methods
 
 type Temperature = { celsius: Float }
@@ -29,4 +29,5 @@ main() = {
 
     # Test equality
     assert_eq(0, warm.compare(same))
+    0
 }

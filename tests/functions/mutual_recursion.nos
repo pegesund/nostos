@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Mutual recursion - even/odd
 
 is_even(0) = true
@@ -9,4 +9,5 @@ is_odd(n) = is_even(n - 1)
 
 main() = {
     assert_eq(true, is_even(10))
+    0
 }

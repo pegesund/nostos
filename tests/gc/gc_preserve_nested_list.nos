@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC preserves deeply nested list structures
 
 type Nested = Wrap(List) | Val(Int)
@@ -17,4 +17,5 @@ main() = {
     nested = build_nested(20, Val(42))
     d = depth(nested)
     assert_eq(20, d)
+    0
 }

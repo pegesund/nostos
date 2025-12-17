@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Ackermann function - tests deep recursion
 
 ack(0, n) = n + 1
@@ -8,4 +8,5 @@ ack(m, n) = ack(m - 1, ack(m, n - 1))
 # ack(3, 2) = 29
 main() = {
     assert_eq(29, ack(3, 2))
+    0
 }

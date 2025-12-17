@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Block expression with let bindings
 
 main() = {
@@ -6,4 +6,5 @@ main() = {
     y = 10
     result = x + y
     assert_eq(15, result)
+    0
 }

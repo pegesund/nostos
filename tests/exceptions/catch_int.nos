@@ -1,7 +1,8 @@
-# expect: ()
+# expect: 0
 # Catch integer exception
 
 main() = {
     result = try throw(42) catch n -> n * 2 end
     assert_eq(84, result)
+    0
 }

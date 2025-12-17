@@ -1,4 +1,4 @@
-# expect: Point(10, 20)
+# expect: Point{x: 10, y: 20}
 # Record type
 
 type Point = { x: Int, y: Int }

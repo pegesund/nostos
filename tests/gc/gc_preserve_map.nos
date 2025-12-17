@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC preserves map structures
 
 check_map(m) = match m
@@ -17,4 +17,5 @@ main() = {
     m = build_map(100, %{})
     val = check_map(m)
     assert_eq(1, val)
+    0
 }

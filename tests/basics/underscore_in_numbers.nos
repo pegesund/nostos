@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Numbers with underscores for readability
 
 main() = {
     assert_eq(1000000, 1_000_000)
+    0
 }

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Trigger GC repeatedly in loop
 
 create_garbage(n) =
@@ -13,4 +13,5 @@ main() = {
     # Run multiple iterations to stress GC
     create_garbage(500)
     assert_eq(1, 1)
+    0
 }

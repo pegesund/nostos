@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Simple match expression
 
 classify(n) = match n
@@ -9,4 +9,5 @@ end
 
 main() = {
     assert_eq(10, classify(1))
+    0
 }

@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Binary integer literal
 
 main() = {
     assert_eq(10, 0b1010)
+    0
 }

@@ -1,4 +1,4 @@
-# expect: "empty"
+# expect: empty
 # Matching on empty list
 
 handle_list(list) =

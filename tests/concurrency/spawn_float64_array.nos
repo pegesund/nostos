@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test spawning processes with Float64Array
 
 # Worker that receives a Float64Array, sums it, and sends result back
@@ -8,7 +8,7 @@ sum_float64_worker(arr: Float64Array, parent: Pid) = {
 }
 
 # Helper to sum array elements
-sum_arr(arr, i, acc) =
+sum_arr(arr: Float64Array, i: Int, acc: Float) -> Float =
     if i >= length(arr) then acc
     else sum_arr(arr, i + 1, acc + arr[i])
 
@@ -26,4 +26,5 @@ main() = {
     # Receive result: 1.0+2.0+3.0+4.0 = 10.0
     result = receive x -> x end
     assert_eq(10.0, result)
+    0
 }

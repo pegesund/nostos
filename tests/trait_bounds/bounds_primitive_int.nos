@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 hashable[T: Hash](x: T) -> Int = hash(x)
 
 main() = {

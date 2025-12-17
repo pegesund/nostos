@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test Float64Array operations - set and read back
 
 main() = {
@@ -12,4 +12,5 @@ main() = {
     assert(arr[1] > 2.70 && arr[1] < 2.72)
     assert(arr[2] > 1.40 && arr[2] < 1.42)
     assert(length(arr) == 3)
+    0
 }

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Multi-clause function (factorial)
 
 fact(0) = 1
@@ -6,4 +6,5 @@ fact(n) = n * fact(n - 1)
 
 main() = {
     assert_eq(120, fact(5))
+    0
 }

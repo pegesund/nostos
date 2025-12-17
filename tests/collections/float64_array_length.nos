@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test Float64Array length
 
 main() = {
@@ -9,4 +9,5 @@ main() = {
     assert(length(arr1) == 50)
     assert(length(arr2) == 1)
     assert(length(arr3) == 0)
+    0
 }

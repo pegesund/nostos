@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Spawn multiple children and collect their results
 
 worker(parent, n) = {
@@ -17,4 +17,5 @@ main() = {
         end
     end
     assert_eq(30, result)
+    0
 }

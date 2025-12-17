@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Exception unwinding through deep stack
 
 level5() = throw("bottom")
@@ -10,4 +10,5 @@ level1() = level2()
 main() = {
     result = try level1() catch e -> e end
     assert_eq("bottom", result)
+    0
 }

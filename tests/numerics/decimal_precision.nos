@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Decimal type maintains precision
 
 main() = {
@@ -8,4 +8,5 @@ main() = {
     c = 0.3d
     sum = a + b
     assert_eq(c, sum)
+    0
 }

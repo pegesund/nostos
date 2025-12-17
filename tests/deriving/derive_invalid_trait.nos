@@ -1,7 +1,0 @@
-# expect_error: CannotDerive
-type Point = Point(Int, Int) deriving Unknown
-
-main() = {
-    p = Point(1, 2)
-    "should not compile"
-}

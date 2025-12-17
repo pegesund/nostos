@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles variants passed between processes
 
 type Result = Ok(Int) | Err(String)
@@ -32,4 +32,5 @@ main() = {
 
     # 100 + 200 + 0 + 300 + 0 = 600
     assert_eq(600, total)
+    0
 }

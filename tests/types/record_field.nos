@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Record field access
 
 type Point = {x: Int, y: Int}
@@ -7,4 +7,5 @@ main() = {
     p = Point(3, 4)
     result = p.x + p.y
     assert_eq(7, result)
+    0
 }

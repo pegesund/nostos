@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Multiple workers adding different amounts to accumulator
 
 mvar sum: Int = 0
@@ -38,4 +38,5 @@ main() = {
 
     # Sum of 1 to 40 = 40 * 41 / 2 = 820
     assert_eq(820, get_sum())
+    0
 }

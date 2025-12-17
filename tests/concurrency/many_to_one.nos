@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test: Many senders to one receiver
 
 sender(target, id, count) = {
@@ -28,4 +28,5 @@ main() = {
     # Sum of 1..10 = 55, times 10 senders = 550
     total = count_messages(100, 0)
     assert_eq(550, total)
+    0
 }

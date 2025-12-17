@@ -1,17 +1,18 @@
-# expect: ()
+# expect: 0
 # Mvar initialized to zero
 
 mvar counter: Int = 0
 
-get() = counter
+getValue() = counter
 
-set(n) = {
+setCounter(n) = {
     counter = n
     counter
 }
 
 main() = {
-    assert_eq(0, get())
-    assert_eq(42, set(42))
-    assert_eq(42, get())
+    assert_eq(0, getValue())
+    assert_eq(42, setCounter(42))
+    assert_eq(42, getValue())
+    0
 }

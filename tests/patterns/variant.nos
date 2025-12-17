@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Variant pattern matching
 
 type Option[T] = Some(T) | None
@@ -8,4 +8,5 @@ unwrap(None) = 0
 
 main() = {
     assert_eq(10, unwrap(Some(10)))
+    0
 }

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Complex arithmetic expression with mvar
 
 mvar a: Int = 5
@@ -12,4 +12,5 @@ compute() = get_a() * get_a() + get_b() * get_b() - get_a() * get_b()
 main() = {
     # 5*5 + 3*3 - 5*3 = 25 + 9 - 15 = 19
     assert_eq(19, compute())
+    0
 }

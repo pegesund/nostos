@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test: Parent process handles child death gracefully while waiting
 
 worker_that_dies(parent) = {
@@ -19,4 +19,5 @@ main() = {
 
     # The worker dies, we should not hang forever
     # This tests that there's no deadlock when sender dies
+    0
 }

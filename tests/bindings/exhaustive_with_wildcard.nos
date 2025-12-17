@@ -1,4 +1,4 @@
-# expect: "other"
+# expect: other
 # Wildcard makes match exhaustive
 
 type Color = Red | Green | Blue

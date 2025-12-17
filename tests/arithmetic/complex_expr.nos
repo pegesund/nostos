@@ -1,7 +1,8 @@
-# expect: ()
+# expect: 0
 # Complex arithmetic expression with proper precedence
 # 3 + (4 * 2) + (6 / 2) = 3 + 8 + 3 = 14
 
 main() = {
     assert_eq(14, 3 + 4 * 2 + 6 / 2)
+    0
 }

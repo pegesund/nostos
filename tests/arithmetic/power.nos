@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Power operator (requires floats)
 
 main() = {
     assert_eq(8.0, 2.0 ** 3.0)
+    0
 }

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC preserves chains of variant types
 
 type Node = Cons(Int, Node) | Nil
@@ -20,4 +20,5 @@ main() = {
     result = sum_chain(chain)
     # Sum of 1..100 = 5050
     assert_eq(5050, result)
+    0
 }

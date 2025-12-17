@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Simple state threading simulation
 
 # Run computation with state, return (result, final_state)
@@ -25,4 +25,5 @@ main() = {
     # Sum: 0+1+2+3 = 6, s4 = 4
     result = (v1 + v2 + v3 + v4, s4)
     assert_eq((6, 4), result)
+    0
 }

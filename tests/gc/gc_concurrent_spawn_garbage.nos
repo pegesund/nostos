@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles garbage created by many spawned processes
 
 worker(parent, n) = {
@@ -31,4 +31,5 @@ main() = {
 
     # Sum of 1^2 + 2^2 + ... + 100^2 = 338350
     assert_eq(338350, total)
+    0
 }

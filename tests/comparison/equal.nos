@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Equality comparison
 
 main() = {
     assert_eq(true, 5 == 5)
+    0
 }

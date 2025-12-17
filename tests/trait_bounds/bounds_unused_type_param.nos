@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 # Type param with bound but not used in function
 ignore[T: Hash](x: Int) -> Int = x * 2
 

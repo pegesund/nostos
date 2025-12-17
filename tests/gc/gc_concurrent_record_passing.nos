@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles records passed between processes
 
 type Point = { x: Int, y: Int }
@@ -35,4 +35,5 @@ main() = {
 
     # 30 + 70 + 110 + 150 + 190 = 550
     assert_eq(550, total)
+    0
 }

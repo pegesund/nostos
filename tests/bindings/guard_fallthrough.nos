@@ -1,4 +1,4 @@
-# expect: "medium"
+# expect: medium
 # Guard failure should fall through to next arm
 
 main() = {

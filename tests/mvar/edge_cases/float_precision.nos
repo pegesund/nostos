@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Float mvar precision test
 
 mvar pi: Float = 3.14159
@@ -13,4 +13,5 @@ main() = {
     # Should be approximately pi
     assert_eq(true, a > 3.14)
     assert_eq(true, a < 3.15)
+    0
 }

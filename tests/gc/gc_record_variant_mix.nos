@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles mixed record and variant structures
 
 type Data = NumData(Int) | StrData(String) | RecData(Info)
@@ -26,4 +26,5 @@ main() = {
     # RecData: 2+5+8+11+14+17+20+23+26+29 = 155
     # Total = 165 + 10 + 155 = 330
     assert_eq(330, result)
+    0
 }

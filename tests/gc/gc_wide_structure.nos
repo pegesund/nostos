@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles wide structures (many siblings at same level)
 
 build_wide(0, acc) = acc
@@ -15,4 +15,5 @@ main() = {
     result = sum_list(wide)
     # Sum of 1..200 = 20100
     assert_eq(20100, result)
+    0
 }

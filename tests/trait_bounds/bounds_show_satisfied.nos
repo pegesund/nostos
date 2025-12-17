@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 type Display = Display(Int) deriving Show
 
 showable[T: Show](x: T) -> String = show(x)

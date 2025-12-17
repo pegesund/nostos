@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC preserves tuple structures
 
 type Chain = Link(Int, Chain) | End(Int)
@@ -17,4 +17,5 @@ main() = {
     result = sum_chain(chain)
     # 5 + 4 + 3 + 2 + 1 + 100 = 115
     assert_eq(115, result)
+    0
 }

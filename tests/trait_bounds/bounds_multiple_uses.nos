@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 # Same bounded function used multiple times with different types
 type A = A(Int) deriving Hash
 type B = B(String) deriving Hash

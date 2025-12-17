@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 # Test built-in hash function for primitive types
 
 main() = {

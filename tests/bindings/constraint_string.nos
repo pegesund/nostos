@@ -1,4 +1,4 @@
-# expect: "matched"
+# expect: matched
 # Constraint with string value
 
 main() = {

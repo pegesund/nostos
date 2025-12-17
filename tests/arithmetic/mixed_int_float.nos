@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test compile-time int-to-float coercion for mixed numeric operations
 
 main() = {
@@ -25,4 +25,5 @@ main() = {
     # Nested expressions
     assert_eq(10.0, (5 + 2.5) + 2.5)
     assert_eq(17.5, 10 + (5 * 1.5))
+    0
 }

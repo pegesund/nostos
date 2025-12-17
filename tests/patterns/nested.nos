@@ -1,8 +1,9 @@
-# expect: ()
+# expect: 0
 # Nested pattern matching
 
 sum_nested(((a, b), c)) = a + b + c
 
 main() = {
     assert_eq(6, sum_nested(((1, 2), 3)))
+    0
 }

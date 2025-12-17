@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles deep recursion with many stack frames
 
 deep_recurse(0, acc) = acc
@@ -12,4 +12,5 @@ main() = {
     result = deep_recurse(500, 0)
     # Sum of 2*1 + 2*2 + ... + 2*500 = 2 * (500*501/2) = 250500
     assert_eq(250500, result)
+    0
 }

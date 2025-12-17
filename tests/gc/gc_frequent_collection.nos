@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles frequent collections in tight loop
 
 tight_loop(0, acc) = acc
@@ -15,4 +15,5 @@ tight_loop(n, acc) = {
 main() = {
     result = tight_loop(2000, 0)
     assert_eq(2000, result)
+    0
 }

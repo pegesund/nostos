@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Function with guards
 
 abs(n) when n >= 0 = n
@@ -6,4 +6,5 @@ abs(n) = -n
 
 main() = {
     assert_eq(3, abs(-3))
+    0
 }

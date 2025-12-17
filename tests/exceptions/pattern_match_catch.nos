@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Pattern matching in catch clauses
 
 classify(code) =
@@ -16,4 +16,5 @@ main() = {
     assert_eq(404, classify(1))
     assert_eq(403, classify(2))
     assert_eq("ok", classify(99))
+    0
 }

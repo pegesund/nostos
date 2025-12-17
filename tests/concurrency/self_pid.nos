@@ -1,8 +1,9 @@
-# expect: ()
+# expect: 0
 # Test that self() returns a Pid (we can compare it to itself)
 
 main() = {
     pid = self()
     # Pids are equal to themselves
     assert(pid == pid)
+    0
 }

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Separate reader functions
 
 mvar value: Int = 100
@@ -13,4 +13,5 @@ main() = {
     assert_eq(100, get_value())
     assert_eq(200, get_double())
     assert_eq(300, get_triple())
+    0
 }

@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Empty list
 
 main() = {
     assert_eq([], [])
+    0
 }

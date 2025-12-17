@@ -1,8 +1,9 @@
-# expect: ()
+# expect: 0
 # String concatenation (interpolation not fully implemented at runtime)
 
 answer() = "42"
 
 main() = {
     assert_eq("The answer is 42", "The answer is " ++ answer())
+    0
 }

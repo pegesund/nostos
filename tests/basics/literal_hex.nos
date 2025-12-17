@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Hex integer literal
 
 main() = {
     assert_eq(255, 0xFF)
+    0
 }

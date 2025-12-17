@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # String concatenation
 
 main() = {
     assert_eq("hello world", "hello" ++ " world")
+    0
 }

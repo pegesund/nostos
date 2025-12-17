@@ -1,4 +1,4 @@
-# expect: "timeout"
+# expect: timeout
 # Receive with zero timeout (immediate)
 
 main() = {

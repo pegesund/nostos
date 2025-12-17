@@ -1,4 +1,4 @@
-# expect: "hello world"
+# expect: hello world
 # String concatenation with typed bindings
 
 main() = {

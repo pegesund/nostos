@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Basic mvar read
 
 mvar counter: Int = 42
@@ -7,4 +7,5 @@ get_counter() = counter
 
 main() = {
     assert_eq(42, get_counter())
+    0
 }

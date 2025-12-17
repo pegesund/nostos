@@ -1,4 +1,4 @@
-# expect: "passed"
+# expect: passed
 # Type parameters without constraints should work with any type
 identity[T](x: T) -> T = x
 

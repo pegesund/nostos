@@ -1,4 +1,4 @@
-# expect: [(1, "a"), (2, "b")]
+# expect: [(1, a), (2, b)]
 # List of tuples
 
 main() = {

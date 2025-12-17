@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles shared references correctly (same object referenced multiple times)
 
 make_shared(n) = {
@@ -23,4 +23,5 @@ main() = {
     result = process(100, 0)
     # Each iteration: 15 * 3 = 45, 100 iterations = 4500
     assert_eq(4500, result)
+    0
 }

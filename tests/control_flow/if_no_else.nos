@@ -1,5 +1,6 @@
-# expect: ()
+# expect: 0
 main() = {
   if true then
     ()
+  0
 }

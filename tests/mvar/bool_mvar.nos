@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Boolean mvar
 
 mvar flag: Bool = false
@@ -16,4 +16,5 @@ main() = {
     assert_eq(true, is_set())
     assert_eq(false, toggle())
     assert_eq(false, is_set())
+    0
 }

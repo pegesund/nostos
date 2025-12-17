@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles alternating allocation patterns
 
 alternate(0, acc) = acc
@@ -24,4 +24,5 @@ main() = {
     result = alternate(1000, 0)
     # 250 * (1+2+3+4) = 250 * 10 = 2500
     assert_eq(2500, result)
+    0
 }

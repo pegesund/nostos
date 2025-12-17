@@ -1,4 +1,4 @@
-# expect: Point(10, 20)
+# expect: Point{x: 10, y: 20}
 # Custom type binding
 
 type Point = { x: Int, y: Int }

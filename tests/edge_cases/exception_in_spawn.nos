@@ -1,4 +1,4 @@
-# expect: "main alive"
+# expect: main alive
 # Exception in spawned process doesn't crash main
 
 worker() = {

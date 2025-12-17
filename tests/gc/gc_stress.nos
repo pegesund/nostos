@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC Stress Test - allocates lots of temporary data
 # If GC doesn't run, this would exhaust memory
 
@@ -37,4 +37,5 @@ main() = {
     assert_eq(500500, result)
 
     # If we got here without OOM, GC is working!
+    0
 }

@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Logical NOT
 
 main() = {
     assert_eq(true, !false)
+    0
 }

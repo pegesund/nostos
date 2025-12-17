@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC preserves list of strings
 
 build_string_list(0, acc) = acc
@@ -16,4 +16,5 @@ main() = {
     strings = build_string_list(500, [])
     result = count_list(strings)
     assert_eq(500, result)
+    0
 }

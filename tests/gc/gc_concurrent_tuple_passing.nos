@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles tuples passed between processes
 
 worker(parent, t) = {
@@ -26,4 +26,5 @@ main() = {
 
     # 6 + 60 + 600 = 666
     assert_eq(666, total)
+    0
 }

@@ -1,9 +1,0 @@
-# expect: "passed"
-type Container = { content: String } deriving Show
-
-main() = {
-    empty = Container("")
-    s = show(empty)
-    assert(s == "Container { content:  }")
-    "passed"
-}

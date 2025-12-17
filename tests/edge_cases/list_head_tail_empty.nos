@@ -1,4 +1,4 @@
-# expect: "caught"
+# expect: caught
 # Head/tail on empty list should be caught
 
 safe_head(list) =

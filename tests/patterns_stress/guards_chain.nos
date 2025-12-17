@@ -1,4 +1,4 @@
-# expect: "large"
+# expect: large
 # Multiple guards in sequence
 
 classify(n) =

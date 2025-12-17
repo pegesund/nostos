@@ -19,4 +19,5 @@ main() = {
     assert(result.stderr == "error message\n")
 
     0
+    0
 }

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test int-to-float coercion with variables
 
 main() = {
@@ -26,6 +26,7 @@ main() = {
     # Function with typed params
     result = compute(4, 2.5)
     assert_eq(10.0, result)
+    0
 }
 
 compute(n: Int, f: Float) -> Float = n * f

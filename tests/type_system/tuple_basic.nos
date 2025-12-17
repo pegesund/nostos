@@ -1,4 +1,4 @@
-# expect: (1, "hello")
+# expect: (1, hello)
 # Tuple type
 
 main() = {

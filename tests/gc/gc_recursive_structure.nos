@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC preserves recursive data structures
 
 type Tree = Leaf(Int) | Branch(Tree, Tree)
@@ -22,4 +22,5 @@ main() = {
     result = sum_tree(tree)
     # 2^7 = 128 leaves, each with value 1
     assert_eq(128, result)
+    0
 }

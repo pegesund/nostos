@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Spawn same function multiple times
 
 worker(parent, id) = {
@@ -18,4 +18,5 @@ main() = {
 
     # Sum should be 1+2+3=6
     assert_eq(6, a + b + c)
+    0
 }

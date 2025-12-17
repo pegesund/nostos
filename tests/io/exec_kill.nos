@@ -14,4 +14,5 @@ main() = {
     # (we can't easily verify this without wait, but at least it shouldn't hang)
 
     0
+    0
 }

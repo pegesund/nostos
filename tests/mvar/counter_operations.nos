@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Various counter operations
 
 mvar counter: Int = 0
@@ -37,4 +37,5 @@ main() = {
     assert_eq(11, add(10))
     assert_eq(22, multiply(2))
     assert_eq(0, reset())
+    0
 }

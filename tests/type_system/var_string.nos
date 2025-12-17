@@ -1,4 +1,4 @@
-# expect: "world"
+# expect: world
 # Mutable String type
 
 main() = {

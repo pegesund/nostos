@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Tail recursive function - sum 1 to n
 
 sum_helper(n, acc) = if n == 0 then acc else sum_helper(n - 1, acc + n)
@@ -7,4 +7,5 @@ sum(n) = sum_helper(n, 0)
 
 main() = {
     assert_eq(5050, sum(100))
+    0
 }

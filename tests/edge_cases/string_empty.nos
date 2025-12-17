@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Empty string operations
 
 main() = {
@@ -13,4 +13,5 @@ main() = {
 
     # Empty ++ empty
     assert_eq("", empty ++ empty)
+    0
 }

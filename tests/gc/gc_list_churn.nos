@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC List Churn Test - creates and discards many lists
 # Tests that the GC reclaims list nodes
 
@@ -16,4 +16,5 @@ main() = {
     # Without GC, this would allocate ~100k list nodes
     result = churn(10000, 0)
     assert_eq(10000, result)
+    0
 }

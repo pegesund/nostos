@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test Process.* introspection functions
 
 # Helper to check if list is empty
@@ -50,4 +50,5 @@ main() = {
 
     # Child should no longer be alive
     assert(Process.alive(child) == false)
+    0
 }

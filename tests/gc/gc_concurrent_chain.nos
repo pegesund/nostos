@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles chain of processes passing data with garbage
 
 chain_node(next, is_last, parent) = {
@@ -38,4 +38,5 @@ main() = {
     end
 
     assert_eq(15, result)
+    0
 }

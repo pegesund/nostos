@@ -1,23 +1,24 @@
-# expect: ()
+# expect: 0
 # GC handles interleaved allocations of live and dead objects
 
-interleave(0, live) = live
-interleave(n, live) = {
+buildInterleavedList(0, live) = live
+buildInterleavedList(n, live) = {
     dead1 = [n * 100]
     keep1 = n
     dead2 = (n, n, n)
     keep2 = n * 2
     dead3 = "dead string"
-    interleave(n - 1, [(keep1, keep2) | live])
+    buildInterleavedList(n - 1, [(keep1, keep2) | live])
 }
 
 sum_pairs([]) = 0
 sum_pairs([(a, b) | rest]) = a + b + sum_pairs(rest)
 
 main() = {
-    live = interleave(200, [])
+    live = buildInterleavedList(200, [])
     result = sum_pairs(live)
     # Each pair: n + 2n = 3n
     # Sum = 3 * (1+2+...+200) = 3 * 20100 = 60300
     assert_eq(60300, result)
+    0
 }

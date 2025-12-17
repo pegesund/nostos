@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Float literal
 
 main() = {
     assert_eq(3.14, 3.14)
+    0
 }

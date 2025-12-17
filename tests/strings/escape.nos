@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # String with escape sequence
 
 main() = {
     assert_eq("hello\nworld", "hello\nworld")
+    0
 }

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test that overloaded functions are truly separate and don't interfere
 # Multi-clause patterns within same signature vs different signatures
 
@@ -36,4 +36,5 @@ main() = {
     assert_eq(identity("test"), "test")
     assert_eq(identity(123), 123)
     assert_eq(typed_double(21), 42)
+    0
 }

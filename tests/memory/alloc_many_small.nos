@@ -5,13 +5,13 @@ make_list(n, acc) =
     if n <= 0 then acc
     else make_list(n - 1, [n | acc])
 
-count(list, acc) =
+countList(list, acc) =
     match list
         [] -> acc
-        [_ | rest] -> count(rest, acc + 1)
+        [_ | rest] -> countList(rest, acc + 1)
     end
 
 main() = {
     list = make_list(1000, [])
-    count(list, 0)
+    countList(list, 0)
 }

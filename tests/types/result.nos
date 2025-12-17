@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Result type
 
 type Result[T, E] = Ok(T) | Err(E)
@@ -8,4 +8,5 @@ unwrap_or(Err(_), default) = default
 
 main() = {
     assert_eq(10, unwrap_or(Ok(10), 0))
+    0
 }

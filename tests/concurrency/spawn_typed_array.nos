@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test spawning processes with Int64Array
 
 # Worker that receives an Int64Array, sums it, and sends result back
@@ -8,7 +8,7 @@ sum_int64_worker(arr: Int64Array, parent: Pid) = {
 }
 
 # Helper to sum array elements
-sum_arr(arr, i, acc) =
+sum_arr(arr: Int64Array, i: Int, acc: Int) -> Int =
     if i >= length(arr) then acc
     else sum_arr(arr, i + 1, acc + arr[i])
 
@@ -23,6 +23,7 @@ main() = {
     # Receive result: 1+2+3+4+5 = 15
     result = receive x -> x end
     assert_eq(15, result)
+    0
 }
 
 fill_int_arr(arr, i) =

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Fibonacci sequence
 
 fib(0) = 0
@@ -7,4 +7,5 @@ fib(n) = fib(n - 1) + fib(n - 2)
 
 main() = {
     assert_eq(55, fib(10))
+    0
 }

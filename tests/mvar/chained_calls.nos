@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Calling multiple mvar leaf functions in sequence
 
 mvar a: Int = 0
@@ -24,4 +24,5 @@ main() = {
     assert_eq(10, get_a())
     assert_eq(20, get_b())
     assert_eq(30, get_a() + get_b())
+    0
 }

@@ -18,4 +18,5 @@ main() = {
     assert(result.stderr == "")
 
     0
+    0
 }

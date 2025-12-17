@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC preserves variant types (Option, Either)
 
 type Option[T] = Some(T) | None
@@ -27,4 +27,5 @@ main() = {
     # Even: 2+4+6+8+10+12+14+16+18+20 = 110
     # Odd doubled: 2+6+10+14+18+22+26+30+34+38 = 200
     assert_eq(310, total)
+    0
 }

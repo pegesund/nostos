@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC Preserves Live Data Test
 # Verifies that GC doesn't collect data that's still reachable
 
@@ -26,4 +26,5 @@ main() = {
 
     # Sum of 1..100 = 5050
     assert_eq(5050, result)
+    0
 }

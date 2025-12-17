@@ -1,7 +1,7 @@
 # expect: true
 # Allocate large strings
 
-repeat_str(s, n, acc) =
+repeat_str(s: String, n: Int, acc: String) -> String =
     if n <= 0 then acc
     else repeat_str(s, n - 1, acc ++ s)
 

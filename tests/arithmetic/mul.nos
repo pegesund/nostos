@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Multiplication
 
 main() = {
     assert_eq(42, 6 * 7)
+    0
 }

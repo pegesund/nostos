@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Boolean literal
 
 main() = {
     assert_eq(true, true)
+    0
 }

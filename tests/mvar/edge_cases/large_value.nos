@@ -1,9 +1,9 @@
-# expect: ()
+# expect: 0
 # Mvar with large values
 
 mvar big: Int = 1000000
 
-get() = big
+getBig() = big
 
 multiply(n) = {
     big = big * n
@@ -11,7 +11,8 @@ multiply(n) = {
 }
 
 main() = {
-    assert_eq(1000000, get())
+    assert_eq(1000000, getBig())
     assert_eq(10000000, multiply(10))
     assert_eq(100000000, multiply(10))
+    0
 }

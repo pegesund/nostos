@@ -29,4 +29,5 @@ main() = {
     Exec.kill(handle)
 
     0
+    0
 }

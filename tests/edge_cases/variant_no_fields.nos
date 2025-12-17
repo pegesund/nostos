@@ -1,4 +1,4 @@
-# expect: "none"
+# expect: none
 # Variant with no fields
 
 type MyOption = MySome(Int) | MyNone

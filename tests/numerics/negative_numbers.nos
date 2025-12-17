@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Negative number operations
 
 main() = {
@@ -8,4 +8,5 @@ main() = {
     assert_eq(25, -5 * -5)
     assert_eq(-2, -10 / 5)
     assert_eq(2, -10 / -5)
+    0
 }

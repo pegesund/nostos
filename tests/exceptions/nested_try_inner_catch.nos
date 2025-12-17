@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Nested try - inner catch handles exception
 
 main() = {
@@ -12,4 +12,5 @@ main() = {
         e -> "outer: " ++ e
     end
     assert_eq("caught inside", result)
+    0
 }

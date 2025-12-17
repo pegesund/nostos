@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC handles lists passed between processes
 
 sum_list([]) = 0
@@ -30,4 +30,5 @@ main() = {
 
     # 15 + 60 + 300 + 1000 = 1375
     assert_eq(1375, total)
+    0
 }

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC preserves list of maps structure
 
 build_map_list(0, acc) = acc
@@ -23,4 +23,5 @@ main() = {
     # Each map contributes n + 2n = 3n
     # Sum = 3 * (1+2+...+50) = 3 * 1275 = 3825
     assert_eq(3825, result)
+    0
 }

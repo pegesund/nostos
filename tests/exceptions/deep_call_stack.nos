@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Exception through deep call stack
 
 level3() = throw("deep error")
@@ -8,4 +8,5 @@ level1() = level2()
 main() = {
     result = try level1() catch e -> e end
     assert_eq("deep error", result)
+    0
 }

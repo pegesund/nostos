@@ -1,8 +1,9 @@
-# expect: ()
+# expect: 0
 # Recursive factorial
 
 factorial(n) = if n <= 1 then 1 else n * factorial(n - 1)
 
 main() = {
     assert_eq(120, factorial(5))
+    0
 }

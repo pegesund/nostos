@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Mvar initialized to empty string
 
 mvar text: String = ""
@@ -14,4 +14,5 @@ main() = {
     assert_eq("", get_text())
     assert_eq("hello", append("hello"))
     assert_eq("hello world", append(" world"))
+    0
 }

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Church numerals - representing numbers as functions
 
 # Church numeral: n is represented as f applied n times to x
@@ -27,4 +27,5 @@ main() = {
     four = add(two, two)
     result = to_int(mul(two, four))
     assert_eq(8, result)
+    0
 }

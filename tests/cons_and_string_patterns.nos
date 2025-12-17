@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test the :: cons operator and string pattern matching
 
 # Function using string pattern matching
@@ -36,4 +36,6 @@ main() = {
     assert_eq(first_char("hello"), "starts with h")
     assert_eq(first_char("apple"), "starts with a")
     assert_eq(first_char("world"), "other")
+    0
+    0
 }

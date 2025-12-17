@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test that JIT-heavy processes don't completely starve other processes
 # All spawned processes should complete and report back
 
@@ -38,4 +38,5 @@ main() = {
     # Sum them - should include 75025 (fib 25) + 1 + 2 + 3 = 75031
     total = r1 + r2 + r3 + r4
     assert_eq(75031, total)
+    0
 }

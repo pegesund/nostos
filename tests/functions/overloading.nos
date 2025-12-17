@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Function overloading by type signature
 # Functions with the same name but different parameter types are treated as different functions
 
@@ -28,4 +28,5 @@ main() = {
     # Test 3: Typed parameter takes precedence over wildcard
     assert_eq(process(5), 10)
     assert_eq(process_generic("test"), "test")
+    0
 }

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC preserves closures with captured variables
 
 make_adder(n) = {
@@ -24,4 +24,5 @@ main() = {
     result = apply_all(adders, 0)
     # 0 + 1 + 2 + ... + 10 = 55
     assert_eq(55, result)
+    0
 }

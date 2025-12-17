@@ -49,6 +49,5 @@ main() = {
     data = %{"id": 123, "data": "..."}
     if get_id(data) != 123 then throw("get_id failed") else {}
 
-    println("Function argument patterns passed!")
     true
 }

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test compile-time int-to-BigInt coercion for mixed numeric operations
 
 main() = {
@@ -25,4 +25,5 @@ main() = {
     # Chained operations
     assert_eq(30n, 10n + 5 + 15)
     assert_eq(60n, 2n * 3 * 10)
+    0
 }

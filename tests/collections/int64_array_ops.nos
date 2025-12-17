@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Test Int64Array operations - creation, indexing, mutation
 
 main() = {
@@ -14,6 +14,7 @@ main() = {
     assert(arr[3] == 9)
     assert(arr[9] == 81)
     assert(length(arr) == 10)
+    0
 }
 
 fillSquares(arr, i) =

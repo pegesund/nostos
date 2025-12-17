@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC preserves nested closures with captured variables
 
 make_nested_closure(n) = {
@@ -31,4 +31,5 @@ main() = {
     # Each closure: (n + 10) + 5 + n = 2n + 15
     # Sum for n=1..20: 2*(1+2+...+20) + 20*15 = 2*210 + 300 = 720
     assert_eq(720, result)
+    0
 }

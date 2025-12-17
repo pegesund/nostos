@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Closure capturing outer variable
 
 main() = {
@@ -6,4 +6,5 @@ main() = {
     addX = y => x + y
     result = addX(5)
     assert_eq(15, result)
+    0
 }

@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Mvar starting at zero and going negative
 
 mvar balance: Int = 0
@@ -22,4 +22,5 @@ main() = {
     assert_eq(0 - 50, add(50))
     assert_eq(0, add(50))
     assert_eq(100, add(100))
+    0
 }

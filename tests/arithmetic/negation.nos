@@ -1,6 +1,7 @@
-# expect: ()
+# expect: 0
 # Unary negation
 
 main() = {
     assert_eq(-5, -5)
+    0
 }

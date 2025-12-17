@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC reclaims unreferenced strings
 
 discard_strings(0, count) = count
@@ -17,4 +17,5 @@ main() = {
     # 5000 iterations * 5 strings = 25000 garbage strings
     result = discard_strings(5000, 0)
     assert_eq(5000, result)
+    0
 }

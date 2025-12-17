@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Different integer sizes
 
 main() = {
@@ -11,4 +11,5 @@ main() = {
     assert_eq(32767i16, b)
     assert_eq(2147483647i32, c)
     assert_eq(9223372036854775807, d)
+    0
 }

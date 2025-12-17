@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # GC follows transitive references through multiple levels
 
 type Node = { value: Int, children: List }
@@ -30,4 +30,5 @@ main() = {
     # Level 0: 32 nodes * 0 = 0
     # Total = 5 + 8 + 12 + 16 + 16 + 0 = 57
     assert_eq(57, total)
+    0
 }

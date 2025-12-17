@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Binary tree operations
 
 type Tree[T] = Leaf | Node(T, Tree[T], Tree[T])
@@ -22,4 +22,5 @@ main() = {
     )
     result = sum_tree(tree)
     assert_eq(28, result)
+    0
 }
