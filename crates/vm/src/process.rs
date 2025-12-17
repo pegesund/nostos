@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use imbl::HashMap as ImblHashMap;
+use imbl::HashSet as ImblHashSet;
 use tokio::sync::oneshot;
 use crossbeam_channel; // Added
 
@@ -224,6 +226,9 @@ pub enum ProcessState {
     /// Waiting for async IO operation to complete.
     /// The actual receiver is stored in Process::io_receiver.
     WaitingIO,
+    /// Waiting to acquire an mvar lock.
+    /// Contains (mvar_name, is_write_lock).
+    WaitingForMvar(String, bool),
     /// Yielded, ready to be scheduled.
     Suspended,
     /// Process has exited with a value.
@@ -510,14 +515,14 @@ impl ThreadSafeValue {
             ThreadSafeValue::Function(func) => GcValue::Function(func.clone()),
             ThreadSafeValue::NativeFunction(func) => GcValue::NativeFunction(func.clone()),
             ThreadSafeValue::Map(entries) => {
-                let gc_entries: HashMap<GcMapKey, GcValue> = entries.iter()
+                let gc_entries: ImblHashMap<GcMapKey, GcValue> = entries.iter()
                     .map(|(k, v)| (k.to_gc_map_key(), v.to_gc_value(heap)))
                     .collect();
                 let ptr = heap.alloc_map(gc_entries);
                 GcValue::Map(ptr)
             }
             ThreadSafeValue::Set(items) => {
-                let gc_items: std::collections::HashSet<GcMapKey> = items.iter()
+                let gc_items: ImblHashSet<GcMapKey> = items.iter()
                     .map(|k| k.to_gc_map_key())
                     .collect();
                 let ptr = heap.alloc_set(gc_items);
@@ -602,6 +607,10 @@ pub struct Process {
 
     /// Destination register for IO result (when state is WaitingIO).
     pub io_result_reg: Option<Reg>,
+
+    /// MVar locks held by this process: mvar_name -> (is_write, acquisition_depth).
+    /// Acquisition depth handles nested calls - only release when depth reaches 0.
+    pub held_mvar_locks: HashMap<String, (bool, u32)>,
 }
 
 impl Process {
@@ -634,6 +643,7 @@ impl Process {
             started_at: Instant::now(),
             io_receiver: None,
             io_result_reg: None,
+            held_mvar_locks: HashMap::new(),
         }
     }
 

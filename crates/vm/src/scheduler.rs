@@ -724,7 +724,8 @@ impl Scheduler {
                         self.run_queue.lock().push_back(current_pid);
                     }
                     ProcessState::Waiting | ProcessState::WaitingTimeout
-                    | ProcessState::Sleeping | ProcessState::WaitingIO => {
+                    | ProcessState::Sleeping | ProcessState::WaitingIO
+                    | ProcessState::WaitingForMvar(_, _) => {
                         drop(proc);
                         let mut waiting = self.waiting.lock();
                         if !waiting.contains(&current_pid) {

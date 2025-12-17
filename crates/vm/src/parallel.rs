@@ -11,15 +11,25 @@
 //! - Local process access: no locks
 //! - Cross-thread messaging: lock-free channels
 
+use std::cell::RefCell;
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, VecDeque};
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam::channel::{self, Sender, Receiver, TryRecvError};
+use imbl::HashMap as ImblHashMap;
+use imbl::HashSet as ImblHashSet;
 use parking_lot::RwLock;
+
+// Thread-local storage for tracking which mvar locks are held by the current thread.
+// This allows MvarRead/MvarWrite to skip locking if MvarLock already holds the lock.
+// Key: mvar name, Value: true if write lock, false if read lock
+thread_local! {
+    static HELD_MVAR_LOCKS: RefCell<HashMap<String, bool>> = RefCell::new(HashMap::new());
+}
 
 use tokio::sync::mpsc as tokio_mpsc;
 
@@ -311,7 +321,7 @@ pub enum SendableValue {
 }
 
 impl SendableValue {
-    fn from_gc_value(value: &GcValue, heap: &Heap) -> Self {
+    pub fn from_gc_value(value: &GcValue, heap: &Heap) -> Self {
         match value {
             GcValue::Unit => SendableValue::Unit,
             GcValue::Bool(b) => SendableValue::Bool(*b),
@@ -703,6 +713,8 @@ struct ThreadWorker {
     main_output: Vec<String>,
     /// List of local_ids waiting for async IO (for efficient polling)
     io_waiting: Vec<u64>,
+    /// List of local_ids waiting for mvar locks (for efficient retry)
+    mvar_waiting: Vec<u64>,
     /// Idle backoff counter (doubles sleep time up to max when idle)
     idle_backoff: u32,
 }
@@ -1086,48 +1098,188 @@ impl ParallelVM {
             }),
         }));
 
-        // Hash - compute hash value for a value (FNV-1a algorithm)
+        // Hash - compute hash value for any value (FNV-1a algorithm)
         self.register_native("hash", Arc::new(GcNativeFn {
             name: "hash".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
-                fn fnv1a_hash(bytes: &[u8]) -> i64 {
-                    let mut hash: u64 = 14695981039346656037; // FNV offset basis
-                    for byte in bytes {
-                        hash ^= *byte as u64;
-                        hash = hash.wrapping_mul(1099511628211); // FNV prime
+                fn hash_value(val: &GcValue, heap: &Heap) -> Result<u64, RuntimeError> {
+                    const FNV_OFFSET: u64 = 14695981039346656037;
+                    const FNV_PRIME: u64 = 1099511628211;
+
+                    fn fnv1a_hash(bytes: &[u8]) -> u64 {
+                        let mut hash: u64 = FNV_OFFSET;
+                        for byte in bytes {
+                            hash ^= *byte as u64;
+                            hash = hash.wrapping_mul(FNV_PRIME);
+                        }
+                        hash
                     }
-                    hash as i64
+
+                    fn combine_hash(h1: u64, h2: u64) -> u64 {
+                        h1.wrapping_mul(FNV_PRIME) ^ h2
+                    }
+
+                    match val {
+                        GcValue::Unit => Ok(0),
+                        GcValue::Bool(b) => Ok(if *b { 1 } else { 0 }),
+                        GcValue::Char(c) => Ok(fnv1a_hash(&(*c as u32).to_le_bytes())),
+                        GcValue::Int8(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::Int16(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::Int32(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::Int64(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::UInt8(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::UInt16(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::UInt32(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::UInt64(n) => Ok(fnv1a_hash(&n.to_le_bytes())),
+                        GcValue::Float32(f) => Ok(fnv1a_hash(&f.to_le_bytes())),
+                        GcValue::Float64(f) => Ok(fnv1a_hash(&f.to_le_bytes())),
+                        GcValue::String(s) => {
+                            if let Some(str_val) = heap.get_string(*s) {
+                                Ok(fnv1a_hash(str_val.data.as_bytes()))
+                            } else {
+                                Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                            }
+                        }
+                        GcValue::List(list) => {
+                            let mut h = fnv1a_hash(b"list");
+                            for item in list.items() {
+                                h = combine_hash(h, hash_value(item, heap)?);
+                            }
+                            Ok(h)
+                        }
+                        GcValue::Tuple(ptr) => {
+                            if let Some(tuple) = heap.get_tuple(*ptr) {
+                                let mut h = fnv1a_hash(b"tuple");
+                                for item in &tuple.items {
+                                    h = combine_hash(h, hash_value(item, heap)?);
+                                }
+                                Ok(h)
+                            } else {
+                                Err(RuntimeError::Panic("Invalid tuple pointer".to_string()))
+                            }
+                        }
+                        GcValue::Record(ptr) => {
+                            if let Some(rec) = heap.get_record(*ptr) {
+                                let mut h = fnv1a_hash(rec.type_name.as_bytes());
+                                for field in &rec.fields {
+                                    h = combine_hash(h, hash_value(field, heap)?);
+                                }
+                                Ok(h)
+                            } else {
+                                Err(RuntimeError::Panic("Invalid record pointer".to_string()))
+                            }
+                        }
+                        GcValue::Variant(ptr) => {
+                            if let Some(var) = heap.get_variant(*ptr) {
+                                let mut h = fnv1a_hash(var.type_name.as_bytes());
+                                h = combine_hash(h, fnv1a_hash(var.constructor.as_bytes()));
+                                for field in &var.fields {
+                                    h = combine_hash(h, hash_value(field, heap)?);
+                                }
+                                Ok(h)
+                            } else {
+                                Err(RuntimeError::Panic("Invalid variant pointer".to_string()))
+                            }
+                        }
+                        GcValue::Map(ptr) => {
+                            if let Some(map) = heap.get_map(*ptr) {
+                                // Hash map by combining all key-value hashes (order-independent via XOR)
+                                let mut h: u64 = fnv1a_hash(b"map");
+                                for (k, v) in map.entries.iter() {
+                                    let kh = match k {
+                                        crate::gc::GcMapKey::Unit => 0,
+                                        crate::gc::GcMapKey::Bool(b) => if *b { 1 } else { 0 },
+                                        crate::gc::GcMapKey::Char(c) => fnv1a_hash(&(*c as u32).to_le_bytes()),
+                                        crate::gc::GcMapKey::Int8(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::Int16(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::Int32(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::Int64(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt8(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt16(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt32(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt64(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::String(s) => fnv1a_hash(s.as_bytes()),
+                                    };
+                                    let vh = hash_value(v, heap)?;
+                                    h ^= combine_hash(kh, vh); // XOR for order-independence
+                                }
+                                Ok(h)
+                            } else {
+                                Err(RuntimeError::Panic("Invalid map pointer".to_string()))
+                            }
+                        }
+                        GcValue::Set(ptr) => {
+                            if let Some(set) = heap.get_set(*ptr) {
+                                // Hash set by XORing all element hashes (order-independent)
+                                let mut h: u64 = fnv1a_hash(b"set");
+                                for k in set.items.iter() {
+                                    let kh = match k {
+                                        crate::gc::GcMapKey::Unit => 0,
+                                        crate::gc::GcMapKey::Bool(b) => if *b { 1 } else { 0 },
+                                        crate::gc::GcMapKey::Char(c) => fnv1a_hash(&(*c as u32).to_le_bytes()),
+                                        crate::gc::GcMapKey::Int8(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::Int16(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::Int32(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::Int64(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt8(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt16(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt32(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::UInt64(n) => fnv1a_hash(&n.to_le_bytes()),
+                                        crate::gc::GcMapKey::String(s) => fnv1a_hash(s.as_bytes()),
+                                    };
+                                    h ^= kh;
+                                }
+                                Ok(h)
+                            } else {
+                                Err(RuntimeError::Panic("Invalid set pointer".to_string()))
+                            }
+                        }
+                        GcValue::BigInt(ptr) => {
+                            if let Some(bi) = heap.get_bigint(*ptr) {
+                                Ok(fnv1a_hash(&bi.value.to_signed_bytes_le()))
+                            } else {
+                                Err(RuntimeError::Panic("Invalid bigint pointer".to_string()))
+                            }
+                        }
+                        GcValue::Decimal(dec) => {
+                            Ok(fnv1a_hash(&dec.serialize()))
+                        }
+                        // Functions/closures hash by identity (pointer)
+                        GcValue::Closure(ptr, _) => Ok(fnv1a_hash(&ptr.as_raw().to_le_bytes())),
+                        GcValue::Function(f) => Ok(fnv1a_hash(f.name.as_bytes())),
+                        GcValue::NativeFunction(f) => Ok(fnv1a_hash(f.name.as_bytes())),
+                        // Other types
+                        GcValue::Pid(p) => Ok(fnv1a_hash(&p.to_le_bytes())),
+                        GcValue::Ref(r) => Ok(fnv1a_hash(&r.to_le_bytes())),
+                        GcValue::Int64Array(ptr) => {
+                            if let Some(arr) = heap.get_int64_array(*ptr) {
+                                let mut h = fnv1a_hash(b"int64array");
+                                for n in &arr.items {
+                                    h = combine_hash(h, fnv1a_hash(&n.to_le_bytes()));
+                                }
+                                Ok(h)
+                            } else {
+                                Err(RuntimeError::Panic("Invalid array pointer".to_string()))
+                            }
+                        }
+                        GcValue::Float64Array(ptr) => {
+                            if let Some(arr) = heap.get_float64_array(*ptr) {
+                                let mut h = fnv1a_hash(b"float64array");
+                                for f in &arr.items {
+                                    h = combine_hash(h, fnv1a_hash(&f.to_le_bytes()));
+                                }
+                                Ok(h)
+                            } else {
+                                Err(RuntimeError::Panic("Invalid array pointer".to_string()))
+                            }
+                        }
+                        _ => Ok(fnv1a_hash(b"unknown")),
+                    }
                 }
 
-                let hash_val = match &args[0] {
-                    GcValue::Unit => 0i64,
-                    GcValue::Bool(b) => if *b { 1 } else { 0 },
-                    GcValue::Char(c) => fnv1a_hash(&(*c as u32).to_le_bytes()),
-                    GcValue::Int8(n) => fnv1a_hash(&n.to_le_bytes()),
-                    GcValue::Int16(n) => fnv1a_hash(&n.to_le_bytes()),
-                    GcValue::Int32(n) => fnv1a_hash(&n.to_le_bytes()),
-                    GcValue::Int64(n) => fnv1a_hash(&n.to_le_bytes()),
-                    GcValue::UInt8(n) => fnv1a_hash(&n.to_le_bytes()),
-                    GcValue::UInt16(n) => fnv1a_hash(&n.to_le_bytes()),
-                    GcValue::UInt32(n) => fnv1a_hash(&n.to_le_bytes()),
-                    GcValue::UInt64(n) => fnv1a_hash(&n.to_le_bytes()),
-                    GcValue::Float32(f) => fnv1a_hash(&f.to_le_bytes()),
-                    GcValue::Float64(f) => fnv1a_hash(&f.to_le_bytes()),
-                    GcValue::String(s) => {
-                        if let Some(str_val) = heap.get_string(*s) {
-                            fnv1a_hash(str_val.data.as_bytes())
-                        } else {
-                            return Err(RuntimeError::Panic("Invalid string pointer".to_string()));
-                        }
-                    }
-                    // For complex types, return an error - user should implement Hash trait
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "hashable type (primitive or String)".to_string(),
-                        found: "complex type - implement Hash trait".to_string()
-                    }),
-                };
-                Ok(GcValue::Int64(hash_val))
+                let hash_val = hash_value(&args[0], heap)?;
+                Ok(GcValue::Int64(hash_val as i64))
             }),
         }));
 
@@ -2554,6 +2706,337 @@ impl ParallelVM {
                 }
             }),
         }));
+
+        // === Map Functions ===
+
+        // Map.insert(map, key, value) -> new map with key-value inserted
+        self.register_native("Map.insert", Arc::new(GcNativeFn {
+            name: "Map.insert".to_string(),
+            arity: 3,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                    expected: "hashable".to_string(),
+                    found: args[1].type_name(heap).to_string()
+                })?;
+                let value = args[2].clone();
+
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                let new_entries = map.entries.update(key, value);
+                let new_ptr = heap.alloc_map(new_entries);
+                Ok(GcValue::Map(new_ptr))
+            }),
+        }));
+
+        // Map.remove(map, key) -> new map with key removed
+        self.register_native("Map.remove", Arc::new(GcNativeFn {
+            name: "Map.remove".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                    expected: "hashable".to_string(),
+                    found: args[1].type_name(heap).to_string()
+                })?;
+
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                let new_entries = map.entries.without(&key);
+                let new_ptr = heap.alloc_map(new_entries);
+                Ok(GcValue::Map(new_ptr))
+            }),
+        }));
+
+        // Map.get(map, key) -> Option value
+        self.register_native("Map.get", Arc::new(GcNativeFn {
+            name: "Map.get".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                    expected: "hashable".to_string(),
+                    found: args[1].type_name(heap).to_string()
+                })?;
+
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                match map.entries.get(&key) {
+                    Some(value) => Ok(value.clone()),
+                    None => Ok(GcValue::Unit)
+                }
+            }),
+        }));
+
+        // Map.contains(map, key) -> Bool
+        self.register_native("Map.contains", Arc::new(GcNativeFn {
+            name: "Map.contains".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                    expected: "hashable".to_string(),
+                    found: args[1].type_name(heap).to_string()
+                })?;
+
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                Ok(GcValue::Bool(map.entries.contains_key(&key)))
+            }),
+        }));
+
+        // Map.keys(map) -> [keys]
+        self.register_native("Map.keys", Arc::new(GcNativeFn {
+            name: "Map.keys".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+
+                // Clone keys first to release borrow on heap
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                let keys_cloned: Vec<_> = map.entries.keys().cloned().collect();
+                drop(map);
+                // Now convert to GcValues
+                let keys: Vec<GcValue> = keys_cloned.into_iter().map(|k| k.to_gc_value(heap)).collect();
+                Ok(GcValue::List(heap.make_list(keys)))
+            }),
+        }));
+
+        // Map.values(map) -> [values]
+        self.register_native("Map.values", Arc::new(GcNativeFn {
+            name: "Map.values".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                let values: Vec<GcValue> = map.entries.values().cloned().collect();
+                Ok(GcValue::List(heap.make_list(values)))
+            }),
+        }));
+
+        // Map.size(map) -> Int
+        self.register_native("Map.size", Arc::new(GcNativeFn {
+            name: "Map.size".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                Ok(GcValue::Int64(map.entries.len() as i64))
+            }),
+        }));
+
+        // Map.isEmpty(map) -> Bool
+        self.register_native("Map.isEmpty", Arc::new(GcNativeFn {
+            name: "Map.isEmpty".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                Ok(GcValue::Bool(map.entries.is_empty()))
+            }),
+        }));
+
+        // === Set Functions ===
+
+        // Set.insert(set, elem) -> new set with element inserted
+        self.register_native("Set.insert", Arc::new(GcNativeFn {
+            name: "Set.insert".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let set_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let elem = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                    expected: "hashable".to_string(),
+                    found: args[1].type_name(heap).to_string()
+                })?;
+
+                let set = heap.get_set(set_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let new_items = set.items.update(elem);
+                let new_ptr = heap.alloc_set(new_items);
+                Ok(GcValue::Set(new_ptr))
+            }),
+        }));
+
+        // Set.remove(set, elem) -> new set with element removed
+        self.register_native("Set.remove", Arc::new(GcNativeFn {
+            name: "Set.remove".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let set_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let elem = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                    expected: "hashable".to_string(),
+                    found: args[1].type_name(heap).to_string()
+                })?;
+
+                let set = heap.get_set(set_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let new_items = set.items.without(&elem);
+                let new_ptr = heap.alloc_set(new_items);
+                Ok(GcValue::Set(new_ptr))
+            }),
+        }));
+
+        // Set.contains(set, elem) -> Bool
+        self.register_native("Set.contains", Arc::new(GcNativeFn {
+            name: "Set.contains".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let set_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let elem = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                    expected: "hashable".to_string(),
+                    found: args[1].type_name(heap).to_string()
+                })?;
+
+                let set = heap.get_set(set_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                Ok(GcValue::Bool(set.items.contains(&elem)))
+            }),
+        }));
+
+        // Set.size(set) -> Int
+        self.register_native("Set.size", Arc::new(GcNativeFn {
+            name: "Set.size".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let set_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+
+                let set = heap.get_set(set_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                Ok(GcValue::Int64(set.items.len() as i64))
+            }),
+        }));
+
+        // Set.isEmpty(set) -> Bool
+        self.register_native("Set.isEmpty", Arc::new(GcNativeFn {
+            name: "Set.isEmpty".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let set_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+
+                let set = heap.get_set(set_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                Ok(GcValue::Bool(set.items.is_empty()))
+            }),
+        }));
+
+        // Set.toList(set) -> [elements]
+        self.register_native("Set.toList", Arc::new(GcNativeFn {
+            name: "Set.toList".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let set_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+
+                // Clone items first to release borrow on heap
+                let set = heap.get_set(set_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let items_cloned: Vec<_> = set.items.iter().cloned().collect();
+                drop(set);
+                // Now convert to GcValues
+                let elements: Vec<GcValue> = items_cloned.into_iter().map(|k| k.to_gc_value(heap)).collect();
+                Ok(GcValue::List(heap.make_list(elements)))
+            }),
+        }));
+
+        // Set.union(set1, set2) -> new set with all elements from both
+        self.register_native("Set.union", Arc::new(GcNativeFn {
+            name: "Set.union".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let set1_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let set2_ptr = match &args[1] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[1].type_name(heap).to_string() })
+                };
+
+                let set1 = heap.get_set(set1_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let set2 = heap.get_set(set2_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let new_items = set1.items.clone().union(set2.items.clone());
+                let new_ptr = heap.alloc_set(new_items);
+                Ok(GcValue::Set(new_ptr))
+            }),
+        }));
+
+        // Set.intersection(set1, set2) -> new set with elements in both
+        self.register_native("Set.intersection", Arc::new(GcNativeFn {
+            name: "Set.intersection".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let set1_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let set2_ptr = match &args[1] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[1].type_name(heap).to_string() })
+                };
+
+                let set1 = heap.get_set(set1_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let set2 = heap.get_set(set2_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let new_items = set1.items.clone().intersection(set2.items.clone());
+                let new_ptr = heap.alloc_set(new_items);
+                Ok(GcValue::Set(new_ptr))
+            }),
+        }));
+
+        // Set.difference(set1, set2) -> new set with elements in set1 but not set2
+        self.register_native("Set.difference", Arc::new(GcNativeFn {
+            name: "Set.difference".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let set1_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let set2_ptr = match &args[1] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[1].type_name(heap).to_string() })
+                };
+
+                let set1 = heap.get_set(set1_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let set2 = heap.get_set(set2_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let new_items = set1.items.clone().relative_complement(set2.items.clone());
+                let new_ptr = heap.alloc_set(new_items);
+                Ok(GcValue::Set(new_ptr))
+            }),
+        }));
     }
 
     /// Set up the inspect channel and register the inspect native function.
@@ -2981,6 +3464,7 @@ impl ThreadWorker {
             main_result: None,
             main_output: Vec::new(),
             io_waiting: Vec::new(),
+            mvar_waiting: Vec::new(),
             idle_backoff: 0,
         }
     }
@@ -3100,6 +3584,9 @@ impl ThreadWorker {
 
             // Check for completed async IO operations
             self.check_io();
+
+            // Retry processes waiting for mvar locks
+            self.check_mvar_waiters();
 
             // Get next process to run
             let local_id = match self.run_queue.pop_front() {
@@ -3327,6 +3814,74 @@ impl ThreadWorker {
         // Remove completed entries from io_waiting
         if !completed.is_empty() {
             self.io_waiting.retain(|id| !completed.contains(id));
+        }
+    }
+
+    /// Check processes waiting for mvar locks and retry acquiring.
+    fn check_mvar_waiters(&mut self) {
+        // Fast path: no mvar-waiting processes
+        if self.mvar_waiting.is_empty() {
+            return;
+        }
+
+        // First pass: collect info about what each process needs (to avoid borrow issues)
+        let to_check: Vec<u64> = self.mvar_waiting.clone();
+        let mut wait_info: Vec<(u64, String, bool)> = Vec::new(); // (local_id, mvar_name, is_write)
+        let mut completed = Vec::new();
+
+        for local_id in &to_check {
+            if let Some(proc) = self.get_process_mut(*local_id) {
+                if let ProcessState::WaitingForMvar(ref mvar_name, is_write) = proc.state {
+                    wait_info.push((*local_id, mvar_name.clone(), is_write));
+                }
+            } else {
+                // Process was removed while waiting
+                completed.push(*local_id);
+            }
+        }
+
+        // Second pass: try to acquire locks (no process borrow needed)
+        let mut acquired_locks: Vec<(u64, String, bool)> = Vec::new(); // (local_id, mvar_name, is_write)
+        for (local_id, mvar_name, is_write) in wait_info {
+            if let Some(var) = self.shared.mvars.get(&mvar_name) {
+                use parking_lot::lock_api::RawRwLock as _;
+                let acquired = unsafe {
+                    if is_write {
+                        var.raw().try_lock_exclusive()
+                    } else {
+                        var.raw().try_lock_shared()
+                    }
+                };
+                if acquired {
+                    acquired_locks.push((local_id, mvar_name, is_write));
+                }
+            } else {
+                // Mvar no longer exists - shouldn't happen, but handle gracefully
+                completed.push(local_id);
+            }
+        }
+
+        // Third pass: update processes that acquired locks
+        for (local_id, mvar_name, is_write) in &acquired_locks {
+            if let Some(proc) = self.get_process_mut(*local_id) {
+                proc.held_mvar_locks.insert(mvar_name.clone(), (*is_write, 1));
+                proc.state = ProcessState::Running;
+                // Increment IP to move past the MvarLock instruction
+                if let Some(frame) = proc.frames.last_mut() {
+                    frame.ip += 1;
+                }
+                // Track in thread-local for compatibility
+                HELD_MVAR_LOCKS.with(|locks| {
+                    locks.borrow_mut().insert(mvar_name.clone(), *is_write);
+                });
+                completed.push(*local_id);
+                self.run_queue.push_back(*local_id);
+            }
+        }
+
+        // Remove completed/acquired entries from mvar_waiting
+        if !completed.is_empty() {
+            self.mvar_waiting.retain(|id| !completed.contains(id));
         }
     }
 
@@ -6132,6 +6687,7 @@ impl ThreadWorker {
                             ProcessState::Waiting => "waiting",
                             ProcessState::WaitingTimeout => "waiting",
                             ProcessState::WaitingIO => "io",
+                            ProcessState::WaitingForMvar(_, _) => "waiting",
                             ProcessState::Sleeping => "sleeping",
                             ProcessState::Suspended => "suspended",
                             ProcessState::Exited(_) => "exited",
@@ -8009,42 +8565,138 @@ impl ThreadWorker {
             // === Module-level mutable variables (mvars) ===
             MvarLock(name_idx, is_write) => {
                 let name = match &constants[*name_idx as usize] {
-                    Value::String(s) => s.as_str(),
+                    Value::String(s) => s.to_string(),
                     _ => return Err(RuntimeError::Panic("MvarLock: name must be a string constant".to_string())),
                 };
-                let var = self.shared.mvars.get(name)
-                    .ok_or_else(|| RuntimeError::Panic(format!("Unknown mvar: {}", name)))?;
-                // Use raw lock for manual management (lock held until MvarUnlock)
-                use parking_lot::lock_api::RawRwLock as _;
-                unsafe {
-                    if *is_write {
-                        var.raw().lock_exclusive();
+
+                // Check mvar exists
+                if !self.shared.mvars.contains_key(&name) {
+                    return Err(RuntimeError::Panic(format!("Unknown mvar: {}", name)));
+                }
+
+                // First check if we already hold this lock (borrow proc mutably)
+                let proc = self.get_process_mut(local_id).unwrap();
+                if let Some((held_write, depth)) = proc.held_mvar_locks.get_mut(&name) {
+                    // Already held - check if we need to upgrade from read to write
+                    if *is_write && !*held_write {
+                        // Need to upgrade: release read lock, acquire write lock
+                        // This is safe because MVar values are copied anyway
+                        let current_depth = *depth;
+                        proc.held_mvar_locks.remove(&name);
+                        drop(proc);
+
+                        // Release the read lock
+                        let var = self.shared.mvars.get(&name).unwrap();
+                        use parking_lot::lock_api::RawRwLock as _;
+                        unsafe { var.raw().unlock_shared(); }
+
+                        // Try to acquire write lock
+                        let acquired = unsafe { var.raw().try_lock_exclusive() };
+
+                        let proc = self.get_process_mut(local_id).unwrap();
+                        if acquired {
+                            // Got write lock - record with preserved depth
+                            proc.held_mvar_locks.insert(name.clone(), (true, current_depth + 1));
+                            HELD_MVAR_LOCKS.with(|locks| {
+                                locks.borrow_mut().insert(name, true);
+                            });
+                        } else {
+                            // Couldn't acquire write lock - yield and retry
+                            // Note: we've already released the read lock, so we need to re-acquire everything
+                            proc.state = ProcessState::WaitingForMvar(name, true);
+                            proc.frames.last_mut().unwrap().ip -= 1;
+                            self.mvar_waiting.push(local_id);
+                            return Ok(StepResult::Waiting);
+                        }
                     } else {
-                        var.raw().lock_shared();
+                        // Same or lower privilege - just increment depth
+                        *depth += 1;
+                    }
+                } else {
+                    // Not held - try to acquire (need to access self.shared.mvars)
+                    // Drop proc borrow first
+                    drop(proc);
+
+                    let var = self.shared.mvars.get(&name).unwrap();
+                    use parking_lot::lock_api::RawRwLock as _;
+                    let acquired = unsafe {
+                        if *is_write {
+                            var.raw().try_lock_exclusive()
+                        } else {
+                            var.raw().try_lock_shared()
+                        }
+                    };
+
+                    // Now get proc again to update state
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    if acquired {
+                        // Got the lock - record in process
+                        proc.held_mvar_locks.insert(name.clone(), (*is_write, 1));
+                        // Also track in thread-local for MvarRead/MvarWrite compatibility
+                        HELD_MVAR_LOCKS.with(|locks| {
+                            locks.borrow_mut().insert(name, *is_write);
+                        });
+                    } else {
+                        // Couldn't acquire - yield and retry
+                        proc.state = ProcessState::WaitingForMvar(name, *is_write);
+                        // Decrement IP so we retry this instruction
+                        proc.frames.last_mut().unwrap().ip -= 1;
+                        // Add to mvar_waiting list for efficient retry
+                        self.mvar_waiting.push(local_id);
+                        return Ok(StepResult::Waiting);
                     }
                 }
             }
 
-            MvarUnlock(name_idx, is_write) => {
+            MvarUnlock(name_idx, _is_write) => {
                 let name = match &constants[*name_idx as usize] {
-                    Value::String(s) => s.as_str(),
+                    Value::String(s) => s.to_string(),
                     _ => return Err(RuntimeError::Panic("MvarUnlock: name must be a string constant".to_string())),
                 };
-                let var = self.shared.mvars.get(name)
-                    .ok_or_else(|| RuntimeError::Panic(format!("Unknown mvar: {}", name)))?;
-                // Release the lock acquired by MvarLock
-                use parking_lot::lock_api::RawRwLock as _;
-                unsafe {
-                    if *is_write {
-                        var.raw().unlock_exclusive();
+
+                // Check mvar exists
+                if !self.shared.mvars.contains_key(&name) {
+                    return Err(RuntimeError::Panic(format!("Unknown mvar: {}", name)));
+                }
+
+                // Check held locks and decrement depth
+                let proc = self.get_process_mut(local_id).unwrap();
+                let needs_unlock = if let Some((held_write, depth)) = proc.held_mvar_locks.get_mut(&name) {
+                    *depth -= 1;
+                    if *depth == 0 {
+                        // Last reference - mark for unlock
+                        let was_write = *held_write;
+                        proc.held_mvar_locks.remove(&name);
+                        Some(was_write)
                     } else {
-                        var.raw().unlock_shared();
+                        None
                     }
+                } else {
+                    // Unlocking a lock we don't hold - this shouldn't happen
+                    return Err(RuntimeError::Panic(format!(
+                        "MvarUnlock: process doesn't hold lock on mvar: {}", name
+                    )));
+                };
+
+                // Actually release the lock if needed (after dropping proc borrow)
+                if let Some(was_write) = needs_unlock {
+                    let var = self.shared.mvars.get(&name).unwrap();
+                    use parking_lot::lock_api::RawRwLock as _;
+                    unsafe {
+                        if was_write {
+                            var.raw().unlock_exclusive();
+                        } else {
+                            var.raw().unlock_shared();
+                        }
+                    }
+                    // Remove from thread-local tracking
+                    HELD_MVAR_LOCKS.with(|locks| {
+                        locks.borrow_mut().remove(&name);
+                    });
                 }
             }
 
             MvarRead(dst, name_idx) => {
-                // Fine-grained locking: acquire read lock, read, release
                 let name = match &constants[*name_idx as usize] {
                     Value::String(s) => s.as_str(),
                     _ => return Err(RuntimeError::Panic("MvarRead: name must be a string constant".to_string())),
@@ -8057,15 +8709,35 @@ impl ThreadWorker {
                 } else {
                     return Err(RuntimeError::Panic(format!("Unknown mvar: {}", name)));
                 };
-                // Acquire read lock, read value, release lock (all atomic)
-                let value = var.read().clone();
+                // Check if this process already holds a lock on this mvar (from MvarLock)
+                let proc = self.get_process(local_id).unwrap();
+                let already_locked = proc.held_mvar_locks.contains_key(name);
+                let value = if already_locked {
+                    // Lock already held by MvarLock - read directly via raw pointer
+                    unsafe {
+                        let ptr = var.data_ptr();
+                        (*ptr).clone()
+                    }
+                } else {
+                    // Fine-grained locking: try to acquire read lock, yield if busy
+                    match var.try_read() {
+                        Some(guard) => guard.clone(),
+                        None => {
+                            // Couldn't acquire lock - yield and retry
+                            let proc = self.get_process_mut(local_id).unwrap();
+                            proc.state = ProcessState::WaitingForMvar(name.to_string(), false);
+                            proc.frames.last_mut().unwrap().ip -= 1;
+                            self.mvar_waiting.push(local_id);
+                            return Ok(StepResult::Waiting);
+                        }
+                    }
+                };
                 let proc = self.get_process_mut(local_id).unwrap();
                 let gc_value = value.to_gc_value(&mut proc.heap);
                 proc.frames.last_mut().unwrap().registers[*dst as usize] = gc_value;
             }
 
             MvarWrite(name_idx, src) => {
-                // Fine-grained locking: acquire write lock, write, release
                 let name = match &constants[*name_idx as usize] {
                     Value::String(s) => s.as_str(),
                     _ => return Err(RuntimeError::Panic("MvarWrite: name must be a string constant".to_string())),
@@ -8082,8 +8754,30 @@ impl ThreadWorker {
                 let proc = self.get_process(local_id).unwrap();
                 let safe_value = ThreadSafeValue::from_gc_value(&value, &proc.heap)
                     .ok_or_else(|| RuntimeError::Panic(format!("Cannot convert value for mvar: {}", name)))?;
-                // Acquire write lock, write value, release lock (all atomic)
-                *var.write() = safe_value;
+                // Check if this process already holds a WRITE lock on this mvar (from MvarLock)
+                let already_locked = proc.held_mvar_locks.get(name)
+                    .map(|(is_write, _)| *is_write)
+                    .unwrap_or(false);
+                if already_locked {
+                    // Write lock already held by MvarLock - write directly via raw pointer
+                    unsafe {
+                        let ptr = var.data_ptr();
+                        *ptr = safe_value;
+                    }
+                } else {
+                    // Fine-grained locking: try to acquire write lock, yield if busy
+                    match var.try_write() {
+                        Some(mut guard) => *guard = safe_value,
+                        None => {
+                            // Couldn't acquire lock - yield and retry
+                            let proc = self.get_process_mut(local_id).unwrap();
+                            proc.state = ProcessState::WaitingForMvar(name.to_string(), true);
+                            proc.frames.last_mut().unwrap().ip -= 1;
+                            self.mvar_waiting.push(local_id);
+                            return Ok(StepResult::Waiting);
+                        }
+                    }
+                }
             }
 
             Panic(msg_reg) => {
@@ -8765,7 +9459,7 @@ impl ThreadWorker {
 
                         MakeSet(dst, ref elements) => {
 
-                            let mut items = std::collections::HashSet::new();
+                            let mut items = ImblHashSet::new();
 
                             for &r in elements.iter() {
 
@@ -8803,7 +9497,7 @@ impl ThreadWorker {
 
                         MakeMap(dst, ref entries) => {
 
-                            let mut map = std::collections::HashMap::new();
+                            let mut map = ImblHashMap::new();
 
                             for (key_reg, val_reg) in entries.iter() {
 

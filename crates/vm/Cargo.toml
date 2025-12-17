@@ -8,6 +8,7 @@ nostos-syntax = { path = "../syntax" }
 nostos-types = { path = "../types" }
 thiserror = "2.0"
 parking_lot = "0.12"
+imbl = "3"
 crossbeam = "0.8"
 crossbeam-channel = "0.5.15"
 crossbeam-deque = "0.7"

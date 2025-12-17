@@ -22,6 +22,8 @@
 //! ```
 
 use std::collections::HashMap;
+use imbl::HashMap as ImblHashMap;
+use imbl::HashSet as ImblHashSet;
 use std::fmt;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -214,16 +216,24 @@ pub struct GcTuple {
     pub items: Vec<GcValue>,
 }
 
-/// A GC-managed map.
+/// A GC-managed map using persistent data structure for O(log n) updates.
+///
+/// TODO: Shared heap optimization for cross-process zero-copy sharing.
+/// imbl's HashMap is Send+Sync and uses Arc internally. If we introduce a shared
+/// heap for immutable data, maps containing only immediate values could be shared
+/// across processes without deep copying. This would benefit workloads passing
+/// large maps of primitives between processes.
 #[derive(Clone, Debug)]
 pub struct GcMap {
-    pub entries: HashMap<GcMapKey, GcValue>,
+    pub entries: ImblHashMap<GcMapKey, GcValue>,
 }
 
-/// A GC-managed set.
+/// A GC-managed set using persistent data structure for O(log n) updates.
+///
+/// TODO: Same shared heap optimization applies to sets.
 #[derive(Clone, Debug)]
 pub struct GcSet {
-    pub items: std::collections::HashSet<GcMapKey>,
+    pub items: ImblHashSet<GcMapKey>,
 }
 
 /// Keys for GC maps/sets (must be hashable, so only immediate values + strings).
@@ -244,6 +254,26 @@ pub enum GcMapKey {
     UInt64(u64),
     // String - stored inline for proper equality/hashing
     String(String),
+}
+
+impl GcMapKey {
+    /// Convert a GcMapKey back to a GcValue
+    pub fn to_gc_value(&self, heap: &mut Heap) -> GcValue {
+        match self {
+            GcMapKey::Unit => GcValue::Unit,
+            GcMapKey::Bool(b) => GcValue::Bool(*b),
+            GcMapKey::Char(c) => GcValue::Char(*c),
+            GcMapKey::Int8(n) => GcValue::Int8(*n),
+            GcMapKey::Int16(n) => GcValue::Int16(*n),
+            GcMapKey::Int32(n) => GcValue::Int32(*n),
+            GcMapKey::Int64(n) => GcValue::Int64(*n),
+            GcMapKey::UInt8(n) => GcValue::UInt8(*n),
+            GcMapKey::UInt16(n) => GcValue::UInt16(*n),
+            GcMapKey::UInt32(n) => GcValue::UInt32(*n),
+            GcMapKey::UInt64(n) => GcValue::UInt64(*n),
+            GcMapKey::String(s) => GcValue::String(heap.alloc_string(s.clone())),
+        }
+    }
 }
 
 /// A GC-managed record.
@@ -1021,13 +1051,13 @@ impl Heap {
     }
 
     /// Allocate a map.
-    pub fn alloc_map(&mut self, entries: HashMap<GcMapKey, GcValue>) -> GcPtr<GcMap> {
+    pub fn alloc_map(&mut self, entries: ImblHashMap<GcMapKey, GcValue>) -> GcPtr<GcMap> {
         let data = HeapData::Map(GcMap { entries });
         GcPtr::from_raw(self.alloc(data))
     }
 
     /// Allocate a set.
-    pub fn alloc_set(&mut self, items: std::collections::HashSet<GcMapKey>) -> GcPtr<GcSet> {
+    pub fn alloc_set(&mut self, items: ImblHashSet<GcMapKey>) -> GcPtr<GcSet> {
         let data = HeapData::Set(GcSet { items });
         GcPtr::from_raw(self.alloc(data))
     }
@@ -1762,7 +1792,7 @@ impl Heap {
             }
             GcValue::Map(ptr) => {
                 if let Some(map) = source.get_map(*ptr) {
-                    let entries: HashMap<GcMapKey, GcValue> = map
+                    let entries: ImblHashMap<GcMapKey, GcValue> = map
                         .entries
                         .iter()
                         .map(|(k, v)| (self.deep_copy_key(k, source), self.deep_copy(v, source)))
@@ -1774,10 +1804,10 @@ impl Heap {
             }
             GcValue::Set(ptr) => {
                 if let Some(set) = source.get_set(*ptr) {
-                    let items: std::collections::HashSet<GcMapKey> = set
+                    let items: ImblHashSet<GcMapKey> = set
                         .items
                         .iter()
-                        .map(|k| self.deep_copy_key(k, source))
+                        .cloned()
                         .collect();
                     GcValue::Set(self.alloc_set(items))
                 } else {
@@ -1954,7 +1984,7 @@ impl Heap {
             GcValue::Map(ptr) => {
                 let entries = self.get_map(*ptr).map(|m| m.entries.clone());
                 if let Some(entries) = entries {
-                    let cloned: HashMap<GcMapKey, GcValue> = entries
+                    let cloned: ImblHashMap<GcMapKey, GcValue> = entries
                         .iter()
                         .map(|(k, v)| (self.clone_key(k), self.clone_value(v)))
                         .collect();
@@ -1966,8 +1996,8 @@ impl Heap {
             GcValue::Set(ptr) => {
                 let items = self.get_set(*ptr).map(|s| s.items.clone());
                 if let Some(items) = items {
-                    let cloned: std::collections::HashSet<GcMapKey> =
-                        items.iter().map(|k| self.clone_key(k)).collect();
+                    let cloned: ImblHashSet<GcMapKey> =
+                        items.iter().cloned().collect();
                     GcValue::Set(self.alloc_set(cloned))
                 } else {
                     GcValue::Unit
@@ -2128,7 +2158,7 @@ impl Heap {
 
             // Map - convert keys and values
             Value::Map(entries) => {
-                let gc_entries: HashMap<GcMapKey, GcValue> = entries
+                let gc_entries: ImblHashMap<GcMapKey, GcValue> = entries
                     .iter()
                     .map(|(k, v)| (self.map_key_to_gc(k), self.value_to_gc(v)))
                     .collect();
@@ -2138,7 +2168,7 @@ impl Heap {
 
             // Set - convert keys
             Value::Set(items) => {
-                let gc_items: std::collections::HashSet<GcMapKey> =
+                let gc_items: ImblHashSet<GcMapKey> =
                     items.iter().map(|k| self.map_key_to_gc(k)).collect();
                 let ptr = self.alloc_set(gc_items);
                 GcValue::Set(ptr)
@@ -2474,7 +2504,7 @@ mod tests {
     #[test]
     fn test_alloc_map() {
         let mut heap = Heap::new();
-        let mut entries = HashMap::new();
+        let mut entries = ImblHashMap::new();
         entries.insert(GcMapKey::Int64(1), GcValue::Bool(true));
         entries.insert(GcMapKey::Int64(2), GcValue::Bool(false));
         let ptr = heap.alloc_map(entries);
@@ -2487,7 +2517,7 @@ mod tests {
     #[test]
     fn test_alloc_set() {
         let mut heap = Heap::new();
-        let mut items = std::collections::HashSet::new();
+        let mut items = ImblHashSet::new();
         items.insert(GcMapKey::Int64(1));
         items.insert(GcMapKey::Int64(2));
         items.insert(GcMapKey::Int64(3));
@@ -2898,7 +2928,7 @@ mod tests {
 
         let value = heap.alloc_string("my_value".to_string());
 
-        let mut entries = HashMap::new();
+        let mut entries = ImblHashMap::new();
         // GcMapKey::String stores inline String for proper hashing
         entries.insert(GcMapKey::String("my_key".to_string()), GcValue::String(value));
         entries.insert(GcMapKey::Int64(42), GcValue::Bool(true));
