@@ -1,0 +1,48 @@
+# expect: 0
+# Test that maps can contain records, unit variants, and tuples as values
+
+type Person = { name: String, age: Int }
+type Status = Active | Inactive | Pending(String)
+
+main() = {
+    # Test records as values
+    people = %{ "alice": Person("Alice", 30), "bob": Person("Bob", 25) }
+    alice = Map.get(people, "alice")
+    assert_eq("Alice", alice.name)
+    assert_eq(30, alice.age)
+
+    # Test unit variants as values
+    statuses = %{ "s1": Active, "s2": Inactive }
+    s1 = match Map.get(statuses, "s1")
+        Active -> 1
+        _ -> 0
+    end
+    assert_eq(1, s1)
+    s2 = match Map.get(statuses, "s2")
+        Inactive -> 2
+        _ -> 0
+    end
+    assert_eq(2, s2)
+
+    # Test variant with payload
+    pending_map = %{ "task": Pending("waiting for review") }
+    msg = match Map.get(pending_map, "task")
+        Pending(m) -> m
+        _ -> "none"
+    end
+    assert_eq("waiting for review", msg)
+
+    # Test tuples as values
+    coords = %{ "origin": (0, 0), "point": (10, 20) }
+    (x, y) = Map.get(coords, "point")
+    assert_eq(10, x)
+    assert_eq(20, y)
+
+    # Test nested: map of tuples containing records
+    nested = %{ "data": (Person("Eve", 40), Active) }
+    (person, status) = Map.get(nested, "data")
+    assert_eq("Eve", person.name)
+    assert_eq(40, person.age)
+
+    0
+}

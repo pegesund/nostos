@@ -1,0 +1,65 @@
+# expect: 0
+# Test that shared maps (via mvar) can contain records, unit variants, and tuples
+
+type Person = { name: String, age: Int }
+type Status = Active | Inactive | Pending(String)
+
+mvar data: Map = %{}
+
+worker_record(parent) = {
+    # Write a record to the shared map
+    data = Map.insert(data, "person", Person("Alice", 30))
+    parent <- true
+}
+
+worker_variant(parent) = {
+    # Write unit variants to the shared map
+    data = Map.insert(data, "status1", Active)
+    data = Map.insert(data, "status2", Pending("review"))
+    parent <- true
+}
+
+worker_tuple(parent) = {
+    # Write a tuple to the shared map
+    data = Map.insert(data, "coords", (100, 200))
+    parent <- true
+}
+
+wait_all(0) = ()
+wait_all(n) = receive _ -> wait_all(n - 1) end
+
+main() = {
+    me = self()
+
+    # Spawn workers that add different value types
+    spawn { worker_record(me) }
+    spawn { worker_variant(me) }
+    spawn { worker_tuple(me) }
+    wait_all(3)
+
+    # Verify record
+    person = Map.get(data, "person")
+    assert_eq("Alice", person.name)
+    assert_eq(30, person.age)
+
+    # Verify unit variant
+    s1 = match Map.get(data, "status1")
+        Active -> 1
+        _ -> 0
+    end
+    assert_eq(1, s1)
+
+    # Verify variant with payload
+    msg = match Map.get(data, "status2")
+        Pending(m) -> m
+        _ -> "none"
+    end
+    assert_eq("review", msg)
+
+    # Verify tuple
+    (x, y) = Map.get(data, "coords")
+    assert_eq(100, x)
+    assert_eq(200, y)
+
+    0
+}
