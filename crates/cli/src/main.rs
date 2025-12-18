@@ -293,6 +293,86 @@ fn mvar_init_to_thread_safe(init: &MvarInitValue) -> ThreadSafeValue {
                 mutable_fields: vec![false; fields.len()],
             }
         }
+        MvarInitValue::EmptyMap => {
+            ThreadSafeValue::Map(nostos_vm::empty_shared_map())
+        }
+        MvarInitValue::Map(entries) => {
+            use nostos_vm::{SharedMapKey, SharedMapValue};
+            let mut map = imbl::HashMap::new();
+            for (k, v) in entries {
+                if let Some(key) = mvar_init_to_shared_key(k) {
+                    let value = mvar_init_to_shared_value(v);
+                    map.insert(key, value);
+                }
+            }
+            ThreadSafeValue::Map(std::sync::Arc::new(map))
+        }
+    }
+}
+
+/// Convert MvarInitValue to SharedMapKey (for map keys)
+fn mvar_init_to_shared_key(init: &MvarInitValue) -> Option<nostos_vm::SharedMapKey> {
+    use nostos_vm::SharedMapKey;
+    match init {
+        MvarInitValue::Unit => Some(SharedMapKey::Unit),
+        MvarInitValue::Bool(b) => Some(SharedMapKey::Bool(*b)),
+        MvarInitValue::Int(n) => Some(SharedMapKey::Int64(*n)),
+        MvarInitValue::String(s) => Some(SharedMapKey::String(s.clone())),
+        MvarInitValue::Char(c) => Some(SharedMapKey::Char(*c)),
+        _ => None, // Other types can't be map keys
+    }
+}
+
+/// Convert MvarInitValue to SharedMapValue (for map values)
+fn mvar_init_to_shared_value(init: &MvarInitValue) -> nostos_vm::SharedMapValue {
+    use nostos_vm::SharedMapValue;
+    match init {
+        MvarInitValue::Unit => SharedMapValue::Unit,
+        MvarInitValue::Bool(b) => SharedMapValue::Bool(*b),
+        MvarInitValue::Int(n) => SharedMapValue::Int64(*n),
+        MvarInitValue::Float(f) => SharedMapValue::Float64(*f),
+        MvarInitValue::String(s) => SharedMapValue::String(s.clone()),
+        MvarInitValue::Char(c) => SharedMapValue::Char(*c),
+        MvarInitValue::EmptyList => SharedMapValue::List(vec![]),
+        MvarInitValue::IntList(ints) => SharedMapValue::List(
+            ints.iter().map(|n| SharedMapValue::Int64(*n)).collect()
+        ),
+        MvarInitValue::FloatList(floats) => SharedMapValue::List(
+            floats.iter().map(|f| SharedMapValue::Float64(*f)).collect()
+        ),
+        MvarInitValue::BoolList(bools) => SharedMapValue::List(
+            bools.iter().map(|b| SharedMapValue::Bool(*b)).collect()
+        ),
+        MvarInitValue::StringList(strings) => SharedMapValue::List(
+            strings.iter().map(|s| SharedMapValue::String(s.clone())).collect()
+        ),
+        MvarInitValue::List(items) => SharedMapValue::List(
+            items.iter().map(|item| mvar_init_to_shared_value(item)).collect()
+        ),
+        MvarInitValue::Tuple(items) => SharedMapValue::Tuple(
+            items.iter().map(|item| mvar_init_to_shared_value(item)).collect()
+        ),
+        MvarInitValue::Record(type_name, fields) => {
+            let field_names: Vec<String> = fields.iter()
+                .enumerate()
+                .map(|(i, (name, _))| if name.is_empty() { format!("_{}", i) } else { name.clone() })
+                .collect();
+            let values: Vec<SharedMapValue> = fields.iter()
+                .map(|(_, val)| mvar_init_to_shared_value(val))
+                .collect();
+            SharedMapValue::Record { type_name: type_name.clone(), field_names, fields: values }
+        }
+        MvarInitValue::EmptyMap => SharedMapValue::Map(nostos_vm::empty_shared_map()),
+        MvarInitValue::Map(entries) => {
+            let mut map = imbl::HashMap::new();
+            for (k, v) in entries {
+                if let Some(key) = mvar_init_to_shared_key(k) {
+                    let value = mvar_init_to_shared_value(v);
+                    map.insert(key, value);
+                }
+            }
+            SharedMapValue::Map(std::sync::Arc::new(map))
+        }
     }
 }
 

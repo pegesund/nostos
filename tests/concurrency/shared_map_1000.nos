@@ -1,0 +1,35 @@
+# expect: 0
+# 1000 processes increment a counter stored in a shared map via MVar
+
+mvar data: Map = %{ "count": 0 }
+
+increment() = {
+    current = Map.get(data, "count")
+    val = if current == () then 0 else current
+    data = Map.insert(data, "count", val + 1)
+}
+
+spawn_workers(parent, n: Int) = if n <= 0 then () else {
+    spawn { increment(); parent <- true }
+    spawn_workers(parent, n - 1)
+}
+
+wait_all(n: Int) = if n <= 0 then () else {
+    receive _ -> wait_all(n - 1) end
+}
+
+main() = {
+    me = self()
+
+    # Verify initial value
+    assert_eq(0, Map.get(data, "count"))
+
+    # Spawn 1000 workers
+    spawn_workers(me, 1000)
+    wait_all(1000)
+
+    # Verify final count is exactly 1000
+    assert_eq(1000, Map.get(data, "count"))
+
+    0
+}

@@ -624,6 +624,10 @@ pub enum MvarInitValue {
     List(Vec<MvarInitValue>),
     /// Record/struct constructor: (type_name, fields as (name, value) pairs)
     Record(String, Vec<(String, MvarInitValue)>),
+    /// Empty map: %{}
+    EmptyMap,
+    /// Map with entries: %{ key => value, ... }
+    Map(Vec<(MvarInitValue, MvarInitValue)>),
 }
 
 /// Mvar access information for a function (for deadlock detection).
@@ -1616,6 +1620,20 @@ impl Compiler {
                     }
                 }
                 Some(MvarInitValue::Record(type_name.node.clone(), field_values))
+            }
+            // Map literals: %{ key => value, ... }
+            Expr::Map(pairs, _) => {
+                if pairs.is_empty() {
+                    Some(MvarInitValue::EmptyMap)
+                } else {
+                    let mut entries = Vec::new();
+                    for (key, value) in pairs {
+                        let k = self.eval_const_expr(key)?;
+                        let v = self.eval_const_expr(value)?;
+                        entries.push((k, v));
+                    }
+                    Some(MvarInitValue::Map(entries))
+                }
             }
             _ => None,
         }
