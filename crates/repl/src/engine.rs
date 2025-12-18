@@ -3440,7 +3440,9 @@ impl ReplEngine {
                 if args.is_empty() {
                     Err("Usage: :load <file.nos>".to_string())
                 } else {
-                    self.load_file(args).map(|_| format!("Loaded {}", args))
+                    // Strip surrounding quotes if present
+                    let path = args.trim_matches('"').trim_matches('\'');
+                    self.load_file(path).map(|_| format!("Loaded {}", path))
                 }
             }
             ":profile" | ":prof" => {
