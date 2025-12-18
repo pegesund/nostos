@@ -10,37 +10,39 @@
 
 main() = {
     # === Creating maps ===
+    # Note: Map values must have consistent types per map
 
     # Empty map
     empty = %{}
 
-    # Map with string keys
-    person = %{"name": "Alice", "age": 30, "city": "Paris"}
+    # Map with string keys and string values
+    person_info = %{"name": "Alice", "city": "Paris", "country": "France"}
 
-    # Map with integer keys
+    # Map with integer keys and integer values
     squares = %{1: 1, 2: 4, 3: 9, 4: 16, 5: 25}
-
-    # Map with mixed value types
-    config = %{"debug": true, "port": 8080, "host": "localhost"}
 
     # === Practical examples ===
 
-    # HTTP status codes to messages
+    # HTTP status codes to messages (Int -> String)
     status_messages = %{200: "OK", 404: "Not Found", 500: "Server Error"}
 
-    # User preferences
-    prefs = %{"theme": "dark", "fontSize": 14, "showLineNumbers": true}
+    # User preferences - string values
+    prefs = %{"theme": "dark", "fontSize": "14", "showLineNumbers": "true"}
 
-    # Word counts (frequency map)
+    # Word counts (frequency map) - String -> Int
     word_counts = %{"hello": 5, "world": 3, "nostos": 10}
 
-    # Configuration settings
-    metadata = %{"version": "1.0", "author": "Team", "stable": true}
+    # Configuration strings
+    config = %{"debug": "true", "port": "8080", "host": "localhost"}
+
+    # Metadata - all strings
+    metadata = %{"version": "1.0", "author": "Team", "stable": "true"}
 
     println("Map literals created successfully!")
-    println("person: " ++ show(person))
+    println("person_info: " ++ show(person_info))
     println("squares: " ++ show(squares))
     println("status_messages: " ++ show(status_messages))
+    println("word_counts: " ++ show(word_counts))
 
     0
 }

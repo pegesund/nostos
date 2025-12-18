@@ -2084,6 +2084,145 @@ impl AsyncProcess {
                 set_reg!(dst, GcValue::Bool(va == vb));
             }
 
+            // === Base64 Encoding ===
+            Base64Encode(dst, src) => {
+                let input = match reg!(src) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default()
+                    }
+                    _ => return Err(RuntimeError::Panic("Base64Encode: expected String".into())),
+                };
+                use base64::{Engine as _, engine::general_purpose};
+                let encoded = general_purpose::STANDARD.encode(input.as_bytes());
+                let ptr = self.heap.alloc_string(encoded);
+                set_reg!(dst, GcValue::String(ptr));
+            }
+
+            Base64Decode(dst, src) => {
+                let input = match reg!(src) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default()
+                    }
+                    _ => return Err(RuntimeError::Panic("Base64Decode: expected String".into())),
+                };
+                use base64::{Engine as _, engine::general_purpose};
+                match general_purpose::STANDARD.decode(input.as_bytes()) {
+                    Ok(bytes) => {
+                        let decoded = String::from_utf8_lossy(&bytes).to_string();
+                        let status_ptr = self.heap.alloc_string("ok".to_string());
+                        let decoded_ptr = self.heap.alloc_string(decoded);
+                        let tuple_ptr = self.heap.alloc_tuple(vec![
+                            GcValue::String(status_ptr),
+                            GcValue::String(decoded_ptr),
+                        ]);
+                        set_reg!(dst, GcValue::Tuple(tuple_ptr));
+                    }
+                    Err(e) => {
+                        let status_ptr = self.heap.alloc_string("error".to_string());
+                        let error_ptr = self.heap.alloc_string(format!("invalid base64: {}", e));
+                        let tuple_ptr = self.heap.alloc_tuple(vec![
+                            GcValue::String(status_ptr),
+                            GcValue::String(error_ptr),
+                        ]);
+                        set_reg!(dst, GcValue::Tuple(tuple_ptr));
+                    }
+                }
+            }
+
+            // === URL Encoding ===
+            UrlEncode(dst, src) => {
+                let input = match reg!(src) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default()
+                    }
+                    _ => return Err(RuntimeError::Panic("UrlEncode: expected String".into())),
+                };
+                use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+                let encoded = utf8_percent_encode(&input, NON_ALPHANUMERIC).to_string();
+                let ptr = self.heap.alloc_string(encoded);
+                set_reg!(dst, GcValue::String(ptr));
+            }
+
+            UrlDecode(dst, src) => {
+                let input = match reg!(src) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default()
+                    }
+                    _ => return Err(RuntimeError::Panic("UrlDecode: expected String".into())),
+                };
+                use percent_encoding::percent_decode_str;
+                match percent_decode_str(&input).decode_utf8() {
+                    Ok(decoded) => {
+                        let status_ptr = self.heap.alloc_string("ok".to_string());
+                        let decoded_ptr = self.heap.alloc_string(decoded.to_string());
+                        let tuple_ptr = self.heap.alloc_tuple(vec![
+                            GcValue::String(status_ptr),
+                            GcValue::String(decoded_ptr),
+                        ]);
+                        set_reg!(dst, GcValue::Tuple(tuple_ptr));
+                    }
+                    Err(e) => {
+                        let status_ptr = self.heap.alloc_string("error".to_string());
+                        let error_ptr = self.heap.alloc_string(format!("invalid URL encoding: {}", e));
+                        let tuple_ptr = self.heap.alloc_tuple(vec![
+                            GcValue::String(status_ptr),
+                            GcValue::String(error_ptr),
+                        ]);
+                        set_reg!(dst, GcValue::Tuple(tuple_ptr));
+                    }
+                }
+            }
+
+            // === UTF-8 Encoding ===
+            Utf8Encode(dst, src) => {
+                // Convert string to list of bytes
+                let input = match reg!(src) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default()
+                    }
+                    _ => return Err(RuntimeError::Panic("Utf8Encode: expected String".into())),
+                };
+                let bytes: Vec<GcValue> = input.as_bytes().iter().map(|&b| GcValue::Int64(b as i64)).collect();
+                let list = self.heap.make_list(bytes);
+                set_reg!(dst, GcValue::List(list));
+            }
+
+            Utf8Decode(dst, src) => {
+                // Convert list of bytes to string
+                let bytes = match reg!(src) {
+                    GcValue::List(list) => {
+                        list.items().iter().filter_map(|v| {
+                            if let GcValue::Int64(n) = v {
+                                Some(*n as u8)
+                            } else {
+                                None
+                            }
+                        }).collect::<Vec<u8>>()
+                    }
+                    _ => return Err(RuntimeError::Panic("Utf8Decode: expected List of Int64".into())),
+                };
+                match String::from_utf8(bytes) {
+                    Ok(decoded) => {
+                        let status_ptr = self.heap.alloc_string("ok".to_string());
+                        let decoded_ptr = self.heap.alloc_string(decoded);
+                        let tuple_ptr = self.heap.alloc_tuple(vec![
+                            GcValue::String(status_ptr),
+                            GcValue::String(decoded_ptr),
+                        ]);
+                        set_reg!(dst, GcValue::Tuple(tuple_ptr));
+                    }
+                    Err(e) => {
+                        let status_ptr = self.heap.alloc_string("error".to_string());
+                        let error_ptr = self.heap.alloc_string(format!("invalid UTF-8: {}", e));
+                        let tuple_ptr = self.heap.alloc_tuple(vec![
+                            GcValue::String(status_ptr),
+                            GcValue::String(error_ptr),
+                        ]);
+                        set_reg!(dst, GcValue::Tuple(tuple_ptr));
+                    }
+                }
+            }
+
             // === Concurrency: Spawn ===
             Spawn(dst, func_reg, ref args) => {
                 let func_val = reg!(func_reg);
@@ -2228,6 +2367,15 @@ impl AsyncProcess {
                         set_reg!(dst, GcValue::Unit);
                     }
                 }
+            }
+
+            // === Sleep ===
+            Sleep(ms_reg) => {
+                let ms = match reg!(ms_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::Panic("Sleep: expected Int64 for milliseconds".into())),
+                };
+                tokio::time::sleep(Duration::from_millis(ms)).await;
             }
 
             // === Type constructors ===
@@ -3926,6 +4074,28 @@ impl AsyncProcess {
                         body,
                         response: tx,
                     };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ServerClose(dst, handle_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::ServerClose { handle, response: tx };
                     if sender.send(request).is_err() {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
@@ -6383,6 +6553,31 @@ impl AsyncVM {
                 let new_items = set1.items.clone().relative_complement(set2.items.clone());
                 let new_ptr = heap.alloc_set(new_items);
                 Ok(GcValue::Set(new_ptr))
+            }),
+        }));
+
+        // Default inspect - just prints the value with its name (used outside TUI mode)
+        self.register_native("inspect", Arc::new(GcNativeFn {
+            name: "inspect".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                // Get the name (second argument must be a string)
+                let name = match &args[1] {
+                    GcValue::String(ptr) => {
+                        if let Some(s) = heap.get_string(*ptr) {
+                            s.data.clone()
+                        } else {
+                            "unknown".to_string()
+                        }
+                    }
+                    _ => "unknown".to_string(),
+                };
+
+                // Display the value
+                let value_str = heap.display_value(&args[0]);
+                println!("[inspect] {}: {}", name, value_str);
+
+                Ok(GcValue::Unit)
             }),
         }));
     }

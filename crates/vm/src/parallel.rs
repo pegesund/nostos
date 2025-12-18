@@ -3044,6 +3044,32 @@ impl ParallelVM {
                 Ok(GcValue::Set(new_ptr))
             }),
         }));
+
+        // Default inspect - just prints the value with its name (used outside TUI mode)
+        // This will be overwritten by setup_inspect() when TUI is active
+        self.register_native("inspect", Arc::new(GcNativeFn {
+            name: "inspect".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                // Get the name (second argument must be a string)
+                let name = match &args[1] {
+                    GcValue::String(ptr) => {
+                        if let Some(s) = heap.get_string(*ptr) {
+                            s.data.clone()
+                        } else {
+                            "unknown".to_string()
+                        }
+                    }
+                    _ => "unknown".to_string(),
+                };
+
+                // Display the value
+                let value_str = heap.display_value(&args[0]);
+                println!("[inspect] {}: {}", name, value_str);
+
+                Ok(GcValue::Unit)
+            }),
+        }));
     }
 
     /// Set up the inspect channel and register the inspect native function.
