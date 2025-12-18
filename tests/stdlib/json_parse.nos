@@ -1,0 +1,40 @@
+# expect: true
+# Tests JSON parsing module
+
+use stdlib.json.{jsonParse, Null, Bool, Number, String, Array, Object}
+
+main() = {
+    # Simple values
+    j1 = jsonParse("null")
+    assert_eq(j1, Null)
+
+    j2 = jsonParse("123")
+    assert_eq(j2, Number(123))
+
+    j3 = jsonParse("\"hello\"")
+    assert_eq(j3, String("hello"))
+
+    j4 = jsonParse("true")
+    assert_eq(j4, Bool(true))
+
+    j5 = jsonParse("false")
+    assert_eq(j5, Bool(false))
+
+    # Array
+    j6 = jsonParse("[1, 2, 3]")
+    assert_eq(j6, Array([Number(1), Number(2), Number(3)]))
+
+    # Object
+    j7 = jsonParse("{\"key\": \"value\", \"num\": 42}")
+    assert_eq(j7, Object([("key", String("value")), ("num", Number(42))]))
+
+    # Nested
+    j8 = jsonParse("{\"list\": [1, 2], \"flag\": true}")
+    expected = Object([
+        ("list", Array([Number(1), Number(2)])),
+        ("flag", Bool(true))
+    ])
+    assert_eq(j8, expected)
+
+    true
+}

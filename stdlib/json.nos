@@ -16,7 +16,19 @@ type Json =
 
 is_whitespace(c) = c == ' ' || c == '\n' || c == '\t' || c == '\r'
 
-is_digit(c) = c >= '0' && c <= '9'
+# Match digit characters explicitly since char comparisons aren't supported
+is_digit(c) = match c
+    '0' -> true
+    '1' -> true
+    '2' -> true
+    '3' -> true
+    '4' -> true
+    '5' -> true
+    '6' -> true
+    '7' -> true
+    '8' -> true
+    '9' -> true
+    _ -> false
 
 
 # --- Whitespace handling ---
