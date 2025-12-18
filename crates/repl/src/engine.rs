@@ -727,8 +727,9 @@ impl ReplEngine {
             }
         }
 
-        // Add to compiler
-        self.compiler.add_module(&module, vec![], Arc::new(source.clone()), path_str.to_string())
+        // Add to compiler with module name from filename
+        let module_path = if module_name.is_empty() { vec![] } else { vec![module_name.clone()] };
+        self.compiler.add_module(&module, module_path, Arc::new(source.clone()), path_str.to_string())
             .map_err(|e| format!("Compilation error: {}", e))?;
 
         // Compile all bodies
