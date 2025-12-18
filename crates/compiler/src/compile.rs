@@ -4474,7 +4474,8 @@ impl Compiler {
                             return Ok(dst);
                         }
                         // === Eval ===
-                        "eval" if args.len() == 1 => {
+                        // Only use built-in eval if no user-defined function exists
+                        "eval" if args.len() == 1 && !self.has_user_function("eval", 1) => {
                             let code_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
                             let name_idx = self.chunk.add_constant(Value::String(Arc::new("eval".to_string())));
@@ -5399,7 +5400,8 @@ impl Compiler {
                         return Ok(dst);
                     }
                     // === Eval ===
-                    "eval" if arg_regs.len() == 1 => {
+                    // Only use built-in eval if no user-defined function exists
+                    "eval" if arg_regs.len() == 1 && !self.has_user_function("eval", 1) => {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("eval".to_string())));
                         self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
