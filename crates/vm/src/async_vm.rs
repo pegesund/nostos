@@ -2709,6 +2709,421 @@ impl AsyncProcess {
                 }
             }
 
+            // === HTTP Client Operations ===
+            HttpGet(dst, url_reg) => {
+                let url = match reg!(url_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr)
+                        .map(|s| s.data.clone())
+                        .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::HttpGet { url, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            HttpPost(dst, url_reg, body_reg) => {
+                let url = match reg!(url_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr)
+                        .map(|s| s.data.clone())
+                        .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let body = match reg!(body_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.as_bytes().to_vec()),
+                    GcValue::Unit => None,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String or ()".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::HttpRequest {
+                        request: crate::io_runtime::HttpRequest {
+                            method: crate::io_runtime::HttpMethod::Post,
+                            url,
+                            headers: vec![],
+                            body,
+                            timeout_ms: None,
+                        },
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            HttpPut(dst, url_reg, body_reg) => {
+                let url = match reg!(url_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr)
+                        .map(|s| s.data.clone())
+                        .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let body = match reg!(body_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.as_bytes().to_vec()),
+                    GcValue::Unit => None,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String or ()".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::HttpRequest {
+                        request: crate::io_runtime::HttpRequest {
+                            method: crate::io_runtime::HttpMethod::Put,
+                            url,
+                            headers: vec![],
+                            body,
+                            timeout_ms: None,
+                        },
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            HttpDelete(dst, url_reg) => {
+                let url = match reg!(url_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr)
+                        .map(|s| s.data.clone())
+                        .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::HttpRequest {
+                        request: crate::io_runtime::HttpRequest {
+                            method: crate::io_runtime::HttpMethod::Delete,
+                            url,
+                            headers: vec![],
+                            body: None,
+                            timeout_ms: None,
+                        },
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            HttpPatch(dst, url_reg, body_reg) => {
+                let url = match reg!(url_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr)
+                        .map(|s| s.data.clone())
+                        .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let body = match reg!(body_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.as_bytes().to_vec()),
+                    GcValue::Unit => None,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String or ()".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::HttpRequest {
+                        request: crate::io_runtime::HttpRequest {
+                            method: crate::io_runtime::HttpMethod::Patch,
+                            url,
+                            headers: vec![],
+                            body,
+                            timeout_ms: None,
+                        },
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            HttpHead(dst, url_reg) => {
+                let url = match reg!(url_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr)
+                        .map(|s| s.data.clone())
+                        .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::HttpRequest {
+                        request: crate::io_runtime::HttpRequest {
+                            method: crate::io_runtime::HttpMethod::Head,
+                            url,
+                            headers: vec![],
+                            body: None,
+                            timeout_ms: None,
+                        },
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            HttpRequest(dst, method_reg, url_reg, headers_reg, body_reg) => {
+                let method_str = match reg!(method_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr)
+                        .map(|s| s.data.clone())
+                        .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let method = match method_str.to_uppercase().as_str() {
+                    "GET" => crate::io_runtime::HttpMethod::Get,
+                    "POST" => crate::io_runtime::HttpMethod::Post,
+                    "PUT" => crate::io_runtime::HttpMethod::Put,
+                    "DELETE" => crate::io_runtime::HttpMethod::Delete,
+                    "PATCH" => crate::io_runtime::HttpMethod::Patch,
+                    "HEAD" => crate::io_runtime::HttpMethod::Head,
+                    _ => return Err(RuntimeError::Panic(format!("Unknown HTTP method: {}", method_str))),
+                };
+                let url = match reg!(url_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr)
+                        .map(|s| s.data.clone())
+                        .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let headers = match reg!(headers_reg) {
+                    GcValue::List(list) => {
+                        let mut result = Vec::new();
+                        for item in list.data.iter().skip(list.start) {
+                            if let GcValue::Tuple(ptr) = item {
+                                if let Some(tuple) = self.heap.get_tuple(*ptr) {
+                                    if tuple.items.len() >= 2 {
+                                        let name = match &tuple.items[0] {
+                                            GcValue::String(ptr) => self.heap.get_string(*ptr)
+                                                .map(|s| s.data.clone())
+                                                .unwrap_or_default(),
+                                            _ => String::new(),
+                                        };
+                                        let value = match &tuple.items[1] {
+                                            GcValue::String(ptr) => self.heap.get_string(*ptr)
+                                                .map(|s| s.data.clone())
+                                                .unwrap_or_default(),
+                                            _ => String::new(),
+                                        };
+                                        result.push((name, value));
+                                    }
+                                }
+                            }
+                        }
+                        result
+                    }
+                    GcValue::Unit => vec![],
+                    _ => vec![],
+                };
+                let body = match reg!(body_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.as_bytes().to_vec()),
+                    GcValue::Unit => None,
+                    _ => None,
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::HttpRequest {
+                        request: crate::io_runtime::HttpRequest {
+                            method,
+                            url,
+                            headers,
+                            body,
+                            timeout_ms: None,
+                        },
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            // === HTTP Server Operations ===
+            ServerBind(dst, port_reg) => {
+                let port = match reg!(port_reg) {
+                    GcValue::Int64(n) => n as u16,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::ServerBind { port, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ServerAccept(dst, handle_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::ServerAccept { handle, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ServerRespond(dst, request_id_reg, status_reg, headers_reg, body_reg) => {
+                let request_id = match reg!(request_id_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let status = match reg!(status_reg) {
+                    GcValue::Int64(n) => n as u16,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let headers = match reg!(headers_reg) {
+                    GcValue::List(list) => {
+                        let mut result = Vec::new();
+                        for item in list.data.iter().skip(list.start) {
+                            if let GcValue::Tuple(ptr) = item {
+                                if let Some(tuple) = self.heap.get_tuple(*ptr) {
+                                    if tuple.items.len() >= 2 {
+                                        let name = match &tuple.items[0] {
+                                            GcValue::String(ptr) => self.heap.get_string(*ptr)
+                                                .map(|s| s.data.clone())
+                                                .unwrap_or_default(),
+                                            _ => String::new(),
+                                        };
+                                        let value = match &tuple.items[1] {
+                                            GcValue::String(ptr) => self.heap.get_string(*ptr)
+                                                .map(|s| s.data.clone())
+                                                .unwrap_or_default(),
+                                            _ => String::new(),
+                                        };
+                                        result.push((name, value));
+                                    }
+                                }
+                            }
+                        }
+                        result
+                    }
+                    GcValue::Unit => vec![],
+                    _ => vec![],
+                };
+                let body = match reg!(body_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr)
+                        .map(|s| s.data.as_bytes().to_vec())
+                        .unwrap_or_default(),
+                    GcValue::Unit => Vec::new(),
+                    _ => Vec::new(),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::ServerRespond {
+                        request_id,
+                        status,
+                        headers,
+                        body,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
             // Unimplemented instructions - add as needed
             _ => {
                 eprintln!("[AsyncVM] Unimplemented instruction: {:?}", instruction);
