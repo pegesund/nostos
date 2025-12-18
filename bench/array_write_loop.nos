@@ -2,7 +2,7 @@
 # Fills an array with computed values and sums them
 
 fillArray(arr) = {
-    i = 0
+    var i = 0
     n = length(arr)
     while i < n {
         arr[i] = i * i + i * 3 + 7
@@ -11,8 +11,8 @@ fillArray(arr) = {
 }
 
 sumArray(arr) = {
-    total = 0
-    i = 0
+    var total = 0
+    var i = 0
     n = length(arr)
     while i < n {
         total = total + arr[i]
@@ -29,8 +29,8 @@ runIteration(size) = {
 
 # Run multiple iterations
 benchmark(iterations, size) = {
-    total = 0
-    i = 0
+    var total = 0
+    var i = 0
     while i < iterations {
         total = total + runIteration(size)
         i = i + 1

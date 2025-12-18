@@ -6565,12 +6565,10 @@ impl ThreadWorker {
                     if let Some(&jit_fn) = self.shared.jit_loop_array_functions.get(func_idx) {
                         let arg = reg!(args[0]).clone();
                         if let GcValue::Int64Array(arr_ptr) = arg {
-                            // Copy jit_fn to avoid borrow conflict, then get process
                             let proc = self.get_process_mut(local_id).unwrap();
                             if let Some(arr) = proc.heap.get_int64_array_mut(arr_ptr) {
                                 let ptr = arr.items.as_mut_ptr();
                                 let len = arr.items.len() as i64;
-                                // Call JIT function with raw ptr and len
                                 let result = jit_fn(ptr as *const i64, len);
                                 set_reg!(*dst, GcValue::Int64(result));
                                 return Ok(StepResult::Continue);

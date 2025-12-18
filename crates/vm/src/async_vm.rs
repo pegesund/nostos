@@ -1107,11 +1107,24 @@ impl AsyncProcess {
                         }
                     }
                     1 => {
+                        // Pure numeric JIT
                         if let Some(jit_fn) = self.shared.jit_int_functions.get(&func_idx_u16) {
                             if let GcValue::Int64(n) = reg!(args[0]) {
                                 let result = jit_fn(n);
                                 set_reg!(dst, GcValue::Int64(result));
                                 return Ok(StepResult::Continue);
+                            }
+                        }
+                        // Loop array JIT
+                        if let Some(&jit_fn) = self.shared.jit_loop_array_functions.get(&func_idx_u16) {
+                            if let GcValue::Int64Array(arr_ptr) = reg!(args[0]) {
+                                if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
+                                    let ptr = arr.items.as_mut_ptr();
+                                    let len = arr.items.len() as i64;
+                                    let result = jit_fn(ptr as *const i64, len);
+                                    set_reg!(dst, GcValue::Int64(result));
+                                    return Ok(StepResult::Continue);
+                                }
                             }
                         }
                     }
@@ -1466,6 +1479,7 @@ impl AsyncProcess {
                         }
                     }
                     1 => {
+                        // Pure numeric JIT
                         if let Some(jit_fn) = self.shared.jit_int_functions.get(&func_idx_u16) {
                             if let GcValue::Int64(n) = reg!(args[0]) {
                                 let result = GcValue::Int64(jit_fn(n));
@@ -1478,6 +1492,25 @@ impl AsyncProcess {
                                     frame.registers[ret_reg as usize] = result;
                                 }
                                 return Ok(StepResult::Continue);
+                            }
+                        }
+                        // Loop array JIT
+                        if let Some(&jit_fn) = self.shared.jit_loop_array_functions.get(&func_idx_u16) {
+                            if let GcValue::Int64Array(arr_ptr) = reg!(args[0]) {
+                                if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
+                                    let ptr = arr.items.as_mut_ptr();
+                                    let len = arr.items.len() as i64;
+                                    let result = GcValue::Int64(jit_fn(ptr as *const i64, len));
+                                    let return_reg = self.frames.last().unwrap().return_reg;
+                                    self.frames.pop();
+                                    if self.frames.is_empty() {
+                                        return Ok(StepResult::Finished(result));
+                                    } else if let Some(ret_reg) = return_reg {
+                                        let frame = self.frames.last_mut().unwrap();
+                                        frame.registers[ret_reg as usize] = result;
+                                    }
+                                    return Ok(StepResult::Continue);
+                                }
                             }
                         }
                     }
