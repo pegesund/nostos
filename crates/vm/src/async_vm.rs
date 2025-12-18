@@ -2752,6 +2752,728 @@ impl AsyncProcess {
                 }
             }
 
+            // === File IO Operations ===
+            FileReadAll(dst, path_reg) => {
+                let path_str = match reg!(path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::FileReadToString {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileWriteAll(dst, path_reg, data_reg) => {
+                let path_str = match reg!(path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let data = match reg!(data_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.as_bytes().to_vec())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid data string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::FileWriteAll {
+                        path: std::path::PathBuf::from(path_str),
+                        data,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileAppend(dst, path_reg, data_reg) => {
+                let path_str = match reg!(path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let data = match reg!(data_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.as_bytes().to_vec())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid data string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::FileAppend {
+                        path: std::path::PathBuf::from(path_str),
+                        data,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileOpen(dst, path_reg, mode_reg) => {
+                let path_str = match reg!(path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let mode_str = match reg!(mode_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid mode string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let mode = match mode_str.as_str() {
+                    "r" | "read" => crate::io_runtime::FileMode::Read,
+                    "w" | "write" => crate::io_runtime::FileMode::Write,
+                    "a" | "append" => crate::io_runtime::FileMode::Append,
+                    "rw" | "readwrite" => crate::io_runtime::FileMode::ReadWrite,
+                    _ => return Err(RuntimeError::IOError(format!("Invalid file mode: {}", mode_str))),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::FileOpen {
+                        path: std::path::PathBuf::from(path_str),
+                        mode,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileWrite(dst, handle_reg, data_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(h) => h as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let data = match reg!(data_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.as_bytes().to_vec())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid data string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::FileWrite {
+                        handle,
+                        data,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileRead(dst, handle_reg, size_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(h) => h as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let size = match reg!(size_reg) {
+                    GcValue::Int64(s) => s as usize,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::FileRead {
+                        handle,
+                        size,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileReadLine(dst, handle_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(h) => h as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::FileReadLine {
+                        handle,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileFlush(dst, handle_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(h) => h as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::FileFlush {
+                        handle,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileClose(dst, handle_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(h) => h as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::FileClose {
+                        handle,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileSeek(dst, handle_reg, offset_reg, whence_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(h) => h as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let offset = match reg!(offset_reg) {
+                    GcValue::Int64(o) => o,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let whence_str = match reg!(whence_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid whence string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let whence = match whence_str.as_str() {
+                    "start" => crate::io_runtime::SeekWhence::Start,
+                    "current" => crate::io_runtime::SeekWhence::Current,
+                    "end" => crate::io_runtime::SeekWhence::End,
+                    _ => return Err(RuntimeError::IOError(format!("Invalid seek whence: {}", whence_str))),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::FileSeek {
+                        handle,
+                        offset,
+                        whence,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            // === Directory Operations ===
+            DirCreate(dst, path_reg) => {
+                let path_str = match reg!(path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::DirCreate {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            DirCreateAll(dst, path_reg) => {
+                let path_str = match reg!(path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::DirCreateAll {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            DirList(dst, path_reg) => {
+                let path_str = match reg!(path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::DirList {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            DirRemove(dst, path_reg) => {
+                let path_str = match reg!(path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::DirRemove {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            DirRemoveAll(dst, path_reg) => {
+                let path_str = match reg!(path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::DirRemoveAll {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            // === File Utility Operations ===
+            FileExists(dst, path_reg) => {
+                let path_str = match reg!(path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::FileExists {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            DirExists(dst, path_reg) => {
+                let path_str = match reg!(path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::DirExists {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileRemove(dst, path_reg) => {
+                let path_str = match reg!(path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::FileRemove {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileRename(dst, old_path_reg, new_path_reg) => {
+                let old_path_str = match reg!(old_path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let new_path_str = match reg!(new_path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::FileRename {
+                        old_path: std::path::PathBuf::from(old_path_str),
+                        new_path: std::path::PathBuf::from(new_path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileCopy(dst, src_path_reg, dest_path_reg) => {
+                let src_path_str = match reg!(src_path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let dest_path_str = match reg!(dest_path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::FileCopy {
+                        src_path: std::path::PathBuf::from(src_path_str),
+                        dest_path: std::path::PathBuf::from(dest_path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            FileSize(dst, path_reg) => {
+                let path_str = match reg!(path_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid path string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::FileSize {
+                        path: std::path::PathBuf::from(path_str),
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
             // === HTTP Client Operations ===
             HttpGet(dst, url_reg) => {
                 let url = match reg!(url_reg) {

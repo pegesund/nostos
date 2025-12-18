@@ -1,0 +1,18 @@
+# File read/write with multiline content
+# expect: true
+
+main() = {
+  path = "/tmp/nostos_test_multiline.txt"
+  content = "Line 1\nLine 2\nLine 3\n"
+
+  (status, _) = File.writeAll(path, content)
+  if status != "ok" then false
+  else {
+    (status2, data) = File.readAll(path)
+    if status2 != "ok" then false
+    else {
+      (_, _) = File.remove(path)
+      data == content
+    }
+  }
+}

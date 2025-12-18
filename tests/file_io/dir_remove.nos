@@ -1,0 +1,16 @@
+# Remove empty directory
+# expect: true
+
+main() = {
+  path = "/tmp/nostos_test_dir_remove"
+
+  (_, _) = Dir.create(path)
+  (status, _) = Dir.remove(path)
+
+  if status != "ok" then false
+  else {
+    (status2, exists) = Dir.exists(path)
+    if status2 != "ok" then false
+    else exists == false
+  }
+}

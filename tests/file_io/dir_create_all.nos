@@ -1,0 +1,16 @@
+# Create nested directory structure
+# expect: true
+
+main() = {
+  path = "/tmp/nostos_test_dir_nested/a/b/c"
+
+  (status, _) = Dir.createAll(path)
+  if status != "ok" then false
+  else {
+    (status2, exists) = Dir.exists(path)
+    (_, _) = Dir.removeAll("/tmp/nostos_test_dir_nested")
+
+    if status2 != "ok" then false
+    else exists
+  }
+}

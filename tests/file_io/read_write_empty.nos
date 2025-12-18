@@ -1,0 +1,18 @@
+# File read/write with empty content
+# expect: true
+
+main() = {
+  path = "/tmp/nostos_test_empty.txt"
+  content = ""
+
+  (status, _) = File.writeAll(path, content)
+  if status != "ok" then false
+  else {
+    (status2, data) = File.readAll(path)
+    if status2 != "ok" then false
+    else {
+      (_, _) = File.remove(path)
+      data == content
+    }
+  }
+}

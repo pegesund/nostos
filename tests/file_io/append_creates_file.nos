@@ -1,0 +1,21 @@
+# Append to nonexistent file should create it
+# expect: true
+
+main() = {
+  path = "/tmp/nostos_test_append_create.txt"
+
+  # Make sure file doesn't exist
+  (_, _) = File.remove(path)
+
+  # Append should create the file
+  (status, _) = File.append(path, "Created by append")
+
+  if status != "ok" then false
+  else {
+    (status2, data) = File.readAll(path)
+    (_, _) = File.remove(path)
+
+    if status2 != "ok" then false
+    else data == "Created by append"
+  }
+}

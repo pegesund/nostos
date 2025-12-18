@@ -1,0 +1,16 @@
+# Remove file
+# expect: true
+
+main() = {
+  path = "/tmp/nostos_test_remove.txt"
+
+  (_, _) = File.writeAll(path, "Delete me")
+  (status, _) = File.remove(path)
+
+  if status != "ok" then false
+  else {
+    (status2, exists) = File.exists(path)
+    if status2 != "ok" then false
+    else exists == false
+  }
+}

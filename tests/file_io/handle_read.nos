@@ -1,0 +1,20 @@
+# File handle read with size
+# expect: true
+
+main() = {
+  path = "/tmp/nostos_test_handle_read.txt"
+
+  (_, _) = File.writeAll(path, "ABCDEFGHIJ")
+
+  (status1, handle) = File.open(path, "r")
+  if status1 != "ok" then false
+  else {
+    # Read 5 bytes
+    (status2, data) = File.read(handle, 5)
+    (_, _) = File.close(handle)
+    (_, _) = File.remove(path)
+
+    if status2 != "ok" then false
+    else data == "ABCDE"
+  }
+}

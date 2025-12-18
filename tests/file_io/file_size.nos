@@ -1,0 +1,14 @@
+# Get file size
+# expect: true
+
+main() = {
+  path = "/tmp/nostos_test_file_size.txt"
+  content = "Hello World!"  # 12 bytes
+
+  (_, _) = File.writeAll(path, content)
+  (status, size) = File.size(path)
+  (_, _) = File.remove(path)
+
+  if status != "ok" then false
+  else size == 12
+}
