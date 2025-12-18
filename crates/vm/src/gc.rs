@@ -277,8 +277,8 @@ pub struct GcSet {
     pub items: ImblHashSet<GcMapKey>,
 }
 
-/// Keys for GC maps/sets (must be hashable, so only immediate values + strings).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// Keys for GC maps/sets - supports primitives, strings, records, and variants.
+#[derive(Clone, Debug)]
 pub enum GcMapKey {
     Unit,
     Bool(bool),
@@ -295,6 +295,86 @@ pub enum GcMapKey {
     UInt64(u64),
     // String - stored inline for proper equality/hashing
     String(String),
+    // Record as key - fields must all be hashable
+    Record {
+        type_name: String,
+        field_names: Vec<String>,
+        fields: Vec<GcMapKey>,
+    },
+    // Variant as key - fields must all be hashable
+    Variant {
+        type_name: String,
+        constructor: String,
+        fields: Vec<GcMapKey>,
+    },
+}
+
+// Manual implementation of PartialEq for GcMapKey
+impl PartialEq for GcMapKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (GcMapKey::Unit, GcMapKey::Unit) => true,
+            (GcMapKey::Bool(a), GcMapKey::Bool(b)) => a == b,
+            (GcMapKey::Char(a), GcMapKey::Char(b)) => a == b,
+            (GcMapKey::Int8(a), GcMapKey::Int8(b)) => a == b,
+            (GcMapKey::Int16(a), GcMapKey::Int16(b)) => a == b,
+            (GcMapKey::Int32(a), GcMapKey::Int32(b)) => a == b,
+            (GcMapKey::Int64(a), GcMapKey::Int64(b)) => a == b,
+            (GcMapKey::UInt8(a), GcMapKey::UInt8(b)) => a == b,
+            (GcMapKey::UInt16(a), GcMapKey::UInt16(b)) => a == b,
+            (GcMapKey::UInt32(a), GcMapKey::UInt32(b)) => a == b,
+            (GcMapKey::UInt64(a), GcMapKey::UInt64(b)) => a == b,
+            (GcMapKey::String(a), GcMapKey::String(b)) => a == b,
+            (
+                GcMapKey::Record { type_name: tn1, field_names: fn1, fields: f1 },
+                GcMapKey::Record { type_name: tn2, field_names: fn2, fields: f2 },
+            ) => tn1 == tn2 && fn1 == fn2 && f1 == f2,
+            (
+                GcMapKey::Variant { type_name: tn1, constructor: c1, fields: f1 },
+                GcMapKey::Variant { type_name: tn2, constructor: c2, fields: f2 },
+            ) => tn1 == tn2 && c1 == c2 && f1 == f2,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for GcMapKey {}
+
+// Manual implementation of Hash for GcMapKey
+impl std::hash::Hash for GcMapKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            GcMapKey::Unit => {}
+            GcMapKey::Bool(b) => b.hash(state),
+            GcMapKey::Char(c) => c.hash(state),
+            GcMapKey::Int8(n) => n.hash(state),
+            GcMapKey::Int16(n) => n.hash(state),
+            GcMapKey::Int32(n) => n.hash(state),
+            GcMapKey::Int64(n) => n.hash(state),
+            GcMapKey::UInt8(n) => n.hash(state),
+            GcMapKey::UInt16(n) => n.hash(state),
+            GcMapKey::UInt32(n) => n.hash(state),
+            GcMapKey::UInt64(n) => n.hash(state),
+            GcMapKey::String(s) => s.hash(state),
+            GcMapKey::Record { type_name, field_names, fields } => {
+                type_name.hash(state);
+                for name in field_names {
+                    name.hash(state);
+                }
+                for field in fields {
+                    field.hash(state);
+                }
+            }
+            GcMapKey::Variant { type_name, constructor, fields } => {
+                type_name.hash(state);
+                constructor.hash(state);
+                for field in fields {
+                    field.hash(state);
+                }
+            }
+        }
+    }
 }
 
 impl GcMapKey {
@@ -313,6 +393,28 @@ impl GcMapKey {
             GcMapKey::UInt32(n) => GcValue::UInt32(*n),
             GcMapKey::UInt64(n) => GcValue::UInt64(*n),
             GcMapKey::String(s) => GcValue::String(heap.alloc_string(s.clone())),
+            GcMapKey::Record { type_name, field_names, fields } => {
+                let gc_fields: Vec<GcValue> = fields.iter()
+                    .map(|f| f.to_gc_value(heap))
+                    .collect();
+                let mutable_fields = vec![false; field_names.len()];
+                GcValue::Record(heap.alloc_record(
+                    type_name.clone(),
+                    field_names.clone(),
+                    gc_fields,
+                    mutable_fields,
+                ))
+            }
+            GcMapKey::Variant { type_name, constructor, fields } => {
+                let gc_fields: Vec<GcValue> = fields.iter()
+                    .map(|f| f.to_gc_value(heap))
+                    .collect();
+                GcValue::Variant(heap.alloc_variant(
+                    Arc::new(type_name.clone()),
+                    Arc::new(constructor.clone()),
+                    gc_fields,
+                ))
+            }
         }
     }
 
@@ -331,6 +433,20 @@ impl GcMapKey {
             GcMapKey::UInt32(n) => SharedMapKey::UInt32(*n),
             GcMapKey::UInt64(n) => SharedMapKey::UInt64(*n),
             GcMapKey::String(s) => SharedMapKey::String(s.clone()),
+            GcMapKey::Record { type_name, field_names, fields } => {
+                SharedMapKey::Record {
+                    type_name: type_name.clone(),
+                    field_names: field_names.clone(),
+                    fields: fields.iter().map(|f| f.to_shared_key()).collect(),
+                }
+            }
+            GcMapKey::Variant { type_name, constructor, fields } => {
+                SharedMapKey::Variant {
+                    type_name: type_name.clone(),
+                    constructor: constructor.clone(),
+                    fields: fields.iter().map(|f| f.to_shared_key()).collect(),
+                }
+            }
         }
     }
 
@@ -349,6 +465,20 @@ impl GcMapKey {
             SharedMapKey::UInt32(n) => GcMapKey::UInt32(*n),
             SharedMapKey::UInt64(n) => GcMapKey::UInt64(*n),
             SharedMapKey::String(s) => GcMapKey::String(s.clone()),
+            SharedMapKey::Record { type_name, field_names, fields } => {
+                GcMapKey::Record {
+                    type_name: type_name.clone(),
+                    field_names: field_names.clone(),
+                    fields: fields.iter().map(|f| GcMapKey::from_shared_key(f)).collect(),
+                }
+            }
+            SharedMapKey::Variant { type_name, constructor, fields } => {
+                GcMapKey::Variant {
+                    type_name: type_name.clone(),
+                    constructor: constructor.clone(),
+                    fields: fields.iter().map(|f| GcMapKey::from_shared_key(f)).collect(),
+                }
+            }
         }
     }
 }
@@ -787,12 +917,43 @@ impl GcValue {
         match self {
             GcValue::Unit => Some(GcMapKey::Unit),
             GcValue::Bool(b) => Some(GcMapKey::Bool(*b)),
-            GcValue::Int64(i) => Some(GcMapKey::Int64(*i)),
             GcValue::Char(c) => Some(GcMapKey::Char(*c)),
+            GcValue::Int8(n) => Some(GcMapKey::Int8(*n)),
+            GcValue::Int16(n) => Some(GcMapKey::Int16(*n)),
+            GcValue::Int32(n) => Some(GcMapKey::Int32(*n)),
+            GcValue::Int64(n) => Some(GcMapKey::Int64(*n)),
+            GcValue::UInt8(n) => Some(GcMapKey::UInt8(*n)),
+            GcValue::UInt16(n) => Some(GcMapKey::UInt16(*n)),
+            GcValue::UInt32(n) => Some(GcMapKey::UInt32(*n)),
+            GcValue::UInt64(n) => Some(GcMapKey::UInt64(*n)),
             GcValue::String(ptr) => {
                 heap.get_string(*ptr)
                     .map(|s| GcMapKey::String(s.data.clone()))
             },
+            GcValue::Record(ptr) => {
+                let record = heap.get_record(*ptr)?;
+                // Convert all fields to keys - if any fails, the whole thing fails
+                let key_fields: Option<Vec<GcMapKey>> = record.fields.iter()
+                    .map(|f| f.to_gc_map_key(heap))
+                    .collect();
+                key_fields.map(|fields| GcMapKey::Record {
+                    type_name: record.type_name.clone(),
+                    field_names: record.field_names.clone(),
+                    fields,
+                })
+            }
+            GcValue::Variant(ptr) => {
+                let variant = heap.get_variant(*ptr)?;
+                // Convert all fields to keys - if any fails, the whole thing fails
+                let key_fields: Option<Vec<GcMapKey>> = variant.fields.iter()
+                    .map(|f| f.to_gc_map_key(heap))
+                    .collect();
+                key_fields.map(|fields| GcMapKey::Variant {
+                    type_name: (*variant.type_name).clone(),
+                    constructor: (*variant.constructor).clone(),
+                    fields,
+                })
+            }
             _ => None,
         }
     }
@@ -2167,7 +2328,7 @@ impl Heap {
     }
 
     /// Deep copy a map key.
-    fn deep_copy_key(&mut self, key: &GcMapKey, _source: &Heap) -> GcMapKey {
+    fn deep_copy_key(&mut self, key: &GcMapKey, source: &Heap) -> GcMapKey {
         match key {
             GcMapKey::Unit => GcMapKey::Unit,
             GcMapKey::Bool(b) => GcMapKey::Bool(*b),
@@ -2184,6 +2345,22 @@ impl Heap {
             GcMapKey::UInt64(i) => GcMapKey::UInt64(*i),
             // String
             GcMapKey::String(s) => GcMapKey::String(s.clone()),
+            // Record
+            GcMapKey::Record { type_name, field_names, fields } => {
+                GcMapKey::Record {
+                    type_name: type_name.clone(),
+                    field_names: field_names.clone(),
+                    fields: fields.iter().map(|f| self.deep_copy_key(f, source)).collect(),
+                }
+            }
+            // Variant
+            GcMapKey::Variant { type_name, constructor, fields } => {
+                GcMapKey::Variant {
+                    type_name: type_name.clone(),
+                    constructor: constructor.clone(),
+                    fields: fields.iter().map(|f| self.deep_copy_key(f, source)).collect(),
+                }
+            }
         }
     }
 
@@ -2358,6 +2535,22 @@ impl Heap {
             GcMapKey::UInt64(i) => GcMapKey::UInt64(*i),
             // String
             GcMapKey::String(s) => GcMapKey::String(s.clone()),
+            // Record
+            GcMapKey::Record { type_name, field_names, fields } => {
+                GcMapKey::Record {
+                    type_name: type_name.clone(),
+                    field_names: field_names.clone(),
+                    fields: fields.iter().map(|f| self.clone_key(f)).collect(),
+                }
+            }
+            // Variant
+            GcMapKey::Variant { type_name, constructor, fields } => {
+                GcMapKey::Variant {
+                    type_name: type_name.clone(),
+                    constructor: constructor.clone(),
+                    fields: fields.iter().map(|f| self.clone_key(f)).collect(),
+                }
+            }
         }
     }
 }
@@ -2535,6 +2728,22 @@ impl Heap {
             MapKey::String(s) => {
                 GcMapKey::String((**s).clone())
             }
+            // Record
+            MapKey::Record { type_name, field_names, fields } => {
+                GcMapKey::Record {
+                    type_name: type_name.clone(),
+                    field_names: field_names.clone(),
+                    fields: fields.iter().map(|f| self.map_key_to_gc(f)).collect(),
+                }
+            }
+            // Variant
+            MapKey::Variant { type_name, constructor, fields } => {
+                GcMapKey::Variant {
+                    type_name: type_name.clone(),
+                    constructor: constructor.clone(),
+                    fields: fields.iter().map(|f| self.map_key_to_gc(f)).collect(),
+                }
+            }
         }
     }
 
@@ -2710,6 +2919,22 @@ impl Heap {
             GcMapKey::String(s) => {
                 MapKey::String(Arc::new(s.clone()))
             }
+            // Record
+            GcMapKey::Record { type_name, field_names, fields } => {
+                MapKey::Record {
+                    type_name: type_name.clone(),
+                    field_names: field_names.clone(),
+                    fields: fields.iter().map(|f| self.gc_map_key_to_value(f)).collect(),
+                }
+            }
+            // Variant
+            GcMapKey::Variant { type_name, constructor, fields } => {
+                MapKey::Variant {
+                    type_name: type_name.clone(),
+                    constructor: constructor.clone(),
+                    fields: fields.iter().map(|f| self.gc_map_key_to_value(f)).collect(),
+                }
+            }
         }
     }
 }
@@ -2729,6 +2954,20 @@ fn shared_key_to_map_key(key: &SharedMapKey) -> MapKey {
         SharedMapKey::UInt32(n) => MapKey::UInt32(*n),
         SharedMapKey::UInt64(n) => MapKey::UInt64(*n),
         SharedMapKey::String(s) => MapKey::String(Arc::new(s.clone())),
+        SharedMapKey::Record { type_name, field_names, fields } => {
+            MapKey::Record {
+                type_name: type_name.clone(),
+                field_names: field_names.clone(),
+                fields: fields.iter().map(shared_key_to_map_key).collect(),
+            }
+        }
+        SharedMapKey::Variant { type_name, constructor, fields } => {
+            MapKey::Variant {
+                type_name: type_name.clone(),
+                constructor: constructor.clone(),
+                fields: fields.iter().map(shared_key_to_map_key).collect(),
+            }
+        }
     }
 }
 

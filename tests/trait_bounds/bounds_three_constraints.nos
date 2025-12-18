@@ -1,5 +1,5 @@
 # expect: passed
-type All = All(Int) deriving (Hash + Eq + Show)
+type All = All(Int)
 
 all_traits[T: Hash + Eq + Show](x: T, y: T) -> Bool = {
     h = hash(x)

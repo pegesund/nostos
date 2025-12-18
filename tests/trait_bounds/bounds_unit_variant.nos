@@ -1,5 +1,5 @@
 # expect: passed
-type Color = Red | Green | Blue deriving (Hash + Eq)
+type Color = Red | Green | Blue
 
 hashable[T: Hash](x: T) -> Int = hash(x)
 

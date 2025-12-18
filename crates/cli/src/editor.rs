@@ -621,7 +621,7 @@ impl View for CodeEditor {
                     Token::Try | Token::Catch | Token::Finally | Token::Do |
                     Token::While | Token::For | Token::To | Token::Break | Token::Continue |
                     Token::Spawn | Token::SpawnLink | Token::SpawnMonitor | Token::Receive | Token::After |
-                    Token::Panic | Token::Extern | Token::From | Token::Test | Token::Deriving | Token::Quote =>
+                    Token::Panic | Token::Extern | Token::From | Token::Test | Token::Quote =>
                         Color::Rgb(255, 0, 255),
 
                     Token::True | Token::False |

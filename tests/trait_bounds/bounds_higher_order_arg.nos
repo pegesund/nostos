@@ -1,6 +1,6 @@
 # expect: passed
 # Test bounds checking when function takes another function
-type Val = Val(Int) deriving Hash
+type Val = Val(Int)
 
 hashable[T: Hash](x: T) -> Int = hash(x)
 

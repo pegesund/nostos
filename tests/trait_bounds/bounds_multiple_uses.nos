@@ -1,7 +1,7 @@
 # expect: passed
 # Same bounded function used multiple times with different types
-type A = A(Int) deriving Hash
-type B = B(String) deriving Hash
+type A = A(Int)
+type B = B(String)
 
 hashable[T: Hash](x: T) -> Int = hash(x)
 

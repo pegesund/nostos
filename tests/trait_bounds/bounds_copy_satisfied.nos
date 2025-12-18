@@ -1,5 +1,5 @@
 # expect: passed
-type Copyable = Copyable(Int) deriving (Copy + Eq)
+type Copyable = Copyable(Int)
 
 duplicate[T: Copy](x: T) -> T = copy(x)
 

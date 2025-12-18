@@ -107,6 +107,17 @@ impl InspectorTab {
             ThreadSafeMapKey::UInt32(i) => ThreadSafeValue::Int64(*i as i64),
             ThreadSafeMapKey::UInt64(i) => ThreadSafeValue::Int64(*i as i64), // Potential overflow if u64 > i64::MAX
             ThreadSafeMapKey::String(s) => ThreadSafeValue::String(s.clone()),
+            ThreadSafeMapKey::Record { type_name, field_names, fields } => ThreadSafeValue::Record {
+                type_name: type_name.clone(),
+                field_names: field_names.clone(),
+                fields: fields.iter().map(|f| self.key_to_value(f)).collect(),
+                mutable_fields: vec![false; fields.len()],
+            },
+            ThreadSafeMapKey::Variant { type_name, constructor, fields } => ThreadSafeValue::Variant {
+                type_name: std::sync::Arc::new(type_name.clone()),
+                constructor: std::sync::Arc::new(constructor.clone()),
+                fields: fields.iter().map(|f| self.key_to_value(f)).collect(),
+            },
         }
     }
 
@@ -165,6 +176,16 @@ impl InspectorTab {
             SharedMapKey::UInt32(i) => ThreadSafeMapKey::UInt32(*i),
             SharedMapKey::UInt64(i) => ThreadSafeMapKey::UInt64(*i),
             SharedMapKey::String(s) => ThreadSafeMapKey::String(s.clone()),
+            SharedMapKey::Record { type_name, field_names, fields } => ThreadSafeMapKey::Record {
+                type_name: type_name.clone(),
+                field_names: field_names.clone(),
+                fields: fields.iter().map(|f| self.shared_key_to_thread_safe_key(f)).collect(),
+            },
+            SharedMapKey::Variant { type_name, constructor, fields } => ThreadSafeMapKey::Variant {
+                type_name: type_name.clone(),
+                constructor: constructor.clone(),
+                fields: fields.iter().map(|f| self.shared_key_to_thread_safe_key(f)).collect(),
+            },
         }
     }
 
@@ -182,6 +203,14 @@ impl InspectorTab {
             SharedMapKey::UInt32(n) => n.to_string(),
             SharedMapKey::UInt64(n) => n.to_string(),
             SharedMapKey::String(s) => if s.len() > 20 { format!("\"{}...\"", &s[..17]) } else { format!("\"{}\"", s) },
+            SharedMapKey::Record { type_name, .. } => format!("{}{{...}}", type_name),
+            SharedMapKey::Variant { type_name, constructor, fields } => {
+                if fields.is_empty() {
+                    format!("{}.{}", type_name, constructor)
+                } else {
+                    format!("{}.{}(...)", type_name, constructor)
+                }
+            }
         }
     }
 
@@ -260,6 +289,22 @@ impl InspectorTab {
             SharedMapKey::UInt32(n) => n.to_string(),
             SharedMapKey::UInt64(n) => n.to_string(),
             SharedMapKey::String(s) => format!("{:?}", s),
+            SharedMapKey::Record { type_name, field_names, fields } => {
+                let field_strs: Vec<String> = field_names.iter().zip(fields.iter())
+                    .map(|(name, val)| format!("{}: {}", name, self.shared_full_format_key(val)))
+                    .collect();
+                format!("{}{{{}}}", type_name, field_strs.join(", "))
+            }
+            SharedMapKey::Variant { type_name, constructor, fields } => {
+                if fields.is_empty() {
+                    format!("{}.{}", type_name, constructor)
+                } else {
+                    let field_strs: Vec<String> = fields.iter()
+                        .map(|f| self.shared_full_format_key(f))
+                        .collect();
+                    format!("{}.{}({})", type_name, constructor, field_strs.join(", "))
+                }
+            }
         }
     }
 
@@ -448,6 +493,14 @@ impl InspectorTab {
                     format!("\"{}\"", s)
                 }
             }
+            ThreadSafeMapKey::Record { type_name, .. } => format!("{}{{...}}", type_name),
+            ThreadSafeMapKey::Variant { type_name, constructor, fields } => {
+                if fields.is_empty() {
+                    format!("{}.{}", type_name, constructor)
+                } else {
+                    format!("{}.{}(...)", type_name, constructor)
+                }
+            }
         }
     }
 
@@ -483,6 +536,22 @@ impl InspectorTab {
             ThreadSafeMapKey::UInt32(n) => n.to_string(),
             ThreadSafeMapKey::UInt64(n) => n.to_string(),
             ThreadSafeMapKey::String(s) => format!("{:?}", s),
+            ThreadSafeMapKey::Record { type_name, field_names, fields } => {
+                let field_strs: Vec<String> = field_names.iter().zip(fields.iter())
+                    .map(|(name, val)| format!("{}: {}", name, self.full_format_key(val)))
+                    .collect();
+                format!("{}{{{}}}", type_name, field_strs.join(", "))
+            }
+            ThreadSafeMapKey::Variant { type_name, constructor, fields } => {
+                if fields.is_empty() {
+                    format!("{}.{}", type_name, constructor)
+                } else {
+                    let field_strs: Vec<String> = fields.iter()
+                        .map(|f| self.full_format_key(f))
+                        .collect();
+                    format!("{}.{}({})", type_name, constructor, field_strs.join(", "))
+                }
+            }
         }
     }
 

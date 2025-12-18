@@ -1,0 +1,18 @@
+# expect: 3
+
+# Test that variants can be used as map keys
+
+type Direction = North | South | East | West
+
+main() = {
+    # Create a map with Direction (variant) keys
+    moves = %{
+        North: 1,
+        South: 2,
+        East: 3,
+        West: 4
+    }
+
+    # Lookup a direction
+    Map.get(moves, East)
+}

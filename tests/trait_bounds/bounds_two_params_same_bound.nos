@@ -1,6 +1,6 @@
 # expect: passed
-type A = A(Int) deriving Hash
-type B = B(Int) deriving Hash
+type A = A(Int)
+type B = B(Int)
 
 hash_both[T: Hash, U: Hash](x: T, y: U) -> Int = hash(x) + hash(y)
 

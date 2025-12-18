@@ -1,5 +1,5 @@
 # expect: passed
-type Point = Point(Int, Int) deriving Eq
+type Point = Point(Int, Int)
 
 comparable[T: Eq](x: T, y: T) -> Bool = x == y
 

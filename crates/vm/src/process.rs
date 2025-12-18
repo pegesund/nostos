@@ -401,7 +401,7 @@ pub enum ExitReason {
 }
 
 /// Thread-safe map key for cross-thread communication.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub enum ThreadSafeMapKey {
     Unit,
     Bool(bool),
@@ -415,6 +415,82 @@ pub enum ThreadSafeMapKey {
     UInt32(u32),
     UInt64(u64),
     String(String),
+    Record {
+        type_name: String,
+        field_names: Vec<String>,
+        fields: Vec<ThreadSafeMapKey>,
+    },
+    Variant {
+        type_name: String,
+        constructor: String,
+        fields: Vec<ThreadSafeMapKey>,
+    },
+}
+
+impl PartialEq for ThreadSafeMapKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ThreadSafeMapKey::Unit, ThreadSafeMapKey::Unit) => true,
+            (ThreadSafeMapKey::Bool(a), ThreadSafeMapKey::Bool(b)) => a == b,
+            (ThreadSafeMapKey::Char(a), ThreadSafeMapKey::Char(b)) => a == b,
+            (ThreadSafeMapKey::Int8(a), ThreadSafeMapKey::Int8(b)) => a == b,
+            (ThreadSafeMapKey::Int16(a), ThreadSafeMapKey::Int16(b)) => a == b,
+            (ThreadSafeMapKey::Int32(a), ThreadSafeMapKey::Int32(b)) => a == b,
+            (ThreadSafeMapKey::Int64(a), ThreadSafeMapKey::Int64(b)) => a == b,
+            (ThreadSafeMapKey::UInt8(a), ThreadSafeMapKey::UInt8(b)) => a == b,
+            (ThreadSafeMapKey::UInt16(a), ThreadSafeMapKey::UInt16(b)) => a == b,
+            (ThreadSafeMapKey::UInt32(a), ThreadSafeMapKey::UInt32(b)) => a == b,
+            (ThreadSafeMapKey::UInt64(a), ThreadSafeMapKey::UInt64(b)) => a == b,
+            (ThreadSafeMapKey::String(a), ThreadSafeMapKey::String(b)) => a == b,
+            (
+                ThreadSafeMapKey::Record { type_name: tn1, field_names: fn1, fields: f1 },
+                ThreadSafeMapKey::Record { type_name: tn2, field_names: fn2, fields: f2 },
+            ) => tn1 == tn2 && fn1 == fn2 && f1 == f2,
+            (
+                ThreadSafeMapKey::Variant { type_name: tn1, constructor: c1, fields: f1 },
+                ThreadSafeMapKey::Variant { type_name: tn2, constructor: c2, fields: f2 },
+            ) => tn1 == tn2 && c1 == c2 && f1 == f2,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ThreadSafeMapKey {}
+
+impl std::hash::Hash for ThreadSafeMapKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            ThreadSafeMapKey::Unit => {}
+            ThreadSafeMapKey::Bool(b) => b.hash(state),
+            ThreadSafeMapKey::Char(c) => c.hash(state),
+            ThreadSafeMapKey::Int8(n) => n.hash(state),
+            ThreadSafeMapKey::Int16(n) => n.hash(state),
+            ThreadSafeMapKey::Int32(n) => n.hash(state),
+            ThreadSafeMapKey::Int64(n) => n.hash(state),
+            ThreadSafeMapKey::UInt8(n) => n.hash(state),
+            ThreadSafeMapKey::UInt16(n) => n.hash(state),
+            ThreadSafeMapKey::UInt32(n) => n.hash(state),
+            ThreadSafeMapKey::UInt64(n) => n.hash(state),
+            ThreadSafeMapKey::String(s) => s.hash(state),
+            ThreadSafeMapKey::Record { type_name, field_names, fields } => {
+                type_name.hash(state);
+                for name in field_names {
+                    name.hash(state);
+                }
+                for field in fields {
+                    field.hash(state);
+                }
+            }
+            ThreadSafeMapKey::Variant { type_name, constructor, fields } => {
+                type_name.hash(state);
+                constructor.hash(state);
+                for field in fields {
+                    field.hash(state);
+                }
+            }
+        }
+    }
 }
 
 /// Thread-safe message value for cross-thread communication.
@@ -484,6 +560,16 @@ impl ThreadSafeMapKey {
             GcMapKey::UInt32(i) => ThreadSafeMapKey::UInt32(*i),
             GcMapKey::UInt64(i) => ThreadSafeMapKey::UInt64(*i),
             GcMapKey::String(s) => ThreadSafeMapKey::String(s.clone()),
+            GcMapKey::Record { type_name, field_names, fields } => ThreadSafeMapKey::Record {
+                type_name: type_name.clone(),
+                field_names: field_names.clone(),
+                fields: fields.iter().map(|f| ThreadSafeMapKey::from_gc_map_key(f)).collect(),
+            },
+            GcMapKey::Variant { type_name, constructor, fields } => ThreadSafeMapKey::Variant {
+                type_name: type_name.clone(),
+                constructor: constructor.clone(),
+                fields: fields.iter().map(|f| ThreadSafeMapKey::from_gc_map_key(f)).collect(),
+            },
         }
     }
 
@@ -502,6 +588,16 @@ impl ThreadSafeMapKey {
             ThreadSafeMapKey::UInt32(i) => GcMapKey::UInt32(*i),
             ThreadSafeMapKey::UInt64(i) => GcMapKey::UInt64(*i),
             ThreadSafeMapKey::String(s) => GcMapKey::String(s.clone()),
+            ThreadSafeMapKey::Record { type_name, field_names, fields } => GcMapKey::Record {
+                type_name: type_name.clone(),
+                field_names: field_names.clone(),
+                fields: fields.iter().map(|f| f.to_gc_map_key()).collect(),
+            },
+            ThreadSafeMapKey::Variant { type_name, constructor, fields } => GcMapKey::Variant {
+                type_name: type_name.clone(),
+                constructor: constructor.clone(),
+                fields: fields.iter().map(|f| f.to_gc_map_key()).collect(),
+            },
         }
     }
 }

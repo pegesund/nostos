@@ -126,8 +126,6 @@ pub struct TypeDef {
     pub name: Ident,
     pub type_params: Vec<TypeParam>,
     pub body: TypeBody,
-    /// Traits to automatically derive: `deriving (Hash, Show, Copy)`
-    pub deriving: Vec<Ident>,
     pub span: Span,
 }
 

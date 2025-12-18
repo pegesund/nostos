@@ -4616,6 +4616,42 @@ impl AsyncVM {
                         h1.wrapping_mul(FNV_PRIME) ^ h2
                     }
 
+                    fn hash_gc_map_key(key: &crate::gc::GcMapKey) -> u64 {
+                        use crate::gc::GcMapKey;
+                        match key {
+                            GcMapKey::Unit => 0,
+                            GcMapKey::Bool(b) => if *b { 1 } else { 0 },
+                            GcMapKey::Char(c) => fnv1a_hash(&(*c as u32).to_le_bytes()),
+                            GcMapKey::Int8(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::Int16(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::Int32(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::Int64(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::UInt8(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::UInt16(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::UInt32(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::UInt64(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::String(s) => fnv1a_hash(s.as_bytes()),
+                            GcMapKey::Record { type_name, field_names, fields } => {
+                                let mut h = fnv1a_hash(type_name.as_bytes());
+                                for name in field_names {
+                                    h = combine_hash(h, fnv1a_hash(name.as_bytes()));
+                                }
+                                for field in fields {
+                                    h = combine_hash(h, hash_gc_map_key(field));
+                                }
+                                h
+                            }
+                            GcMapKey::Variant { type_name, constructor, fields } => {
+                                let mut h = fnv1a_hash(type_name.as_bytes());
+                                h = combine_hash(h, fnv1a_hash(constructor.as_bytes()));
+                                for field in fields {
+                                    h = combine_hash(h, hash_gc_map_key(field));
+                                }
+                                h
+                            }
+                        }
+                    }
+
                     match val {
                         GcValue::Unit => Ok(0),
                         GcValue::Bool(b) => Ok(if *b { 1 } else { 0 }),
@@ -4682,20 +4718,7 @@ impl AsyncVM {
                             if let Some(map) = heap.get_map(*ptr) {
                                 let mut h: u64 = fnv1a_hash(b"map");
                                 for (k, v) in map.entries.iter() {
-                                    let kh = match k {
-                                        crate::gc::GcMapKey::Unit => 0,
-                                        crate::gc::GcMapKey::Bool(b) => if *b { 1 } else { 0 },
-                                        crate::gc::GcMapKey::Char(c) => fnv1a_hash(&(*c as u32).to_le_bytes()),
-                                        crate::gc::GcMapKey::Int8(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::Int16(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::Int32(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::Int64(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt8(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt16(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt32(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt64(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::String(s) => fnv1a_hash(s.as_bytes()),
-                                    };
+                                    let kh = hash_gc_map_key(k);
                                     let vh = hash_value(v, heap)?;
                                     h ^= combine_hash(kh, vh);
                                 }
@@ -4708,21 +4731,7 @@ impl AsyncVM {
                             if let Some(set) = heap.get_set(*ptr) {
                                 let mut h: u64 = fnv1a_hash(b"set");
                                 for k in set.items.iter() {
-                                    let kh = match k {
-                                        crate::gc::GcMapKey::Unit => 0,
-                                        crate::gc::GcMapKey::Bool(b) => if *b { 1 } else { 0 },
-                                        crate::gc::GcMapKey::Char(c) => fnv1a_hash(&(*c as u32).to_le_bytes()),
-                                        crate::gc::GcMapKey::Int8(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::Int16(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::Int32(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::Int64(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt8(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt16(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt32(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt64(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::String(s) => fnv1a_hash(s.as_bytes()),
-                                    };
-                                    h ^= kh;
+                                    h ^= hash_gc_map_key(k);
                                 }
                                 Ok(h)
                             } else {

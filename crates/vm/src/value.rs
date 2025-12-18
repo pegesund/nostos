@@ -84,7 +84,7 @@ pub enum Value {
 }
 
 /// Key type for maps and sets (must be hashable).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub enum MapKey {
     Unit,
     Bool(bool),
@@ -101,6 +101,86 @@ pub enum MapKey {
     UInt64(u64),
     // String
     String(Arc<String>),
+    // Record as key - fields must all be hashable
+    Record {
+        type_name: String,
+        field_names: Vec<String>,
+        fields: Vec<MapKey>,
+    },
+    // Variant as key - fields must all be hashable
+    Variant {
+        type_name: String,
+        constructor: String,
+        fields: Vec<MapKey>,
+    },
+}
+
+// Manual implementation of PartialEq for MapKey
+impl PartialEq for MapKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (MapKey::Unit, MapKey::Unit) => true,
+            (MapKey::Bool(a), MapKey::Bool(b)) => a == b,
+            (MapKey::Char(a), MapKey::Char(b)) => a == b,
+            (MapKey::Int8(a), MapKey::Int8(b)) => a == b,
+            (MapKey::Int16(a), MapKey::Int16(b)) => a == b,
+            (MapKey::Int32(a), MapKey::Int32(b)) => a == b,
+            (MapKey::Int64(a), MapKey::Int64(b)) => a == b,
+            (MapKey::UInt8(a), MapKey::UInt8(b)) => a == b,
+            (MapKey::UInt16(a), MapKey::UInt16(b)) => a == b,
+            (MapKey::UInt32(a), MapKey::UInt32(b)) => a == b,
+            (MapKey::UInt64(a), MapKey::UInt64(b)) => a == b,
+            (MapKey::String(a), MapKey::String(b)) => a == b,
+            (
+                MapKey::Record { type_name: tn1, field_names: fn1, fields: f1 },
+                MapKey::Record { type_name: tn2, field_names: fn2, fields: f2 },
+            ) => tn1 == tn2 && fn1 == fn2 && f1 == f2,
+            (
+                MapKey::Variant { type_name: tn1, constructor: c1, fields: f1 },
+                MapKey::Variant { type_name: tn2, constructor: c2, fields: f2 },
+            ) => tn1 == tn2 && c1 == c2 && f1 == f2,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for MapKey {}
+
+// Manual implementation of Hash for MapKey
+impl std::hash::Hash for MapKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            MapKey::Unit => {}
+            MapKey::Bool(b) => b.hash(state),
+            MapKey::Char(c) => c.hash(state),
+            MapKey::Int8(n) => n.hash(state),
+            MapKey::Int16(n) => n.hash(state),
+            MapKey::Int32(n) => n.hash(state),
+            MapKey::Int64(n) => n.hash(state),
+            MapKey::UInt8(n) => n.hash(state),
+            MapKey::UInt16(n) => n.hash(state),
+            MapKey::UInt32(n) => n.hash(state),
+            MapKey::UInt64(n) => n.hash(state),
+            MapKey::String(s) => s.hash(state),
+            MapKey::Record { type_name, field_names, fields } => {
+                type_name.hash(state);
+                for name in field_names {
+                    name.hash(state);
+                }
+                for field in fields {
+                    field.hash(state);
+                }
+            }
+            MapKey::Variant { type_name, constructor, fields } => {
+                type_name.hash(state);
+                constructor.hash(state);
+                for field in fields {
+                    field.hash(state);
+                }
+            }
+        }
+    }
 }
 
 /// A record value with named fields.

@@ -57,7 +57,7 @@ impl Highlighter for NostosHighlighter {
                 Token::Try | Token::Catch | Token::Finally | Token::Do |
                 Token::While | Token::For | Token::To | Token::Break | Token::Continue |
                 Token::Spawn | Token::SpawnLink | Token::SpawnMonitor | Token::Receive | Token::After |
-                Token::Panic | Token::Extern | Token::From | Token::Test | Token::Deriving | Token::Quote =>
+                Token::Panic | Token::Extern | Token::From | Token::Test | Token::Quote =>
                     Style::new().fg(Color::Magenta).bold(),
 
                 // Boolean literals
@@ -184,7 +184,7 @@ impl Completer for NostosCompleter {
                 "type", "var", "if", "then", "else", "match", "when", "trait", "module", "end",
                 "use", "private", "pub", "self", "Self", "try", "catch", "finally", "do",
                 "while", "for", "to", "break", "continue", "spawn", "receive", "after", "panic",
-                "extern", "test", "deriving", "quote", "true", "false"
+                "extern", "test", "quote", "true", "false"
             ];
 
             keywords.iter()
@@ -811,13 +811,6 @@ impl Repl {
                 }
             }
 
-            // Derived traits
-            if !type_def.deriving.is_empty() {
-                let traits: Vec<_> = type_def.deriving.iter().map(|t| t.node.as_str()).collect();
-                println!();
-                println!("  Deriving: {}", traits.join(", "));
-            }
-
             return;
         }
 
@@ -872,12 +865,6 @@ impl Repl {
             if !body.is_empty() {
                 output.push_str(" = ");
                 output.push_str(&body);
-            }
-
-            if !type_def.deriving.is_empty() {
-                output.push_str(" deriving ");
-                let traits: Vec<_> = type_def.deriving.iter().map(|t| t.node.as_str()).collect();
-                output.push_str(&traits.join(", "));
             }
 
             println!("{}", output);

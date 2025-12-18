@@ -1,5 +1,5 @@
 # expect: passed
-type Result = Ok(Int) | Err(String) deriving (Hash + Eq)
+type Result = Ok(Int) | Err(String)
 
 hashable[T: Hash](x: T) -> Int = hash(x)
 equal[T: Eq](x: T, y: T) -> Bool = x == y

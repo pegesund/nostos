@@ -1,6 +1,6 @@
 # expect: passed
 # Test bounds with recursive type - just Eq, not Hash (Hash has issues with recursive calls)
-type List = Cons(Int, List) | Nil deriving Eq
+type List = Cons(Int, List) | Nil
 
 equal[T: Eq](x: T, y: T) -> Bool = x == y
 

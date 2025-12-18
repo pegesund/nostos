@@ -1,6 +1,6 @@
 # expect: passed
 # Test bounds checking with lambda-like function
-type Val = Val(Int) deriving Hash
+type Val = Val(Int)
 
 hash_it(x: Val) -> Int = hash(x)
 

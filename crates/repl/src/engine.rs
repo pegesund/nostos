@@ -2052,13 +2052,6 @@ impl ReplEngine {
                 }
             }
 
-            // Derived traits
-            if !type_def.deriving.is_empty() {
-                let traits: Vec<_> = type_def.deriving.iter().map(|t| t.node.as_str()).collect();
-                output.push('\n');
-                output.push_str(&format!("  Deriving: {}\n", traits.join(", ")));
-            }
-
             return output;
         }
 
@@ -2111,12 +2104,6 @@ impl ReplEngine {
             if !body.is_empty() {
                 output.push_str(" = ");
                 output.push_str(&body);
-            }
-
-            if !type_def.deriving.is_empty() {
-                output.push_str(" deriving ");
-                let traits: Vec<_> = type_def.deriving.iter().map(|t| t.node.as_str()).collect();
-                output.push_str(&traits.join(", "));
             }
 
             return output;
@@ -2184,11 +2171,6 @@ impl ReplEngine {
             TypeKind::Primitive => {
                 output.push_str("# primitive type");
             }
-        }
-
-        if !type_val.traits.is_empty() {
-            output.push_str(" deriving ");
-            output.push_str(&type_val.traits.join(", "));
         }
 
         output

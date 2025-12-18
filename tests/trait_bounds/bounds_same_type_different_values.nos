@@ -1,5 +1,5 @@
 # expect: passed
-type Pair = Pair(Int, Int) deriving (Hash + Eq)
+type Pair = Pair(Int, Int)
 
 compare[T: Eq](x: T, y: T) -> Bool = x == y
 

@@ -1,5 +1,5 @@
 # expect: passed
-type Point = Point(Int, Int) deriving Hash
+type Point = Point(Int, Int)
 
 hashable[T: Hash](x: T) -> Int = hash(x)
 

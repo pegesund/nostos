@@ -95,7 +95,7 @@ fn ident() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
         Token::Finally | Token::Do | Token::While | Token::For | Token::To |
         Token::Break | Token::Continue | Token::Spawn | Token::SpawnLink |
         Token::SpawnMonitor | Token::Receive | Token::After | Token::Panic |
-        Token::Extern | Token::From | Token::Deriving | Token::Quote =>
+        Token::Extern | Token::From | Token::Quote =>
             Err(Simple::custom(span, format!("'{}' is a reserved keyword", tok))),
         _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
     })
@@ -1359,20 +1359,6 @@ fn type_body() -> impl Parser<Token, TypeBody, Error = Simple<Token>> + Clone {
     choice((record, variant, alias))
 }
 
-/// Parser for deriving clause: `deriving (Hash + Show + Copy)` or `deriving Hash`
-fn deriving_clause() -> impl Parser<Token, Vec<Ident>, Error = Simple<Token>> + Clone {
-    let single_trait = type_name().map(|t| vec![t]);
-    let multi_traits = type_name()
-        .separated_by(just(Token::Plus))
-        .at_least(1)
-        .delimited_by(just(Token::LParen), just(Token::RParen));
-
-    just(Token::Deriving)
-        .ignore_then(multi_traits.or(single_trait))
-        .or_not()
-        .map(|traits| traits.unwrap_or_default())
-}
-
 /// Parser for type definition.
 fn type_def() -> impl Parser<Token, TypeDef, Error = Simple<Token>> + Clone {
     let mutable = just(Token::Var).or_not().map(|v| v.is_some());
@@ -1383,15 +1369,13 @@ fn type_def() -> impl Parser<Token, TypeDef, Error = Simple<Token>> + Clone {
         .then(type_name())
         .then(type_params())
         .then(just(Token::Eq).ignore_then(type_body()).or_not())
-        .then(deriving_clause())
-        .map_with_span(|(((((vis, mutable), name), type_params), body), deriving), span| TypeDef {
+        .map_with_span(|((((vis, mutable), name), type_params), body), span| TypeDef {
             visibility: vis,
             doc: None,
             mutable,
             name,
             type_params,
             body: body.unwrap_or(TypeBody::Empty),
-            deriving,
             span: to_span(span),
         })
 }

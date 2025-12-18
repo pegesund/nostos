@@ -1,0 +1,19 @@
+# expect: true
+
+# Test that records can be used as map keys
+
+type Point = { x: Int, y: Int }
+
+main() = {
+    p1 = Point(1, 2)
+    p2 = Point(3, 4)
+    p3 = Point(1, 2)  # Same as p1
+
+    # Create a map with Point keys
+    m = %{ p1: "origin", p2: "corner" }
+
+    # Lookup using a structurally equal key (p3 == p1)
+    result = Map.get(m, p3)
+
+    result == "origin"
+}

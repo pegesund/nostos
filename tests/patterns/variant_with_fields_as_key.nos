@@ -1,0 +1,17 @@
+# expect: found
+
+# Test that variants with fields can be used as map keys
+
+type Shape = Circle(Int) | Rectangle(Int, Int)
+
+main() = {
+    c1 = Circle(5)
+    r1 = Rectangle(3, 4)
+    c2 = Circle(5)  # Same as c1
+
+    # Create a map with Shape keys
+    m = %{ c1: "found", r1: "also found" }
+
+    # Lookup using structurally equal key
+    Map.get(m, c2)
+}

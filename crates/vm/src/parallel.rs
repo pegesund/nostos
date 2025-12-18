@@ -284,13 +284,75 @@ pub struct SendableVariant {
 }
 
 /// Thread-safe sendable map key.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug)]
 pub enum SendableMapKey {
     Unit,
     Bool(bool),
     Char(char),
     Int64(i64),
     String(String),
+    Record {
+        type_name: String,
+        field_names: Vec<String>,
+        fields: Vec<SendableMapKey>,
+    },
+    Variant {
+        type_name: String,
+        constructor: String,
+        fields: Vec<SendableMapKey>,
+    },
+}
+
+impl PartialEq for SendableMapKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (SendableMapKey::Unit, SendableMapKey::Unit) => true,
+            (SendableMapKey::Bool(a), SendableMapKey::Bool(b)) => a == b,
+            (SendableMapKey::Char(a), SendableMapKey::Char(b)) => a == b,
+            (SendableMapKey::Int64(a), SendableMapKey::Int64(b)) => a == b,
+            (SendableMapKey::String(a), SendableMapKey::String(b)) => a == b,
+            (
+                SendableMapKey::Record { type_name: tn1, field_names: fn1, fields: f1 },
+                SendableMapKey::Record { type_name: tn2, field_names: fn2, fields: f2 },
+            ) => tn1 == tn2 && fn1 == fn2 && f1 == f2,
+            (
+                SendableMapKey::Variant { type_name: tn1, constructor: c1, fields: f1 },
+                SendableMapKey::Variant { type_name: tn2, constructor: c2, fields: f2 },
+            ) => tn1 == tn2 && c1 == c2 && f1 == f2,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for SendableMapKey {}
+
+impl std::hash::Hash for SendableMapKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            SendableMapKey::Unit => {}
+            SendableMapKey::Bool(b) => b.hash(state),
+            SendableMapKey::Char(c) => c.hash(state),
+            SendableMapKey::Int64(n) => n.hash(state),
+            SendableMapKey::String(s) => s.hash(state),
+            SendableMapKey::Record { type_name, field_names, fields } => {
+                type_name.hash(state);
+                for name in field_names {
+                    name.hash(state);
+                }
+                for field in fields {
+                    field.hash(state);
+                }
+            }
+            SendableMapKey::Variant { type_name, constructor, fields } => {
+                type_name.hash(state);
+                constructor.hash(state);
+                for field in fields {
+                    field.hash(state);
+                }
+            }
+        }
+    }
 }
 
 /// Simple value that can be sent between threads.
@@ -454,7 +516,7 @@ impl SendableValue {
         }
     }
 
-    fn gc_map_key_to_sendable(key: &crate::gc::GcMapKey, _heap: &Heap) -> Option<SendableMapKey> {
+    fn gc_map_key_to_sendable(key: &crate::gc::GcMapKey, heap: &Heap) -> Option<SendableMapKey> {
         use crate::gc::GcMapKey;
         match key {
             GcMapKey::Unit => Some(SendableMapKey::Unit),
@@ -469,6 +531,26 @@ impl SendableValue {
             GcMapKey::UInt32(i) => Some(SendableMapKey::Int64(*i as i64)),
             GcMapKey::UInt64(i) => Some(SendableMapKey::Int64(*i as i64)),
             GcMapKey::String(s) => Some(SendableMapKey::String(s.clone())),
+            GcMapKey::Record { type_name, field_names, fields } => {
+                let sendable_fields: Option<Vec<_>> = fields.iter()
+                    .map(|f| Self::gc_map_key_to_sendable(f, heap))
+                    .collect();
+                sendable_fields.map(|f| SendableMapKey::Record {
+                    type_name: type_name.clone(),
+                    field_names: field_names.clone(),
+                    fields: f,
+                })
+            }
+            GcMapKey::Variant { type_name, constructor, fields } => {
+                let sendable_fields: Option<Vec<_>> = fields.iter()
+                    .map(|f| Self::gc_map_key_to_sendable(f, heap))
+                    .collect();
+                sendable_fields.map(|f| SendableMapKey::Variant {
+                    type_name: type_name.clone(),
+                    constructor: constructor.clone(),
+                    fields: f,
+                })
+            }
         }
     }
 
@@ -486,6 +568,26 @@ impl SendableValue {
             SharedMapKey::UInt32(i) => Some(SendableMapKey::Int64(*i as i64)),
             SharedMapKey::UInt64(i) => Some(SendableMapKey::Int64(*i as i64)),
             SharedMapKey::String(s) => Some(SendableMapKey::String(s.clone())),
+            SharedMapKey::Record { type_name, field_names, fields } => {
+                let sendable_fields: Option<Vec<_>> = fields.iter()
+                    .map(Self::shared_key_to_sendable_key)
+                    .collect();
+                sendable_fields.map(|f| SendableMapKey::Record {
+                    type_name: type_name.clone(),
+                    field_names: field_names.clone(),
+                    fields: f,
+                })
+            }
+            SharedMapKey::Variant { type_name, constructor, fields } => {
+                let sendable_fields: Option<Vec<_>> = fields.iter()
+                    .map(Self::shared_key_to_sendable_key)
+                    .collect();
+                sendable_fields.map(|f| SendableMapKey::Variant {
+                    type_name: type_name.clone(),
+                    constructor: constructor.clone(),
+                    fields: f,
+                })
+            }
         }
     }
 
@@ -696,6 +798,20 @@ impl SendableValue {
             SendableMapKey::Char(c) => MapKey::Char(*c),
             SendableMapKey::Int64(i) => MapKey::Int64(*i),
             SendableMapKey::String(s) => MapKey::String(Arc::new(s.clone())),
+            SendableMapKey::Record { type_name, field_names, fields } => {
+                MapKey::Record {
+                    type_name: type_name.clone(),
+                    field_names: field_names.clone(),
+                    fields: fields.iter().map(Self::sendable_key_to_map_key).collect(),
+                }
+            }
+            SendableMapKey::Variant { type_name, constructor, fields } => {
+                MapKey::Variant {
+                    type_name: type_name.clone(),
+                    constructor: constructor.clone(),
+                    fields: fields.iter().map(Self::sendable_key_to_map_key).collect(),
+                }
+            }
         }
     }
 
@@ -760,6 +876,20 @@ impl SendableValue {
             SendableMapKey::Char(c) => ThreadSafeMapKey::Char(*c),
             SendableMapKey::Int64(i) => ThreadSafeMapKey::Int64(*i),
             SendableMapKey::String(s) => ThreadSafeMapKey::String(s.clone()),
+            SendableMapKey::Record { type_name, field_names, fields } => {
+                ThreadSafeMapKey::Record {
+                    type_name: type_name.clone(),
+                    field_names: field_names.clone(),
+                    fields: fields.iter().map(Self::sendable_key_to_thread_safe_key).collect(),
+                }
+            }
+            SendableMapKey::Variant { type_name, constructor, fields } => {
+                ThreadSafeMapKey::Variant {
+                    type_name: type_name.clone(),
+                    constructor: constructor.clone(),
+                    fields: fields.iter().map(Self::sendable_key_to_thread_safe_key).collect(),
+                }
+            }
         }
     }
 
@@ -770,6 +900,20 @@ impl SendableValue {
             SendableMapKey::Char(c) => SharedMapKey::Char(*c),
             SendableMapKey::Int64(i) => SharedMapKey::Int64(*i),
             SendableMapKey::String(s) => SharedMapKey::String(s.clone()),
+            SendableMapKey::Record { type_name, field_names, fields } => {
+                SharedMapKey::Record {
+                    type_name: type_name.clone(),
+                    field_names: field_names.clone(),
+                    fields: fields.iter().map(Self::sendable_key_to_shared_key).collect(),
+                }
+            }
+            SendableMapKey::Variant { type_name, constructor, fields } => {
+                SharedMapKey::Variant {
+                    type_name: type_name.clone(),
+                    constructor: constructor.clone(),
+                    fields: fields.iter().map(Self::sendable_key_to_shared_key).collect(),
+                }
+            }
         }
     }
 
@@ -1271,6 +1415,42 @@ impl ParallelVM {
                         h1.wrapping_mul(FNV_PRIME) ^ h2
                     }
 
+                    fn hash_gc_map_key(key: &crate::gc::GcMapKey) -> u64 {
+                        use crate::gc::GcMapKey;
+                        match key {
+                            GcMapKey::Unit => 0,
+                            GcMapKey::Bool(b) => if *b { 1 } else { 0 },
+                            GcMapKey::Char(c) => fnv1a_hash(&(*c as u32).to_le_bytes()),
+                            GcMapKey::Int8(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::Int16(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::Int32(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::Int64(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::UInt8(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::UInt16(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::UInt32(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::UInt64(n) => fnv1a_hash(&n.to_le_bytes()),
+                            GcMapKey::String(s) => fnv1a_hash(s.as_bytes()),
+                            GcMapKey::Record { type_name, field_names, fields } => {
+                                let mut h = fnv1a_hash(type_name.as_bytes());
+                                for name in field_names {
+                                    h = combine_hash(h, fnv1a_hash(name.as_bytes()));
+                                }
+                                for field in fields {
+                                    h = combine_hash(h, hash_gc_map_key(field));
+                                }
+                                h
+                            }
+                            GcMapKey::Variant { type_name, constructor, fields } => {
+                                let mut h = fnv1a_hash(type_name.as_bytes());
+                                h = combine_hash(h, fnv1a_hash(constructor.as_bytes()));
+                                for field in fields {
+                                    h = combine_hash(h, hash_gc_map_key(field));
+                                }
+                                h
+                            }
+                        }
+                    }
+
                     match val {
                         GcValue::Unit => Ok(0),
                         GcValue::Bool(b) => Ok(if *b { 1 } else { 0 }),
@@ -1335,25 +1515,11 @@ impl ParallelVM {
                         }
                         GcValue::Map(ptr) => {
                             if let Some(map) = heap.get_map(*ptr) {
-                                // Hash map by combining all key-value hashes (order-independent via XOR)
                                 let mut h: u64 = fnv1a_hash(b"map");
                                 for (k, v) in map.entries.iter() {
-                                    let kh = match k {
-                                        crate::gc::GcMapKey::Unit => 0,
-                                        crate::gc::GcMapKey::Bool(b) => if *b { 1 } else { 0 },
-                                        crate::gc::GcMapKey::Char(c) => fnv1a_hash(&(*c as u32).to_le_bytes()),
-                                        crate::gc::GcMapKey::Int8(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::Int16(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::Int32(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::Int64(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt8(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt16(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt32(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt64(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::String(s) => fnv1a_hash(s.as_bytes()),
-                                    };
+                                    let kh = hash_gc_map_key(k);
                                     let vh = hash_value(v, heap)?;
-                                    h ^= combine_hash(kh, vh); // XOR for order-independence
+                                    h ^= combine_hash(kh, vh);
                                 }
                                 Ok(h)
                             } else {
@@ -1362,24 +1528,9 @@ impl ParallelVM {
                         }
                         GcValue::Set(ptr) => {
                             if let Some(set) = heap.get_set(*ptr) {
-                                // Hash set by XORing all element hashes (order-independent)
                                 let mut h: u64 = fnv1a_hash(b"set");
                                 for k in set.items.iter() {
-                                    let kh = match k {
-                                        crate::gc::GcMapKey::Unit => 0,
-                                        crate::gc::GcMapKey::Bool(b) => if *b { 1 } else { 0 },
-                                        crate::gc::GcMapKey::Char(c) => fnv1a_hash(&(*c as u32).to_le_bytes()),
-                                        crate::gc::GcMapKey::Int8(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::Int16(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::Int32(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::Int64(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt8(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt16(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt32(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::UInt64(n) => fnv1a_hash(&n.to_le_bytes()),
-                                        crate::gc::GcMapKey::String(s) => fnv1a_hash(s.as_bytes()),
-                                    };
-                                    h ^= kh;
+                                    h ^= hash_gc_map_key(k);
                                 }
                                 Ok(h)
                             } else {

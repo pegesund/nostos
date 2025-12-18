@@ -100,10 +100,6 @@ pub enum Token {
     #[token("test")]
     Test,
 
-    // === Deriving ===
-    #[token("deriving")]
-    Deriving,
-
     // === Introspection ===
     #[token("quote")]
     Quote,
@@ -423,7 +419,6 @@ impl fmt::Display for Token {
             Token::Extern => write!(f, "extern"),
             Token::From => write!(f, "from"),
             Token::Test => write!(f, "test"),
-            Token::Deriving => write!(f, "deriving"),
             Token::Quote => write!(f, "quote"),
             Token::True => write!(f, "true"),
             Token::False => write!(f, "false"),

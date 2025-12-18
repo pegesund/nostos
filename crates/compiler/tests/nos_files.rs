@@ -3,7 +3,7 @@
 //! Test files should have a `# expect: <value>` comment at the top to specify
 //! the expected result of running main().
 
-use nostos_compiler::compile::{compile_module, MvarInitValue};
+use nostos_compiler::compile::{compile_module, compile_module_with_stdlib, MvarInitValue};
 use nostos_syntax::parse;
 use nostos_vm::value::Value;
 use nostos_vm::async_vm::{AsyncVM, AsyncConfig};
@@ -195,6 +195,13 @@ fn value_to_string(value: &Value) -> String {
     }
 }
 
+/// Find the stdlib directory relative to the workspace root.
+fn find_stdlib_path() -> std::path::PathBuf {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let workspace_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+    workspace_root.join("stdlib")
+}
+
 /// Compile and run a Nostos source file using AsyncVM, returning a Value.
 fn run_nos_source(source: &str) -> Result<Value, String> {
     // Parse
@@ -204,8 +211,9 @@ fn run_nos_source(source: &str) -> Result<Value, String> {
     }
     let module = module_opt.ok_or_else(|| "Parse returned no module".to_string())?;
 
-    // Compile
-    let compiler = compile_module(&module, source).map_err(|e| format!("Compile error: {:?}", e))?;
+    // Compile with stdlib
+    let stdlib_path = find_stdlib_path();
+    let compiler = compile_module_with_stdlib(&module, source, &stdlib_path).map_err(|e| format!("Compile error: {:?}", e))?;
 
     // Create AsyncVM
     let config = AsyncConfig::default();
@@ -242,8 +250,9 @@ fn run_nos_source_gc(source: &str) -> Result<String, String> {
     }
     let module = module_opt.ok_or_else(|| "Parse returned no module".to_string())?;
 
-    // Compile
-    let compiler = compile_module(&module, source).map_err(|e| format!("Compile error: {:?}", e))?;
+    // Compile with stdlib
+    let stdlib_path = find_stdlib_path();
+    let compiler = compile_module_with_stdlib(&module, source, &stdlib_path).map_err(|e| format!("Compile error: {:?}", e))?;
 
     // Create AsyncVM
     let config = AsyncConfig::default();

@@ -58,6 +58,20 @@ impl MapKey {
             MapKey::UInt32(i) => i.to_string(),
             MapKey::UInt64(i) => i.to_string(),
             MapKey::String(s) => format!("\"{}\"", s),
+            MapKey::Record { type_name, field_names, fields } => {
+                let fields_str: Vec<_> = field_names.iter().zip(fields.iter())
+                    .map(|(n, v)| format!("{}: {}", n, v.display()))
+                    .collect();
+                format!("{}{{{}}}", type_name, fields_str.join(", "))
+            }
+            MapKey::Variant { type_name, constructor, fields } => {
+                if fields.is_empty() {
+                    format!("{}.{}", type_name, constructor)
+                } else {
+                    let fields_str: Vec<_> = fields.iter().map(|v| v.display()).collect();
+                    format!("{}.{}({})", type_name, constructor, fields_str.join(", "))
+                }
+            }
         }
     }
 }

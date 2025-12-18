@@ -1,6 +1,6 @@
 # expect: passed
-type H = H(Int) deriving Hash
-type E = E(Int) deriving Eq
+type H = H(Int)
+type E = E(Int)
 
 mixed[T: Hash, U: Eq](x: T, y: U, z: U) -> Int = {
     h = hash(x)
