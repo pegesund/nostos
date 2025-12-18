@@ -474,7 +474,7 @@ impl<'a> InferCtx<'a> {
                     _ => Type::Named {
                         name: name.clone(),
                         args: vec![],
-                    },
+                    }
                 }
             }
             TypeExpr::Generic(name, args) => {
@@ -1343,8 +1343,16 @@ impl<'a> InferCtx<'a> {
                                 // Try to get concrete field types from the constructor's return type
                                 // This enables proper type narrowing through pattern matching
                                 // The return type is the variant type (e.g., Expr for Add constructor)
-                                let concrete_field_types = if let Type::Named { name: type_name, .. } = &*f.ret {
-                                    self.env.lookup_variant_field_types(type_name, &name.node)
+                                // But only for NON-PARAMETRIC types - parametric types like Tree[T]
+                                // need to use the substituted params from the constructor function.
+                                let concrete_field_types = if let Type::Named { name: type_name, args } = &*f.ret {
+                                    // Only use concrete field types for non-parametric types
+                                    // Parametric types need the substituted f.params instead
+                                    if args.is_empty() {
+                                        self.env.lookup_variant_field_types(type_name, &name.node)
+                                    } else {
+                                        None
+                                    }
                                 } else {
                                     None
                                 };
@@ -1357,7 +1365,7 @@ impl<'a> InferCtx<'a> {
                                         self.infer_pattern(pat, field_ty)?;
                                     }
                                 } else {
-                                    // Fall back to constructor params (may be type variables)
+                                    // Use constructor params (already substituted for parametric types)
                                     for (pat, param_ty) in pats.iter().zip(f.params.iter()) {
                                         self.infer_pattern(pat, param_ty)?;
                                     }
@@ -1578,6 +1586,13 @@ impl<'a> InferCtx<'a> {
                 })
             }
             Type::Named { name, args } => {
+                // Handle type parameters that were parsed as Named types with no args
+                // (e.g., "T" in "Tree[T]" gets parsed as Named { name: "T", args: [] })
+                if args.is_empty() {
+                    if let Some(replacement) = subst.get(name) {
+                        return replacement.clone();
+                    }
+                }
                 Type::Named {
                     name: name.clone(),
                     args: args.iter().map(|t| Self::substitute_type_params(t, subst)).collect(),

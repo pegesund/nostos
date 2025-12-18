@@ -8660,6 +8660,14 @@ impl Compiler {
 
         // Register known types from the compiler context
         for (name, type_info) in &self.types {
+            // Get type parameters from the original TypeDef if available
+            let type_params: Vec<nostos_types::TypeParam> = self.type_defs.get(name)
+                .map(|td| td.type_params.iter().map(|p| nostos_types::TypeParam {
+                    name: p.name.node.clone(),
+                    constraints: p.constraints.iter().map(|c| c.node.clone()).collect(),
+                }).collect())
+                .unwrap_or_default();
+
             match &type_info.kind {
                 TypeInfoKind::Record { fields, mutable } => {
                     let field_types: Vec<(String, nostos_types::Type, bool)> = fields
@@ -8669,7 +8677,7 @@ impl Compiler {
                     env.define_type(
                         name.clone(),
                         nostos_types::TypeDef::Record {
-                            params: vec![],
+                            params: type_params,
                             fields: field_types,
                             is_mutable: *mutable,
                         },
@@ -8692,7 +8700,7 @@ impl Compiler {
                     env.define_type(
                         name.clone(),
                         nostos_types::TypeDef::Variant {
-                            params: vec![],
+                            params: type_params,
                             constructors: ctors,
                         },
                     );
@@ -8909,6 +8917,14 @@ impl Compiler {
 
         // Register known types from the compiler context
         for (name, type_info) in &self.types {
+            // Get type parameters from the original TypeDef if available
+            let type_params: Vec<nostos_types::TypeParam> = self.type_defs.get(name)
+                .map(|td| td.type_params.iter().map(|p| nostos_types::TypeParam {
+                    name: p.name.node.clone(),
+                    constraints: p.constraints.iter().map(|c| c.node.clone()).collect(),
+                }).collect())
+                .unwrap_or_default();
+
             match &type_info.kind {
                 TypeInfoKind::Record { fields, mutable } => {
                     let field_types: Vec<(String, nostos_types::Type, bool)> = fields
@@ -8918,7 +8934,7 @@ impl Compiler {
                     env.define_type(
                         name.clone(),
                         nostos_types::TypeDef::Record {
-                            params: vec![],
+                            params: type_params,
                             fields: field_types,
                             is_mutable: *mutable,
                         },
@@ -8941,7 +8957,7 @@ impl Compiler {
                     env.define_type(
                         name.clone(),
                         nostos_types::TypeDef::Variant {
-                            params: vec![],
+                            params: type_params,
                             constructors: ctors,
                         },
                     );
