@@ -6,7 +6,7 @@
 type Json =
     | Null
     | Bool(Bool)
-    | Number(Int)
+    | Number(Float)
     | String(String)
     | Array(List[Json])
     | Object(List[(String, Json)])
@@ -61,15 +61,26 @@ collect_digits(chars, acc) = match chars
                   else (acc, chars)
     [] -> (acc, [])
 
+# Collect integer part, optional decimal point and fractional part
+collect_number_chars(chars, acc) = {
+    (int_digits, after_int) = collect_digits(chars, acc)
+    match after_int
+        ['.' | rest] -> {
+            (frac_digits, after_frac) = collect_digits(rest, int_digits ++ ['.'])
+            (frac_digits, after_frac)
+        }
+        _ -> (int_digits, after_int)
+}
+
 parse_number(chars) = match chars
     ['-' | rest] -> {
-        (digits, remaining) = collect_digits(rest, [])
-        num = String.to_int(String.from_chars(digits))
-        (Number(0 - num), remaining)
+        (num_chars, remaining) = collect_number_chars(rest, [])
+        num = String.toFloat(String.from_chars(num_chars))
+        (Number(0.0 - num), remaining)
     }
     _ -> {
-        (digits, rest) = collect_digits(chars, [])
-        num = String.to_int(String.from_chars(digits))
+        (num_chars, rest) = collect_number_chars(chars, [])
+        num = String.toFloat(String.from_chars(num_chars))
         (Number(num), rest)
     }
 

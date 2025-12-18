@@ -9,14 +9,24 @@ main() = {
     assert_eq(j1, Null)
 
     j2 = jsonParse("123")
-    assert_eq(j2, Number(123))
+    assert_eq(j2, Number(123.0))
 
     # Negative numbers
     j2a = jsonParse("-42")
-    assert_eq(j2a, Number(-42))
+    assert_eq(j2a, Number(-42.0))
 
     j2b = jsonParse("-1")
-    assert_eq(j2b, Number(-1))
+    assert_eq(j2b, Number(-1.0))
+
+    # Float numbers
+    j2c = jsonParse("3.14")
+    assert_eq(j2c, Number(3.14))
+
+    j2d = jsonParse("-2.5")
+    assert_eq(j2d, Number(-2.5))
+
+    j2e = jsonParse("0.123")
+    assert_eq(j2e, Number(0.123))
 
     j3 = jsonParse("\"hello\"")
     assert_eq(j3, String("hello"))
@@ -29,20 +39,28 @@ main() = {
 
     # Array
     j6 = jsonParse("[1, 2, 3]")
-    assert_eq(j6, Array([Number(1), Number(2), Number(3)]))
+    assert_eq(j6, Array([Number(1.0), Number(2.0), Number(3.0)]))
 
     # Array with negative numbers
     j6a = jsonParse("[-1, 0, -99]")
-    assert_eq(j6a, Array([Number(-1), Number(0), Number(-99)]))
+    assert_eq(j6a, Array([Number(-1.0), Number(0.0), Number(-99.0)]))
+
+    # Array with floats
+    j6b = jsonParse("[1.5, 2.25, 3.0]")
+    assert_eq(j6b, Array([Number(1.5), Number(2.25), Number(3.0)]))
 
     # Object
     j7 = jsonParse("{\"key\": \"value\", \"num\": 42}")
-    assert_eq(j7, Object([("key", String("value")), ("num", Number(42))]))
+    assert_eq(j7, Object([("key", String("value")), ("num", Number(42.0))]))
+
+    # Object with float
+    j7a = jsonParse("{\"pi\": 3.14159}")
+    assert_eq(j7a, Object([("pi", Number(3.14159))]))
 
     # Nested
     j8 = jsonParse("{\"list\": [1, 2], \"flag\": true}")
     expected = Object([
-        ("list", Array([Number(1), Number(2)])),
+        ("list", Array([Number(1.0), Number(2.0)])),
         ("flag", Bool(true))
     ])
     assert_eq(j8, expected)
