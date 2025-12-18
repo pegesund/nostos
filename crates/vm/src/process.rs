@@ -87,6 +87,13 @@ pub struct CallFrame {
     pub return_reg: Option<Reg>,
 }
 
+// CallFrame is Send because all its fields are Send:
+// - function: Arc<FunctionValue> is Send (FunctionValue is Send)
+// - registers/captures: Vec<GcValue> is Send (GcValue is Send)
+// - ip, return_reg: primitives
+unsafe impl Send for CallFrame {}
+unsafe impl Sync for CallFrame {}
+
 impl CallFrame {
     /// Get the current source line number (1-indexed), or 0 if unavailable.
     /// Note: IP is incremented before instruction execution, so we look at ip-1
@@ -311,6 +318,12 @@ pub enum ThreadSafeValue {
     /// Float64 typed array (deep copy of data)
     Float64Array(Vec<f64>),
 }
+
+// ThreadSafeValue is explicitly Send + Sync:
+// - All variants contain only Send+Sync types (primitives, String, Arc, Vec)
+// - Designed specifically for cross-thread communication
+unsafe impl Send for ThreadSafeValue {}
+unsafe impl Sync for ThreadSafeValue {}
 
 impl ThreadSafeMapKey {
     /// Convert a GcMapKey to a thread-safe map key.

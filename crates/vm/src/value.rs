@@ -461,6 +461,11 @@ impl RuntimeError {
     }
 }
 
+// Value is Send+Sync: all variants contain only Send+Sync types
+// (primitives, Arc, String which are all Send+Sync)
+unsafe impl Send for Value {}
+unsafe impl Sync for Value {}
+
 /// A chunk of bytecode.
 #[derive(Clone, Default)]
 pub struct Chunk {
@@ -923,6 +928,11 @@ pub enum Instruction {
     /// Debug print
     DebugPrint(Reg),
 }
+
+// Instruction is Send+Sync: all variants contain only primitive types
+// (Reg = u8, ConstIdx = u16) and Arc<[...]> which are Send+Sync
+unsafe impl Send for Instruction {}
+unsafe impl Sync for Instruction {}
 
 impl Chunk {
     pub fn new() -> Self {

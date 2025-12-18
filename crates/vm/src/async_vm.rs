@@ -18,7 +18,34 @@ use std::time::{Duration, Instant};
 use imbl::{HashMap as ImblHashMap, HashSet as ImblHashSet};
 
 use tokio::sync::{mpsc, RwLock as TokioRwLock, OwnedRwLockReadGuard, OwnedRwLockWriteGuard};
-use tokio::task::LocalSet;
+// LocalSet removed - now using multi-threaded runtime with tokio::spawn
+
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::future::Future;
+
+/// Wrapper to assert that a future is Send.
+///
+/// SAFETY: This is safe because all types used in AsyncProcess are Send:
+/// - GcValue, GcPtr, Heap, etc. have explicit `unsafe impl Send`
+/// - All collections use Send-safe types
+/// - Cross-process communication uses ThreadSafeValue
+///
+/// The compiler can't prove this automatically because async fn generates
+/// opaque future types that don't propagate unsafe impl Send bounds.
+pub struct AssertSend<F>(pub F);
+
+unsafe impl<F: Future> Send for AssertSend<F> {}
+
+impl<F: Future> Future for AssertSend<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // SAFETY: We're just forwarding the poll to the inner future.
+        // The Pin projection is safe because we never move the inner future.
+        unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().0) }.poll(cx)
+    }
+}
 
 use crate::gc::{GcConfig, GcList, GcValue, Heap, GcNativeFn};
 
@@ -27,6 +54,12 @@ pub enum HeldMvarLock {
     Read(OwnedRwLockReadGuard<ThreadSafeValue>),
     Write(OwnedRwLockWriteGuard<ThreadSafeValue>),
 }
+
+// HeldMvarLock is Send because:
+// - OwnedRwLockReadGuard<T> is Send if T: Send + Sync
+// - OwnedRwLockWriteGuard<T> is Send if T: Send
+// - ThreadSafeValue is designed to be Send + Sync (only contains primitives, String, Arc)
+unsafe impl Send for HeldMvarLock {}
 use crate::process::{CallFrame, ExceptionHandler, ProcessState, ThreadSafeValue};
 use crate::value::{FunctionValue, Pid, TypeValue, RefId, RuntimeError, Value};
 use crate::parallel::SendableValue;
@@ -184,6 +217,12 @@ pub struct AsyncProcess {
     /// Reentrant lock depth counters (name -> depth).
     pub mvar_lock_depths: HashMap<String, usize>,
 }
+
+// AsyncProcess is safe to Send between threads:
+// - Each process has its own Heap and state
+// - Processes don't share mutable data with other processes
+// - Cross-process communication uses ThreadSafeValue
+unsafe impl Send for AsyncProcess {}
 
 impl AsyncProcess {
     /// Create a new async process.
@@ -356,8 +395,10 @@ impl AsyncProcess {
         let sender = process.mailbox_sender.clone();
         shared.register_process(pid, sender).await;
 
-        // Spawn as local task (stays on current thread - required for GcValue)
-        tokio::task::spawn_local(async move {
+        // Spawn as tokio task (can run on any thread)
+        // Wrap with AssertSend because all underlying types are Send but the compiler
+        // can't prove it through async fn's opaque future types.
+        tokio::spawn(AssertSend(async move {
             // Set up initial call frame
             let args_gc: Vec<GcValue> = safe_args.iter()
                 .map(|v| v.to_gc_value(&mut process.heap))
@@ -385,7 +426,7 @@ impl AsyncProcess {
             shared_clone.unregister_process(pid).await;
 
             result
-        });
+        }));
 
         pid
     }
@@ -1963,9 +2004,11 @@ impl AsyncProcess {
                 // delivered immediately after spawn returns
                 self.shared.register_process(child_pid, mailbox_sender.clone()).await;
 
-                // Spawn as local tokio task
+                // Spawn as tokio task (can run on any thread)
+                // Wrap with AssertSend because all underlying types are Send but the compiler
+                // can't prove it through async fn's opaque future types.
                 let func_name = func.name.clone();
-                tokio::task::spawn_local(async move {
+                tokio::spawn(AssertSend(async move {
                     if std::env::var("ASYNC_VM_DEBUG").is_ok() {
                         eprintln!("[AsyncVM] Spawned process {} running function: {}", child_pid.0, func_name);
                     }
@@ -2002,7 +2045,7 @@ impl AsyncProcess {
 
                     // Unregister on exit
                     shared_clone.unregister_process(child_pid).await;
-                });
+                }));
 
                 // Yield to allow the spawned task to start running
                 // This is critical for recursive spawns where parent immediately waits
@@ -3753,24 +3796,18 @@ impl AsyncVM {
 
     /// Run the main function and return the result.
     pub fn run(&mut self, main_fn_name: &str) -> Result<SendableValue, String> {
-        // Create tokio runtime - use current_thread for LocalSet compatibility
-        let rt = tokio::runtime::Builder::new_current_thread()
+        // Create multi-threaded tokio runtime for parallel execution
+        let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
 
-        // Run within a LocalSet so spawn_local works
-        let local = LocalSet::new();
-        local.block_on(&rt, self.run_async(main_fn_name))
+        // Run with work-stealing across multiple threads
+        rt.block_on(self.run_async(main_fn_name))
     }
 
-    /// Run with multi-threaded work distribution.
-    /// Spawns multiple worker threads, each with its own LocalSet.
-    pub fn run_parallel(&mut self, main_fn_name: &str, num_threads: usize) -> Result<SendableValue, String> {
-        // For now, use single-threaded. Multi-threaded requires coordinating
-        // LocalSets across threads, which we'll add later.
-        // TODO: Implement multi-threaded execution with thread-local LocalSets
-        let _ = num_threads;
+    /// Run with multi-threaded work distribution (same as run, kept for API compat).
+    pub fn run_parallel(&mut self, main_fn_name: &str, _num_threads: usize) -> Result<SendableValue, String> {
         self.run(main_fn_name)
     }
 

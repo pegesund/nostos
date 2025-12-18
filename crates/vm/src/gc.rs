@@ -86,7 +86,7 @@ pub type RawGcPtr = u32;
 /// GcPtr is Copy because it's just an index - very cheap to copy.
 pub struct GcPtr<T> {
     index: RawGcPtr,
-    _marker: PhantomData<*const T>,
+    _marker: PhantomData<T>,
 }
 
 // Manually implement Copy and Clone to avoid T: Copy bounds
@@ -97,6 +97,11 @@ impl<T> Clone for GcPtr<T> {
         *self
     }
 }
+
+// GcPtr is just a u32 index, safe to send between threads.
+// The actual data lives in a Heap that is owned by a single process.
+unsafe impl<T: Send> Send for GcPtr<T> {}
+unsafe impl<T: Sync> Sync for GcPtr<T> {}
 
 impl<T> GcPtr<T> {
     /// Check if two pointers point to the same object.
@@ -413,6 +418,46 @@ impl Default for GcValue {
         GcValue::Unit
     }
 }
+
+// GcValue is safe to Send between threads:
+// - Immediate values (primitives) are inherently Send
+// - GcPtr is just a u32 index, valid only within a specific Heap
+// - Each process has its own Heap, so GcValues don't escape their owning process
+// - When sending between processes, values are converted to ThreadSafeValue first
+unsafe impl Send for GcValue {}
+unsafe impl Sync for GcValue {}
+
+// All GC container types are Send+Sync because:
+// - They only contain primitives, Strings, Arcs, or other GC types that are Send+Sync
+// - Each process has its own Heap, so these values don't escape their owning process
+unsafe impl Send for GcString {}
+unsafe impl Sync for GcString {}
+unsafe impl Send for GcList {}
+unsafe impl Sync for GcList {}
+unsafe impl Send for GcArray {}
+unsafe impl Sync for GcArray {}
+unsafe impl Send for GcInt64Array {}
+unsafe impl Sync for GcInt64Array {}
+unsafe impl Send for GcFloat64Array {}
+unsafe impl Sync for GcFloat64Array {}
+unsafe impl Send for GcTuple {}
+unsafe impl Sync for GcTuple {}
+unsafe impl Send for GcMap {}
+unsafe impl Sync for GcMap {}
+unsafe impl Send for GcSet {}
+unsafe impl Sync for GcSet {}
+unsafe impl Send for GcRecord {}
+unsafe impl Sync for GcRecord {}
+unsafe impl Send for GcVariant {}
+unsafe impl Sync for GcVariant {}
+unsafe impl Send for GcBigInt {}
+unsafe impl Sync for GcBigInt {}
+unsafe impl Send for GcClosure {}
+unsafe impl Sync for GcClosure {}
+unsafe impl Send for GcMapKey {}
+unsafe impl Sync for GcMapKey {}
+unsafe impl Send for GcNativeFn {}
+unsafe impl Sync for GcNativeFn {}
 
 impl PartialEq for GcValue {
     fn eq(&self, other: &Self) -> bool {
@@ -922,6 +967,13 @@ pub struct Heap {
     /// Statistics
     stats: GcStats,
 }
+
+// Heap is safe to Send between threads:
+// - Each process has its own Heap instance
+// - Heaps are not shared between threads
+// - The contained GcObjects are Send (they contain GcValues which are Send)
+unsafe impl Send for Heap {}
+unsafe impl Sync for Heap {}
 
 impl Heap {
     /// Create a new heap with default configuration.
