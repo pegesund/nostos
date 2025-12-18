@@ -764,6 +764,17 @@ impl<'a> InferCtx<'a> {
 
             // Field access
             Expr::FieldAccess(expr, field, _) => {
+                // Check if this is a qualified function name like "Panel.show"
+                // In this case, look up "Panel.show" in the functions environment
+                if let Expr::Var(base_ident) = expr.as_ref() {
+                    let qualified_name = format!("{}.{}", base_ident.node, field.node);
+                    if let Some(fn_type) = self.env.functions.get(&qualified_name).cloned() {
+                        // Return the function type, instantiated with fresh type variables
+                        return Ok(self.instantiate_function(&fn_type));
+                    }
+                }
+
+                // Regular field access on a value
                 let expr_ty = self.infer_expr(expr)?;
                 let field_ty = self.fresh();
                 self.require_field(expr_ty, &field.node, field_ty.clone());
@@ -846,6 +857,39 @@ impl<'a> InferCtx<'a> {
 
             // Method call
             Expr::MethodCall(receiver, method, args, _) => {
+                // Check if this is a qualified function call like "Panel.show(id)"
+                // where receiver is Record("Panel", [], _) and method is "show"
+                if let Expr::Record(type_ident, fields, _) = receiver.as_ref() {
+                    if fields.is_empty() {
+                        // This is a namespace-like call: Panel.show(id)
+                        let qualified_name = format!("{}.{}", type_ident.node, method.node);
+                        if let Some(fn_type) = self.env.functions.get(&qualified_name).cloned() {
+                            // Found the function - infer argument types and unify
+                            let mut arg_types = Vec::new();
+                            for arg in args {
+                                arg_types.push(self.infer_expr(arg)?);
+                            }
+
+                            // Instantiate the function type
+                            let func_ty = self.instantiate_function(&fn_type);
+                            if let Type::Function(ft) = func_ty {
+                                // Unify argument types
+                                if ft.params.len() != arg_types.len() {
+                                    return Err(TypeError::ArityMismatch {
+                                        expected: ft.params.len(),
+                                        found: arg_types.len(),
+                                    });
+                                }
+                                for (param_ty, arg_ty) in ft.params.iter().zip(arg_types.iter()) {
+                                    self.unify(arg_ty.clone(), param_ty.clone());
+                                }
+                                return Ok(*ft.ret);
+                            }
+                        }
+                    }
+                }
+
+                // Regular method call on a value
                 let receiver_ty = self.infer_expr(receiver)?;
                 let mut arg_types = vec![receiver_ty.clone()];
                 for arg in args {

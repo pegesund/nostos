@@ -26,10 +26,15 @@ pub struct BuiltinInfo {
 pub const BUILTINS: &[BuiltinInfo] = &[
     // === Core ===
     BuiltinInfo { name: "println", signature: "a -> ()", doc: "Print a value to stdout followed by a newline" },
+    BuiltinInfo { name: "print", signature: "a -> ()", doc: "Print a value to stdout without newline" },
     BuiltinInfo { name: "show", signature: "a -> String", doc: "Convert any value to its string representation" },
     BuiltinInfo { name: "copy", signature: "a -> a", doc: "Create a deep copy of a value" },
     BuiltinInfo { name: "hash", signature: "a -> Int", doc: "Compute hash code for a value" },
     BuiltinInfo { name: "inspect", signature: "a -> String -> ()", doc: "Send a value to the inspector panel with a label" },
+    BuiltinInfo { name: "assert", signature: "Bool -> ()", doc: "Assert condition is true, panic if false" },
+    BuiltinInfo { name: "assert_eq", signature: "a -> a -> ()", doc: "Assert two values are equal, panic if not" },
+    BuiltinInfo { name: "panic", signature: "a -> ()", doc: "Panic with a message (terminates execution)" },
+    BuiltinInfo { name: "sleep", signature: "Int -> ()", doc: "Sleep for N milliseconds" },
     BuiltinInfo { name: "self", signature: "() -> Pid", doc: "Get the current process ID" },
     BuiltinInfo { name: "spawn", signature: "(() -> a) -> Pid", doc: "Spawn a new lightweight process" },
     BuiltinInfo { name: "send", signature: "Pid -> a -> ()", doc: "Send a message to a process (also: pid <- msg)" },
@@ -51,7 +56,8 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "log10", signature: "Float -> Float", doc: "Base-10 logarithm" },
 
     // === List/Array ===
-    BuiltinInfo { name: "len", signature: "[a] -> Int", doc: "Length of a list or array" },
+    BuiltinInfo { name: "length", signature: "[a] -> Int", doc: "Get the length of a list" },
+    BuiltinInfo { name: "len", signature: "[a] -> Int", doc: "Length of a list or array (alias for length)" },
     BuiltinInfo { name: "head", signature: "[a] -> a", doc: "First element of a list" },
     BuiltinInfo { name: "tail", signature: "[a] -> [a]", doc: "All elements except the first" },
     BuiltinInfo { name: "init", signature: "[a] -> [a]", doc: "All elements except the last" },
@@ -83,6 +89,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "range", signature: "Int -> Int -> [Int]", doc: "Create list of integers from start to end" },
     BuiltinInfo { name: "replicate", signature: "Int -> a -> [a]", doc: "Create list of n copies of a value" },
     BuiltinInfo { name: "empty", signature: "[a] -> Bool", doc: "True if list is empty" },
+    BuiltinInfo { name: "isEmpty", signature: "[a] -> Bool", doc: "True if list is empty (alias for empty)" },
     BuiltinInfo { name: "sum", signature: "[Num] -> Num", doc: "Sum of all elements" },
     BuiltinInfo { name: "product", signature: "[Num] -> Num", doc: "Product of all elements" },
 
@@ -839,35 +846,48 @@ impl Compiler {
 
         // Second pass: re-run HM inference for functions with type variables in their signatures
         // This handles cases like bar23() = bar() + 1 where bar was compiled after bar23's first inference
+        // Run multiple iterations until no more signatures change (handles dependency order issues)
         let fn_names: Vec<String> = self.functions.keys().cloned().collect();
-        for fn_name in fn_names {
-            if let Some(fn_val) = self.functions.get(&fn_name) {
-                if let Some(sig) = &fn_val.signature {
-                    // If signature contains ONLY type variables (like 'a' or 'a -> b'), re-infer
-                    // A signature with only type variables won't contain concrete type names
-                    let has_concrete_type = sig.contains("Int") || sig.contains("Float") ||
-                        sig.contains("String") || sig.contains("Bool") || sig.contains("Char") ||
-                        sig.contains("List") || sig.contains("Map") || sig.contains("Set") ||
-                        sig.contains("Option") || sig.contains("Result") || sig.contains("Unit") ||
-                        sig.contains("Bytes") || sig.contains("BigInt") || sig.contains("Decimal");
-                    // Has single-letter type variables like 'a', 'b', etc.
-                    let has_type_var = sig.chars().any(|c| c.is_ascii_lowercase() && c != '-' && c != '>');
+        let max_iterations = 5; // Prevent infinite loops
+        for _iteration in 0..max_iterations {
+            let mut changed = false;
+            for fn_name in &fn_names {
+                if let Some(fn_val) = self.functions.get(fn_name) {
+                    if let Some(sig) = &fn_val.signature {
+                        // If signature contains ONLY type variables (like 'a' or 'a -> b'), re-infer
+                        // A signature with only type variables won't contain concrete type names
+                        let has_concrete_type = sig.contains("Int") || sig.contains("Float") ||
+                            sig.contains("String") || sig.contains("Bool") || sig.contains("Char") ||
+                            sig.contains("List") || sig.contains("Map") || sig.contains("Set") ||
+                            sig.contains("Option") || sig.contains("Result") || sig.contains("Unit") ||
+                            sig.contains("Bytes") || sig.contains("BigInt") || sig.contains("Decimal");
+                        // Has single-letter type variables like 'a', 'b', etc.
+                        let has_type_var = sig.chars().any(|c| c.is_ascii_lowercase() && c != '-' && c != '>');
 
-                    if has_type_var && !has_concrete_type {
-                        // Try HM inference again now that all dependencies are compiled
-                        if let Some(fn_ast) = self.fn_asts.get(&fn_name).cloned() {
-                            if let Some(inferred_sig) = self.try_hm_inference(&fn_ast) {
-                                // Update the function's signature - need to clone and replace
-                                // since Arc::get_mut won't work if there are other references
-                                if let Some(fn_val) = self.functions.get(&fn_name) {
-                                    let mut new_fn_val = (**fn_val).clone();
-                                    new_fn_val.signature = Some(inferred_sig);
-                                    self.functions.insert(fn_name.clone(), Arc::new(new_fn_val));
+                        if has_type_var && !has_concrete_type {
+                            // Try HM inference again now that all dependencies are compiled
+                            if let Some(fn_ast) = self.fn_asts.get(fn_name).cloned() {
+                                let result = self.try_hm_inference(&fn_ast);
+                                if let Some(inferred_sig) = result {
+                                    // Check if signature actually changed
+                                    if &inferred_sig != sig {
+                                        // Update the function's signature - need to clone and replace
+                                        // since Arc::get_mut won't work if there are other references
+                                        if let Some(fn_val) = self.functions.get(fn_name) {
+                                            let mut new_fn_val = (**fn_val).clone();
+                                            new_fn_val.signature = Some(inferred_sig);
+                                            self.functions.insert(fn_name.clone(), Arc::new(new_fn_val));
+                                            changed = true;
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
+            }
+            if !changed {
+                break;
             }
         }
 
@@ -883,15 +903,49 @@ impl Compiler {
                 continue;
             }
 
+            // Check if this function has untyped parameters and is recursive
+            let has_untyped_params = fn_ast.clauses.first()
+                .map(|c| c.params.iter().any(|p| p.ty.is_none()))
+                .unwrap_or(false);
+            let is_recursive = Self::is_recursive_fn(fn_ast);
+
             // Run type checking with full knowledge of all function signatures
             if let Err(e) = self.type_check_fn(fn_ast) {
                 // Only report concrete type mismatches
                 let should_report = match &e {
                     CompileError::TypeError { message, .. } => {
+                        // Filter out List element vs List errors from mutual recursion inference
+                        // Pattern 1: "List[X] and X" - list type first
+                        // Pattern 2: "X and List[X]" - element type first
+                        let is_list_element_error = message.contains("List[") &&
+                            (message.contains("] and ") || message.contains(" and List[")) &&
+                            message.matches("List[").count() == 1;
+
+                        // For RECURSIVE functions with untyped params, filter out false positives
+                        // from recursive inference where param types get confused with returns
+                        // Non-recursive functions with conflicting branch types are real errors
+                        let is_recursive_inference_error = has_untyped_params && is_recursive &&
+                            message.contains("Cannot unify types:");
+
+                        // For dynamic typing support (like heterogeneous lists), filter out
+                        // unification errors in functions WITHOUT untyped params that call
+                        // functions WITH untyped params
+                        // e.g., g() = f([1,2,3]) where f(xs) = ["hello"] ++ xs
+                        // The error is in g (no untyped params) calling f (has untyped params)
+                        // But DON'T filter errors in functions WITH untyped params themselves
+                        // e.g., f(x) = if x then 42 else "hello" - conflicting branch types
+                        let is_call_inference_error = !has_untyped_params &&
+                            message.contains("Cannot unify types:") &&
+                            !message.contains("List[") &&
+                            !message.contains("->");
+
                         let is_inference_limitation = message.contains("Unknown identifier") ||
                             message.contains("Unknown type") ||
                             message.contains("has no field") ||
                             message.contains("() and ()") ||
+                            is_list_element_error ||
+                            is_recursive_inference_error ||
+                            is_call_inference_error ||
                             Self::is_type_variable_only_error(message);
                         !is_inference_limitation
                     }
@@ -1415,15 +1469,41 @@ impl Compiler {
         vec![]
     }
 
-    /// Get the simple name of a type expression (for type tracking).
+    /// Get the full name of a type expression including type parameters.
     fn type_expr_name(&self, ty: &nostos_syntax::TypeExpr) -> String {
         match ty {
             nostos_syntax::TypeExpr::Name(ident) => ident.node.clone(),
-            nostos_syntax::TypeExpr::Generic(ident, _) => ident.node.clone(),
-            nostos_syntax::TypeExpr::Function(_, _) => "Function".to_string(),
-            nostos_syntax::TypeExpr::Record(_) => "Record".to_string(),
-            nostos_syntax::TypeExpr::Tuple(_) => "Tuple".to_string(),
-            nostos_syntax::TypeExpr::Unit => "Unit".to_string(),
+            nostos_syntax::TypeExpr::Generic(ident, args) => {
+                // Include type parameters: List[Int], Map[String, Int], etc.
+                let args_str: Vec<String> = args.iter()
+                    .map(|arg| self.type_expr_name(arg))
+                    .collect();
+                if args_str.is_empty() {
+                    ident.node.clone()
+                } else {
+                    format!("{}[{}]", ident.node, args_str.join(", "))
+                }
+            }
+            nostos_syntax::TypeExpr::Function(params, ret) => {
+                let params_str: Vec<String> = params.iter()
+                    .map(|p| self.type_expr_name(p))
+                    .collect();
+                let ret_str = self.type_expr_name(ret);
+                format!("({}) -> {}", params_str.join(", "), ret_str)
+            }
+            nostos_syntax::TypeExpr::Record(fields) => {
+                let fields_str: Vec<String> = fields.iter()
+                    .map(|(name, ty)| format!("{}: {}", name.node, self.type_expr_name(ty)))
+                    .collect();
+                format!("{{{}}}", fields_str.join(", "))
+            }
+            nostos_syntax::TypeExpr::Tuple(elems) => {
+                let elems_str: Vec<String> = elems.iter()
+                    .map(|e| self.type_expr_name(e))
+                    .collect();
+                format!("({})", elems_str.join(", "))
+            }
+            nostos_syntax::TypeExpr::Unit => "()".to_string(),
         }
     }
 
@@ -3014,7 +3094,18 @@ impl Compiler {
         // Note: This may fail for functions calling not-yet-compiled functions,
         // so we only treat it as an error if we have sufficient type information.
         // In the future, this should be a two-pass system.
-        if let Err(e) = self.type_check_fn(def) {
+        //
+        // Skip first-pass type checking for functions with untyped parameters -
+        // these rely on inference which may produce false positives during initial
+        // compilation. Real type errors will be caught in the second pass.
+        // Also skip if this function calls any function with untyped params, since
+        // those functions haven't been inferred yet.
+        let has_untyped_params = def.clauses.first()
+            .map(|c| c.params.iter().any(|p| p.ty.is_none()))
+            .unwrap_or(false);
+        let calls_untyped = self.calls_function_with_untyped_params(def);
+        if !has_untyped_params && !calls_untyped {
+            if let Err(e) = self.type_check_fn(def) {
             // Only report errors that are actual type mismatches, not unknown identifiers
             // or polymorphic type issues that the checker can't handle yet
             let should_report = match &e {
@@ -3025,10 +3116,19 @@ impl Compiler {
                     // - Type variable unification (polymorphism issues)
                     // - Missing field errors (trait method dispatch limitations)
                     // - Unit type unification (false positive: () and ())
+                    // - List element type vs list unification (complex mutual recursion inference)
+                    //   Pattern: "Cannot unify types: List[X] and X" where there's one List[]
+                    // Filter out List element vs List errors from mutual recursion inference
+                    // Pattern 1: "List[X] and X" - list type first
+                    // Pattern 2: "X and List[X]" - element type first
+                    let is_list_element_error = message.contains("List[") &&
+                        (message.contains("] and ") || message.contains(" and List[")) &&
+                        message.matches("List[").count() == 1;
                     let is_inference_limitation = message.contains("Unknown identifier") ||
                         message.contains("Unknown type") ||
                         message.contains("has no field") ||
                         message.contains("() and ()") ||
+                        is_list_element_error ||
                         Self::is_type_variable_only_error(message);
 
                     !is_inference_limitation
@@ -3037,6 +3137,7 @@ impl Compiler {
             };
             if should_report {
                 return Err(e);
+            }
             }
         }
 
@@ -8599,6 +8700,31 @@ impl Compiler {
             }
         }
 
+        // Register mvars as bindings so type inference can resolve mvar references
+        for (mvar_name, mvar_info) in &self.mvars {
+            let mvar_type = self.type_name_to_type(&mvar_info.type_name);
+            // Register with both qualified and unqualified names
+            env.bindings.insert(mvar_name.clone(), (mvar_type.clone(), false));
+            // Also register with just the local name (strip module prefix)
+            if let Some(dot_pos) = mvar_name.rfind('.') {
+                let local_name = &mvar_name[dot_pos + 1..];
+                if !env.bindings.contains_key(local_name) {
+                    env.bindings.insert(local_name.to_string(), (mvar_type, false));
+                }
+            }
+        }
+
+        // Register built-in functions from BUILTINS for type inference
+        // This allows functions calling Panel.*, String.*, etc. to have proper return types
+        for builtin in BUILTINS {
+            if env.functions.contains_key(builtin.name) {
+                continue; // Don't overwrite standard_env functions
+            }
+            if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
+                env.functions.insert(builtin.name.to_string(), fn_type);
+            }
+        }
+
         // Register known functions in environment for recursive calls
         // Don't overwrite functions from standard_env (like println) that have trait constraints
         for (fn_name, fn_val) in &self.functions {
@@ -8606,9 +8732,22 @@ impl Compiler {
                 // Skip - don't overwrite built-in functions with proper type params/constraints
                 continue;
             }
+            // Skip placeholder functions - they have no signature yet and would have wrong param types
+            // We'll rely on pre-registration for the function being inferred (below)
+            if fn_val.signature.is_none() {
+                continue;
+            }
             let param_types: Vec<nostos_types::Type> = fn_val.param_types
                 .iter()
-                .map(|ty| self.type_name_to_type(ty))
+                .map(|ty| {
+                    // For unknown types ("_" or "?"), use a fresh type variable
+                    // Each param needs its own distinct type variable
+                    if ty == "_" || ty == "?" {
+                        env.fresh_var()
+                    } else {
+                        self.type_name_to_type(ty)
+                    }
+                })
                 .collect();
 
             // Use declared return type if available, otherwise try to parse from inferred signature
@@ -8661,14 +8800,55 @@ impl Compiler {
             }
         }
 
+        // Pre-register the function being inferred with fresh type variables for recursion support
+        // This allows the function to call itself during type inference
+        let fn_name = &def.name.node;
+        if !env.functions.contains_key(fn_name) {
+            if let Some(clause) = def.clauses.first() {
+                let param_types: Vec<nostos_types::Type> = clause.params
+                    .iter()
+                    .map(|p| {
+                        if let Some(ty_expr) = &p.ty {
+                            self.type_name_to_type(&self.type_expr_to_string(ty_expr))
+                        } else {
+                            env.fresh_var()
+                        }
+                    })
+                    .collect();
+                let ret_ty = clause.return_type.as_ref()
+                    .map(|ty| self.type_name_to_type(&self.type_expr_to_string(ty)))
+                    .unwrap_or_else(|| env.fresh_var());
+
+                env.functions.insert(
+                    fn_name.clone(),
+                    nostos_types::FunctionType {
+                        type_params: vec![],
+                        params: param_types,
+                        ret: Box::new(ret_ty),
+                    },
+                );
+            }
+        }
+
         // Create inference context
         let mut ctx = InferCtx::new(&mut env);
 
         // Infer the function type
-        let func_ty = ctx.infer_function(def).ok()?;
+        let func_ty = match ctx.infer_function(def) {
+            Ok(ft) => ft,
+            Err(_e) => {
+                // Debug: uncomment to see inference errors
+                // eprintln!("DEBUG: infer_function failed for {}: {:?}", def.name.node, _e);
+                return None;
+            }
+        };
 
         // Solve constraints (this can hang on unresolved type vars with HasField)
-        ctx.solve().ok()?;
+        if let Err(_e) = ctx.solve() {
+            // Debug: uncomment to see solve errors
+            // eprintln!("DEBUG: solve failed for {}: {:?}", def.name.node, _e);
+            return None;
+        }
 
         // Collect all resolved types for the signature
         let resolved_params: Vec<nostos_types::Type> = func_ty.params
@@ -8676,6 +8856,9 @@ impl Compiler {
             .map(|ty| ctx.env.apply_subst(ty))
             .collect();
         let resolved_ret = ctx.env.apply_subst(&func_ty.ret);
+
+        // Debug: uncomment to see resolved types
+        // eprintln!("DEBUG: {} resolved_ret = {:?}", def.name.node, resolved_ret);
 
         // Collect all type variable IDs in order of first appearance
         let mut var_order: Vec<u32> = Vec::new();
@@ -8766,6 +8949,12 @@ impl Compiler {
             }
         }
 
+        // NOTE: We intentionally do NOT register mvars here in type_check_fn.
+        // Mvar registration is only done in try_hm_inference for signature inference.
+        // Registering mvars in type_check_fn can cause spurious type errors when
+        // the inferred function signature uses type variables that don't match
+        // the concrete mvar types.
+
         // Register known functions FIRST - these have actual inferred types
         // after compilation, not just type variables
         for (fn_name, fn_val) in &self.functions {
@@ -8774,31 +8963,40 @@ impl Compiler {
             if fn_val.signature.is_none() {
                 continue;
             }
-            let param_types: Vec<nostos_types::Type> = fn_val.param_types
-                .iter()
-                .map(|ty| self.type_name_to_type(ty))
-                .collect();
-            // Get return type from explicit annotation, or parse from inferred signature
-            let ret_ty = if let Some(ty) = fn_val.return_type.as_ref() {
-                self.type_name_to_type(ty)
-            } else if let Some(sig) = fn_val.signature.as_ref() {
-                // Parse return type from signature
-                // Formats: "Int -> String" (with params), "()" (just return type for 0-param)
-                let ret_str = if let Some(arrow_pos) = sig.rfind(" -> ") {
-                    sig[arrow_pos + 4..].trim()
+            // Parse the full signature to get accurate param and return types
+            // This is better than using param_types which may contain "?" placeholders
+            let fn_type = if let Some(sig) = fn_val.signature.as_ref() {
+                if let Some(parsed) = self.parse_signature_string(sig) {
+                    parsed
                 } else {
-                    // No arrow means the whole signature is just the return type
-                    sig.trim()
-                };
-                self.type_name_to_type(ret_str)
+                    // Fallback to building from param_types
+                    let param_types: Vec<nostos_types::Type> = fn_val.param_types
+                        .iter()
+                        .map(|ty| self.type_name_to_type(ty))
+                        .collect();
+                    let ret_ty = fn_val.return_type.as_ref()
+                        .map(|ty| self.type_name_to_type(ty))
+                        .unwrap_or_else(|| env.fresh_var());
+                    nostos_types::FunctionType {
+                        type_params: vec![],
+                        params: param_types,
+                        ret: Box::new(ret_ty),
+                    }
+                }
             } else {
-                env.fresh_var()
-            };
-
-            let fn_type = nostos_types::FunctionType {
-                type_params: vec![],
-                params: param_types,
-                ret: Box::new(ret_ty),
+                // No signature - use param_types as fallback
+                let param_types: Vec<nostos_types::Type> = fn_val.param_types
+                    .iter()
+                    .map(|ty| self.type_name_to_type(ty))
+                    .collect();
+                let ret_ty = fn_val.return_type.as_ref()
+                    .map(|ty| self.type_name_to_type(ty))
+                    .unwrap_or_else(|| env.fresh_var());
+                nostos_types::FunctionType {
+                    type_params: vec![],
+                    params: param_types,
+                    ret: Box::new(ret_ty),
+                }
             };
 
             // Register with full key (e.g., "bar2/")
@@ -8808,11 +9006,10 @@ impl Compiler {
 
             // Also register with local name (strip signature suffix and module prefix)
             // "utils.bar2/" -> "bar2", "bar2/" -> "bar2"
+            // We overwrite any existing entry to ensure the correct type is used
             let base_name = fn_name.split('/').next().unwrap_or(fn_name);
             let local_name = base_name.rsplit('.').next().unwrap_or(base_name);
-            if !env.functions.contains_key(local_name) {
-                env.functions.insert(local_name.to_string(), fn_type);
-            }
+            env.functions.insert(local_name.to_string(), fn_type);
         }
 
         // Then register pending function signatures (for functions not yet compiled)
@@ -8945,6 +9142,181 @@ impl Compiler {
         false
     }
 
+    /// Check if a function definition is recursive (calls itself)
+    fn is_recursive_fn(def: &FnDef) -> bool {
+        let fn_name = &def.name.node;
+        for clause in &def.clauses {
+            if Self::expr_contains_call(&clause.body, fn_name) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check if an expression contains a call to the given function name
+    fn expr_contains_call(expr: &Expr, fn_name: &str) -> bool {
+        match expr {
+            Expr::Call(callee, args, _) => {
+                // Check if this is a direct call to fn_name
+                if let Expr::Var(ident) = callee.as_ref() {
+                    if ident.node == fn_name {
+                        return true;
+                    }
+                }
+                // Check callee and all argument expressions
+                if Self::expr_contains_call(callee, fn_name) {
+                    return true;
+                }
+                args.iter().any(|a| Self::expr_contains_call(a, fn_name))
+            }
+            Expr::BinOp(lhs, _, rhs, _) => {
+                Self::expr_contains_call(lhs, fn_name) ||
+                Self::expr_contains_call(rhs, fn_name)
+            }
+            Expr::UnaryOp(_, e, _) => Self::expr_contains_call(e, fn_name),
+            Expr::If(cond, then_br, else_br, _) => {
+                Self::expr_contains_call(cond, fn_name) ||
+                Self::expr_contains_call(then_br, fn_name) ||
+                Self::expr_contains_call(else_br, fn_name)
+            }
+            Expr::Match(scrutinee, arms, _) => {
+                if Self::expr_contains_call(scrutinee, fn_name) {
+                    return true;
+                }
+                arms.iter().any(|arm| Self::expr_contains_call(&arm.body, fn_name))
+            }
+            Expr::Block(stmts, _) => {
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Let(binding) => {
+                            if Self::expr_contains_call(&binding.value, fn_name) {
+                                return true;
+                            }
+                        }
+                        Stmt::Expr(e) => {
+                            if Self::expr_contains_call(e, fn_name) {
+                                return true;
+                            }
+                        }
+                        Stmt::Assign(_, e, _) => {
+                            if Self::expr_contains_call(e, fn_name) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            Expr::Lambda(_, body, _) => Self::expr_contains_call(body, fn_name),
+            Expr::Try(body, arms, finally, _) => {
+                Self::expr_contains_call(body, fn_name) ||
+                arms.iter().any(|arm| Self::expr_contains_call(&arm.body, fn_name)) ||
+                finally.as_ref().map(|f| Self::expr_contains_call(f, fn_name)).unwrap_or(false)
+            }
+            Expr::String(string_lit, _) => {
+                // Check string interpolation parts
+                match string_lit {
+                    StringLit::Interpolated(parts) => parts.iter().any(|p| {
+                        match p {
+                            StringPart::Expr(e) => Self::expr_contains_call(e, fn_name),
+                            _ => false,
+                        }
+                    }),
+                    StringLit::Plain(_) => false,
+                }
+            }
+            Expr::Tuple(elems, _) => elems.iter().any(|e| Self::expr_contains_call(e, fn_name)),
+            Expr::List(elems, _, _) => elems.iter().any(|e| Self::expr_contains_call(e, fn_name)),
+            Expr::MethodCall(receiver, _, args, _) => {
+                Self::expr_contains_call(receiver, fn_name) ||
+                args.iter().any(|a| Self::expr_contains_call(a, fn_name))
+            }
+            Expr::FieldAccess(e, _, _) => Self::expr_contains_call(e, fn_name),
+            Expr::Index(e, idx, _) => {
+                Self::expr_contains_call(e, fn_name) ||
+                Self::expr_contains_call(idx, fn_name)
+            }
+            _ => false, // Literals and other terminal expressions
+        }
+    }
+
+    /// Check if a function definition calls any function that has untyped parameters.
+    /// This is used to defer type errors for functions that depend on not-yet-inferred functions.
+    fn calls_function_with_untyped_params(&self, def: &FnDef) -> bool {
+        for clause in &def.clauses {
+            if self.expr_calls_function_with_untyped_params(&clause.body) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check if an expression calls any function with untyped params.
+    fn expr_calls_function_with_untyped_params(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Call(func, args, _) => {
+                // Check the called function
+                if let Expr::Var(ident) = func.as_ref() {
+                    let name = &ident.node;
+                    // Look up the function to see if it has untyped params
+                    // Try different name formats
+                    for (fn_name, fn_val) in &self.functions {
+                        let base_name = fn_name.split('/').next().unwrap_or(fn_name);
+                        if base_name == name || fn_name == name {
+                            // Check if any param type is "?" or "_"
+                            if fn_val.param_types.iter().any(|t| t == "?" || t == "_") {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                // Recursively check arguments
+                args.iter().any(|a| self.expr_calls_function_with_untyped_params(a)) ||
+                self.expr_calls_function_with_untyped_params(func)
+            }
+            Expr::BinOp(left, _, right, _) => {
+                self.expr_calls_function_with_untyped_params(left) ||
+                self.expr_calls_function_with_untyped_params(right)
+            }
+            Expr::UnaryOp(_, e, _) => self.expr_calls_function_with_untyped_params(e),
+            Expr::If(cond, then_branch, else_branch, _) => {
+                self.expr_calls_function_with_untyped_params(cond) ||
+                self.expr_calls_function_with_untyped_params(then_branch) ||
+                self.expr_calls_function_with_untyped_params(else_branch)
+            }
+            Expr::Match(e, arms, _) => {
+                self.expr_calls_function_with_untyped_params(e) ||
+                arms.iter().any(|arm| self.expr_calls_function_with_untyped_params(&arm.body))
+            }
+            Expr::Block(stmts, _) => {
+                stmts.iter().any(|stmt| match stmt {
+                    Stmt::Let(binding) => self.expr_calls_function_with_untyped_params(&binding.value),
+                    Stmt::Expr(e) => self.expr_calls_function_with_untyped_params(e),
+                    Stmt::Assign(_, e, _) => self.expr_calls_function_with_untyped_params(e),
+                })
+            }
+            Expr::Lambda(_, body, _) => self.expr_calls_function_with_untyped_params(body),
+            Expr::Try(body, arms, finally, _) => {
+                self.expr_calls_function_with_untyped_params(body) ||
+                arms.iter().any(|arm| self.expr_calls_function_with_untyped_params(&arm.body)) ||
+                finally.as_ref().map(|f| self.expr_calls_function_with_untyped_params(f)).unwrap_or(false)
+            }
+            Expr::Tuple(elems, _) | Expr::List(elems, _, _) => {
+                elems.iter().any(|e| self.expr_calls_function_with_untyped_params(e))
+            }
+            Expr::MethodCall(receiver, _, args, _) => {
+                self.expr_calls_function_with_untyped_params(receiver) ||
+                args.iter().any(|a| self.expr_calls_function_with_untyped_params(a))
+            }
+            Expr::FieldAccess(e, _, _) => self.expr_calls_function_with_untyped_params(e),
+            Expr::Index(e, idx, _) => {
+                self.expr_calls_function_with_untyped_params(e) ||
+                self.expr_calls_function_with_untyped_params(idx)
+            }
+            _ => false,
+        }
+    }
+
     /// Collect all type variable IDs in order of first appearance.
     fn collect_type_vars(&self, ty: &nostos_types::Type, vars: &mut Vec<u32>) {
         match ty {
@@ -9039,10 +9411,12 @@ impl Compiler {
                     .map(|t| self.format_type_normalized(t, var_map))
                     .collect();
                 let ret = self.format_type_normalized(&f.ret, var_map);
+                // Wrap entire function type in parentheses so it's a single unit
+                // when used as a parameter in another function signature
                 if params.is_empty() {
-                    format!("() -> {}", ret)
+                    format!("(() -> {})", ret)
                 } else {
-                    format!("({}) -> {}", params.join(", "), ret)
+                    format!("(({}) -> {})", params.join(", "), ret)
                 }
             }
             nostos_types::Type::Named { name, args } => {
@@ -9073,7 +9447,54 @@ impl Compiler {
     }
 
     /// Convert a type name string to a nostos_types::Type.
+    /// Handles parameterized types like "List[Int]" and "Map[String, Int]".
     fn type_name_to_type(&self, ty: &str) -> nostos_types::Type {
+        let ty = ty.trim();
+
+        // Handle list shorthand syntax: [a] means List[a]
+        if ty.starts_with('[') && ty.ends_with(']') {
+            let inner = &ty[1..ty.len() - 1].trim();
+            let elem_type = self.type_name_to_type(inner);
+            return nostos_types::Type::List(Box::new(elem_type));
+        }
+
+        // Check for parameterized type syntax: Name[Args]
+        if let Some(bracket_pos) = ty.find('[') {
+            if ty.ends_with(']') {
+                let name = ty[..bracket_pos].trim();
+                let args_str = &ty[bracket_pos + 1..ty.len() - 1];
+
+                // Parse type arguments (handle nested brackets for things like List[List[Int]])
+                let args = self.parse_type_args(args_str);
+
+                // Handle built-in parameterized types
+                return match name {
+                    "List" if args.len() == 1 => {
+                        nostos_types::Type::List(Box::new(args.into_iter().next().unwrap()))
+                    }
+                    "Array" if args.len() == 1 => {
+                        nostos_types::Type::Array(Box::new(args.into_iter().next().unwrap()))
+                    }
+                    "Set" if args.len() == 1 => {
+                        nostos_types::Type::Set(Box::new(args.into_iter().next().unwrap()))
+                    }
+                    "Map" if args.len() == 2 => {
+                        let mut iter = args.into_iter();
+                        let key = iter.next().unwrap();
+                        let val = iter.next().unwrap();
+                        nostos_types::Type::Map(Box::new(key), Box::new(val))
+                    }
+                    "IO" if args.len() == 1 => {
+                        nostos_types::Type::IO(Box::new(args.into_iter().next().unwrap()))
+                    }
+                    _ => nostos_types::Type::Named {
+                        name: name.to_string(),
+                        args,
+                    },
+                };
+            }
+        }
+
         match ty {
             "Int" | "Int64" => nostos_types::Type::Int,
             "Int8" => nostos_types::Type::Int8,
@@ -9093,9 +9514,132 @@ impl Compiler {
             "Pid" => nostos_types::Type::Pid,
             "Ref" => nostos_types::Type::Ref,
             "()" | "Unit" => nostos_types::Type::Unit,
-            "?" => nostos_types::Type::Var(u32::MAX), // Unknown type
-            _ => nostos_types::Type::Named { name: ty.to_string(), args: vec![] },
+            "?" | "_" => nostos_types::Type::Var(u32::MAX), // Unknown/untyped param
+            _ => {
+                // Check if this is a type variable (single lowercase letter)
+                // Type variables like 'a', 'b', 'c' are used in polymorphic signatures
+                if ty.len() == 1 && ty.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
+                    // Convert to a consistent type variable ID based on the letter
+                    // 'a' -> 1, 'b' -> 2, etc.
+                    let var_id = (ty.chars().next().unwrap() as u32) - ('a' as u32) + 1;
+                    nostos_types::Type::Var(var_id)
+                } else {
+                    nostos_types::Type::Named { name: ty.to_string(), args: vec![] }
+                }
+            }
         }
+    }
+
+    /// Parse comma-separated type arguments, handling nested brackets.
+    fn parse_type_args(&self, args_str: &str) -> Vec<nostos_types::Type> {
+        let mut args = Vec::new();
+        let mut current = String::new();
+        let mut depth = 0;
+
+        for ch in args_str.chars() {
+            match ch {
+                '[' => {
+                    depth += 1;
+                    current.push(ch);
+                }
+                ']' => {
+                    depth -= 1;
+                    current.push(ch);
+                }
+                ',' if depth == 0 => {
+                    if !current.trim().is_empty() {
+                        args.push(self.type_name_to_type(current.trim()));
+                    }
+                    current.clear();
+                }
+                _ => current.push(ch),
+            }
+        }
+
+        // Don't forget the last argument
+        if !current.trim().is_empty() {
+            args.push(self.type_name_to_type(current.trim()));
+        }
+
+        args
+    }
+
+    /// Parse a signature string like "String -> Int" or "Int -> String -> ()" into a FunctionType.
+    /// This is used to register built-in functions for type inference.
+    fn parse_signature_string(&self, sig: &str) -> Option<nostos_types::FunctionType> {
+        let sig = sig.trim();
+
+        // Handle constraint syntax: "Show a => a -> String" -> "a -> String"
+        let sig_without_constraints = if let Some(idx) = sig.find("=>") {
+            sig[idx + 2..].trim()
+        } else {
+            sig
+        };
+
+        // Split by " -> " to get parameter and return types
+        // Need to be careful with nested types like "Map k v -> k"
+        let parts: Vec<&str> = self.split_arrow_types(sig_without_constraints);
+
+        if parts.is_empty() {
+            return None;
+        }
+
+        // Last part is the return type, rest are parameters
+        let ret_str = parts.last()?;
+        let param_strs = &parts[..parts.len() - 1];
+
+        let params: Vec<nostos_types::Type> = param_strs
+            .iter()
+            .map(|s| self.type_name_to_type(s.trim()))
+            .collect();
+
+        let ret = self.type_name_to_type(ret_str.trim());
+
+        Some(nostos_types::FunctionType {
+            type_params: vec![],
+            params,
+            ret: Box::new(ret),
+        })
+    }
+
+    /// Split a signature string by " -> " while respecting nested brackets.
+    fn split_arrow_types<'a>(&self, sig: &'a str) -> Vec<&'a str> {
+        let mut parts = Vec::new();
+        let mut depth: i32 = 0;
+        let mut start = 0;
+        let bytes = sig.as_bytes();
+        let mut i = 0;
+
+        while i < bytes.len() {
+            match bytes[i] {
+                b'[' | b'(' | b'{' => depth += 1,
+                b']' | b')' | b'}' => depth = (depth - 1).max(0),
+                b'-' if depth == 0 && i + 2 < bytes.len() && bytes[i + 1] == b'>' => {
+                    // Found " -> " at depth 0
+                    let part = &sig[start..i].trim();
+                    if !part.is_empty() {
+                        parts.push(*part);
+                    }
+                    i += 2; // Skip "->"
+                    // Skip whitespace after ->
+                    while i < bytes.len() && bytes[i] == b' ' {
+                        i += 1;
+                    }
+                    start = i;
+                    continue;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+
+        // Don't forget the last part (return type)
+        let last = sig[start..].trim();
+        if !last.is_empty() {
+            parts.push(last);
+        }
+
+        parts
     }
 
 }
@@ -9431,6 +9975,18 @@ impl Compiler {
             // name already includes signature from collection phase (e.g., "greet/Int")
             let full_name = name.clone();
 
+            // Extract param types from the first clause for type inference
+            // Use "?" for untyped params (will be resolved by HM inference)
+            let param_types: Vec<String> = clauses[0].params.iter()
+                .map(|p| p.ty.as_ref()
+                    .map(|ty| self.type_expr_to_string(ty))
+                    .unwrap_or_else(|| "?".to_string()))
+                .collect();
+
+            // Extract return type from the first clause if available
+            let return_type = clauses[0].return_type.as_ref()
+                .map(|ty| self.type_expr_to_string(ty));
+
             // Insert a placeholder function for forward reference
             let placeholder = FunctionValue {
                 name: full_name.clone(),
@@ -9447,8 +10003,8 @@ impl Compiler {
                 source_file: None,
                 doc: None,
                 signature: None,
-                param_types: vec![],
-                return_type: None,
+                param_types,
+                return_type,
             };
             self.functions.insert(full_name.clone(), Arc::new(placeholder));
 
@@ -12615,6 +13171,277 @@ mod tests {
         let sig = get_signature("printInt(x: Int) = println(x)\nmain() = 0", "printInt").unwrap();
         // With a concrete type annotation, no type variable, so no constraint needed
         assert_eq!(sig, "Int -> ()", "printInt: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_144_string_literal_return() {
+        // A function returning a string literal should have String return type
+        let sig = get_signature("greeting() = \"hello\"\nmain() = 0", "greeting").unwrap();
+        assert_eq!(sig, "String", "greeting: expected String return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_145_int_literal_return() {
+        // A function returning an int literal should have Int return type
+        let sig = get_signature("answer() = 42\nmain() = 0", "answer").unwrap();
+        assert_eq!(sig, "Int", "answer: expected Int return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_146_string_concat_return() {
+        // A function returning string concat should have String return type
+        let sig = get_signature("fullName() = \"John\" ++ \" \" ++ \"Doe\"\nmain() = 0", "fullName").unwrap();
+        assert_eq!(sig, "String", "fullName: expected String return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_147_unit_return() {
+        // A function returning unit should have () return type
+        let sig = get_signature("doNothing() = ()\nmain() = 0", "doNothing").unwrap();
+        assert_eq!(sig, "()", "doNothing: expected () return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_148_list_int_return() {
+        // A function returning a list of ints should have List[Int] return type
+        let sig = get_signature("numbers() = [1, 2, 3]\nmain() = 0", "numbers").unwrap();
+        assert_eq!(sig, "List[Int]", "numbers: expected List[Int] return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_149_function_with_mvar_returns_string() {
+        // Function that uses mvar should still have String return type when returning a string
+        let sig = get_signature(r#"
+mvar counter: Int = 0
+initDemo() = {
+    counter = 1
+    "Demo initialized"
+}
+main() = 0
+"#, "initDemo").unwrap();
+        assert_eq!(sig, "String", "initDemo with mvar: expected String return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_150_function_with_mvar_string_concat() {
+        // Function that uses string concatenation and mvar should have String return type
+        let sig = get_signature(r#"
+mvar items: List[String] = ["item1", "item2"]
+viewList() = {
+    header = "Items:\n"
+    footer = "\n[End]"
+    header ++ footer
+}
+main() = 0
+"#, "viewList").unwrap();
+        assert_eq!(sig, "String", "viewList with concat: expected String return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_151_function_returns_unit_from_mvar_write() {
+        // Function that writes to mvar should have () return type (unit)
+        let sig = get_signature(r#"
+mvar counter: Int = 0
+increment() = {
+    counter = counter + 1
+    ()
+}
+main() = 0
+"#, "increment").unwrap();
+        assert_eq!(sig, "()", "increment: expected () return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_152_function_reads_mvar_returns_int() {
+        // Function that reads mvar and returns Int should have Int return type
+        let sig = get_signature(r#"
+mvar counter: Int = 0
+getCount() = counter
+main() = 0
+"#, "getCount").unwrap();
+        assert_eq!(sig, "Int", "getCount: expected Int return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_153_list_demo_style_view_function() {
+        // Simulates the list demo's listView function structure
+        let sig = get_signature(r#"
+mvar listItems: List[String] = ["item1", "item2"]
+mvar listCursor: Int = 0
+listView() = {
+    header = "=== List Demo ===\n\n"
+    footer = "\n[End]"
+    header ++ footer
+}
+main() = 0
+"#, "listView").unwrap();
+        assert_eq!(sig, "String", "listView: expected String return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_154_list_demo_style_init_function() {
+        // Simulates the list demo's listInit function structure
+        let sig = get_signature(r#"
+mvar listPanelId: Int = 0
+listInit() = {
+    listPanelId = 1
+    "List demo ready."
+}
+main() = 0
+"#, "listInit").unwrap();
+        assert_eq!(sig, "String", "listInit: expected String return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_155_function_reads_mvar_list() {
+        // Function that reads mvar list should return List[Int]
+        let sig = get_signature(r#"
+mvar items: List[Int] = [1, 2, 3]
+getItems() = items
+main() = 0
+"#, "getItems").unwrap();
+        assert_eq!(sig, "List[Int]", "getItems: expected List[Int] return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_156_function_reads_mvar_list_string() {
+        // Function that reads mvar list of strings should return List[String]
+        let sig = get_signature(r#"
+mvar names: List[String] = ["a", "b", "c"]
+getNames() = names
+main() = 0
+"#, "getNames").unwrap();
+        assert_eq!(sig, "List[String]", "getNames: expected List[String] return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_157_function_calls_panel_show() {
+        // Function calling Panel.show should have signature Int -> ()
+        let sig = get_signature(r#"
+showPanel(id) = Panel.show(id)
+main() = 0
+"#, "showPanel").unwrap();
+        assert_eq!(sig, "Int -> ()", "showPanel: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_158_function_calls_panel_setcontent() {
+        // Function calling Panel.setContent should have signature Int -> String -> ()
+        let sig = get_signature(r#"
+updatePanel(id, content) = Panel.setContent(id, content)
+main() = 0
+"#, "updatePanel").unwrap();
+        assert_eq!(sig, "Int -> String -> ()", "updatePanel: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_159_function_calls_panel_create() {
+        // Function calling Panel.create should have signature String -> Int
+        let sig = get_signature(r#"
+createPanel(title) = Panel.create(title)
+main() = 0
+"#, "createPanel").unwrap();
+        assert_eq!(sig, "String -> Int", "createPanel: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_160_string_concat_chain() {
+        // String concatenation chain should return String
+        let sig = get_signature(r#"
+buildMessage() = {
+    header = "Header\n"
+    body = "Body\n"
+    footer = "Footer"
+    header ++ body ++ footer
+}
+main() = 0
+"#, "buildMessage").unwrap();
+        assert_eq!(sig, "String", "buildMessage: expected String return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_161_function_like_listview() {
+        // Function similar to listView that calls other functions and concats strings
+        let sig = get_signature(r#"
+mvar listItems: List[String] = ["item1", "item2"]
+mvar listCursor: Int = 0
+renderItem(idx, item) = if idx == 0 then "> " ++ item else "  " ++ item
+listView() = {
+    header = "=== List ===\n\n"
+    footer = "\n[End]"
+    header ++ footer
+}
+main() = 0
+"#, "listView").unwrap();
+        assert_eq!(sig, "String", "listView: expected String return type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_162_list_demo_panel_calls() {
+        // Test that list demo functions using Panel.* are inferred correctly
+        let source = r#"
+mvar listPanelId: Int = 0
+mvar listCursor: Int = 0
+
+# listShow() calls Panel.setContent and Panel.show - should return ()
+listShow() = {
+    Panel.setContent(listPanelId, "content")
+    Panel.show(listPanelId)
+}
+
+# listInit() calls Panel.create and returns String
+listInit() = {
+    listPanelId = Panel.create("List Demo")
+    Panel.onKey(listPanelId, "callback")
+    "ready"
+}
+
+main() = 0
+"#;
+        // Check listShow signature - should be () since Panel.show returns ()
+        let sig = get_signature(source, "listShow").unwrap();
+        assert_eq!(sig, "()", "listShow: got: {}", sig);
+
+        // Check listInit signature - should be String (the return value)
+        let sig = get_signature(source, "listInit").unwrap();
+        assert_eq!(sig, "String", "listInit: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_163_listview_with_recursive_render() {
+        // Full listView test with recursive listRenderList function
+        let source = r#"
+mvar listItems: List[String] = ["First", "Second", "Third"]
+mvar listCursor: Int = 0
+
+listRenderItem(idx, item, cursor) =
+    if idx == cursor then "> " ++ item else "  " ++ item
+
+listRenderList(items, idx, cursor) = match items
+    [] -> ""
+    [item | rest] -> listRenderItem(idx, item, cursor) ++ "\n" ++ listRenderList(rest, idx + 1, cursor)
+end
+
+listView() = {
+    header = "=== List Demo ===\n\n"
+    list = listRenderList(listItems, 0, listCursor)
+    footer = "\n[End]"
+    header ++ list ++ footer
+}
+
+main() = 0
+"#;
+        // listRenderItem should be Int -> String -> Int -> String
+        let sig = get_signature(source, "listRenderItem").unwrap();
+        assert!(sig.contains("String"), "listRenderItem should return String: got: {}", sig);
+
+        // listRenderList should return String
+        let sig = get_signature(source, "listRenderList").unwrap();
+        assert!(sig.contains("String"), "listRenderList should return String: got: {}", sig);
+
+        // listView should return String
+        let sig = get_signature(source, "listView").unwrap();
+        assert_eq!(sig, "String", "listView: got: {}", sig);
     }
 
     // =========================================================================

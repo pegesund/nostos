@@ -22,7 +22,7 @@ pub enum BrowserItem {
     Function { name: String, signature: String, doc: Option<String>, eval_created: bool },
     Type { name: String, eval_created: bool },
     Trait { name: String, eval_created: bool },
-    Variable { name: String, mutable: bool, eval_created: bool },
+    Variable { name: String, mutable: bool, eval_created: bool, is_mvar: bool, type_name: Option<String> },
     /// Module metadata (_meta.nos) - contains together directives etc.
     Metadata { module: String },
 }
@@ -3149,16 +3149,24 @@ impl ReplEngine {
                     name: name.clone(),
                     mutable: binding.mutable,
                     eval_created: false,  // REPL bindings are not from eval
+                    is_mvar: false,
+                    type_name: binding.type_annotation.clone(),
                 });
             }
         }
 
         // Mvars (module-level mutable variables) - at any level
         for name in &mvars {
+            // Get the type from MvarInfo
+            let full_name = format!("{}{}", prefix, name);
+            let type_name = self.compiler.get_mvars().get(&full_name)
+                .map(|info| info.type_name.clone());
             items.push(BrowserItem::Variable {
                 name: name.clone(),
                 mutable: true,  // mvars are always mutable
                 eval_created: false,  // TODO: track eval-created mvars
+                is_mvar: true,
+                type_name,
             });
         }
 
