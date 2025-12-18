@@ -1,0 +1,32 @@
+# expect: 0
+# Test passing a map between processes with Map operations
+
+worker(parent) = {
+    receive map -> {
+        # Verify received map is empty
+        size = Map.size(map)
+        # Add a key and send back
+        updated = Map.insert(map, "answer", 42)
+        parent <- (size, updated)
+    } end
+}
+
+main() = {
+    me = self()
+    child = spawn { worker(me) }
+
+    # Send empty map
+    child <- %{}
+
+    # Receive result
+    (received_size, result) = receive m -> m end
+
+    # Verify the received empty map had size 0
+    assert_eq(0, received_size)
+
+    # Verify the returned map has our value
+    assert_eq(42, Map.get(result, "answer"))
+    assert_eq(1, Map.size(result))
+
+    0
+}

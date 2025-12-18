@@ -1,0 +1,47 @@
+# expect: 0
+# Stress test for SharedMap: 100 processes each add their ID to a shared map
+# Tests that map passing through messages (using SharedMap optimization) works correctly
+
+# Worker: receives a map, adds its id to it, passes it to next worker
+worker(id: Int, next_pid) = {
+    receive map -> {
+        # Add our id to the map
+        updated = Map.insert(map, id, id * 10)
+        # Pass to next worker (or back to main if next_pid is main)
+        next_pid <- updated
+    } end
+}
+
+# Create a chain of workers, returns the first worker's pid
+create_chain(main_pid, count: Int, prev_pid) =
+    if count <= 0 then prev_pid
+    else {
+        # Create worker that will send to prev_pid
+        new_pid = spawn { worker(count, prev_pid) }
+        create_chain(main_pid, count - 1, new_pid)
+    }
+
+main() = {
+    me = self()
+
+    # Create chain of 10 workers
+    # Last worker (id=10) will send back to me
+    # First worker (id=1) receives from me
+    first = create_chain(me, 10, me)
+
+    # Start with empty map, send to first worker
+    first <- %{}
+
+    # Receive final map (after passing through all 100 workers)
+    final_map = receive m -> m end
+
+    # Verify: map should have 10 entries
+    assert_eq(10, Map.size(final_map))
+
+    # Spot check some entries
+    assert_eq(10, Map.get(final_map, 1))    # id 1 -> 10
+    assert_eq(50, Map.get(final_map, 5))    # id 5 -> 50
+    assert_eq(100, Map.get(final_map, 10))  # id 10 -> 100
+
+    0
+}
