@@ -1,0 +1,84 @@
+# expect: 0
+# Test that sorted lock ordering prevents deadlock with multiple MVars
+# Different functions access MVars in different source-code orders,
+# but the compiler should sort them alphabetically to prevent deadlock.
+
+mvar alpha: Int = 0
+mvar beta: Int = 0
+mvar gamma: Int = 0
+
+# Accesses in order: gamma, alpha, beta (compiler should lock: alpha, beta, gamma)
+update_gab() = {
+    gamma = gamma + 1
+    alpha = alpha + 1
+    beta = beta + 1
+    alpha + beta + gamma
+}
+
+# Accesses in order: beta, gamma, alpha (compiler should lock: alpha, beta, gamma)
+update_bga() = {
+    beta = beta + 10
+    gamma = gamma + 10
+    alpha = alpha + 10
+    alpha + beta + gamma
+}
+
+# Accesses in order: alpha, beta, gamma (compiler should lock: alpha, beta, gamma)
+update_abg() = {
+    alpha = alpha + 100
+    beta = beta + 100
+    gamma = gamma + 100
+    alpha + beta + gamma
+}
+
+worker_gab(parent, n) = {
+    do_n_times(n, update_gab)
+    parent <- "gab_done"
+}
+
+worker_bga(parent, n) = {
+    do_n_times(n, update_bga)
+    parent <- "bga_done"
+}
+
+worker_abg(parent, n) = {
+    do_n_times(n, update_abg)
+    parent <- "abg_done"
+}
+
+do_n_times(n, f) = if n <= 0 then () else {
+    _ = f()
+    _ = do_n_times(n - 1, f)
+    ()
+}
+
+main() = {
+    me = self()
+
+    # Spawn workers that access MVars in different orders
+    # Without proper lock ordering, these could deadlock
+    _ = spawn { worker_gab(me, 10) }
+    _ = spawn { worker_bga(me, 10) }
+    _ = spawn { worker_abg(me, 10) }
+    _ = spawn { worker_gab(me, 10) }
+    _ = spawn { worker_bga(me, 10) }
+    _ = spawn { worker_abg(me, 10) }
+
+    # Wait for all
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+
+    # Each MVar should have:
+    # gab: 2 workers * 10 iterations * 1 = 20
+    # bga: 2 workers * 10 iterations * 10 = 200
+    # abg: 2 workers * 10 iterations * 100 = 2000
+    # Total per mvar: 20 + 200 + 2000 = 2220
+    assert_eq(2220, alpha)
+    assert_eq(2220, beta)
+    assert_eq(2220, gamma)
+    0
+}
