@@ -100,7 +100,7 @@ fn value_to_string(value: &Value) -> String {
         Value::Decimal(d) => format!("{}d", d),
         // Other types
         Value::Bool(b) => b.to_string(),
-        Value::String(s) => format!("\"{}\"", s),
+        Value::String(s) => s.to_string(),
         Value::Char(c) => format!("'{}'", c),
         Value::Unit => "()".to_string(),
         Value::List(items) => {
@@ -112,8 +112,12 @@ fn value_to_string(value: &Value) -> String {
             format!("({})", items_str.join(", "))
         }
         Value::Record(rec) => {
-            let fields_str: Vec<String> = rec.fields.iter().map(value_to_string).collect();
-            format!("{}({})", rec.type_name, fields_str.join(", "))
+            // Format as TypeName{field1: val1, field2: val2}
+            let fields_str: Vec<String> = rec.field_names.iter()
+                .zip(rec.fields.iter())
+                .map(|(name, val)| format!("{}: {}", name, value_to_string(val)))
+                .collect();
+            format!("{}{{{}}}", rec.type_name, fields_str.join(", "))
         }
         Value::Variant(var) => {
             if var.fields.is_empty() {
