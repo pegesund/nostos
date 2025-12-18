@@ -519,7 +519,7 @@ fn main() -> ExitCode {
                 println!("  --json-errors    Output errors as JSON (for debugger integration)");
                 println!("  --threads N      Use N worker threads (default: all CPUs)");
                 println!("  --legacy-vm      Use legacy parallel VM (for debugging)");
-                println!("  --profile        Enable function call profiling (disables JIT)");
+                println!("  --profile        Enable function call profiling (JIT functions show as [JIT])");
                 println!();
                 println!("REPL usage:");
                 println!("  nostos repl              Start interactive REPL");
@@ -565,7 +565,7 @@ fn main() -> ExitCode {
             }
             if arg == "--profile" {
                 profiling_enabled = true;
-                enable_jit = false; // Profiling requires JIT to be disabled for accurate results
+                // JIT profiling is now supported - JIT functions show as "[JIT] function_name"
                 i += 1;
                 continue;
             }

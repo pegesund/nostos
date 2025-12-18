@@ -13,6 +13,7 @@ use crate::session::extract_dependencies_from_fn;
 use nostos_syntax::ast::{Item, Pattern};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::parallel::{ParallelVM, ParallelConfig, InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver};
+use nostos_vm::async_vm::{AsyncVM, AsyncConfig};
 use nostos_vm::process::ThreadSafeValue;
 
 /// An item in the browser
@@ -3442,6 +3443,13 @@ impl ReplEngine {
                     self.load_file(args).map(|_| format!("Loaded {}", args))
                 }
             }
+            ":profile" | ":prof" => {
+                if args.is_empty() {
+                    Err("Usage: :profile <expression>\nExample: :profile fib(30)".to_string())
+                } else {
+                    self.profile_eval(args)
+                }
+            }
             _ => Err(format!("Unknown command: {}. Type :help for available commands.", cmd)),
         }
     }
@@ -3654,12 +3662,172 @@ impl ReplEngine {
         &self.hotkey_callbacks
     }
 
+    /// Profile an expression and return formatted results
+    fn profile_eval(&self, expr: &str) -> Result<String, String> {
+        use nostos_syntax::parse;
+
+        // Parse the expression
+        let wrapped_code = format!("__profile_main__() = {}", expr);
+        let (module_opt, errors) = parse(&wrapped_code);
+        if !errors.is_empty() {
+            return Err(format!("Parse error in expression: {:?}", errors));
+        }
+        let module = module_opt.ok_or("Failed to parse expression")?;
+
+        // Create a compiler for the profiled evaluation
+        let mut eval_compiler = Compiler::new_empty();
+
+        // Pre-populate compiler with REPL's compiled functions
+        {
+            let stdlib_funcs = self.vm.get_stdlib_functions();
+            let func_list = self.vm.get_stdlib_function_list();
+            let stdlib_funcs_guard = stdlib_funcs.read();
+            let func_list_guard = func_list.read();
+            eval_compiler.register_external_functions_with_list(&stdlib_funcs_guard, &func_list_guard);
+        }
+
+        // Pre-populate with prelude imports
+        {
+            let imports = self.vm.get_prelude_imports();
+            let imports_guard = imports.read();
+            for (local_name, qualified_name) in imports_guard.iter() {
+                eval_compiler.add_prelude_import(local_name.clone(), qualified_name.clone());
+            }
+        }
+
+        // Pre-populate with stdlib types
+        {
+            let types = self.vm.get_stdlib_types();
+            let types_guard = types.read();
+            for (name, type_val) in types_guard.iter() {
+                eval_compiler.register_external_type(name, type_val);
+            }
+        }
+
+        // Pre-populate with previously eval'd functions
+        {
+            let dyn_funcs = self.dynamic_functions.read();
+            for (name, func) in dyn_funcs.iter() {
+                eval_compiler.register_external_function(name, func.clone());
+            }
+        }
+
+        // Pre-populate with dynamic types
+        {
+            let dyn_types = self.dynamic_types.read();
+            for (name, type_val) in dyn_types.iter() {
+                eval_compiler.register_external_type(name, type_val);
+            }
+        }
+
+        // Add the module and compile
+        eval_compiler.add_module(&module, vec![], std::sync::Arc::new(wrapped_code.clone()), "<profile>".to_string())
+            .map_err(|e| format!("{}", e))?;
+
+        if let Err((e, _, _)) = eval_compiler.compile_all() {
+            return Err(format!("Compile error: {}", e));
+        }
+
+        // Create AsyncVM with profiling enabled and JIT
+        let async_config = AsyncConfig {
+            num_threads: self.config.num_threads,
+            reductions_per_yield: 100,
+            profiling_enabled: true,
+        };
+        let mut async_vm = AsyncVM::new(async_config);
+        async_vm.register_default_natives();
+
+        // Register all functions from stdlib
+        {
+            let stdlib_funcs = self.vm.get_stdlib_functions();
+            let stdlib_funcs_guard = stdlib_funcs.read();
+            for (name, func) in stdlib_funcs_guard.iter() {
+                async_vm.register_function(name, func.clone());
+            }
+        }
+
+        // Register all dynamic functions
+        {
+            let dyn_funcs = self.dynamic_functions.read();
+            for (name, func) in dyn_funcs.iter() {
+                async_vm.register_function(name, func.clone());
+            }
+        }
+
+        // Register all compiled functions (includes __profile_main__)
+        for (name, func) in eval_compiler.get_all_functions().iter() {
+            async_vm.register_function(name, func.clone());
+        }
+
+        // Register all types
+        {
+            let types = self.vm.get_stdlib_types();
+            let types_guard = types.read();
+            for (name, type_val) in types_guard.iter() {
+                async_vm.register_type(name, type_val.clone());
+            }
+        }
+        {
+            let dyn_types = self.dynamic_types.read();
+            for (name, type_val) in dyn_types.iter() {
+                async_vm.register_type(name, type_val.clone());
+            }
+        }
+
+        // Build function list for CallDirect
+        let func_list = eval_compiler.get_function_list();
+        async_vm.set_function_list(func_list.clone());
+
+        // JIT compile if enabled
+        if self.config.enable_jit {
+            if let Ok(mut jit) = JitCompiler::new(JitConfig::default()) {
+                for idx in 0..func_list.len() {
+                    jit.queue_compilation(idx as u16);
+                }
+                if let Ok(_compiled) = jit.process_queue(&func_list) {
+                    for idx in 0..func_list.len() {
+                        if let Some(jit_fn) = jit.get_int_function_0(idx as u16) {
+                            async_vm.register_jit_int_function_0(idx as u16, jit_fn);
+                        }
+                        if let Some(jit_fn) = jit.get_int_function(idx as u16) {
+                            async_vm.register_jit_int_function(idx as u16, jit_fn);
+                        }
+                        if let Some(jit_fn) = jit.get_int_function_2(idx as u16) {
+                            async_vm.register_jit_int_function_2(idx as u16, jit_fn);
+                        }
+                        if let Some(jit_fn) = jit.get_int_function_3(idx as u16) {
+                            async_vm.register_jit_int_function_3(idx as u16, jit_fn);
+                        }
+                        if let Some(jit_fn) = jit.get_int_function_4(idx as u16) {
+                            async_vm.register_jit_int_function_4(idx as u16, jit_fn);
+                        }
+                        if let Some(jit_fn) = jit.get_loop_int64_array_function(idx as u16) {
+                            async_vm.register_jit_loop_array_function(idx as u16, jit_fn);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Run the profiled function
+        let result = async_vm.run("__profile_main__");
+
+        // Format the result
+        match result {
+            Ok(value) => {
+                Ok(format!("Result: {:?}\n\n(Profile data printed to console)", value))
+            }
+            Err(e) => Err(format!("Runtime error: {}", e)),
+        }
+    }
+
     /// Help text for REPL commands
     fn help_text(&self) -> String {
         "REPL Commands:
   :help, :h, :?    Show this help
   :demo            Load demo folder (demo/*.nos)
   :load <file>     Load a .nos file
+  :profile <expr>  Run expression with profiling (JIT functions show as [JIT])
   :quit, :q        Exit (TUI only)
 
 Keyboard shortcuts (TUI):

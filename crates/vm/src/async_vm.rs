@@ -337,6 +337,25 @@ impl AsyncProcess {
         }
     }
 
+    /// Record a JIT function call for profiling.
+    /// This is called at the JIT dispatch boundary, not inside the JIT code.
+    #[inline]
+    pub fn profile_jit_call(&mut self, func_name: &str, duration: std::time::Duration) {
+        if let Some(ref mut profile) = self.profile {
+            let jit_name = format!("[JIT] {}", func_name);
+            profile.stats
+                .entry(jit_name)
+                .or_insert_with(crate::process::FunctionStats::new)
+                .record_call(duration.as_nanos() as u64);
+        }
+    }
+
+    /// Check if profiling is enabled.
+    #[inline]
+    pub fn is_profiling(&self) -> bool {
+        self.profile.is_some()
+    }
+
     /// Get a register vec from the pool, or allocate a new one.
     #[inline]
     fn alloc_registers(&mut self, size: usize) -> Vec<GcValue> {
@@ -1098,11 +1117,22 @@ impl AsyncProcess {
             CallDirect(dst, func_idx, ref args) => {
                 // Check for JIT-compiled version first based on arity
                 let func_idx_u16 = *func_idx;
+                let profiling = self.is_profiling();
                 match args.len() {
                     0 => {
                         if let Some(jit_fn) = self.shared.jit_int_functions_0.get(&func_idx_u16) {
-                            let result = jit_fn();
+                            let (result, duration) = if profiling {
+                                let start = Instant::now();
+                                let r = jit_fn();
+                                (r, Some(start.elapsed()))
+                            } else {
+                                (jit_fn(), None)
+                            };
                             set_reg!(dst, GcValue::Int64(result));
+                            if let Some(d) = duration {
+                                let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                self.profile_jit_call(&name, d);
+                            }
                             return Ok(StepResult::Continue);
                         }
                     }
@@ -1110,8 +1140,18 @@ impl AsyncProcess {
                         // Pure numeric JIT
                         if let Some(jit_fn) = self.shared.jit_int_functions.get(&func_idx_u16) {
                             if let GcValue::Int64(n) = reg!(args[0]) {
-                                let result = jit_fn(n);
+                                let (result, duration) = if profiling {
+                                    let start = Instant::now();
+                                    let r = jit_fn(n);
+                                    (r, Some(start.elapsed()))
+                                } else {
+                                    (jit_fn(n), None)
+                                };
                                 set_reg!(dst, GcValue::Int64(result));
+                                if let Some(d) = duration {
+                                    let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    self.profile_jit_call(&name, d);
+                                }
                                 return Ok(StepResult::Continue);
                             }
                         }
@@ -1121,8 +1161,18 @@ impl AsyncProcess {
                                 if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
                                     let ptr = arr.items.as_mut_ptr();
                                     let len = arr.items.len() as i64;
-                                    let result = jit_fn(ptr as *const i64, len);
+                                    let (result, duration) = if profiling {
+                                        let start = Instant::now();
+                                        let r = jit_fn(ptr as *const i64, len);
+                                        (r, Some(start.elapsed()))
+                                    } else {
+                                        (jit_fn(ptr as *const i64, len), None)
+                                    };
                                     set_reg!(dst, GcValue::Int64(result));
+                                    if let Some(d) = duration {
+                                        let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                        self.profile_jit_call(&name, d);
+                                    }
                                     return Ok(StepResult::Continue);
                                 }
                             }
@@ -1131,8 +1181,18 @@ impl AsyncProcess {
                     2 => {
                         if let Some(jit_fn) = self.shared.jit_int_functions_2.get(&func_idx_u16) {
                             if let (GcValue::Int64(a), GcValue::Int64(b)) = (reg!(args[0]), reg!(args[1])) {
-                                let result = jit_fn(a, b);
+                                let (result, duration) = if profiling {
+                                    let start = Instant::now();
+                                    let r = jit_fn(a, b);
+                                    (r, Some(start.elapsed()))
+                                } else {
+                                    (jit_fn(a, b), None)
+                                };
                                 set_reg!(dst, GcValue::Int64(result));
+                                if let Some(d) = duration {
+                                    let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    self.profile_jit_call(&name, d);
+                                }
                                 return Ok(StepResult::Continue);
                             }
                         }
@@ -1141,8 +1201,18 @@ impl AsyncProcess {
                         if let Some(jit_fn) = self.shared.jit_int_functions_3.get(&func_idx_u16) {
                             if let (GcValue::Int64(a), GcValue::Int64(b), GcValue::Int64(c)) =
                                 (reg!(args[0]), reg!(args[1]), reg!(args[2])) {
-                                let result = jit_fn(a, b, c);
+                                let (result, duration) = if profiling {
+                                    let start = Instant::now();
+                                    let r = jit_fn(a, b, c);
+                                    (r, Some(start.elapsed()))
+                                } else {
+                                    (jit_fn(a, b, c), None)
+                                };
                                 set_reg!(dst, GcValue::Int64(result));
+                                if let Some(d) = duration {
+                                    let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    self.profile_jit_call(&name, d);
+                                }
                                 return Ok(StepResult::Continue);
                             }
                         }
@@ -1151,8 +1221,18 @@ impl AsyncProcess {
                         if let Some(jit_fn) = self.shared.jit_int_functions_4.get(&func_idx_u16) {
                             if let (GcValue::Int64(a), GcValue::Int64(b), GcValue::Int64(c), GcValue::Int64(d)) =
                                 (reg!(args[0]), reg!(args[1]), reg!(args[2]), reg!(args[3])) {
-                                let result = jit_fn(a, b, c, d);
+                                let (result, duration) = if profiling {
+                                    let start = Instant::now();
+                                    let r = jit_fn(a, b, c, d);
+                                    (r, Some(start.elapsed()))
+                                } else {
+                                    (jit_fn(a, b, c, d), None)
+                                };
                                 set_reg!(dst, GcValue::Int64(result));
+                                if let Some(dur) = duration {
+                                    let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    self.profile_jit_call(&name, dur);
+                                }
                                 return Ok(StepResult::Continue);
                             }
                         }
@@ -1462,10 +1542,22 @@ impl AsyncProcess {
             TailCallDirect(func_idx, ref args) => {
                 // Check for JIT-compiled version first
                 let func_idx_u16 = *func_idx;
+                let profiling = self.is_profiling();
                 match args.len() {
                     0 => {
                         if let Some(jit_fn) = self.shared.jit_int_functions_0.get(&func_idx_u16) {
-                            let result = GcValue::Int64(jit_fn());
+                            let (res, duration) = if profiling {
+                                let start = Instant::now();
+                                let r = jit_fn();
+                                (r, Some(start.elapsed()))
+                            } else {
+                                (jit_fn(), None)
+                            };
+                            if let Some(d) = duration {
+                                let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                self.profile_jit_call(&name, d);
+                            }
+                            let result = GcValue::Int64(res);
                             // Pop frame and return result
                             let return_reg = self.frames.last().unwrap().return_reg;
                             self.frames.pop();
@@ -1482,7 +1574,18 @@ impl AsyncProcess {
                         // Pure numeric JIT
                         if let Some(jit_fn) = self.shared.jit_int_functions.get(&func_idx_u16) {
                             if let GcValue::Int64(n) = reg!(args[0]) {
-                                let result = GcValue::Int64(jit_fn(n));
+                                let (res, duration) = if profiling {
+                                    let start = Instant::now();
+                                    let r = jit_fn(n);
+                                    (r, Some(start.elapsed()))
+                                } else {
+                                    (jit_fn(n), None)
+                                };
+                                if let Some(d) = duration {
+                                    let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    self.profile_jit_call(&name, d);
+                                }
+                                let result = GcValue::Int64(res);
                                 let return_reg = self.frames.last().unwrap().return_reg;
                                 self.frames.pop();
                                 if self.frames.is_empty() {
@@ -1500,7 +1603,18 @@ impl AsyncProcess {
                                 if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
                                     let ptr = arr.items.as_mut_ptr();
                                     let len = arr.items.len() as i64;
-                                    let result = GcValue::Int64(jit_fn(ptr as *const i64, len));
+                                    let (res, duration) = if profiling {
+                                        let start = Instant::now();
+                                        let r = jit_fn(ptr as *const i64, len);
+                                        (r, Some(start.elapsed()))
+                                    } else {
+                                        (jit_fn(ptr as *const i64, len), None)
+                                    };
+                                    if let Some(d) = duration {
+                                        let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                        self.profile_jit_call(&name, d);
+                                    }
+                                    let result = GcValue::Int64(res);
                                     let return_reg = self.frames.last().unwrap().return_reg;
                                     self.frames.pop();
                                     if self.frames.is_empty() {
@@ -1517,7 +1631,18 @@ impl AsyncProcess {
                     2 => {
                         if let Some(jit_fn) = self.shared.jit_int_functions_2.get(&func_idx_u16) {
                             if let (GcValue::Int64(a), GcValue::Int64(b)) = (reg!(args[0]), reg!(args[1])) {
-                                let result = GcValue::Int64(jit_fn(a, b));
+                                let (res, duration) = if profiling {
+                                    let start = Instant::now();
+                                    let r = jit_fn(a, b);
+                                    (r, Some(start.elapsed()))
+                                } else {
+                                    (jit_fn(a, b), None)
+                                };
+                                if let Some(d) = duration {
+                                    let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    self.profile_jit_call(&name, d);
+                                }
+                                let result = GcValue::Int64(res);
                                 let return_reg = self.frames.last().unwrap().return_reg;
                                 self.frames.pop();
                                 if self.frames.is_empty() {
