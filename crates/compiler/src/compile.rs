@@ -1625,6 +1625,7 @@ impl Compiler {
     /// This is used for function-level locking - we need to know which mvars
     /// a function accesses BEFORE compiling it so we can emit lock instructions.
     /// Returns (reads, writes) as sets of mvar names.
+    #[allow(dead_code)]
     fn analyze_mvar_access(&self, expr: &Expr) -> (HashSet<String>, HashSet<String>) {
         let mut reads = HashSet::new();
         let mut writes = HashSet::new();
@@ -1633,6 +1634,7 @@ impl Compiler {
     }
 
     /// Recursively collect mvar accesses from an expression.
+    #[allow(dead_code)]
     fn collect_mvar_access(&self, expr: &Expr, reads: &mut HashSet<String>, writes: &mut HashSet<String>) {
         match expr {
             Expr::Var(ident) => {
@@ -1831,6 +1833,7 @@ impl Compiler {
     }
 
     /// Collect mvar accesses from a statement.
+    #[allow(dead_code)]
     fn collect_mvar_access_stmt(&self, stmt: &Stmt, reads: &mut HashSet<String>, writes: &mut HashSet<String>) {
         match stmt {
             Stmt::Expr(expr) => {
@@ -1859,6 +1862,7 @@ impl Compiler {
     }
 
     /// Analyze a function clause to find all mvar accesses.
+    #[allow(dead_code)]
     fn analyze_fn_clause_mvar_access(&self, clause: &FnClause) -> (HashSet<String>, HashSet<String>) {
         let mut reads = HashSet::new();
         let mut writes = HashSet::new();
@@ -1875,6 +1879,7 @@ impl Compiler {
     }
 
     /// Analyze all clauses of a function definition to find mvar accesses.
+    #[allow(dead_code)]
     fn analyze_fn_def_mvar_access(&self, def: &FnDef) -> (HashSet<String>, HashSet<String>) {
         let mut reads = HashSet::new();
         let mut writes = HashSet::new();
@@ -1969,16 +1974,19 @@ impl Compiler {
     }
 
     /// Helper to create a Spanned node with a dummy span
+    #[allow(dead_code)]
     fn spanned<T>(&self, node: T) -> Spanned<T> {
         Spanned::new(node, Span { start: 0, end: 0 })
     }
 
     /// Helper to create an Ident with a dummy span
+    #[allow(dead_code)]
     fn ident(&self, name: &str) -> Ident {
         self.spanned(name.to_string())
     }
 
     /// Dummy span for synthesized AST nodes
+    #[allow(dead_code)]
     fn span(&self) -> Span {
         Span { start: 0, end: 0 }
     }
@@ -1986,6 +1994,7 @@ impl Compiler {
     /// Synthesize a Hash trait implementation for a type.
     /// Uses a proper hash combining algorithm that includes the type name
     /// to avoid collisions between different types with the same structure.
+    #[allow(dead_code)]
     fn synthesize_hash_impl(&self, type_name: &str, def: &TypeDef) -> Result<TraitImpl, CompileError> {
         let base_name = type_name.split("::").last().unwrap_or(type_name);
 
@@ -2188,6 +2197,7 @@ impl Compiler {
     }
 
     /// Helper: make hash(self.field) expression
+    #[allow(dead_code)]
     fn make_hash_field_expr(&self, obj: &str, field: &str) -> Expr {
         let field_access = Expr::FieldAccess(
             Box::new(Expr::Var(self.ident(obj))),
@@ -2204,6 +2214,7 @@ impl Compiler {
     /// Helper: make a hash call for a field access with known type.
     /// If the type implements Hash, generates Type.Hash.hash(self.field).
     /// Otherwise, generates hash(self.field) for primitive types.
+    #[allow(dead_code)]
     fn make_hash_field_expr_with_type(&self, obj: &str, field: &str, field_type: &TypeExpr) -> Expr {
         let type_name = self.type_expr_to_string(field_type);
         let field_access = Expr::FieldAccess(
@@ -2239,6 +2250,7 @@ impl Compiler {
     }
 
     /// Helper: make hash(var) expression
+    #[allow(dead_code)]
     fn make_hash_var_expr(&self, var: &str) -> Expr {
         Expr::Call(
             Box::new(Expr::Var(self.ident("hash"))),
@@ -2250,6 +2262,7 @@ impl Compiler {
     /// Helper: make a hash call for a variable with known type.
     /// If the type implements Hash, generates Type.Hash.hash(var).
     /// Otherwise, generates hash(var) for primitive types.
+    #[allow(dead_code)]
     fn make_hash_call_with_type(&self, var: &str, field_type: &TypeExpr) -> Expr {
         // Get the type name from the TypeExpr
         let type_name = self.type_expr_to_string(field_type);
@@ -2277,6 +2290,7 @@ impl Compiler {
     }
 
     /// Synthesize a Show trait implementation for a type.
+    #[allow(dead_code)]
     fn synthesize_show_impl(&self, type_name: &str, def: &TypeDef) -> Result<TraitImpl, CompileError> {
         let base_name = type_name.split("::").last().unwrap_or(type_name);
 
@@ -2479,6 +2493,7 @@ impl Compiler {
     }
 
     /// Helper: concatenate expr with show(self.field)
+    #[allow(dead_code)]
     fn concat_show_field(&self, expr: Expr, obj: &str, field: &str) -> Expr {
         let field_access = Expr::FieldAccess(
             Box::new(Expr::Var(self.ident(obj))),
@@ -2499,6 +2514,7 @@ impl Compiler {
     }
 
     /// Helper: make show(var) expression
+    #[allow(dead_code)]
     fn make_show_var_expr(&self, var: &str) -> Expr {
         Expr::Call(
             Box::new(Expr::Var(self.ident("show"))),
@@ -2509,6 +2525,7 @@ impl Compiler {
 
     /// Synthesize a Copy trait implementation for a type.
     /// Copy simply returns self - the VM handles value copying semantically.
+    #[allow(dead_code)]
     fn synthesize_copy_impl(&self, type_name: &str, def: &TypeDef) -> Result<TraitImpl, CompileError> {
         let base_name = type_name.split("::").last().unwrap_or(type_name);
 
@@ -2553,6 +2570,7 @@ impl Compiler {
     }
 
     /// Synthesize an Eq trait implementation for a type.
+    #[allow(dead_code)]
     fn synthesize_eq_impl(&self, type_name: &str, def: &TypeDef) -> Result<TraitImpl, CompileError> {
         let base_name = type_name.split("::").last().unwrap_or(type_name);
 
@@ -2624,6 +2642,7 @@ impl Compiler {
     }
 
     /// Helper: make self.field == other.field expression
+    #[allow(dead_code)]
     fn make_field_eq_expr(&self, obj1: &str, obj2: &str, field: &str) -> Expr {
         let field1 = Expr::FieldAccess(
             Box::new(Expr::Var(self.ident(obj1))),
