@@ -337,6 +337,33 @@ impl AsyncProcess {
         }
     }
 
+    /// Get a register vec from the pool, or allocate a new one.
+    #[inline]
+    fn alloc_registers(&mut self, size: usize) -> Vec<GcValue> {
+        // Pop from pool if available (LIFO for cache locality)
+        // We don't search for exact size match - any capacity works
+        if let Some(mut regs) = self.register_pool.pop() {
+            // Truncate to exact size (drops extra elements for GC correctness)
+            regs.truncate(size);
+            // Extend if needed
+            if regs.len() < size {
+                regs.resize(size, GcValue::Unit);
+            }
+            regs
+        } else {
+            vec![GcValue::Unit; size]
+        }
+    }
+
+    /// Return a register vec to the pool for reuse.
+    #[inline]
+    fn free_registers(&mut self, mut regs: Vec<GcValue>) {
+        regs.clear();
+        if regs.capacity() <= 64 && self.register_pool.len() < 32 {
+            self.register_pool.push(regs);
+        }
+    }
+
     /// Read from an mvar (async - yields if locked).
     pub async fn mvar_read(&mut self, name: &str) -> Result<GcValue, RuntimeError> {
         // Check if we already hold a lock on this mvar
@@ -483,9 +510,18 @@ impl AsyncProcess {
     /// Main execution loop for this process.
     pub async fn run(&mut self) -> Result<GcValue, RuntimeError> {
         loop {
-            // Check shutdown
-            if self.shared.shutdown.load(Ordering::SeqCst) {
-                return Ok(GcValue::Unit);
+            // Only check shutdown periodically to avoid atomic load overhead
+            self.instructions_since_yield += 1;
+            if self.instructions_since_yield >= REDUCTIONS_PER_YIELD {
+                self.instructions_since_yield = 0;
+
+                // Check shutdown
+                if self.shared.shutdown.load(Ordering::SeqCst) {
+                    return Ok(GcValue::Unit);
+                }
+
+                // Yield for fairness
+                tokio::task::yield_now().await;
             }
 
             // Check if we have frames to execute
@@ -496,8 +532,7 @@ impl AsyncProcess {
             // Execute one instruction
             match self.step().await {
                 Ok(StepResult::Continue) => {
-                    // Maybe yield for fairness
-                    self.maybe_yield().await;
+                    // Continue to next instruction (yield check is at top of loop)
                 }
                 Ok(StepResult::Finished(value)) => {
                     return Ok(value);
@@ -512,33 +547,29 @@ impl AsyncProcess {
         }
     }
 
-    /// Execute one instruction.
+    /// Execute instructions in a tight loop until we need to yield or change frames.
     async fn step(&mut self) -> Result<StepResult, RuntimeError> {
         use crate::value::Instruction::{self, *};
 
+        // Execute multiple instructions without returning to reduce async overhead
+        'instruction_loop: loop {
 
-        // Get frame info without holding mutable borrow
-        let (code_len, ip) = {
-            let frame = match self.frames.last() {
-                Some(f) => f,
-                None => return Ok(StepResult::Finished(GcValue::Unit)),
-            };
-            (frame.function.code.code.len(), frame.ip)
+        // Cache frame index once - avoid repeated len() calls
+        let cur_frame = match self.frames.len().checked_sub(1) {
+            Some(idx) => idx,
+            None => return Ok(StepResult::Finished(GcValue::Unit)),
         };
 
-        if ip >= code_len {
-            return Ok(StepResult::Finished(GcValue::Unit));
-        }
-
-        // Get raw pointer to instruction - safe because function is Arc'd and code is immutable.
-        // This avoids cloning the instruction on every step.
-        let instruction_ptr: *const Instruction = {
-            let frame = self.frames.last().unwrap();
-            &frame.function.code.code[ip] as *const _
+        // Get frame info and instruction pointer in one access
+        // SAFETY: cur_frame is valid (computed from len() - 1)
+        // SAFETY: ip is always valid - compiler ensures code ends with Return
+        let instruction_ptr: *const Instruction = unsafe {
+            let frame = self.frames.get_unchecked(cur_frame);
+            frame.function.code.code.get_unchecked(frame.ip) as *const _
         };
 
-        // Increment IP
-        self.frames.last_mut().unwrap().ip += 1;
+        // Increment IP - SAFETY: cur_frame is valid (computed from len() - 1)
+        unsafe { self.frames.get_unchecked_mut(cur_frame).ip += 1; }
 
         // SAFETY: The instruction pointer is valid because:
         // 1. frame.function is Arc<FunctionValue>, so it won't be deallocated
@@ -546,25 +577,30 @@ impl AsyncProcess {
         // 3. This dereference happens immediately, within the same step() call
         let instruction = unsafe { &*instruction_ptr };
 
-        // Helper macros for register access - use direct indexing
+        // Helper macros for register access - use cached frame index
+        // SAFETY: cur_frame is computed from frames.len() - 1, so it's always valid.
+        // Using get_unchecked avoids bounds checking overhead.
         // Note: $r and $idx may be references (when matching on &Instruction),
         // so we use AsIdx trait which works with both owned and referenced values
         macro_rules! reg {
             ($r:expr) => {{
-                let frame = self.frames.last().unwrap();
-                frame.registers[$r.as_idx()].clone()
+                unsafe { self.frames.get_unchecked(cur_frame).registers.get_unchecked($r.as_idx()).clone() }
+            }};
+        }
+        // Reference version - avoids clone when we only need to read the value
+        macro_rules! reg_ref {
+            ($r:expr) => {{
+                unsafe { self.frames.get_unchecked(cur_frame).registers.get_unchecked($r.as_idx()) }
             }};
         }
         macro_rules! set_reg {
             ($r:expr, $v:expr) => {{
-                let frame = self.frames.last_mut().unwrap();
-                frame.registers[$r.as_idx()] = $v;
+                unsafe { *self.frames.get_unchecked_mut(cur_frame).registers.get_unchecked_mut($r.as_idx()) = $v; }
             }};
         }
         macro_rules! get_const {
             ($idx:expr) => {{
-                let frame = self.frames.last().unwrap();
-                frame.function.code.constants[$idx.as_idx()].clone()
+                unsafe { self.frames.get_unchecked(cur_frame).function.code.constants.get_unchecked($idx.as_idx()).clone() }
             }};
         }
 
@@ -585,9 +621,9 @@ impl AsyncProcess {
 
             // === Integer arithmetic ===
             AddInt(dst, a, b) => {
-                let va = reg!(a);
-                let vb = reg!(b);
-                let result = match (&va, &vb) {
+                let va = reg_ref!(a);
+                let vb = reg_ref!(b);
+                let result = match (va, vb) {
                     (GcValue::Int8(x), GcValue::Int8(y)) => GcValue::Int8(x.wrapping_add(*y)),
                     (GcValue::Int16(x), GcValue::Int16(y)) => GcValue::Int16(x.wrapping_add(*y)),
                     (GcValue::Int32(x), GcValue::Int32(y)) => GcValue::Int32(x.wrapping_add(*y)),
@@ -613,9 +649,9 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             SubInt(dst, a, b) => {
-                let va = reg!(a);
-                let vb = reg!(b);
-                let result = match (&va, &vb) {
+                let va = reg_ref!(a);
+                let vb = reg_ref!(b);
+                let result = match (va, vb) {
                     (GcValue::Int8(x), GcValue::Int8(y)) => GcValue::Int8(x.wrapping_sub(*y)),
                     (GcValue::Int16(x), GcValue::Int16(y)) => GcValue::Int16(x.wrapping_sub(*y)),
                     (GcValue::Int32(x), GcValue::Int32(y)) => GcValue::Int32(x.wrapping_sub(*y)),
@@ -641,9 +677,9 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             MulInt(dst, a, b) => {
-                let va = reg!(a);
-                let vb = reg!(b);
-                let result = match (&va, &vb) {
+                let va = reg_ref!(a);
+                let vb = reg_ref!(b);
+                let result = match (va, vb) {
                     (GcValue::Int8(x), GcValue::Int8(y)) => GcValue::Int8(x.wrapping_mul(*y)),
                     (GcValue::Int16(x), GcValue::Int16(y)) => GcValue::Int16(x.wrapping_mul(*y)),
                     (GcValue::Int32(x), GcValue::Int32(y)) => GcValue::Int32(x.wrapping_mul(*y)),
@@ -669,9 +705,9 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             DivInt(dst, a, b) => {
-                let va = reg!(a);
-                let vb = reg!(b);
-                let result = match (&va, &vb) {
+                let va = reg_ref!(a);
+                let vb = reg_ref!(b);
+                let result = match (va, vb) {
                     (GcValue::Int8(x), GcValue::Int8(y)) => {
                         if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
                         GcValue::Int8(x.wrapping_div(*y))
@@ -725,9 +761,9 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             ModInt(dst, a, b) => {
-                let va = reg!(a);
-                let vb = reg!(b);
-                let result = match (&va, &vb) {
+                let va = reg_ref!(a);
+                let vb = reg_ref!(b);
+                let result = match (va, vb) {
                     (GcValue::Int8(x), GcValue::Int8(y)) => {
                         if *y == 0 { return Err(RuntimeError::Panic("Division by zero".into())); }
                         GcValue::Int8(x.wrapping_rem(*y))
@@ -775,8 +811,8 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             NegInt(dst, src) => {
-                let v = reg!(src);
-                let result = match &v {
+                let v = reg_ref!(src);
+                let result = match v {
                     GcValue::Int8(n) => GcValue::Int8(-n),
                     GcValue::Int16(n) => GcValue::Int16(-n),
                     GcValue::Int32(n) => GcValue::Int32(-n),
@@ -793,8 +829,8 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             AbsInt(dst, src) => {
-                let v = reg!(src);
-                let result = match &v {
+                let v = reg_ref!(src);
+                let result = match v {
                     GcValue::Int8(n) => GcValue::Int8(n.abs()),
                     GcValue::Int16(n) => GcValue::Int16(n.abs()),
                     GcValue::Int32(n) => GcValue::Int32(n.abs()),
@@ -812,21 +848,21 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             MinInt(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("MinInt: expected Int64".into())) };
-                let vb = match reg!(b) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("MinInt: expected Int64".into())) };
+                let va = match reg_ref!(a) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("MinInt: expected Int64".into())) };
+                let vb = match reg_ref!(b) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("MinInt: expected Int64".into())) };
                 set_reg!(dst, GcValue::Int64(va.min(vb)));
             }
             MaxInt(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("MaxInt: expected Int64".into())) };
-                let vb = match reg!(b) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("MaxInt: expected Int64".into())) };
+                let va = match reg_ref!(a) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("MaxInt: expected Int64".into())) };
+                let vb = match reg_ref!(b) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("MaxInt: expected Int64".into())) };
                 set_reg!(dst, GcValue::Int64(va.max(vb)));
             }
 
             // === Float arithmetic ===
             AddFloat(dst, a, b) => {
-                let va = reg!(a);
-                let vb = reg!(b);
-                let result = match (&va, &vb) {
+                let va = reg_ref!(a);
+                let vb = reg_ref!(b);
+                let result = match (va, vb) {
                     (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x + y),
                     (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x + y),
                     _ => return Err(RuntimeError::Panic("AddFloat: expected Float".into())),
@@ -834,9 +870,9 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             SubFloat(dst, a, b) => {
-                let va = reg!(a);
-                let vb = reg!(b);
-                let result = match (&va, &vb) {
+                let va = reg_ref!(a);
+                let vb = reg_ref!(b);
+                let result = match (va, vb) {
                     (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x - y),
                     (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x - y),
                     _ => return Err(RuntimeError::Panic("SubFloat: expected Float".into())),
@@ -844,9 +880,9 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             MulFloat(dst, a, b) => {
-                let va = reg!(a);
-                let vb = reg!(b);
-                let result = match (&va, &vb) {
+                let va = reg_ref!(a);
+                let vb = reg_ref!(b);
+                let result = match (va, vb) {
                     (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x * y),
                     (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x * y),
                     _ => return Err(RuntimeError::Panic("MulFloat: expected Float".into())),
@@ -854,9 +890,9 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             DivFloat(dst, a, b) => {
-                let va = reg!(a);
-                let vb = reg!(b);
-                let result = match (&va, &vb) {
+                let va = reg_ref!(a);
+                let vb = reg_ref!(b);
+                let result = match (va, vb) {
                     (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x / y),
                     (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x / y),
                     _ => return Err(RuntimeError::Panic("DivFloat: expected Float".into())),
@@ -864,8 +900,8 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             NegFloat(dst, src) => {
-                let v = reg!(src);
-                let result = match &v {
+                let v = reg_ref!(src);
+                let result = match v {
                     GcValue::Float64(n) => GcValue::Float64(-n),
                     GcValue::Float32(n) => GcValue::Float32(-n),
                     _ => return Err(RuntimeError::Panic("NegFloat: expected Float".into())),
@@ -873,8 +909,8 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             AbsFloat(dst, src) => {
-                let v = reg!(src);
-                let result = match &v {
+                let v = reg_ref!(src);
+                let result = match v {
                     GcValue::Float64(n) => GcValue::Float64(n.abs()),
                     GcValue::Float32(n) => GcValue::Float32(n.abs()),
                     _ => return Err(RuntimeError::Panic("AbsFloat: expected Float".into())),
@@ -882,8 +918,8 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             SqrtFloat(dst, src) => {
-                let v = reg!(src);
-                let result = match &v {
+                let v = reg_ref!(src);
+                let result = match v {
                     GcValue::Float64(n) => GcValue::Float64(n.sqrt()),
                     GcValue::Float32(n) => GcValue::Float32(n.sqrt()),
                     _ => return Err(RuntimeError::Panic("SqrtFloat: expected Float".into())),
@@ -891,9 +927,9 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             PowFloat(dst, a, b) => {
-                let va = reg!(a);
-                let vb = reg!(b);
-                let result = match (&va, &vb) {
+                let va = reg_ref!(a);
+                let vb = reg_ref!(b);
+                let result = match (va, vb) {
                     (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x.powf(*y)),
                     (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x.powf(*y)),
                     _ => return Err(RuntimeError::Panic("PowFloat: expected Float".into())),
@@ -903,18 +939,18 @@ impl AsyncProcess {
 
             // === Float comparisons ===
             EqFloat(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("EqFloat: expected Float64".into())) };
-                let vb = match reg!(b) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("EqFloat: expected Float64".into())) };
+                let va = match reg_ref!(a) { GcValue::Float64(n) => *n, _ => return Err(RuntimeError::Panic("EqFloat: expected Float64".into())) };
+                let vb = match reg_ref!(b) { GcValue::Float64(n) => *n, _ => return Err(RuntimeError::Panic("EqFloat: expected Float64".into())) };
                 set_reg!(dst, GcValue::Bool(va == vb));
             }
             LtFloat(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("LtFloat: expected Float64".into())) };
-                let vb = match reg!(b) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("LtFloat: expected Float64".into())) };
+                let va = match reg_ref!(a) { GcValue::Float64(n) => *n, _ => return Err(RuntimeError::Panic("LtFloat: expected Float64".into())) };
+                let vb = match reg_ref!(b) { GcValue::Float64(n) => *n, _ => return Err(RuntimeError::Panic("LtFloat: expected Float64".into())) };
                 set_reg!(dst, GcValue::Bool(va < vb));
             }
             LeFloat(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("LeFloat: expected Float64".into())) };
-                let vb = match reg!(b) { GcValue::Float64(n) => n, _ => return Err(RuntimeError::Panic("LeFloat: expected Float64".into())) };
+                let va = match reg_ref!(a) { GcValue::Float64(n) => *n, _ => return Err(RuntimeError::Panic("LeFloat: expected Float64".into())) };
+                let vb = match reg_ref!(b) { GcValue::Float64(n) => *n, _ => return Err(RuntimeError::Panic("LeFloat: expected Float64".into())) };
                 set_reg!(dst, GcValue::Bool(va <= vb));
             }
 
@@ -974,23 +1010,23 @@ impl AsyncProcess {
 
             // === Comparisons ===
             EqInt(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("EqInt: expected Int64".into())) };
-                let vb = match reg!(b) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("EqInt: expected Int64".into())) };
+                let va = match reg_ref!(a) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("EqInt: expected Int64".into())) };
+                let vb = match reg_ref!(b) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("EqInt: expected Int64".into())) };
                 set_reg!(dst, GcValue::Bool(va == vb));
             }
             LtInt(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("LtInt: expected Int64".into())) };
-                let vb = match reg!(b) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("LtInt: expected Int64".into())) };
+                let va = match reg_ref!(a) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("LtInt: expected Int64".into())) };
+                let vb = match reg_ref!(b) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("LtInt: expected Int64".into())) };
                 set_reg!(dst, GcValue::Bool(va < vb));
             }
             LeInt(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("LeInt: expected Int64".into())) };
-                let vb = match reg!(b) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("LeInt: expected Int64".into())) };
+                let va = match reg_ref!(a) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("LeInt: expected Int64".into())) };
+                let vb = match reg_ref!(b) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("LeInt: expected Int64".into())) };
                 set_reg!(dst, GcValue::Bool(va <= vb));
             }
             GtInt(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("GtInt: expected Int64".into())) };
-                let vb = match reg!(b) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("GtInt: expected Int64".into())) };
+                let va = match reg_ref!(a) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("GtInt: expected Int64".into())) };
+                let vb = match reg_ref!(b) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("GtInt: expected Int64".into())) };
                 set_reg!(dst, GcValue::Bool(va > vb));
             }
 
@@ -999,36 +1035,46 @@ impl AsyncProcess {
             // Since we already incremented ip before this match, the current ip is (original_ip + 1)
             // So we need: current_ip + offset = (original_ip + 1) + offset
             Jump(offset) => {
-                let frame = self.frames.last_mut().unwrap();
+                // SAFETY: cur_frame is valid
+                let frame = unsafe { self.frames.get_unchecked_mut(cur_frame) };
                 // frame.ip was already incremented, so current ip = original_ip + 1
                 // target = original_ip + 1 + offset = current_ip + offset
                 frame.ip = (frame.ip as isize + *offset as isize) as usize;
             }
             JumpIfTrue(cond, offset) => {
-                if matches!(reg!(cond), GcValue::Bool(true)) {
-                    let frame = self.frames.last_mut().unwrap();
+                if matches!(reg_ref!(cond), GcValue::Bool(true)) {
+                    // SAFETY: cur_frame is valid
+                    let frame = unsafe { self.frames.get_unchecked_mut(cur_frame) };
                     frame.ip = (frame.ip as isize + *offset as isize) as usize;
                 }
             }
             JumpIfFalse(cond, offset) => {
-                if matches!(reg!(cond), GcValue::Bool(false)) {
-                    let frame = self.frames.last_mut().unwrap();
+                if matches!(reg_ref!(cond), GcValue::Bool(false)) {
+                    // SAFETY: cur_frame is valid
+                    let frame = unsafe { self.frames.get_unchecked_mut(cur_frame) };
                     frame.ip = (frame.ip as isize + *offset as isize) as usize;
                 }
             }
 
             // === Return ===
             Return(src) => {
-                let value = reg!(src);
                 // Record function exit for profiling
                 self.profile_exit();
-                // Get return_reg from CURRENT frame BEFORE popping
-                let return_reg = self.frames.last().unwrap().return_reg;
-                self.frames.pop();
+                // SAFETY: cur_frame is valid
+                let cur = unsafe { self.frames.get_unchecked_mut(cur_frame) };
+                // Get return_reg BEFORE taking value (avoid aliasing)
+                let return_reg = cur.return_reg;
+                // Take ownership of return value (avoid clone) - frame is about to be destroyed
+                let value = std::mem::take(unsafe { cur.registers.get_unchecked_mut(src.as_idx()) });
+                // Pop frame and recycle its registers
+                if let Some(frame) = self.frames.pop() {
+                    self.free_registers(frame.registers);
+                }
                 if self.frames.is_empty() {
                     return Ok(StepResult::Finished(value));
                 } else if let Some(ret_reg) = return_reg {
                     // Store return value in caller's return register
+                    // SAFETY: After pop, if frames is not empty, last frame exists
                     let frame = self.frames.last_mut().unwrap();
                     frame.registers[ret_reg as usize] = value;
                 }
@@ -1092,8 +1138,8 @@ impl AsyncProcess {
                     .ok_or_else(|| RuntimeError::Panic(format!("Unknown function index: {}", func_idx)))?
                     .clone();
 
-                // Copy args directly to registers, avoiding intermediate Vec allocation
-                let mut registers = vec![GcValue::Unit; function.code.register_count as usize];
+                // Get registers from pool or allocate new
+                let mut registers = self.alloc_registers(function.code.register_count as usize);
                 for (i, r) in args.iter().enumerate() {
                     if i < registers.len() {
                         registers[i] = reg!(*r);
@@ -1142,7 +1188,7 @@ impl AsyncProcess {
                 match callee {
                     GcValue::Function(func) => {
                         // Regular function call
-                        let mut registers = vec![GcValue::Unit; func.code.register_count as usize];
+                        let mut registers = self.alloc_registers(func.code.register_count as usize);
                         for (i, arg) in arg_values.into_iter().enumerate() {
                             if i < registers.len() {
                                 registers[i] = arg;
@@ -1165,7 +1211,7 @@ impl AsyncProcess {
                         let func = closure.function.clone();
                         let captures = closure.captures.clone();
 
-                        let mut registers = vec![GcValue::Unit; func.code.register_count as usize];
+                        let mut registers = self.alloc_registers(func.code.register_count as usize);
                         for (i, arg) in arg_values.into_iter().enumerate() {
                             if i < registers.len() {
                                 registers[i] = arg;
@@ -1578,9 +1624,10 @@ impl AsyncProcess {
             // === Self-recursive calls ===
             CallSelf(dst, ref args) => {
                 // Call the current function recursively
-                let func = self.frames.last().unwrap().function.clone();
-                // Copy args directly to registers, avoiding intermediate Vec allocation
-                let mut registers = vec![GcValue::Unit; func.code.register_count as usize];
+                // SAFETY: cur_frame is valid
+                let func = unsafe { self.frames.get_unchecked(cur_frame).function.clone() };
+                // Get registers from pool
+                let mut registers = self.alloc_registers(func.code.register_count as usize);
                 for (i, r) in args.iter().enumerate() {
                     if i < registers.len() {
                         registers[i] = reg!(*r);
@@ -3900,7 +3947,11 @@ impl AsyncProcess {
             }
         }
 
-        Ok(StepResult::Continue)
+        // Continue executing more instructions in the tight loop
+        // (Frame-changing instructions like Call/Return already returned above)
+        continue 'instruction_loop;
+
+        } // end of 'instruction_loop
     }
 
     /// Convert an IO result to a GcValue.

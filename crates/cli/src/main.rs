@@ -419,18 +419,19 @@ fn main() -> ExitCode {
     let mut profiling_enabled = false; // Enable function call profiling
 
     let mut i = 1;
+    let mut file_idx: Option<usize> = None;
     while i < args.len() {
         let arg = &args[i];
         if arg.starts_with("--") || arg.starts_with("-") {
             if arg == "--help" || arg == "-h" {
-                println!("Usage: nostos [options] <command|file.nos> [args...]");
+                println!("Usage: nostos [options] <command|file.nos> [options...]");
                 println!();
                 println!("Commands:");
                 println!("  repl           Start the interactive REPL");
                 println!();
                 println!("Run a Nostos program file or start the REPL.");
                 println!();
-                println!("Options:");
+                println!("Options (can appear before or after the file):");
                 println!("  --help           Show this help message");
                 println!("  --version        Show version information");
                 println!("  --no-jit         Disable JIT compilation (for debugging)");
@@ -490,16 +491,22 @@ fn main() -> ExitCode {
             }
             i += 1;
         } else {
-            file_idx = i;
-            break;
+            // First non-flag argument is the file
+            if file_idx.is_none() {
+                file_idx = Some(i);
+            }
+            i += 1;
         }
     }
 
-    if file_idx >= args.len() {
-        eprintln!("Error: No input file specified");
-        eprintln!("Use 'nostos repl' to start the interactive REPL");
-        return ExitCode::FAILURE;
-    }
+    let file_idx = match file_idx {
+        Some(idx) => idx,
+        None => {
+            eprintln!("Error: No input file specified");
+            eprintln!("Use 'nostos repl' to start the interactive REPL");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let file_path_arg = &args[file_idx];
     let input_path = std::path::Path::new(file_path_arg);

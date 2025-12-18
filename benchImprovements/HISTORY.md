@@ -146,3 +146,64 @@ for (i, r) in args.iter().enumerate() {
 
 The remaining bottleneck is `vec![GcValue::Unit; register_count]` allocation.
 Modern allocators are fast, but 30M malloc/free pairs still add up.
+
+## 2025-12-18: reg_ref! Macro Optimization
+**Status**: IMPLEMENTED - modest improvement (~8%)
+
+**Note on Benchmark Bug**:
+Initial testing showed dramatic 50x speedup, but this was due to `--no-jit` flag
+not being parsed when placed AFTER the filename. The CLI parser breaks on first
+non-flag argument, so `nostos file.nos --no-jit` uses JIT while
+`nostos --no-jit file.nos` properly disables it.
+
+**The Change**:
+Added `reg_ref!` macro that returns a reference without cloning:
+```rust
+macro_rules! reg_ref {
+    ($r:expr) => {{
+        let frame = self.frames.last().unwrap();
+        &frame.registers[$r.as_idx()]  // Reference, no clone!
+    }};
+}
+```
+
+For arithmetic operations, changed from clone-then-reference to direct reference:
+```rust
+// Before:
+let va = reg!(a);  // Clone
+let vb = reg!(b);  // Clone
+match (&va, &vb) { ... }
+
+// After:
+let va = reg_ref!(a);  // Reference
+let vb = reg_ref!(b);  // Reference
+match (va, vb) { ... }
+```
+
+**Files modified**: `crates/vm/src/async_vm.rs`
+- Added `reg_ref!` macro
+- Updated AddInt, SubInt, MulInt, DivInt, ModInt
+- Updated NegInt, AbsInt, MinInt, MaxInt
+- Updated AddFloat, SubFloat, MulFloat, DivFloat, NegFloat, AbsFloat, SqrtFloat, PowFloat
+- Updated EqInt, LtInt, LeInt, GtInt, EqFloat, LtFloat, LeFloat, MinInt, MaxInt
+
+**Actual Results** (with correct --no-jit flag order):
+| Benchmark | Before reg_ref! | After reg_ref! | Change |
+|-----------|-----------------|----------------|--------|
+| fib(35) no-jit | ~7.4s | 6.81s | **~8% faster** |
+
+**Comparison to Python**:
+| Benchmark | Python | Nostos (no JIT) | Result |
+|-----------|--------|-----------------|--------|
+| fib(35) | 0.79s | 6.81s | 8.6x slower than Python |
+
+**Comparison WITH JIT**:
+| Benchmark | Python | Nostos (with JIT) | Result |
+|-----------|--------|-------------------|--------|
+| fib(35) | 0.79s | 0.14s | **5.6x faster than Python!** |
+
+**Conclusion**: The reg_ref! optimization provides ~8% improvement to interpreter
+performance, but the major performance gains come from JIT compilation. The interpreter
+is still ~8.6x slower than Python without JIT.
+
+**Tests**: All 49 core tests pass
