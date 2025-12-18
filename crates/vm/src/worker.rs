@@ -106,8 +106,10 @@ pub struct WorkerPool {
     /// Shutdown flag
     shutdown: Arc<AtomicBool>,
     /// Number of active workers
+    #[allow(dead_code)]
     active_workers: Arc<AtomicUsize>,
     /// Configuration
+    #[allow(dead_code)]
     config: WorkerPoolConfig,
     /// Result from main process (pid 1) - uses MainResult for thread safety
     main_result: Arc<Mutex<MainResult>>,
@@ -279,6 +281,7 @@ struct Worker {
     /// Main process result (thread-safe)
     main_result: Arc<Mutex<MainResult>>,
     /// Configuration
+    #[allow(dead_code)]
     config: WorkerPoolConfig,
 }
 
@@ -1237,6 +1240,7 @@ impl Worker {
     /// 1. Check if current function has JIT code
     /// 2. If yes, call native function directly
     /// 3. If no, interpret bytecode
+    #[allow(dead_code)]
     fn execute_step_jit_aware(&self, pid: Pid) -> Result<ProcessResult, RuntimeError> {
         // Get current frame info
         let frame_info = self.scheduler.with_process(pid, |proc| {
@@ -3295,6 +3299,7 @@ enum BatchResult {
     /// Process finished with value
     Finished(GcValue),
     /// Process is waiting for message
+    #[allow(dead_code)]
     Waiting,
 }
 

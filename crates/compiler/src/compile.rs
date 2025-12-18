@@ -7,13 +7,12 @@
 //! - Type-directed code generation
 
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 
 use nostos_syntax::ast::*;
 use nostos_vm::*;
-use nostos_types::{TypeEnv, infer::InferCtx};
+use nostos_types::infer::InferCtx;
 
 /// Metadata for a built-in function.
 pub struct BuiltinInfo {
@@ -520,6 +519,7 @@ pub struct Compiler {
     /// Known constructors (for type checking)
     known_constructors: HashSet<String>,
     /// Current scope depth
+    #[allow(dead_code)]
     scope_depth: usize,
     /// Current module path (e.g., ["Foo", "Bar"] for module Foo.Bar)
     module_path: Vec<String>,
@@ -638,8 +638,10 @@ pub struct FnMvarAccess {
 #[derive(Clone)]
 struct LoopContext {
     /// Address of loop start (for back-jump at end of loop)
+    #[allow(dead_code)]
     start_addr: usize,
     /// Address where continue should jump to (may differ from start_addr for for loops)
+    #[allow(dead_code)]
     continue_addr: usize,
     /// Addresses of continue jumps to patch
     continue_jumps: Vec<usize>,
@@ -4721,7 +4723,7 @@ impl Compiler {
             }
 
             // Spawn: spawn(func), spawn(() => expr), or spawn { block }
-            Expr::Spawn(kind, func_expr, args, span) => {
+            Expr::Spawn(kind, func_expr, args, _span) => {
                 // If func_expr is a Block, wrap it in a zero-param Lambda (thunk)
                 let effective_func = match func_expr.as_ref() {
                     Expr::Block(_, block_span) => {

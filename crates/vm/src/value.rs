@@ -437,7 +437,7 @@ impl RuntimeError {
             RuntimeError::IOError(msg) => {
                 ("IOError", msg.clone())
             }
-            RuntimeError::WithStackTrace { error, stack_trace } => {
+            RuntimeError::WithStackTrace { error, stack_trace: _stack_trace } => {
                 // Delegate to the inner error, but append stack trace to message
                 let inner = error.to_exception_value();
                 // For now, just return the inner error's value

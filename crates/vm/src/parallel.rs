@@ -13,7 +13,7 @@
 
 use std::cell::RefCell;
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -33,7 +33,7 @@ thread_local! {
 
 use tokio::sync::mpsc as tokio_mpsc;
 
-use crate::gc::{GcConfig, GcList, GcMapKey, GcNativeFn, GcValue, Heap, InlineOp};
+use crate::gc::{GcConfig, GcList, GcNativeFn, GcValue, Heap, InlineOp};
 use crate::io_runtime::{IoRequest, IoRuntime};
 use crate::process::{CallFrame, ExitReason, IoResponseValue, Process, ProcessState, ThreadSafeMapKey, ThreadSafeValue};
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, TypeValue, Value};
@@ -253,10 +253,12 @@ pub struct ParallelVM {
     /// Number of threads
     num_threads: usize,
     /// Next thread for round-robin initial spawn
+    #[allow(dead_code)]
     next_thread: AtomicU64,
     /// Configuration
     config: ParallelConfig,
     /// IO runtime for async file/HTTP operations
+    #[allow(dead_code)]
     io_runtime: Option<IoRuntime>,
 }
 
@@ -679,6 +681,7 @@ impl SendableValue {
 /// Result from a thread when it finishes.
 #[derive(Debug)]
 struct ThreadResult {
+    #[allow(dead_code)]
     thread_id: u16,
     main_result: Option<Result<SendableValue, String>>,
     /// Captured output from the main process (println, print, etc.)
@@ -2144,7 +2147,7 @@ impl ParallelVM {
                         for item in items {
                             match item {
                                 GcValue::Int64(n) => result *= n,
-                                GcValue::Float64(f) => return Ok(GcValue::Float64(items.iter().fold(1.0, |acc, v| {
+                                GcValue::Float64(_f) => return Ok(GcValue::Float64(items.iter().fold(1.0, |acc, v| {
                                     match v {
                                         GcValue::Float64(x) => acc * x,
                                         GcValue::Int64(x) => acc * (*x as f64),
@@ -2806,7 +2809,7 @@ impl ParallelVM {
                 // Clone keys first to release borrow on heap
                 let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
                 let keys_cloned: Vec<_> = map.entries.keys().cloned().collect();
-                drop(map);
+                let _ = map;
                 // Now convert to GcValues
                 let keys: Vec<GcValue> = keys_cloned.into_iter().map(|k| k.to_gc_value(heap)).collect();
                 Ok(GcValue::List(heap.make_list(keys)))
@@ -2965,7 +2968,7 @@ impl ParallelVM {
                 // Clone items first to release borrow on heap
                 let set = heap.get_set(set_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
                 let items_cloned: Vec<_> = set.items.iter().cloned().collect();
-                drop(set);
+                let _ = set;
                 // Now convert to GcValues
                 let elements: Vec<GcValue> = items_cloned.into_iter().map(|k| k.to_gc_value(heap)).collect();
                 Ok(GcValue::List(heap.make_list(elements)))
@@ -6099,7 +6102,7 @@ impl ThreadWorker {
                         let closure = proc.heap.get_closure(ptr).unwrap();
                         let func = closure.function.clone();
                         let captures = closure.captures.clone();
-                        drop(proc);
+                        let _ = proc;
 
                         // Fast path: use cached InlineOp for simple binary closures
                         if arg_values.len() == 2 && captures.is_empty() && inline_op != InlineOp::None {
@@ -6608,7 +6611,7 @@ impl ThreadWorker {
 
             ProcessTime(dst, pid_reg) => {
                 let target_pid = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*pid_reg) {
                         GcValue::Pid(p) => Pid(*p),
                         _ => return Err(RuntimeError::TypeError {
@@ -6637,7 +6640,7 @@ impl ThreadWorker {
 
             ProcessAlive(dst, pid_reg) => {
                 let target_pid = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*pid_reg) {
                         GcValue::Pid(p) => Pid(*p),
                         _ => return Err(RuntimeError::TypeError {
@@ -6668,7 +6671,7 @@ impl ThreadWorker {
 
             ProcessInfo(dst, pid_reg) => {
                 let target_pid = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*pid_reg) {
                         GcValue::Pid(p) => Pid(*p),
                         _ => return Err(RuntimeError::TypeError {
@@ -6723,7 +6726,7 @@ impl ThreadWorker {
 
             ProcessKill(dst, pid_reg) => {
                 let target_pid = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*pid_reg) {
                         GcValue::Pid(p) => Pid(*p),
                         _ => return Err(RuntimeError::TypeError {
@@ -6878,7 +6881,7 @@ impl ThreadWorker {
 
             ExecReadLine(dst, handle_reg) => {
                 let handle = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*handle_reg) {
                         GcValue::Int64(h) => *h as u64,
                         _ => return Err(RuntimeError::TypeError {
@@ -6908,7 +6911,7 @@ impl ThreadWorker {
 
             ExecReadStderr(dst, handle_reg) => {
                 let handle = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*handle_reg) {
                         GcValue::Int64(h) => *h as u64,
                         _ => return Err(RuntimeError::TypeError {
@@ -6938,7 +6941,7 @@ impl ThreadWorker {
 
             ExecWrite(dst, handle_reg, data_reg) => {
                 let handle = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*handle_reg) {
                         GcValue::Int64(h) => *h as u64,
                         _ => return Err(RuntimeError::TypeError {
@@ -6986,7 +6989,7 @@ impl ThreadWorker {
 
             ExecWait(dst, handle_reg) => {
                 let handle = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*handle_reg) {
                         GcValue::Int64(h) => *h as u64,
                         _ => return Err(RuntimeError::TypeError {
@@ -7016,7 +7019,7 @@ impl ThreadWorker {
 
             ExecKill(dst, handle_reg) => {
                 let handle = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*handle_reg) {
                         GcValue::Int64(h) => *h as u64,
                         _ => return Err(RuntimeError::TypeError {
@@ -7516,7 +7519,7 @@ impl ThreadWorker {
             // === HTTP Server Operations ===
             ServerBind(dst, port_reg) => {
                 let port = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*port_reg) {
                         GcValue::Int64(p) => *p as u16,
                         _ => return Err(RuntimeError::TypeError {
@@ -7546,7 +7549,7 @@ impl ThreadWorker {
 
             ServerAccept(dst, handle_reg) => {
                 let handle = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*handle_reg) {
                         GcValue::Int64(h) => *h as u64,
                         _ => return Err(RuntimeError::TypeError {
@@ -7650,7 +7653,7 @@ impl ThreadWorker {
 
             ServerClose(dst, handle_reg) => {
                 let handle = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*handle_reg) {
                         GcValue::Int64(h) => *h as u64,
                         _ => return Err(RuntimeError::TypeError {
@@ -7823,7 +7826,7 @@ impl ThreadWorker {
                 // Convert list of bytes to string
                 // Extract bytes list with immutable borrow
                 let bytes = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*bytes_reg) {
                         GcValue::List(list) => {
                             let mut bytes = Vec::new();
@@ -7949,7 +7952,7 @@ impl ThreadWorker {
 
             FileRead(dst, handle_reg, size_reg) => {
                 let (handle, size) = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     let handle = match reg!(*handle_reg) {
                         GcValue::Int64(n) => *n as u64,
                         _ => return Err(RuntimeError::TypeError {
@@ -7983,7 +7986,7 @@ impl ThreadWorker {
 
             FileReadLine(dst, handle_reg) => {
                 let handle = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*handle_reg) {
                         GcValue::Int64(n) => *n as u64,
                         _ => return Err(RuntimeError::TypeError {
@@ -8009,7 +8012,7 @@ impl ThreadWorker {
 
             FileFlush(dst, handle_reg) => {
                 let handle = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*handle_reg) {
                         GcValue::Int64(n) => *n as u64,
                         _ => return Err(RuntimeError::TypeError {
@@ -8035,7 +8038,7 @@ impl ThreadWorker {
 
             FileClose(dst, handle_reg) => {
                 let handle = {
-                    let proc = self.get_process(local_id).unwrap();
+                    let _proc = self.get_process(local_id).unwrap();
                     match reg!(*handle_reg) {
                         GcValue::Int64(n) => *n as u64,
                         _ => return Err(RuntimeError::TypeError {
@@ -8515,505 +8518,6 @@ impl ThreadWorker {
                 }
             }
 
-            // === HTTP Client Operations ===
-            HttpGet(dst, url_reg) => {
-                let url = {
-                    let proc = self.get_process(local_id).unwrap();
-                    match reg!(*url_reg) {
-                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                            .map(|s| s.data.clone())
-                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "String".to_string(),
-                            found: "non-string".to_string(),
-                        }),
-                    }
-                };
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                if let Some(sender) = &self.shared.io_sender {
-                    let request = crate::io_runtime::IoRequest::HttpGet {
-                        url,
-                        response: tx,
-                    };
-                    if sender.send(request).is_err() {
-                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
-                    }
-                    let proc = self.get_process_mut(local_id).unwrap();
-                    proc.start_io_wait(rx, *dst);
-                    self.io_waiting.push(local_id);
-                    return Ok(StepResult::Waiting);
-                } else {
-                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
-                }
-            }
-
-            HttpPost(dst, url_reg, body_reg) => {
-                let (url, body) = {
-                    let proc = self.get_process(local_id).unwrap();
-                    let url = match reg!(*url_reg) {
-                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                            .map(|s| s.data.clone())
-                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "String".to_string(),
-                            found: "non-string".to_string(),
-                        }),
-                    };
-                    let body = match reg!(*body_reg) {
-                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                            .map(|s| s.data.as_bytes().to_vec()),
-                        GcValue::Unit => None,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "String or ()".to_string(),
-                            found: "other".to_string(),
-                        }),
-                    };
-                    (url, body)
-                };
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                if let Some(sender) = &self.shared.io_sender {
-                    let request = crate::io_runtime::IoRequest::HttpRequest {
-                        request: crate::io_runtime::HttpRequest {
-                            method: crate::io_runtime::HttpMethod::Post,
-                            url,
-                            headers: vec![],
-                            body,
-                            timeout_ms: None,
-                        },
-                        response: tx,
-                    };
-                    if sender.send(request).is_err() {
-                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
-                    }
-                    let proc = self.get_process_mut(local_id).unwrap();
-                    proc.start_io_wait(rx, *dst);
-                    self.io_waiting.push(local_id);
-                    return Ok(StepResult::Waiting);
-                } else {
-                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
-                }
-            }
-
-            HttpPut(dst, url_reg, body_reg) => {
-                let (url, body) = {
-                    let proc = self.get_process(local_id).unwrap();
-                    let url = match reg!(*url_reg) {
-                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                            .map(|s| s.data.clone())
-                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "String".to_string(),
-                            found: "non-string".to_string(),
-                        }),
-                    };
-                    let body = match reg!(*body_reg) {
-                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                            .map(|s| s.data.as_bytes().to_vec()),
-                        GcValue::Unit => None,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "String or ()".to_string(),
-                            found: "other".to_string(),
-                        }),
-                    };
-                    (url, body)
-                };
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                if let Some(sender) = &self.shared.io_sender {
-                    let request = crate::io_runtime::IoRequest::HttpRequest {
-                        request: crate::io_runtime::HttpRequest {
-                            method: crate::io_runtime::HttpMethod::Put,
-                            url,
-                            headers: vec![],
-                            body,
-                            timeout_ms: None,
-                        },
-                        response: tx,
-                    };
-                    if sender.send(request).is_err() {
-                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
-                    }
-                    let proc = self.get_process_mut(local_id).unwrap();
-                    proc.start_io_wait(rx, *dst);
-                    self.io_waiting.push(local_id);
-                    return Ok(StepResult::Waiting);
-                } else {
-                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
-                }
-            }
-
-            HttpDelete(dst, url_reg) => {
-                let url = {
-                    let proc = self.get_process(local_id).unwrap();
-                    match reg!(*url_reg) {
-                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                            .map(|s| s.data.clone())
-                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "String".to_string(),
-                            found: "non-string".to_string(),
-                        }),
-                    }
-                };
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                if let Some(sender) = &self.shared.io_sender {
-                    let request = crate::io_runtime::IoRequest::HttpRequest {
-                        request: crate::io_runtime::HttpRequest {
-                            method: crate::io_runtime::HttpMethod::Delete,
-                            url,
-                            headers: vec![],
-                            body: None,
-                            timeout_ms: None,
-                        },
-                        response: tx,
-                    };
-                    if sender.send(request).is_err() {
-                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
-                    }
-                    let proc = self.get_process_mut(local_id).unwrap();
-                    proc.start_io_wait(rx, *dst);
-                    self.io_waiting.push(local_id);
-                    return Ok(StepResult::Waiting);
-                } else {
-                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
-                }
-            }
-
-            HttpPatch(dst, url_reg, body_reg) => {
-                let (url, body) = {
-                    let proc = self.get_process(local_id).unwrap();
-                    let url = match reg!(*url_reg) {
-                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                            .map(|s| s.data.clone())
-                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "String".to_string(),
-                            found: "non-string".to_string(),
-                        }),
-                    };
-                    let body = match reg!(*body_reg) {
-                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                            .map(|s| s.data.as_bytes().to_vec()),
-                        GcValue::Unit => None,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "String or ()".to_string(),
-                            found: "other".to_string(),
-                        }),
-                    };
-                    (url, body)
-                };
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                if let Some(sender) = &self.shared.io_sender {
-                    let request = crate::io_runtime::IoRequest::HttpRequest {
-                        request: crate::io_runtime::HttpRequest {
-                            method: crate::io_runtime::HttpMethod::Patch,
-                            url,
-                            headers: vec![],
-                            body,
-                            timeout_ms: None,
-                        },
-                        response: tx,
-                    };
-                    if sender.send(request).is_err() {
-                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
-                    }
-                    let proc = self.get_process_mut(local_id).unwrap();
-                    proc.start_io_wait(rx, *dst);
-                    self.io_waiting.push(local_id);
-                    return Ok(StepResult::Waiting);
-                } else {
-                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
-                }
-            }
-
-            HttpHead(dst, url_reg) => {
-                let url = {
-                    let proc = self.get_process(local_id).unwrap();
-                    match reg!(*url_reg) {
-                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                            .map(|s| s.data.clone())
-                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "String".to_string(),
-                            found: "non-string".to_string(),
-                        }),
-                    }
-                };
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                if let Some(sender) = &self.shared.io_sender {
-                    let request = crate::io_runtime::IoRequest::HttpRequest {
-                        request: crate::io_runtime::HttpRequest {
-                            method: crate::io_runtime::HttpMethod::Head,
-                            url,
-                            headers: vec![],
-                            body: None,
-                            timeout_ms: None,
-                        },
-                        response: tx,
-                    };
-                    if sender.send(request).is_err() {
-                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
-                    }
-                    let proc = self.get_process_mut(local_id).unwrap();
-                    proc.start_io_wait(rx, *dst);
-                    self.io_waiting.push(local_id);
-                    return Ok(StepResult::Waiting);
-                } else {
-                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
-                }
-            }
-
-            HttpRequest(dst, method_reg, url_reg, headers_reg, body_reg) => {
-                let (method, url, headers, body) = {
-                    let proc = self.get_process(local_id).unwrap();
-
-                    // Get method string
-                    let method_str = match reg!(*method_reg) {
-                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                            .map(|s| s.data.clone())
-                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "String".to_string(),
-                            found: "non-string".to_string(),
-                        }),
-                    };
-                    let method = match method_str.to_uppercase().as_str() {
-                        "GET" => crate::io_runtime::HttpMethod::Get,
-                        "POST" => crate::io_runtime::HttpMethod::Post,
-                        "PUT" => crate::io_runtime::HttpMethod::Put,
-                        "DELETE" => crate::io_runtime::HttpMethod::Delete,
-                        "PATCH" => crate::io_runtime::HttpMethod::Patch,
-                        "HEAD" => crate::io_runtime::HttpMethod::Head,
-                        _ => return Err(RuntimeError::Panic(format!("Unknown HTTP method: {}", method_str))),
-                    };
-
-                    // Get URL
-                    let url = match reg!(*url_reg) {
-                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                            .map(|s| s.data.clone())
-                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "String".to_string(),
-                            found: "non-string".to_string(),
-                        }),
-                    };
-
-                    // Get headers (list of (name, value) tuples)
-                    let headers = match reg!(*headers_reg) {
-                        GcValue::List(list) => {
-                            let mut result = Vec::new();
-                            for item in list.data.iter().skip(list.start) {
-                                match item {
-                                    GcValue::Tuple(ptr) => {
-                                        if let Some(tuple) = proc.heap.get_tuple(*ptr) {
-                                            if tuple.items.len() >= 2 {
-                                                let name = match &tuple.items[0] {
-                                                    GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                                                        .map(|s| s.data.clone())
-                                                        .unwrap_or_default(),
-                                                    _ => String::new(),
-                                                };
-                                                let value = match &tuple.items[1] {
-                                                    GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                                                        .map(|s| s.data.clone())
-                                                        .unwrap_or_default(),
-                                                    _ => String::new(),
-                                                };
-                                                result.push((name, value));
-                                            }
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            result
-                        }
-                        GcValue::Unit => vec![],
-                        _ => vec![],
-                    };
-
-                    // Get body
-                    let body = match reg!(*body_reg) {
-                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                            .map(|s| s.data.as_bytes().to_vec()),
-                        GcValue::Unit => None,
-                        _ => None,
-                    };
-
-                    (method, url, headers, body)
-                };
-
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                if let Some(sender) = &self.shared.io_sender {
-                    let request = crate::io_runtime::IoRequest::HttpRequest {
-                        request: crate::io_runtime::HttpRequest {
-                            method,
-                            url,
-                            headers,
-                            body,
-                            timeout_ms: None,
-                        },
-                        response: tx,
-                    };
-                    if sender.send(request).is_err() {
-                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
-                    }
-                    let proc = self.get_process_mut(local_id).unwrap();
-                    proc.start_io_wait(rx, *dst);
-                    self.io_waiting.push(local_id);
-                    return Ok(StepResult::Waiting);
-                } else {
-                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
-                }
-            }
-
-            // === HTTP Server Operations ===
-            ServerBind(dst, port_reg) => {
-                let port = {
-                    let proc = self.get_process(local_id).unwrap();
-                    match reg!(*port_reg) {
-                        GcValue::Int64(n) => *n as u16,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "Int".to_string(),
-                            found: "non-int".to_string(),
-                        }),
-                    }
-                };
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                if let Some(sender) = &self.shared.io_sender {
-                    let request = crate::io_runtime::IoRequest::ServerBind {
-                        port,
-                        response: tx,
-                    };
-                    if sender.send(request).is_err() {
-                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
-                    }
-                    let proc = self.get_process_mut(local_id).unwrap();
-                    proc.start_io_wait(rx, *dst);
-                    self.io_waiting.push(local_id);
-                    return Ok(StepResult::Waiting);
-                } else {
-                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
-                }
-            }
-
-            ServerAccept(dst, handle_reg) => {
-                let handle = {
-                    let proc = self.get_process(local_id).unwrap();
-                    match reg!(*handle_reg) {
-                        GcValue::Int64(n) => *n as u64,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "Int".to_string(),
-                            found: "non-int".to_string(),
-                        }),
-                    }
-                };
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                if let Some(sender) = &self.shared.io_sender {
-                    let request = crate::io_runtime::IoRequest::ServerAccept {
-                        handle,
-                        response: tx,
-                    };
-                    if sender.send(request).is_err() {
-                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
-                    }
-                    let proc = self.get_process_mut(local_id).unwrap();
-                    proc.start_io_wait(rx, *dst);
-                    self.io_waiting.push(local_id);
-                    return Ok(StepResult::Waiting);
-                } else {
-                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
-                }
-            }
-
-            ServerRespond(dst, request_id_reg, status_reg, headers_reg, body_reg) => {
-                let (request_id, status, headers, body) = {
-                    let proc = self.get_process(local_id).unwrap();
-
-                    // Get request ID
-                    let request_id = match reg!(*request_id_reg) {
-                        GcValue::Int64(n) => *n as u64,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "Int".to_string(),
-                            found: "non-int".to_string(),
-                        }),
-                    };
-
-                    // Get status code
-                    let status = match reg!(*status_reg) {
-                        GcValue::Int64(n) => *n as u16,
-                        _ => return Err(RuntimeError::TypeError {
-                            expected: "Int".to_string(),
-                            found: "non-int".to_string(),
-                        }),
-                    };
-
-                    // Get headers (list of (name, value) tuples)
-                    let headers = match reg!(*headers_reg) {
-                        GcValue::List(list) => {
-                            let mut result = Vec::new();
-                            for item in list.data.iter().skip(list.start) {
-                                match item {
-                                    GcValue::Tuple(ptr) => {
-                                        if let Some(tuple) = proc.heap.get_tuple(*ptr) {
-                                            if tuple.items.len() >= 2 {
-                                                let name = match &tuple.items[0] {
-                                                    GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                                                        .map(|s| s.data.clone())
-                                                        .unwrap_or_default(),
-                                                    _ => String::new(),
-                                                };
-                                                let value = match &tuple.items[1] {
-                                                    GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                                                        .map(|s| s.data.clone())
-                                                        .unwrap_or_default(),
-                                                    _ => String::new(),
-                                                };
-                                                result.push((name, value));
-                                            }
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            result
-                        }
-                        GcValue::Unit => vec![],
-                        _ => vec![],
-                    };
-
-                    // Get body as bytes
-                    let body = match reg!(*body_reg) {
-                        GcValue::String(ptr) => proc.heap.get_string(*ptr)
-                            .map(|s| s.data.as_bytes().to_vec())
-                            .unwrap_or_default(),
-                        GcValue::Unit => Vec::new(),
-                        _ => Vec::new(),
-                    };
-
-                    (request_id, status, headers, body)
-                };
-
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                if let Some(sender) = &self.shared.io_sender {
-                    let request = crate::io_runtime::IoRequest::ServerRespond {
-                        request_id,
-                        status,
-                        headers,
-                        body,
-                        response: tx,
-                    };
-                    if sender.send(request).is_err() {
-                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
-                    }
-                    let proc = self.get_process_mut(local_id).unwrap();
-                    proc.start_io_wait(rx, *dst);
-                    self.io_waiting.push(local_id);
-                    return Ok(StepResult::Waiting);
-                } else {
-                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
-                }
-            }
-
             // === I/O ===
             Println(src) => {
                 // Get the value and display it first (immutable borrow)
@@ -9082,7 +8586,7 @@ impl ThreadWorker {
                         // This is safe because MVar values are copied anyway
                         let current_depth = *depth;
                         proc.held_mvar_locks.remove(&name);
-                        drop(proc);
+                        let _ = proc;
 
                         // Release the read lock
                         let var = self.shared.mvars.get(&name).unwrap();
@@ -9114,7 +8618,7 @@ impl ThreadWorker {
                 } else {
                     // Not held - try to acquire (need to access self.shared.mvars)
                     // Drop proc borrow first
-                    drop(proc);
+                    let _ = proc;
 
                     let var = self.shared.mvars.get(&name).unwrap();
                     use parking_lot::lock_api::RawRwLock as _;
@@ -10032,52 +9536,6 @@ impl ThreadWorker {
 
                         }
 
-            
-
-                        Decons(head, tail, list) => {
-
-                            let list_val = reg!(*list).clone();
-
-                            if let GcValue::List(l) = list_val {
-
-                                if let Some(h) = l.head() {
-
-                                    let t = l.tail();
-
-                                    // set_reg! macro might not handle multiple sets?
-
-                                    // set_reg! uses self.get_process_mut(local_id).unwrap()
-
-                                    // calling it twice is fine (scopes are separate statements)
-
-                                    set_reg!(*head, h.clone());
-
-                                    set_reg!(*tail, GcValue::List(t));
-
-                                } else {
-
-                                    return Err(RuntimeError::Panic("Cannot decons empty list".to_string()));
-
-                                }
-
-                            } else {
-
-                                let proc = self.get_process(local_id).unwrap();
-
-                                return Err(RuntimeError::TypeError {
-
-                                    expected: "List".to_string(),
-
-                                    found: list_val.type_name(&proc.heap).to_string(),
-
-                                });
-
-                            }
-
-                        }
-
-            
-
                         IsMap(dst, src) => {
 
                             let val = reg!(*src).clone();
@@ -10487,6 +9945,7 @@ impl ThreadWorker {
 /// Result of executing one instruction.
 enum StepResult {
     Continue,
+    #[allow(dead_code)]
     Yield,
     Waiting,
     Finished(GcValue),

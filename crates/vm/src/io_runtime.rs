@@ -16,7 +16,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
-use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::process::IoResponseValue;
 
@@ -293,10 +292,10 @@ pub enum IoRequest {
 }
 
 /// Open file state (held by the IO runtime)
+#[allow(dead_code)]
 struct OpenFile {
     file: tokio::fs::File,
     path: PathBuf,
-    #[allow(dead_code)]
     mode: FileMode,
 }
 
@@ -309,6 +308,7 @@ pub struct IoRuntime {
     /// Next file handle ID
     next_handle: AtomicU64,
     /// HTTP client for connection pooling
+    #[allow(dead_code)]
     http_client: reqwest::Client,
 }
 
@@ -366,6 +366,7 @@ impl IoRuntime {
         // HTTP Server state
         // Request type: (request_id, method, path, headers, body)
         type ServerRequest = (u64, String, String, Vec<(String, String)>, Vec<u8>);
+        #[allow(dead_code)]
         type ServerRequestTx = mpsc::UnboundedSender<ServerRequest>;
         type ServerRequestRx = mpsc::UnboundedReceiver<ServerRequest>;
 
@@ -377,7 +378,7 @@ impl IoRuntime {
         type ResponseSender = oneshot::Sender<(u16, Vec<(String, String)>, Vec<u8>)>;
         let pending_responses: Arc<Mutex<HashMap<u64, ResponseSender>>> = Arc::new(Mutex::new(HashMap::new()));
         let mut next_server_handle: u64 = 1;
-        let mut next_request_id: Arc<std::sync::atomic::AtomicU64> = Arc::new(std::sync::atomic::AtomicU64::new(1));
+        let next_request_id: Arc<std::sync::atomic::AtomicU64> = Arc::new(std::sync::atomic::AtomicU64::new(1));
 
         // Spawned process state
         // Each spawned process has optional stdin, buffered stdout/stderr readers
@@ -1021,6 +1022,7 @@ impl IoRuntime {
         }
     }
 
+    #[allow(dead_code)]
     async fn handle_file_open(
         path: &PathBuf,
         mode: FileMode,
@@ -1064,6 +1066,7 @@ impl IoRuntime {
         }
     }
 
+    #[allow(dead_code)]
     async fn handle_file_read(file: &mut tokio::fs::File, size: usize) -> IoResult<Vec<u8>> {
         use tokio::io::AsyncReadExt;
         let mut buf = vec![0u8; size];
@@ -1076,6 +1079,7 @@ impl IoRuntime {
         }
     }
 
+    #[allow(dead_code)]
     async fn handle_file_read_all(file: &mut tokio::fs::File) -> IoResult<Vec<u8>> {
         use tokio::io::AsyncReadExt;
         let mut buf = Vec::new();
@@ -1085,6 +1089,7 @@ impl IoRuntime {
         }
     }
 
+    #[allow(dead_code)]
     async fn handle_file_read_line(file: &mut tokio::fs::File) -> IoResult<Option<String>> {
         use tokio::io::{AsyncBufReadExt, BufReader};
         let mut reader = BufReader::new(file);
@@ -1096,6 +1101,7 @@ impl IoRuntime {
         }
     }
 
+    #[allow(dead_code)]
     async fn handle_file_write(file: &mut tokio::fs::File, data: &[u8]) -> IoResult<usize> {
         use tokio::io::AsyncWriteExt;
         match file.write(data).await {

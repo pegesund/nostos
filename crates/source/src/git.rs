@@ -219,6 +219,7 @@ pub fn rename_and_commit(
 }
 
 /// Check if repository has uncommitted changes
+#[allow(dead_code)]
 pub fn has_uncommitted_changes(nostos_dir: &Path) -> bool {
     let output = Command::new("git")
         .args(["status", "--porcelain"])

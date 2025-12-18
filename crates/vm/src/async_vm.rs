@@ -2198,31 +2198,6 @@ impl AsyncProcess {
                 set_reg!(dst, value);
             }
 
-            MakeTuple(dst, ref elements) => {
-                let items: Vec<GcValue> = elements.iter().map(|&r| reg!(r)).collect();
-                let ptr = self.heap.alloc_tuple(items);
-                set_reg!(dst, GcValue::Tuple(ptr));
-            }
-
-            GetTupleField(dst, tuple_reg, idx) => {
-                let ptr = match reg!(tuple_reg) {
-                    GcValue::Tuple(ptr) => ptr,
-                    other => return Err(RuntimeError::TypeError {
-                        expected: "Tuple".to_string(),
-                        found: format!("{:?}", other),
-                    }),
-                };
-                let item = self.heap.get_tuple(ptr)
-                    .and_then(|t| t.items.get(idx as usize).cloned());
-                match item {
-                    Some(val) => set_reg!(dst, val),
-                    None => return Err(RuntimeError::IndexOutOfBounds {
-                        index: idx as i64,
-                        length: 0,
-                    }),
-                }
-            }
-
             MakeSet(dst, ref elements) => {
                 let mut items = ImblHashSet::new();
                 for &r in elements.iter() {
@@ -2357,48 +2332,6 @@ impl AsyncProcess {
                         found: format!("{:?}", func_val),
                     }),
                 }
-            }
-
-            TailCallDirect(func_idx, ref args) => {
-                let func = self.shared.function_list.get(func_idx as usize)
-                    .ok_or_else(|| RuntimeError::Panic(format!("Unknown function index: {}", func_idx)))?
-                    .clone();
-                let arg_values: Vec<GcValue> = args.iter().map(|&r| reg!(r)).collect();
-                let return_reg = self.frames.last().unwrap().return_reg;
-                self.frames.pop();
-                let reg_count = func.code.register_count as usize;
-                let mut registers = vec![GcValue::Unit; reg_count.max(arg_values.len())];
-                for (i, arg) in arg_values.into_iter().enumerate() {
-                    registers[i] = arg;
-                }
-                self.frames.push(CallFrame {
-                    function: func,
-                    ip: 0,
-                    registers,
-                    captures: Vec::new(),
-                    return_reg,
-                });
-            }
-
-            TailCallSelf(ref args) => {
-                let func = self.frames.last()
-                    .ok_or_else(|| RuntimeError::Panic("No frame for TailCallSelf".into()))?
-                    .function.clone();
-                let return_reg = self.frames.last().unwrap().return_reg;
-                let arg_values: Vec<GcValue> = args.iter().map(|&r| reg!(r)).collect();
-                self.frames.pop();
-                let reg_count = func.code.register_count as usize;
-                let mut registers = vec![GcValue::Unit; reg_count.max(arg_values.len())];
-                for (i, arg) in arg_values.into_iter().enumerate() {
-                    registers[i] = arg;
-                }
-                self.frames.push(CallFrame {
-                    function: func,
-                    ip: 0,
-                    registers,
-                    captures: Vec::new(),
-                    return_reg,
-                });
             }
 
             // === Type conversions ===
@@ -4072,8 +4005,10 @@ pub struct AsyncVM {
     /// Shared state.
     shared: Arc<AsyncSharedState>,
     /// IO runtime.
+    #[allow(dead_code)]
     io_runtime: Option<IoRuntime>,
     /// Config.
+    #[allow(dead_code)]
     config: AsyncConfig,
 }
 
@@ -5434,7 +5369,7 @@ impl AsyncVM {
                         for item in items {
                             match item {
                                 GcValue::Int64(n) => result *= n,
-                                GcValue::Float64(f) => return Ok(GcValue::Float64(items.iter().fold(1.0, |acc, v| {
+                                GcValue::Float64(_f) => return Ok(GcValue::Float64(items.iter().fold(1.0, |acc, v| {
                                     match v {
                                         GcValue::Float64(x) => acc * x,
                                         GcValue::Int64(x) => acc * (*x as f64),
@@ -6096,7 +6031,7 @@ impl AsyncVM {
                 // Clone keys first to release borrow on heap
                 let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
                 let keys_cloned: Vec<_> = map.entries.keys().cloned().collect();
-                drop(map);
+                let _ = map;
                 // Now convert to GcValues
                 let keys: Vec<GcValue> = keys_cloned.into_iter().map(|k| k.to_gc_value(heap)).collect();
                 Ok(GcValue::List(heap.make_list(keys)))
@@ -6255,7 +6190,7 @@ impl AsyncVM {
                 // Clone items first to release borrow on heap
                 let set = heap.get_set(set_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
                 let items_cloned: Vec<_> = set.items.iter().cloned().collect();
-                drop(set);
+                let _ = set;
                 // Now convert to GcValues
                 let elements: Vec<GcValue> = items_cloned.into_iter().map(|k| k.to_gc_value(heap)).collect();
                 Ok(GcValue::List(heap.make_list(elements)))

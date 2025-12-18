@@ -809,7 +809,7 @@ impl HeapData {
                 }
                 ptrs
             }
-            HeapData::Set(set) => {
+            HeapData::Set(_set) => {
                 // Keys are inline, no pointers
                 vec![]
             }
@@ -1926,7 +1926,7 @@ impl Heap {
     }
 
     /// Deep copy a map key.
-    fn deep_copy_key(&mut self, key: &GcMapKey, source: &Heap) -> GcMapKey {
+    fn deep_copy_key(&mut self, key: &GcMapKey, _source: &Heap) -> GcMapKey {
         match key {
             GcMapKey::Unit => GcMapKey::Unit,
             GcMapKey::Bool(b) => GcMapKey::Bool(*b),

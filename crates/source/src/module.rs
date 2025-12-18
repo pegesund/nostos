@@ -12,6 +12,7 @@ pub fn module_path_to_string(path: &ModulePath) -> String {
 }
 
 /// Parse module path from string
+#[allow(dead_code)]
 pub fn module_path_from_string(s: &str) -> ModulePath {
     s.split('.').map(String::from).collect()
 }

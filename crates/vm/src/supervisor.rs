@@ -165,6 +165,7 @@ impl SupervisorConfig {
 struct ChildInfo {
     spec: ChildSpec,
     pid: Pid,
+    #[allow(dead_code)]
     monitor_ref: RefId,
 }
 
