@@ -11,6 +11,13 @@ main() = {
     j2 = jsonParse("123")
     assert_eq(j2, Number(123))
 
+    # Negative numbers
+    j2a = jsonParse("-42")
+    assert_eq(j2a, Number(-42))
+
+    j2b = jsonParse("-1")
+    assert_eq(j2b, Number(-1))
+
     j3 = jsonParse("\"hello\"")
     assert_eq(j3, String("hello"))
 
@@ -23,6 +30,10 @@ main() = {
     # Array
     j6 = jsonParse("[1, 2, 3]")
     assert_eq(j6, Array([Number(1), Number(2), Number(3)]))
+
+    # Array with negative numbers
+    j6a = jsonParse("[-1, 0, -99]")
+    assert_eq(j6a, Array([Number(-1), Number(0), Number(-99)]))
 
     # Object
     j7 = jsonParse("{\"key\": \"value\", \"num\": 42}")
