@@ -296,14 +296,18 @@ fn mvar_init_to_thread_safe(init: &MvarInitValue) -> ThreadSafeValue {
     }
 }
 
-/// Run program using the experimental tokio-based AsyncVM.
+/// Run program using the tokio-based AsyncVM.
 fn run_with_async_vm(
     compiler: &Compiler,
     entry_point_name: &str,
+    profiling_enabled: bool,
+    enable_jit: bool,
 ) -> ExitCode {
-    eprintln!("[AsyncVM] Using experimental tokio-based async VM");
 
-    let config = AsyncConfig::default();
+    let config = AsyncConfig {
+        profiling_enabled,
+        ..AsyncConfig::default()
+    };
     let mut vm = AsyncVM::new(config);
 
     // Register default native functions
@@ -329,8 +333,9 @@ fn run_with_async_vm(
         vm.register_mvar(name, initial_value);
     }
 
-    // JIT compile suitable functions
+    // JIT compile suitable functions (unless --no-jit was specified)
     let function_list = compiler.get_function_list();
+    if enable_jit {
     if let Ok(mut jit) = JitCompiler::new(JitConfig::default()) {
         for idx in 0..function_list.len() {
             jit.queue_compilation(idx as u16);
@@ -359,6 +364,7 @@ fn run_with_async_vm(
                 }
             }
         }
+    }
     }
 
     // Run the program
@@ -410,6 +416,7 @@ fn main() -> ExitCode {
     let mut debug_mode = false;
     let mut num_threads: usize = 0; // 0 = auto-detect
     let mut use_async_vm = true; // Use tokio-based async VM (default)
+    let mut profiling_enabled = false; // Enable function call profiling
 
     let mut i = 1;
     while i < args.len() {
@@ -431,6 +438,7 @@ fn main() -> ExitCode {
                 println!("  --json-errors    Output errors as JSON (for debugger integration)");
                 println!("  --threads N      Use N worker threads (default: all CPUs)");
                 println!("  --legacy-vm      Use legacy parallel VM (for debugging)");
+                println!("  --profile        Enable function call profiling (disables JIT)");
                 println!();
                 println!("REPL usage:");
                 println!("  nostos repl              Start interactive REPL");
@@ -471,6 +479,12 @@ fn main() -> ExitCode {
             }
             if arg == "--legacy-vm" {
                 use_async_vm = false;
+                i += 1;
+                continue;
+            }
+            if arg == "--profile" {
+                profiling_enabled = true;
+                enable_jit = false; // Profiling requires JIT to be disabled for accurate results
                 i += 1;
                 continue;
             }
@@ -686,7 +700,7 @@ fn main() -> ExitCode {
 
     // Use AsyncVM by default (use --legacy-vm to use old ParallelVM)
     if use_async_vm {
-        return run_with_async_vm(&compiler, &entry_point_name);
+        return run_with_async_vm(&compiler, &entry_point_name, profiling_enabled, enable_jit);
     }
 
     // Create legacy ParallelVM (only if --legacy-vm flag is set)

@@ -22,6 +22,147 @@ use crate::gc::{GcConfig, GcValue, Heap, RawGcPtr, InlineOp, GcNativeFn, GcMapKe
 use crate::io_runtime::IoResult;
 use crate::value::{FunctionValue, Pid, RefId, Reg};
 
+// ============================================================================
+// Profiling Support
+// ============================================================================
+
+/// Statistics for a single function.
+#[derive(Clone, Debug, Default)]
+pub struct FunctionStats {
+    /// Number of times this function was called.
+    pub call_count: u64,
+    /// Total time spent in this function (nanoseconds).
+    pub total_time_ns: u64,
+    /// Minimum call duration (nanoseconds).
+    pub min_time_ns: u64,
+    /// Maximum call duration (nanoseconds).
+    pub max_time_ns: u64,
+}
+
+impl FunctionStats {
+    /// Create new stats with zero values.
+    pub fn new() -> Self {
+        Self {
+            call_count: 0,
+            total_time_ns: 0,
+            min_time_ns: u64::MAX,
+            max_time_ns: 0,
+        }
+    }
+
+    /// Record a call with the given duration.
+    pub fn record_call(&mut self, duration_ns: u64) {
+        self.call_count += 1;
+        self.total_time_ns += duration_ns;
+        self.min_time_ns = self.min_time_ns.min(duration_ns);
+        self.max_time_ns = self.max_time_ns.max(duration_ns);
+    }
+
+    /// Average time per call in nanoseconds.
+    pub fn avg_time_ns(&self) -> u64 {
+        if self.call_count > 0 {
+            self.total_time_ns / self.call_count
+        } else {
+            0
+        }
+    }
+}
+
+/// Entry on the profiling call stack (for timing nested calls).
+#[derive(Clone, Debug)]
+pub struct ProfileStackEntry {
+    /// Function name.
+    pub function_name: String,
+    /// When this call started.
+    pub start_time: Instant,
+}
+
+/// Per-process profiling data.
+#[derive(Clone, Debug, Default)]
+pub struct ProfileData {
+    /// Statistics per function name.
+    pub stats: HashMap<String, FunctionStats>,
+    /// Stack of active calls (for timing).
+    pub call_stack: Vec<ProfileStackEntry>,
+}
+
+impl ProfileData {
+    /// Create empty profile data.
+    pub fn new() -> Self {
+        Self {
+            stats: HashMap::new(),
+            call_stack: Vec::new(),
+        }
+    }
+
+    /// Record function entry.
+    pub fn enter_function(&mut self, name: String) {
+        self.call_stack.push(ProfileStackEntry {
+            function_name: name,
+            start_time: Instant::now(),
+        });
+    }
+
+    /// Record function exit and update stats.
+    pub fn exit_function(&mut self) {
+        if let Some(entry) = self.call_stack.pop() {
+            let duration = entry.start_time.elapsed().as_nanos() as u64;
+            self.stats
+                .entry(entry.function_name)
+                .or_insert_with(FunctionStats::new)
+                .record_call(duration);
+        }
+    }
+
+    /// Merge another ProfileData into this one.
+    pub fn merge(&mut self, other: &ProfileData) {
+        for (name, other_stats) in &other.stats {
+            let stats = self.stats.entry(name.clone()).or_insert_with(FunctionStats::new);
+            stats.call_count += other_stats.call_count;
+            stats.total_time_ns += other_stats.total_time_ns;
+            stats.min_time_ns = stats.min_time_ns.min(other_stats.min_time_ns);
+            stats.max_time_ns = stats.max_time_ns.max(other_stats.max_time_ns);
+        }
+    }
+
+    /// Print a summary of profiling data.
+    pub fn print_summary(&self) {
+        if self.stats.is_empty() {
+            println!("No profiling data collected.");
+            return;
+        }
+
+        // Sort by total time descending
+        let mut entries: Vec<_> = self.stats.iter().collect();
+        entries.sort_by(|a, b| b.1.total_time_ns.cmp(&a.1.total_time_ns));
+
+        println!("\n{:=<80}", "");
+        println!("FUNCTION PROFILING SUMMARY");
+        println!("{:=<80}", "");
+        println!(
+            "{:<40} {:>10} {:>12} {:>12}",
+            "Function", "Calls", "Total (ms)", "Avg (µs)"
+        );
+        println!("{:-<80}", "");
+
+        for (name, stats) in entries {
+            let display_name = if name.len() > 38 {
+                format!("...{}", &name[name.len() - 35..])
+            } else {
+                name.clone()
+            };
+            println!(
+                "{:<40} {:>10} {:>12.3} {:>12.3}",
+                display_name,
+                stats.call_count,
+                stats.total_time_ns as f64 / 1_000_000.0,
+                stats.avg_time_ns() as f64 / 1_000.0,
+            );
+        }
+        println!("{:=<80}\n", "");
+    }
+}
+
 /// Type alias for IO response receiver
 pub type IoReceiver = oneshot::Receiver<IoResult<IoResponseValue>>;
 
@@ -624,6 +765,9 @@ pub struct Process {
     /// MVar locks held by this process: mvar_name -> (is_write, acquisition_depth).
     /// Acquisition depth handles nested calls - only release when depth reaches 0.
     pub held_mvar_locks: HashMap<String, (bool, u32)>,
+
+    /// Profiling data (only populated when profiling is enabled).
+    pub profile: Option<ProfileData>,
 }
 
 impl Process {
@@ -657,6 +801,7 @@ impl Process {
             io_receiver: None,
             io_result_reg: None,
             held_mvar_locks: HashMap::new(),
+            profile: None,
         }
     }
 

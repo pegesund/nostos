@@ -1,5 +1,8 @@
 //! Parallel VM with CPU affinity for Erlang-style concurrency.
 //!
+//! **DEPRECATED**: This is the old, non-maintained VM implementation.
+//! Use `AsyncVM` from `async_vm.rs` instead, which is the current default.
+//!
 //! Design principles:
 //! - Each thread owns its processes (no locking for local operations)
 //! - Processes stay on the thread that spawned them (affinity)
@@ -224,7 +227,7 @@ pub struct SharedState {
     pub dynamic_mvars: Arc<RwLock<HashMap<String, Arc<RwLock<ThreadSafeValue>>>>>,
 }
 
-/// Configuration for the parallel VM.
+/// Configuration for the parallel VM (DEPRECATED - use AsyncVM instead).
 #[derive(Clone)]
 pub struct ParallelConfig {
     /// Number of worker threads (0 = auto-detect CPU count)
@@ -242,7 +245,7 @@ impl Default for ParallelConfig {
     }
 }
 
-/// The parallel VM entry point.
+/// The parallel VM entry point (DEPRECATED - use AsyncVM instead).
 pub struct ParallelVM {
     /// Shared state (Arc for thread sharing)
     shared: Arc<SharedState>,

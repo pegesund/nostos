@@ -60,7 +60,7 @@ pub enum HeldMvarLock {
 // - OwnedRwLockWriteGuard<T> is Send if T: Send
 // - ThreadSafeValue is designed to be Send + Sync (only contains primitives, String, Arc)
 unsafe impl Send for HeldMvarLock {}
-use crate::process::{CallFrame, ExceptionHandler, ProcessState, ThreadSafeValue};
+use crate::process::{CallFrame, ExceptionHandler, ProcessState, ThreadSafeValue, ProfileData};
 use crate::value::{FunctionValue, Pid, TypeValue, RefId, RuntimeError, Value};
 use crate::parallel::SendableValue;
 use crate::io_runtime::{IoRequest, IoRuntime};
@@ -130,6 +130,9 @@ pub struct AsyncSharedState {
 
     /// PID counter for generating unique PIDs.
     pub next_pid: AtomicU64,
+
+    /// Whether profiling is enabled.
+    pub profiling_enabled: bool,
 }
 
 impl AsyncSharedState {
@@ -216,6 +219,9 @@ pub struct AsyncProcess {
 
     /// Reentrant lock depth counters (name -> depth).
     pub mvar_lock_depths: HashMap<String, usize>,
+
+    /// Profiling data (only populated when profiling is enabled).
+    pub profile: Option<ProfileData>,
 }
 
 // AsyncProcess is safe to Send between threads:
@@ -228,6 +234,7 @@ impl AsyncProcess {
     /// Create a new async process.
     pub fn new(pid: Pid, shared: Arc<AsyncSharedState>) -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
+        let profiling_enabled = shared.profiling_enabled;
         Self {
             pid,
             heap: Heap::with_config(GcConfig::default()),
@@ -248,12 +255,14 @@ impl AsyncProcess {
             shared,
             held_mvar_locks: HashMap::new(),
             mvar_lock_depths: HashMap::new(),
+            profile: if profiling_enabled { Some(ProfileData::new()) } else { None },
         }
     }
 
     /// Create a new async process with a pre-created mailbox.
     /// Used when the mailbox must be registered BEFORE the process starts (to avoid race conditions).
     pub fn new_with_mailbox(pid: Pid, shared: Arc<AsyncSharedState>, sender: MailboxSender, receiver: MailboxReceiver) -> Self {
+        let profiling_enabled = shared.profiling_enabled;
         Self {
             pid,
             heap: Heap::with_config(GcConfig::default()),
@@ -274,6 +283,7 @@ impl AsyncProcess {
             shared,
             held_mvar_locks: HashMap::new(),
             mvar_lock_depths: HashMap::new(),
+            profile: if profiling_enabled { Some(ProfileData::new()) } else { None },
         }
     }
 
@@ -285,6 +295,22 @@ impl AsyncProcess {
         if self.instructions_since_yield >= REDUCTIONS_PER_YIELD {
             self.instructions_since_yield = 0;
             tokio::task::yield_now().await;
+        }
+    }
+
+    /// Record function entry for profiling.
+    #[inline]
+    pub fn profile_enter(&mut self, func_name: &str) {
+        if let Some(ref mut profile) = self.profile {
+            profile.enter_function(func_name.to_string());
+        }
+    }
+
+    /// Record function exit for profiling.
+    #[inline]
+    pub fn profile_exit(&mut self) {
+        if let Some(ref mut profile) = self.profile {
+            profile.exit_function();
         }
     }
 
@@ -962,6 +988,8 @@ impl AsyncProcess {
             // === Return ===
             Return(src) => {
                 let value = reg!(src);
+                // Record function exit for profiling
+                self.profile_exit();
                 // Get return_reg from CURRENT frame BEFORE popping
                 let return_reg = self.frames.last().unwrap().return_reg;
                 self.frames.pop();
@@ -1040,6 +1068,9 @@ impl AsyncProcess {
                     }
                 }
 
+                // Record function entry for profiling
+                self.profile_enter(&function.name);
+
                 self.frames.push(CallFrame {
                     function,
                     ip: 0,
@@ -1085,6 +1116,8 @@ impl AsyncProcess {
                                 registers[i] = arg;
                             }
                         }
+                        // Record function entry for profiling
+                        self.profile_enter(&func.name);
                         self.frames.push(CallFrame {
                             function: func,
                             ip: 0,
@@ -1107,6 +1140,8 @@ impl AsyncProcess {
                             }
                         }
 
+                        // Record closure entry for profiling
+                        self.profile_enter(&func.name);
                         self.frames.push(CallFrame {
                             function: func,
                             ip: 0,
@@ -1519,6 +1554,8 @@ impl AsyncProcess {
                         registers[i] = arg;
                     }
                 }
+                // Record function entry for profiling
+                self.profile_enter(&func.name);
                 self.frames.push(CallFrame {
                     function: func,
                     ip: 0,
@@ -3989,6 +4026,8 @@ pub struct AsyncConfig {
     pub num_threads: usize,
     /// Reductions per yield for fairness.
     pub reductions_per_yield: usize,
+    /// Enable function call profiling.
+    pub profiling_enabled: bool,
 }
 
 impl Default for AsyncConfig {
@@ -3996,6 +4035,7 @@ impl Default for AsyncConfig {
         Self {
             num_threads: 0, // Auto-detect
             reductions_per_yield: REDUCTIONS_PER_YIELD,
+            profiling_enabled: false,
         }
     }
 }
@@ -4042,6 +4082,7 @@ impl AsyncVM {
             eval_callback: Arc::new(RwLock::new(None)),
             io_sender: Some(io_sender),
             next_pid: AtomicU64::new(1),
+            profiling_enabled: config.profiling_enabled,
         });
 
         Self {
@@ -6293,6 +6334,9 @@ impl AsyncVM {
         let sender = process.mailbox_sender.clone();
         self.shared.register_process(pid, sender).await;
 
+        // Record initial function entry for profiling
+        process.profile_enter(&main_fn.name);
+
         // Set up initial call frame
         let registers = vec![GcValue::Unit; main_fn.code.register_count as usize];
         process.frames.push(CallFrame {
@@ -6304,7 +6348,14 @@ impl AsyncVM {
         });
 
         // Run main process (blocks until complete)
-        match process.run().await {
+        let result = process.run().await;
+
+        // Print profiling summary if enabled
+        if let Some(ref profile) = process.profile {
+            profile.print_summary();
+        }
+
+        match result {
             Ok(value) => {
                 let sendable = SendableValue::from_gc_value(&value, &process.heap);
                 Ok(sendable)
