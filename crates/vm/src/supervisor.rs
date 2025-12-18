@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
+use smallvec::smallvec;
 
 use crate::gc::GcValue;
 use crate::process::ExitReason;

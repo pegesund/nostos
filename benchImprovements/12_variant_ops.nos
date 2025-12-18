@@ -1,0 +1,22 @@
+# Benchmark: Variant operations
+# Tests variant creation and matching
+
+type Option = None | Some(Int)
+
+unwrap_or(None, default) = default
+unwrap_or(Some(x), _) = x
+
+map_option(None, _) = None
+map_option(Some(x), f) = Some(f(x))
+
+double(x) = x * 2
+
+process(0, acc) = acc
+process(n, acc) = {
+    opt = if n % 2 == 0 then Some(n) else None
+    opt2 = map_option(opt, double)
+    val = unwrap_or(opt2, 0)
+    process(n - 1, acc + val)
+}
+
+main() = process(3000, 0)

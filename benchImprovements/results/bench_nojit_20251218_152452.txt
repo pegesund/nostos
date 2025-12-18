@@ -1,0 +1,31 @@
+# Nostos Benchmark Results (NO JIT)
+# Date: to. 18. des. 15:24:52 +0100 2025
+# Description: No description
+# Git commit: c5f94cf
+
+01_call_overhead | 94 | 42
+02_fib_recursive | 102 | 6765
+03_fib_tail | 91 | 832040
+04_sum_recursive | 94 | 12502500
+05_list_fold | 97 | 500500
+06_list_map | 94 | 500
+07_list_filter | 95 | 250
+08_list_build | 96 | 5000
+09_arithmetic_heavy | 96 | 417111337500
+10_pattern_match | 107 | 445861777
+11_record_ops | 92 | 45022502500
+12_variant_ops | 101 | 4503000
+13_closure_create | 103 | 4531500
+14_closure_call | 100 | 4801500
+15_string_concat | 102 | 42
+16_tuple_ops | 107 | 27009000
+17_guards_heavy | 101 | 18893
+18_nested_calls | 97 | 510500
+19_wide_calls | 93 | 10035000
+20_higher_order | 97 | 667669000
+21_allocation_stress | 94 | 12502500
+22_ackermann | 161 | 509
+23_list_reverse | 105 | 1
+24_binary_ops | 105 | 16835
+25_conditionals | 92 | 38257
+26_list_build_large | 97 | 10000

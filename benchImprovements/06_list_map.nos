@@ -1,0 +1,21 @@
+# Benchmark: List map operation
+# Tests list traversal with transformation
+
+map([], _) = []
+map([x | xs], f) = [f(x) | map(xs, f)]
+
+double(x) = x * 2
+
+range_helper(0, acc) = acc
+range_helper(n, acc) = range_helper(n - 1, [n | acc])
+
+range(n) = range_helper(n, [])
+
+length([]) = 0
+length([_ | xs]) = 1 + length(xs)
+
+main() = {
+    lst = range(500)
+    result = map(lst, double)
+    length(result)
+}

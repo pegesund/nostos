@@ -1,0 +1,17 @@
+# Benchmark: Higher-order function chains
+# Tests HOF overhead
+
+compose(f, g) = \x => f(g(x))
+
+double(x) = x * 2
+inc(x) = x + 1
+square(x) = x * x
+
+apply_chain(0, f, acc) = acc
+apply_chain(n, f, acc) = apply_chain(n - 1, f, acc + f(n))
+
+main() = {
+    f1 = compose(double, inc)
+    f2 = compose(f1, square)
+    apply_chain(1000, f2, 0)
+}

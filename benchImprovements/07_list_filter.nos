@@ -1,0 +1,23 @@
+# Benchmark: List filter operation
+# Tests conditional list building
+
+filter([], _) = []
+filter([x | xs], pred) =
+    if pred(x) then [x | filter(xs, pred)]
+    else filter(xs, pred)
+
+is_even(n) = n % 2 == 0
+
+range_helper(0, acc) = acc
+range_helper(n, acc) = range_helper(n - 1, [n | acc])
+
+range(n) = range_helper(n, [])
+
+length([]) = 0
+length([_ | xs]) = 1 + length(xs)
+
+main() = {
+    lst = range(500)
+    result = filter(lst, is_even)
+    length(result)
+}

@@ -1,0 +1,18 @@
+# Benchmark: Deeply nested function calls
+# Tests call stack depth
+
+f1(x) = x + 1
+f2(x) = f1(x) + 1
+f3(x) = f2(x) + 1
+f4(x) = f3(x) + 1
+f5(x) = f4(x) + 1
+f6(x) = f5(x) + 1
+f7(x) = f6(x) + 1
+f8(x) = f7(x) + 1
+f9(x) = f8(x) + 1
+f10(x) = f9(x) + 1
+
+loop(0, acc) = acc
+loop(n, acc) = loop(n - 1, acc + f10(n))
+
+main() = loop(1000, 0)

@@ -1,0 +1,13 @@
+# Benchmark: Closure creation
+# Tests closure allocation overhead
+
+make_adder(n) = \x => x + n
+
+apply_adders(0, acc) = acc
+apply_adders(n, acc) = {
+    adder = make_adder(n)
+    result = adder(10)
+    apply_adders(n - 1, acc + result)
+}
+
+main() = apply_adders(3000, 0)

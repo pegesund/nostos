@@ -1,0 +1,16 @@
+# Benchmark: Arithmetic intensive
+# Tests raw arithmetic performance
+
+compute(x) = {
+    a = x * 2 + 3
+    b = a * a - x
+    c = b / 2 + a
+    d = c % 100 + b
+    e = d * 3 - c
+    e
+}
+
+loop(0, acc) = acc
+loop(n, acc) = loop(n - 1, acc + compute(n))
+
+main() = loop(5000, 0)

@@ -1,0 +1,7 @@
+# Benchmark: Recursive sum
+# Tests simple recursion with accumulator
+
+sum_to(0) = 0
+sum_to(n) = n + sum_to(n - 1)
+
+main() = sum_to(5000)

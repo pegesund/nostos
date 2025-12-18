@@ -1,0 +1,22 @@
+# Benchmark: List reversal
+# Tests list building in reverse
+
+reverse_helper([], acc) = acc
+reverse_helper([x | xs], acc) = reverse_helper(xs, [x | acc])
+
+reverse_list(lst) = reverse_helper(lst, [])
+
+range_helper(0, acc) = acc
+range_helper(n, acc) = range_helper(n - 1, [n | acc])
+
+range(n) = range_helper(n, [])
+
+head([x | _]) = x
+head([]) = 0
+
+main() = {
+    lst = range(2000)
+    rev = reverse_list(lst)
+    rev2 = reverse_list(rev)
+    head(rev2)
+}

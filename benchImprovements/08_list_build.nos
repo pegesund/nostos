@@ -1,0 +1,13 @@
+# Benchmark: List building
+# Tests cons cell allocation
+
+build_list(0, acc) = acc
+build_list(n, acc) = build_list(n - 1, [n | acc])
+
+length([]) = 0
+length([_ | xs]) = 1 + length(xs)
+
+main() = {
+    lst = build_list(5000, [])
+    length(lst)
+}

@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
+use smallvec::smallvec;
 use imbl::{HashMap as ImblHashMap, HashSet as ImblHashSet};
 
 use tokio::sync::{mpsc, RwLock as TokioRwLock, OwnedRwLockReadGuard, OwnedRwLockWriteGuard};
@@ -222,6 +223,28 @@ pub struct AsyncProcess {
 
     /// Profiling data (only populated when profiling is enabled).
     pub profile: Option<ProfileData>,
+}
+
+/// Helper trait to convert register/constant indices (u8, u16, etc.) to usize.
+/// Works with both owned values and references (needed because matching on &Instruction
+/// gives references to fields).
+trait AsIdx {
+    fn as_idx(&self) -> usize;
+}
+
+impl AsIdx for u8 {
+    #[inline(always)]
+    fn as_idx(&self) -> usize { *self as usize }
+}
+
+impl AsIdx for u16 {
+    #[inline(always)]
+    fn as_idx(&self) -> usize { *self as usize }
+}
+
+impl AsIdx for i16 {
+    #[inline(always)]
+    fn as_idx(&self) -> usize { *self as usize }
 }
 
 // AsyncProcess is safe to Send between threads:
@@ -491,7 +514,7 @@ impl AsyncProcess {
 
     /// Execute one instruction.
     async fn step(&mut self) -> Result<StepResult, RuntimeError> {
-        use crate::value::Instruction::*;
+        use crate::value::Instruction::{self, *};
 
 
         // Get frame info without holding mutable borrow
@@ -507,32 +530,41 @@ impl AsyncProcess {
             return Ok(StepResult::Finished(GcValue::Unit));
         }
 
-        // Get instruction reference and constants - use indices to avoid borrow issues
-        let instruction = {
+        // Get raw pointer to instruction - safe because function is Arc'd and code is immutable.
+        // This avoids cloning the instruction on every step.
+        let instruction_ptr: *const Instruction = {
             let frame = self.frames.last().unwrap();
-            frame.function.code.code[ip].clone()
+            &frame.function.code.code[ip] as *const _
         };
 
         // Increment IP
         self.frames.last_mut().unwrap().ip += 1;
 
+        // SAFETY: The instruction pointer is valid because:
+        // 1. frame.function is Arc<FunctionValue>, so it won't be deallocated
+        // 2. We don't modify the code array during execution
+        // 3. This dereference happens immediately, within the same step() call
+        let instruction = unsafe { &*instruction_ptr };
+
         // Helper macros for register access - use direct indexing
+        // Note: $r and $idx may be references (when matching on &Instruction),
+        // so we use AsIdx trait which works with both owned and referenced values
         macro_rules! reg {
             ($r:expr) => {{
                 let frame = self.frames.last().unwrap();
-                frame.registers[$r as usize].clone()
+                frame.registers[$r.as_idx()].clone()
             }};
         }
         macro_rules! set_reg {
             ($r:expr, $v:expr) => {{
                 let frame = self.frames.last_mut().unwrap();
-                frame.registers[$r as usize] = $v;
+                frame.registers[$r.as_idx()] = $v;
             }};
         }
         macro_rules! get_const {
             ($idx:expr) => {{
                 let frame = self.frames.last().unwrap();
-                frame.function.code.constants[$idx as usize].clone()
+                frame.function.code.constants[$idx.as_idx()].clone()
             }};
         }
 
@@ -970,18 +1002,18 @@ impl AsyncProcess {
                 let frame = self.frames.last_mut().unwrap();
                 // frame.ip was already incremented, so current ip = original_ip + 1
                 // target = original_ip + 1 + offset = current_ip + offset
-                frame.ip = (frame.ip as isize + offset as isize) as usize;
+                frame.ip = (frame.ip as isize + *offset as isize) as usize;
             }
             JumpIfTrue(cond, offset) => {
                 if matches!(reg!(cond), GcValue::Bool(true)) {
                     let frame = self.frames.last_mut().unwrap();
-                    frame.ip = (frame.ip as isize + offset as isize) as usize;
+                    frame.ip = (frame.ip as isize + *offset as isize) as usize;
                 }
             }
             JumpIfFalse(cond, offset) => {
                 if matches!(reg!(cond), GcValue::Bool(false)) {
                     let frame = self.frames.last_mut().unwrap();
-                    frame.ip = (frame.ip as isize + offset as isize) as usize;
+                    frame.ip = (frame.ip as isize + *offset as isize) as usize;
                 }
             }
 
@@ -1005,7 +1037,7 @@ impl AsyncProcess {
             // === Function calls ===
             CallDirect(dst, func_idx, ref args) => {
                 // Check for JIT-compiled version first based on arity
-                let func_idx_u16 = func_idx as u16;
+                let func_idx_u16 = *func_idx;
                 match args.len() {
                     0 => {
                         if let Some(jit_fn) = self.shared.jit_int_functions_0.get(&func_idx_u16) {
@@ -1056,15 +1088,15 @@ impl AsyncProcess {
                 }
 
                 // Fall back to interpreter
-                let function = self.shared.function_list.get(func_idx as usize)
+                let function = self.shared.function_list.get(*func_idx as usize)
                     .ok_or_else(|| RuntimeError::Panic(format!("Unknown function index: {}", func_idx)))?
                     .clone();
 
-                let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r)).collect();
+                // Copy args directly to registers, avoiding intermediate Vec allocation
                 let mut registers = vec![GcValue::Unit; function.code.register_count as usize];
-                for (i, arg) in arg_values.into_iter().enumerate() {
+                for (i, r) in args.iter().enumerate() {
                     if i < registers.len() {
-                        registers[i] = arg;
+                        registers[i] = reg!(*r);
                     }
                 }
 
@@ -1076,7 +1108,7 @@ impl AsyncProcess {
                     ip: 0,
                     registers,
                     captures: Vec::new(),
-                    return_reg: Some(dst),
+                    return_reg: Some(*dst),
                 });
             }
 
@@ -1123,7 +1155,7 @@ impl AsyncProcess {
                             ip: 0,
                             registers,
                             captures: Vec::new(),
-                            return_reg: Some(dst),
+                            return_reg: Some(*dst),
                         });
                     }
                     GcValue::Closure(ptr, _inline_op) => {
@@ -1147,7 +1179,7 @@ impl AsyncProcess {
                             ip: 0,
                             registers,
                             captures,
-                            return_reg: Some(dst),
+                            return_reg: Some(*dst),
                         });
                     }
                     _ => return Err(RuntimeError::Panic(format!("Call: expected function or closure, got {:?}", callee))),
@@ -1166,7 +1198,7 @@ impl AsyncProcess {
                     .map(|pid| GcValue::Pid(pid.0))
                     .collect();
                 drop(registry);
-                let list = GcValue::List(crate::gc::GcList { data: Arc::new(pids), start: 0 });
+                let list = GcValue::List(crate::gc::GcList::from_vec(pids));
                 set_reg!(dst, list);
             }
 
@@ -1300,7 +1332,7 @@ impl AsyncProcess {
                         .clone();
 
                     // Acquire lock (async - will yield if contended)
-                    let guard = if is_write {
+                    let guard = if *is_write {
                         HeldMvarLock::Write(var.write_owned().await)
                     } else {
                         HeldMvarLock::Read(var.read_owned().await)
@@ -1356,7 +1388,7 @@ impl AsyncProcess {
             // === Tail call (replaces current frame) ===
             TailCallDirect(func_idx, ref args) => {
                 // Check for JIT-compiled version first
-                let func_idx_u16 = func_idx as u16;
+                let func_idx_u16 = *func_idx;
                 match args.len() {
                     0 => {
                         if let Some(jit_fn) = self.shared.jit_int_functions_0.get(&func_idx_u16) {
@@ -1409,7 +1441,7 @@ impl AsyncProcess {
                 }
 
                 // Fall back to interpreter
-                let function = self.shared.function_list.get(func_idx as usize)
+                let function = self.shared.function_list.get(*func_idx as usize)
                     .ok_or_else(|| RuntimeError::Panic(format!("Unknown function index: {}", func_idx)))?;
 
                 // OPTIMIZATION: If calling same function, reuse registers (no heap allocation!)
@@ -1547,11 +1579,11 @@ impl AsyncProcess {
             CallSelf(dst, ref args) => {
                 // Call the current function recursively
                 let func = self.frames.last().unwrap().function.clone();
-                let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r)).collect();
+                // Copy args directly to registers, avoiding intermediate Vec allocation
                 let mut registers = vec![GcValue::Unit; func.code.register_count as usize];
-                for (i, arg) in arg_values.into_iter().enumerate() {
+                for (i, r) in args.iter().enumerate() {
                     if i < registers.len() {
-                        registers[i] = arg;
+                        registers[i] = reg!(*r);
                     }
                 }
                 // Record function entry for profiling
@@ -1561,7 +1593,7 @@ impl AsyncProcess {
                     ip: 0,
                     registers,
                     captures: Vec::new(),
-                    return_reg: Some(dst),
+                    return_reg: Some(*dst),
                 });
             }
             TailCallSelf(ref args) => {
@@ -1664,8 +1696,8 @@ impl AsyncProcess {
 
             GetCapture(dst, idx) => {
                 let frame = self.frames.last().unwrap();
-                if (idx as usize) < frame.captures.len() {
-                    let value = frame.captures[idx as usize].clone();
+                if (*idx as usize) < frame.captures.len() {
+                    let value = frame.captures[*idx as usize].clone();
                     set_reg!(dst, value);
                 } else {
                     return Err(RuntimeError::Panic(format!("Capture index {} out of bounds (frame has {} captures)",
@@ -1684,8 +1716,8 @@ impl AsyncProcess {
                 let tuple = reg!(tuple_reg);
                 if let GcValue::Tuple(ptr) = tuple {
                     if let Some(t) = self.heap.get_tuple(ptr) {
-                        if (idx as usize) < t.items.len() {
-                            let value = t.items[idx as usize].clone();
+                        if (*idx as usize) < t.items.len() {
+                            let value = t.items[*idx as usize].clone();
                             set_reg!(dst, value);
                         } else {
                             return Err(RuntimeError::Panic("Tuple index out of bounds".into()));
@@ -1747,9 +1779,8 @@ impl AsyncProcess {
                 let head_val = reg!(head);
                 let tail_val = reg!(tail);
                 if let GcValue::List(tail_list) = tail_val {
-                    let mut items = vec![head_val];
-                    items.extend(tail_list.items().iter().cloned());
-                    let new_list = self.heap.make_list(items);
+                    // O(log n) cons using persistent data structure
+                    let new_list = tail_list.cons(head_val);
                     set_reg!(dst, GcValue::List(new_list));
                 } else {
                     return Err(RuntimeError::Panic("Cons: tail must be a list".into()));
@@ -2197,13 +2228,13 @@ impl AsyncProcess {
                     GcValue::Variant(ptr) => {
                         let variant = self.heap.get_variant(ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid variant reference".to_string()))?;
-                        variant.fields.get(idx as usize).cloned()
+                        variant.fields.get(*idx as usize).cloned()
                             .ok_or_else(|| RuntimeError::Panic(format!("Variant field {} out of bounds", idx)))?
                     }
                     GcValue::Record(ptr) => {
                         let record = self.heap.get_record(ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid record reference".to_string()))?;
-                        record.fields.get(idx as usize).cloned()
+                        record.fields.get(*idx as usize).cloned()
                             .ok_or_else(|| RuntimeError::Panic(format!("Record field {} out of bounds", idx)))?
                     }
                     _ => return Err(RuntimeError::Panic("GetVariantField expects variant or record".to_string())),
@@ -2273,7 +2304,7 @@ impl AsyncProcess {
             // === Exception handling ===
             PushHandler(offset) => {
                 let frame_index = self.frames.len() - 1;
-                let catch_ip = (self.frames[frame_index].ip as isize + offset as isize) as usize;
+                let catch_ip = (self.frames[frame_index].ip as isize + *offset as isize) as usize;
                 self.handlers.push(ExceptionHandler {
                     frame_index,
                     catch_ip,
@@ -2498,7 +2529,7 @@ impl AsyncProcess {
                         let mut result = Vec::new();
                         for item in list.items() {
                             if let GcValue::String(s_ptr) = item {
-                                if let Some(s) = self.heap.get_string(*s_ptr) {
+                                if let Some(s) = self.heap.get_string(s_ptr) {
                                     result.push(s.data.clone());
                                 }
                             }
@@ -2548,7 +2579,7 @@ impl AsyncProcess {
                         let mut result = Vec::new();
                         for item in list.items() {
                             if let GcValue::String(s_ptr) = item {
-                                if let Some(s) = self.heap.get_string(*s_ptr) {
+                                if let Some(s) = self.heap.get_string(s_ptr) {
                                     result.push(s.data.clone());
                                 }
                             }
@@ -3689,7 +3720,7 @@ impl AsyncProcess {
                 let headers = match reg!(headers_reg) {
                     GcValue::List(list) => {
                         let mut result = Vec::new();
-                        for item in list.data.iter().skip(list.start) {
+                        for item in list.iter() {
                             if let GcValue::Tuple(ptr) = item {
                                 if let Some(tuple) = self.heap.get_tuple(*ptr) {
                                     if tuple.items.len() >= 2 {
@@ -3806,7 +3837,7 @@ impl AsyncProcess {
                 let headers = match reg!(headers_reg) {
                     GcValue::List(list) => {
                         let mut result = Vec::new();
-                        for item in list.data.iter().skip(list.start) {
+                        for item in list.iter() {
                             if let GcValue::Tuple(ptr) = item {
                                 if let Some(tuple) = self.heap.get_tuple(*ptr) {
                                     if tuple.items.len() >= 2 {
@@ -3898,7 +3929,7 @@ impl AsyncProcess {
                     Ok(s) => GcValue::String(self.heap.alloc_string(s)),
                     Err(_) => {
                         let values: Vec<GcValue> = bytes.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                        GcValue::List(GcList { data: Arc::new(values), start: 0 })
+                        GcValue::List(GcList::from_vec(values))
                     }
                 }
             }
@@ -3911,7 +3942,7 @@ impl AsyncProcess {
                     .into_iter()
                     .map(|s| GcValue::String(self.heap.alloc_string(s)))
                     .collect();
-                GcValue::List(GcList { data: Arc::new(values), start: 0 })
+                GcValue::List(GcList::from_vec(values))
             }
             IoResponseValue::HttpResponse { status, headers, body } => {
                 let header_tuples: Vec<GcValue> = headers
@@ -3922,13 +3953,13 @@ impl AsyncProcess {
                         GcValue::Tuple(self.heap.alloc_tuple(vec![key, val]))
                     })
                     .collect();
-                let headers_list = GcValue::List(GcList { data: Arc::new(header_tuples), start: 0 });
+                let headers_list = GcValue::List(GcList::from_vec(header_tuples));
 
                 let body_value = match std::string::String::from_utf8(body.clone()) {
                     Ok(s) => GcValue::String(self.heap.alloc_string(s)),
                     Err(_) => {
                         let bytes: Vec<GcValue> = body.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                        GcValue::List(GcList::from_vec(bytes))
                     }
                 };
 
@@ -3955,13 +3986,13 @@ impl AsyncProcess {
                         GcValue::Tuple(self.heap.alloc_tuple(vec![key, val]))
                     })
                     .collect();
-                let headers_list = GcValue::List(GcList { data: Arc::new(header_tuples), start: 0 });
+                let headers_list = GcValue::List(GcList::from_vec(header_tuples));
 
                 let body_value = match std::string::String::from_utf8(body.clone()) {
                     Ok(s) => GcValue::String(self.heap.alloc_string(s)),
                     Err(_) => {
                         let bytes: Vec<GcValue> = body.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                        GcValue::List(GcList::from_vec(bytes))
                     }
                 };
 
@@ -3980,7 +4011,7 @@ impl AsyncProcess {
                     Ok(s) => GcValue::String(self.heap.alloc_string(s)),
                     Err(_) => {
                         let bytes: Vec<GcValue> = stdout.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                        GcValue::List(GcList::from_vec(bytes))
                     }
                 };
 
@@ -3988,7 +4019,7 @@ impl AsyncProcess {
                     Ok(s) => GcValue::String(self.heap.alloc_string(s)),
                     Err(_) => {
                         let bytes: Vec<GcValue> = stderr.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                        GcValue::List(GcList::from_vec(bytes))
                     }
                 };
 
@@ -4356,7 +4387,7 @@ impl AsyncVM {
                         GcValue::List(list) => {
                             let mut h = fnv1a_hash(b"list");
                             for item in list.items() {
-                                h = combine_hash(h, hash_value(item, heap)?);
+                                h = combine_hash(h, hash_value(&item, heap)?);
                             }
                             Ok(h)
                         }
@@ -4364,7 +4395,7 @@ impl AsyncVM {
                             if let Some(tuple) = heap.get_tuple(*ptr) {
                                 let mut h = fnv1a_hash(b"tuple");
                                 for item in &tuple.items {
-                                    h = combine_hash(h, hash_value(item, heap)?);
+                                    h = combine_hash(h, hash_value(&item, heap)?);
                                 }
                                 Ok(h)
                             } else {
@@ -4520,7 +4551,7 @@ impl AsyncVM {
                         let mut s = String::new();
                         for item in list.items() {
                             match item {
-                                GcValue::Char(c) => s.push(*c),
+                                GcValue::Char(c) => s.push(c),
                                 _ => return Err(RuntimeError::TypeError { expected: "Char".to_string(), found: "other".to_string() })
                             }
                         }
@@ -5407,7 +5438,7 @@ impl AsyncVM {
                     GcValue::List(list) => {
                         let items = list.items();
                         let mut result: i64 = 1;
-                        for item in items {
+                        for item in &items {
                             match item {
                                 GcValue::Int64(n) => result *= n,
                                 GcValue::Float64(_f) => return Ok(GcValue::Float64(items.iter().fold(1.0, |acc, v| {

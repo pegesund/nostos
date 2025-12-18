@@ -1,0 +1,13 @@
+# Benchmark: Binary operations
+# Tests bitwise and comparison operations
+
+count_bits(0, acc) = acc
+count_bits(n, acc) = count_bits(n / 2, acc + (n % 2))
+
+loop(0, acc) = acc
+loop(n, acc) = {
+    bits = count_bits(n, 0)
+    loop(n - 1, acc + bits)
+}
+
+main() = loop(3000, 0)

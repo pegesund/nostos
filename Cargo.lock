@@ -1731,6 +1731,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rust_decimal",
+ "smallvec",
  "thiserror 2.0.17",
  "tokio",
 ]

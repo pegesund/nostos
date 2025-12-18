@@ -456,7 +456,7 @@ impl Scheduler {
                         let mut s = String::new();
                         for item in list.items() {
                             match item {
-                                GcValue::Char(c) => s.push(*c),
+                                GcValue::Char(c) => s.push(c),
                                 _ => return Err(RuntimeError::TypeError { expected: "Char".to_string(), found: "other".to_string() })
                             }
                         }

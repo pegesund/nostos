@@ -1,0 +1,15 @@
+# Benchmark: Wide function calls (many calls per iteration)
+# Tests call dispatch overhead
+
+a(x) = x + 1
+b(x) = x + 2
+c(x) = x + 3
+d(x) = x + 4
+e(x) = x + 5
+
+all_calls(x) = a(x) + b(x) + c(x) + d(x) + e(x)
+
+loop(0, acc) = acc
+loop(n, acc) = loop(n - 1, acc + all_calls(n))
+
+main() = loop(2000, 0)

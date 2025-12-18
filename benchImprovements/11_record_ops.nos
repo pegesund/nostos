@@ -1,0 +1,17 @@
+# Benchmark: Record operations
+# Tests record creation and field access
+
+type Point = { x: Int, y: Int }
+
+make_point(n) = Point(n, n * 2)
+
+distance_sq(p) = p.x * p.x + p.y * p.y
+
+sum_distances(0, acc) = acc
+sum_distances(n, acc) = {
+    p = make_point(n)
+    d = distance_sq(p)
+    sum_distances(n - 1, acc + d)
+}
+
+main() = sum_distances(3000, 0)

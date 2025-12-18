@@ -1,0 +1,9 @@
+# Benchmark: Tail-recursive fibonacci
+# Tests tail call optimization
+
+fib_helper(0, a, _) = a
+fib_helper(n, a, b) = fib_helper(n - 1, b, a + b)
+
+fib(n) = fib_helper(n, 0, 1)
+
+main() = fib(30)

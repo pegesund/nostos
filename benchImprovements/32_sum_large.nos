@@ -1,0 +1,7 @@
+# Benchmark: Large recursive sum - stress test tail call optimization
+# 1 million iterations
+
+sum_to(0, acc) = acc
+sum_to(n, acc) = sum_to(n - 1, acc + n)
+
+main() = sum_to(1000000, 0)

@@ -1,0 +1,27 @@
+# Benchmark: Pattern matching intensive
+# Tests pattern matching dispatch
+
+type Shape = Circle(Int) | Rectangle(Int, Int) | Triangle(Int, Int, Int)
+
+area(Circle(r)) = r * r * 3
+area(Rectangle(w, h)) = w * h
+area(Triangle(a, b, c)) = (a + b + c) / 2
+
+make_shape(n, m) =
+    if m == 0 then Circle(n)
+    else if m == 1 then Rectangle(n, n + 1)
+    else Triangle(n, n + 1, n + 2)
+
+make_shapes(0, acc) = acc
+make_shapes(n, acc) = {
+    shape = make_shape(n, n % 3)
+    make_shapes(n - 1, [shape | acc])
+}
+
+sum_areas([]) = 0
+sum_areas([s | ss]) = area(s) + sum_areas(ss)
+
+main() = {
+    shapes = make_shapes(1000, [])
+    sum_areas(shapes)
+}

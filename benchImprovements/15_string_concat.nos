@@ -1,0 +1,11 @@
+# Benchmark: String operations
+# Tests string concatenation
+
+repeat_char(0, acc) = acc
+repeat_char(n, acc) = repeat_char(n - 1, acc ++ "x")
+
+main() = {
+    s = repeat_char(500, "")
+    # Return length indicator
+    42
+}

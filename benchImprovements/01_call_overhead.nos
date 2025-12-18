@@ -1,0 +1,21 @@
+# Benchmark: Function call overhead
+# Tests the cost of simple function calls
+
+identity(x) = x
+
+add1(x) = x + 1
+
+call_many(0) = 0
+call_many(n) = {
+    _ = identity(n)
+    _ = identity(n)
+    _ = identity(n)
+    _ = identity(n)
+    _ = identity(n)
+    call_many(n - 1)
+}
+
+main() = {
+    call_many(2000)
+    42
+}

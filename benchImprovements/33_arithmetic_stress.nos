@@ -1,0 +1,12 @@
+# Benchmark: Heavy arithmetic loop - stress test instruction dispatch
+# 10 million iterations of simple math
+
+loop(0, acc) = acc
+loop(n, acc) = {
+    x = acc + n
+    y = x * 2
+    z = y - n
+    loop(n - 1, z)
+}
+
+main() = loop(10000000, 0)

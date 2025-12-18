@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam::deque::{Injector, Stealer, Worker as WorkQueue};
 use parking_lot::Mutex;
+use smallvec::smallvec;
 
 use crate::gc::{constructor_discriminant, GcValue, InlineOp};
 use crate::process::{CallFrame, ExceptionHandler, ExitReason, ProcessState};
@@ -2587,13 +2588,8 @@ impl Worker {
                     GcValue::List(list) => list,
                     _ => return Err(RuntimeError::Panic("Cons expects list tail".to_string())),
                 };
-                let result = self.scheduler.with_process_mut(pid, |proc| {
-                    let tail_items = tail_list.items().to_vec();
-                    let mut new_items = vec![head_val];
-                    new_items.extend(tail_items);
-                    let list = proc.heap.make_list(new_items);
-                    GcValue::List(list)
-                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
+                // O(log n) cons using persistent data structure
+                let result = GcValue::List(tail_list.cons(head_val));
                 set_reg!(dst, result);
             }
 

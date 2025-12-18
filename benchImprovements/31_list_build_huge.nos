@@ -1,0 +1,13 @@
+# Benchmark: Build very large list - stress test cons operation
+# 100,000 elements should show O(n) vs O(log n) difference clearly
+
+build_list(0, acc) = acc
+build_list(n, acc) = build_list(n - 1, [n | acc])
+
+length([]) = 0
+length([_ | xs]) = 1 + length(xs)
+
+main() = {
+    lst = build_list(100000, [])
+    length(lst)
+}

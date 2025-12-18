@@ -1,0 +1,23 @@
+# Benchmark: Conditional heavy
+# Tests if-then-else evaluation
+
+complex_condition(n) =
+    if n < 100 then
+        if n < 50 then
+            if n < 25 then 1
+            else 2
+        else
+            if n < 75 then 3
+            else 4
+    else
+        if n < 500 then
+            if n < 250 then 5
+            else 6
+        else
+            if n < 750 then 7
+            else 8
+
+loop(0, acc) = acc
+loop(n, acc) = loop(n - 1, acc + complex_condition(n))
+
+main() = loop(5000, 0)

@@ -24,6 +24,7 @@
 use std::collections::HashMap;
 use imbl::HashMap as ImblHashMap;
 use imbl::HashSet as ImblHashSet;
+use imbl::Vector as ImblVector;
 use std::fmt;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -154,46 +155,79 @@ pub struct GcString {
     pub data: String,
 }
 
-/// A GC-managed list (immutable).
-/// Uses Arc for O(1) tail operations - tail just increments start offset.
+/// A GC-managed list (immutable, persistent).
+/// Uses imbl::Vector (RRB tree) for O(log n) cons/head/tail operations.
+/// This is much faster than Arc<Vec> which required O(n) copies for cons.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GcList {
-    pub data: std::sync::Arc<Vec<GcValue>>,
-    pub start: usize,  // Offset into data for slice-like behavior
+    pub data: ImblVector<GcValue>,
 }
 
 impl GcList {
-    /// Get effective items slice (from start to end)
+    /// Create a new empty list
     #[inline]
-    pub fn items(&self) -> &[GcValue] {
-        &self.data[self.start..]
+    pub fn new() -> Self {
+        GcList { data: ImblVector::new() }
+    }
+
+    /// Create from a Vec (consumes the Vec)
+    #[inline]
+    pub fn from_vec(v: Vec<GcValue>) -> Self {
+        GcList { data: v.into_iter().collect() }
+    }
+
+    /// Get items as a Vec (for compatibility - allocates)
+    #[inline]
+    pub fn items(&self) -> Vec<GcValue> {
+        self.data.iter().cloned().collect()
+    }
+
+    /// Iterate over items without allocating
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &GcValue> {
+        self.data.iter()
     }
 
     /// Check if empty
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.start >= self.data.len()
+        self.data.is_empty()
     }
 
     /// Get length
     #[inline]
     pub fn len(&self) -> usize {
-        self.data.len().saturating_sub(self.start)
+        self.data.len()
     }
 
-    /// Get head element
+    /// Get head element (O(log n))
     #[inline]
     pub fn head(&self) -> Option<&GcValue> {
-        self.data.get(self.start)
+        self.data.front()
     }
 
-    /// Create a tail view (O(1) - no allocation!)
+    /// Create a tail view (O(log n) - structural sharing!)
     #[inline]
     pub fn tail(&self) -> GcList {
-        GcList {
-            data: self.data.clone(),  // Arc clone is cheap
-            start: (self.start + 1).min(self.data.len()),
+        if self.data.is_empty() {
+            GcList::new()
+        } else {
+            GcList { data: self.data.clone().split_off(1) }
         }
+    }
+
+    /// Cons: prepend an element (O(log n) - structural sharing!)
+    #[inline]
+    pub fn cons(&self, head: GcValue) -> GcList {
+        let mut new_data = self.data.clone();
+        new_data.push_front(head);
+        GcList { data: new_data }
+    }
+
+    /// Get element at index (O(log n))
+    #[inline]
+    pub fn get(&self, index: usize) -> Option<&GcValue> {
+        self.data.get(index)
     }
 }
 
@@ -1063,19 +1097,13 @@ impl Heap {
     /// Create a list (no heap allocation - lists are inline in GcValue).
     #[inline]
     pub fn make_list(&self, items: Vec<GcValue>) -> GcList {
-        GcList {
-            data: std::sync::Arc::new(items),
-            start: 0,
-        }
+        GcList::from_vec(items)
     }
 
     /// Create an empty list (no heap allocation).
     #[inline]
     pub fn make_empty_list(&self) -> GcList {
-        GcList {
-            data: std::sync::Arc::new(Vec::new()),
-            start: 0,
-        }
+        GcList::new()
     }
 
     /// Allocate an array.

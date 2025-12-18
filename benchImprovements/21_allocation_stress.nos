@@ -1,0 +1,14 @@
+# Benchmark: Allocation stress
+# Tests heap allocation and GC pressure
+
+type Box = { value: Int }
+
+make_box(n) = Box(n)
+
+allocate_many(0, acc) = acc
+allocate_many(n, acc) = {
+    b = make_box(n)
+    allocate_many(n - 1, acc + b.value)
+}
+
+main() = allocate_many(5000, 0)

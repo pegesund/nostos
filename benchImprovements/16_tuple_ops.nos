@@ -1,0 +1,15 @@
+# Benchmark: Tuple operations
+# Tests tuple creation and destructuring
+
+make_triple(n) = (n, n * 2, n * 3)
+
+sum_triple((a, b, c)) = a + b + c
+
+process(0, acc) = acc
+process(n, acc) = {
+    t = make_triple(n)
+    s = sum_triple(t)
+    process(n - 1, acc + s)
+}
+
+main() = process(3000, 0)

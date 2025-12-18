@@ -26,6 +26,7 @@ use crossbeam::channel::{self, Sender, Receiver, TryRecvError};
 use imbl::HashMap as ImblHashMap;
 use imbl::HashSet as ImblHashSet;
 use parking_lot::RwLock;
+use smallvec::smallvec;
 
 // Thread-local storage for tracking which mvar locks are held by the current thread.
 // This allows MvarRead/MvarWrite to skip locking if MvarLock already holds the lock.
@@ -1072,7 +1073,7 @@ impl ParallelVM {
                         let mut s = String::new();
                         for item in list.items() {
                             match item {
-                                GcValue::Char(c) => s.push(*c),
+                                GcValue::Char(c) => s.push(c),
                                 _ => return Err(RuntimeError::TypeError { expected: "Char".to_string(), found: "other".to_string() })
                             }
                         }
@@ -1150,7 +1151,7 @@ impl ParallelVM {
                         GcValue::List(list) => {
                             let mut h = fnv1a_hash(b"list");
                             for item in list.items() {
-                                h = combine_hash(h, hash_value(item, heap)?);
+                                h = combine_hash(h, hash_value(&item, heap)?);
                             }
                             Ok(h)
                         }
@@ -1158,7 +1159,7 @@ impl ParallelVM {
                             if let Some(tuple) = heap.get_tuple(*ptr) {
                                 let mut h = fnv1a_hash(b"tuple");
                                 for item in &tuple.items {
-                                    h = combine_hash(h, hash_value(item, heap)?);
+                                    h = combine_hash(h, hash_value(&item, heap)?);
                                 }
                                 Ok(h)
                             } else {
@@ -2147,7 +2148,7 @@ impl ParallelVM {
                     GcValue::List(list) => {
                         let items = list.items();
                         let mut result: i64 = 1;
-                        for item in items {
+                        for item in &items {
                             match item {
                                 GcValue::Int64(n) => result *= n,
                                 GcValue::Float64(_f) => return Ok(GcValue::Float64(items.iter().fold(1.0, |acc, v| {
@@ -3924,7 +3925,7 @@ impl ThreadWorker {
                     Ok(s) => GcValue::String(proc.heap.alloc_string(s)),
                     Err(_) => {
                         let values: Vec<GcValue> = bytes.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                        GcValue::List(GcList { data: Arc::new(values), start: 0 })
+                        GcValue::List(GcList::from_vec(values))
                     }
                 }
             }
@@ -3945,14 +3946,14 @@ impl ThreadWorker {
                         GcValue::Tuple(proc.heap.alloc_tuple(vec![key, val]))
                     })
                     .collect();
-                let headers_list = GcValue::List(GcList { data: Arc::new(header_tuples), start: 0 });
+                let headers_list = GcValue::List(GcList::from_vec(header_tuples));
 
                 // Build body as string (try UTF-8, fallback to bytes list)
                 let body_value = match std::string::String::from_utf8(body.clone()) {
                     Ok(s) => GcValue::String(proc.heap.alloc_string(s)),
                     Err(_) => {
                         let bytes: Vec<GcValue> = body.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                        GcValue::List(GcList::from_vec(bytes))
                     }
                 };
 
@@ -3982,7 +3983,7 @@ impl ThreadWorker {
                     .into_iter()
                     .map(|s| GcValue::String(proc.heap.alloc_string(s)))
                     .collect();
-                GcValue::List(GcList { data: Arc::new(values), start: 0 })
+                GcValue::List(GcList::from_vec(values))
             }
             ServerHandle(handle_id) => {
                 // Return server handle as an integer
@@ -3998,14 +3999,14 @@ impl ThreadWorker {
                         GcValue::Tuple(proc.heap.alloc_tuple(vec![key, val]))
                     })
                     .collect();
-                let headers_list = GcValue::List(GcList { data: Arc::new(header_tuples), start: 0 });
+                let headers_list = GcValue::List(GcList::from_vec(header_tuples));
 
                 // Build body as string (try UTF-8, fallback to bytes list)
                 let body_value = match std::string::String::from_utf8(body.clone()) {
                     Ok(s) => GcValue::String(proc.heap.alloc_string(s)),
                     Err(_) => {
                         let bytes: Vec<GcValue> = body.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                        GcValue::List(GcList::from_vec(bytes))
                     }
                 };
 
@@ -4033,7 +4034,7 @@ impl ThreadWorker {
                     Ok(s) => GcValue::String(proc.heap.alloc_string(s)),
                     Err(_) => {
                         let bytes: Vec<GcValue> = stdout.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                        GcValue::List(GcList::from_vec(bytes))
                     }
                 };
 
@@ -4042,7 +4043,7 @@ impl ThreadWorker {
                     Ok(s) => GcValue::String(proc.heap.alloc_string(s)),
                     Err(_) => {
                         let bytes: Vec<GcValue> = stderr.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                        GcValue::List(GcList::from_vec(bytes))
                     }
                 };
 
@@ -6607,7 +6608,7 @@ impl ThreadWorker {
                     })
                     .collect();
                 let proc = self.get_process_mut(local_id).unwrap();
-                let list = GcValue::List(GcList { data: Arc::new(pids), start: 0 });
+                let list = GcValue::List(GcList::from_vec(pids));
                 let frame = proc.frames.last_mut().unwrap();
                 frame.registers[*dst as usize] = list;
             }
@@ -6791,7 +6792,7 @@ impl ThreadWorker {
                             let mut result = Vec::new();
                             for item in list.items() {
                                 if let GcValue::String(s_ptr) = item {
-                                    if let Some(s) = proc.heap.get_string(*s_ptr) {
+                                    if let Some(s) = proc.heap.get_string(s_ptr) {
                                         result.push(s.data.clone());
                                     }
                                 }
@@ -6849,7 +6850,7 @@ impl ThreadWorker {
                             let mut result = Vec::new();
                             for item in list.items() {
                                 if let GcValue::String(s_ptr) = item {
-                                    if let Some(s) = proc.heap.get_string(*s_ptr) {
+                                    if let Some(s) = proc.heap.get_string(s_ptr) {
                                         result.push(s.data.clone());
                                     }
                                 }
@@ -7463,7 +7464,7 @@ impl ThreadWorker {
                             let mut hdrs = vec![];
                             for item in list.items() {
                                 if let GcValue::Tuple(ptr) = item {
-                                    if let Some(tuple) = proc.heap.get_tuple(*ptr) {
+                                    if let Some(tuple) = proc.heap.get_tuple(ptr) {
                                         if tuple.items.len() == 2 {
                                             let key = match &tuple.items[0] {
                                                 GcValue::String(ptr) => proc.heap.get_string(*ptr).map(|s| s.data.clone()).unwrap_or_default(),
@@ -7606,7 +7607,7 @@ impl ThreadWorker {
                             let mut hdrs = Vec::new();
                             for item in list.items() {
                                 if let GcValue::Tuple(tuple_ptr) = item {
-                                    if let Some(tuple) = proc.heap.get_tuple(*tuple_ptr) {
+                                    if let Some(tuple) = proc.heap.get_tuple(tuple_ptr) {
                                         if tuple.items.len() == 2 {
                                             if let (GcValue::String(k_ptr), GcValue::String(v_ptr)) = (&tuple.items[0], &tuple.items[1]) {
                                                 let key = proc.heap.get_string(*k_ptr).map(|s| s.data.clone()).unwrap_or_default();
@@ -7822,7 +7823,7 @@ impl ThreadWorker {
                     }
                 };
                 let bytes: Vec<GcValue> = input.as_bytes().iter().map(|b| GcValue::Int64(*b as i64)).collect();
-                set_reg!(*dst, GcValue::List(GcList { data: Arc::new(bytes), start: 0 }));
+                set_reg!(*dst, GcValue::List(GcList::from_vec(bytes)));
             }
 
             Utf8Decode(dst, bytes_reg) => {
@@ -7835,7 +7836,7 @@ impl ThreadWorker {
                             let mut bytes = Vec::new();
                             for item in list.items() {
                                 match item {
-                                    GcValue::Int64(n) => bytes.push(*n as u8),
+                                    GcValue::Int64(n) => bytes.push(n as u8),
                                     _ => return Err(RuntimeError::TypeError {
                                         expected: "Int".to_string(),
                                         found: "non-int in list".to_string(),
@@ -9023,12 +9024,10 @@ impl ThreadWorker {
             Cons(dst, head, tail) => {
                 let head_val = reg!(*head).clone();
                 let tail_val = reg!(*tail).clone();
-                let proc = self.get_process_mut(local_id).unwrap();
                 match tail_val {
                     GcValue::List(tail_list) => {
-                        let mut items = vec![head_val];
-                        items.extend(tail_list.items().iter().cloned());
-                        let new_list = proc.heap.make_list(items);
+                        // O(log n) cons using persistent data structure
+                        let new_list = tail_list.cons(head_val);
                         set_reg!(*dst, GcValue::List(new_list));
                     }
                     _ => {

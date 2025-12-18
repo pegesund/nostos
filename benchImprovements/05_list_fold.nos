@@ -1,0 +1,17 @@
+# Benchmark: List fold operation
+# Tests list traversal and accumulation
+
+fold([], acc, _) = acc
+fold([x | xs], acc, f) = fold(xs, f(acc, x), f)
+
+add(a, b) = a + b
+
+range_helper(0, acc) = acc
+range_helper(n, acc) = range_helper(n - 1, [n | acc])
+
+range(n) = range_helper(n, [])
+
+main() = {
+    lst = range(1000)
+    fold(lst, 0, add)
+}
