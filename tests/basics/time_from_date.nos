@@ -1,0 +1,11 @@
+# expect: 1
+# Time.fromDate(year, month, day) creates a timestamp
+# and Time.year/month/day extract components
+
+main() = {
+    ts = Time.fromDate(2025, 12, 19)
+    y = Time.year(ts)
+    m = Time.month(ts)
+    d = Time.day(ts)
+    if y == 2025 && m == 12 && d == 19 then 1 else 0
+}

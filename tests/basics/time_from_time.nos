@@ -1,0 +1,9 @@
+# expect: 1
+# Time.fromTime(hour, min, sec) creates a time-of-day timestamp
+# The result is milliseconds since midnight
+
+main() = {
+    ts = Time.fromTime(14, 30, 45)
+    # 14*3600*1000 + 30*60*1000 + 45*1000 = 52245000
+    if ts == 52245000 then 1 else 0
+}

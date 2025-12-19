@@ -239,6 +239,9 @@ pub enum PgValue {
     Float(f64),
     String(String),
     Bytes(Vec<u8>),
+    /// Timestamp as milliseconds since Unix epoch (UTC)
+    /// Used for TIMESTAMP, TIMESTAMPTZ, DATE, TIME
+    Timestamp(i64),
 }
 
 /// A call frame on the stack.

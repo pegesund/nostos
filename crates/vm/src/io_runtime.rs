@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use chrono::Timelike;
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::{Client as PgClient, NoTls, Statement};
@@ -88,6 +89,8 @@ pub enum PgParam {
     Int(i64),
     Float(f64),
     String(String),
+    /// Timestamp as milliseconds since Unix epoch (UTC)
+    Timestamp(i64),
 }
 
 /// Result type for IO operations
@@ -1409,6 +1412,52 @@ impl IoRuntime {
                     Err(_) => PgValue::Null,
                 }
             }
+            Type::TIMESTAMP => {
+                // TIMESTAMP without timezone - stored as NaiveDateTime
+                use chrono::NaiveDateTime;
+                match row.try_get::<_, NaiveDateTime>(idx) {
+                    Ok(v) => PgValue::Timestamp(v.and_utc().timestamp_millis()),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::TIMESTAMPTZ => {
+                // TIMESTAMP WITH TIME ZONE - stored as DateTime<Utc>
+                use chrono::{DateTime, Utc};
+                match row.try_get::<_, DateTime<Utc>>(idx) {
+                    Ok(v) => PgValue::Timestamp(v.timestamp_millis()),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::DATE => {
+                // DATE - stored as NaiveDate, convert to millis at midnight UTC
+                use chrono::NaiveDate;
+                match row.try_get::<_, NaiveDate>(idx) {
+                    Ok(v) => {
+                        let midnight = v.and_hms_opt(0, 0, 0).unwrap();
+                        PgValue::Timestamp(midnight.and_utc().timestamp_millis())
+                    }
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::TIME => {
+                // TIME - stored as NaiveTime, convert to millis since midnight
+                use chrono::NaiveTime;
+                match row.try_get::<_, NaiveTime>(idx) {
+                    Ok(v) => {
+                        let millis = v.num_seconds_from_midnight() as i64 * 1000
+                            + (v.nanosecond() / 1_000_000) as i64;
+                        PgValue::Timestamp(millis)
+                    }
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::TIMETZ => {
+                // TIME WITH TIME ZONE - try as string for now (complex type)
+                match row.try_get::<_, String>(idx) {
+                    Ok(v) => PgValue::String(v),
+                    Err(_) => PgValue::Null,
+                }
+            }
             _ => {
                 // For other types, try to get as string
                 match row.try_get::<_, String>(idx) {
@@ -1431,6 +1480,7 @@ impl IoRuntime {
                 PgParam::Int(_) => format!("{}::int8", placeholder),
                 PgParam::Float(_) => format!("{}::float8", placeholder),
                 PgParam::String(_) => format!("{}::text", placeholder),
+                PgParam::Timestamp(_) => format!("{}::timestamptz", placeholder),
             };
             // Only replace if not already typed (check for ::)
             let check_pattern = format!("{}::", placeholder);
@@ -1578,6 +1628,38 @@ impl IoRuntime {
                 PgParam::String(s) => {
                     // Strings can be used for any type - PostgreSQL will convert
                     Box::new(s.clone()) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>
+                }
+                PgParam::Timestamp(millis) => {
+                    use chrono::{DateTime, Utc, NaiveDateTime, NaiveDate, NaiveTime};
+                    // Convert millis since epoch to appropriate chrono type based on expected type
+                    match expected_type {
+                        Some(t) if *t == Type::DATE => {
+                            // Convert millis to NaiveDate
+                            let dt = DateTime::from_timestamp_millis(*millis)
+                                .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+                            Box::new(dt.date_naive()) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>
+                        }
+                        Some(t) if *t == Type::TIME => {
+                            // Millis since midnight to NaiveTime
+                            let secs = (*millis / 1000) as u32;
+                            let nanos = ((*millis % 1000) * 1_000_000) as u32;
+                            let time = NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos)
+                                .unwrap_or_else(|| NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+                            Box::new(time) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>
+                        }
+                        Some(t) if *t == Type::TIMESTAMP => {
+                            // Convert to NaiveDateTime (no timezone)
+                            let dt = DateTime::from_timestamp_millis(*millis)
+                                .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+                            Box::new(dt.naive_utc()) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>
+                        }
+                        _ => {
+                            // Default to TIMESTAMPTZ (DateTime<Utc>)
+                            let dt = DateTime::from_timestamp_millis(*millis)
+                                .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+                            Box::new(dt) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>
+                        }
+                    }
                 }
             }
         }).collect()

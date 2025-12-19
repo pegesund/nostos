@@ -1,0 +1,8 @@
+# expect: 1
+# Time.now() returns a timestamp (milliseconds since epoch)
+# The test checks that Time.now() returns a positive integer
+
+main() = {
+    ts = Time.now()
+    if ts > 0 then 1 else 0
+}

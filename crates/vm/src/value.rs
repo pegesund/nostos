@@ -1011,6 +1011,28 @@ pub enum Instruction {
     /// Deallocate prepared statement: dst = Pg.deallocate(handle, name)
     PgDeallocate(Reg, Reg, Reg),
 
+    // === Time builtins ===
+    /// Get current UTC timestamp in milliseconds: dst = Time.now()
+    TimeNow(Reg),
+    /// Create timestamp from date parts: dst = Time.fromDate(year, month, day)
+    TimeFromDate(Reg, Reg, Reg, Reg),
+    /// Create time millis from time parts: dst = Time.fromTime(hour, min, sec)
+    TimeFromTime(Reg, Reg, Reg, Reg),
+    /// Create full timestamp: dst = Time.fromDateTime(year, month, day, hour, min, sec)
+    TimeFromDateTime(Reg, Reg, Reg, Reg, Reg, Reg, Reg),
+    /// Extract year from timestamp: dst = Time.year(ts)
+    TimeYear(Reg, Reg),
+    /// Extract month from timestamp: dst = Time.month(ts)
+    TimeMonth(Reg, Reg),
+    /// Extract day from timestamp: dst = Time.day(ts)
+    TimeDay(Reg, Reg),
+    /// Extract hour from timestamp: dst = Time.hour(ts)
+    TimeHour(Reg, Reg),
+    /// Extract minute from timestamp: dst = Time.minute(ts)
+    TimeMinute(Reg, Reg),
+    /// Extract second from timestamp: dst = Time.second(ts)
+    TimeSecond(Reg, Reg),
+
     // === IO/Debug builtins ===
     /// Print value, return string representation: dst = print(value)
     Print(Reg, Reg),

@@ -4494,6 +4494,7 @@ impl ThreadWorker {
                 let values: Vec<GcValue> = bytes.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
                 GcValue::List(GcList::from_vec(values))
             }
+            PgValue::Timestamp(millis) => GcValue::Int64(millis),
         }
     }
 
@@ -8714,6 +8715,168 @@ impl ThreadWorker {
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
+            }
+
+            // === Time Builtins ===
+            TimeNow(dst) => {
+                use chrono::Utc;
+                let millis = Utc::now().timestamp_millis();
+                let proc = self.get_process_mut(local_id).unwrap();
+                set_reg!(*dst, GcValue::Int64(millis));
+            }
+
+            TimeFromDate(dst, year_reg, month_reg, day_reg) => {
+                use chrono::{NaiveDate, TimeZone, Utc};
+                let (year, month, day) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let y = match reg!(*year_reg) {
+                        GcValue::Int64(v) => *v as i32,
+                        _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }),
+                    };
+                    let m = match reg!(*month_reg) {
+                        GcValue::Int64(v) => *v as u32,
+                        _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }),
+                    };
+                    let d = match reg!(*day_reg) {
+                        GcValue::Int64(v) => *v as u32,
+                        _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }),
+                    };
+                    (y, m, d)
+                };
+                let date = NaiveDate::from_ymd_opt(year, month, day)
+                    .ok_or_else(|| RuntimeError::Panic(format!("Invalid date: {}-{}-{}", year, month, day)))?;
+                let dt = date.and_hms_opt(0, 0, 0).unwrap();
+                let millis = dt.and_utc().timestamp_millis();
+                let proc = self.get_process_mut(local_id).unwrap();
+                set_reg!(*dst, GcValue::Int64(millis));
+            }
+
+            TimeFromTime(dst, hour_reg, min_reg, sec_reg) => {
+                let (hour, min, sec) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let h = match reg!(*hour_reg) {
+                        GcValue::Int64(v) => *v,
+                        _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }),
+                    };
+                    let m = match reg!(*min_reg) {
+                        GcValue::Int64(v) => *v,
+                        _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }),
+                    };
+                    let s = match reg!(*sec_reg) {
+                        GcValue::Int64(v) => *v,
+                        _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }),
+                    };
+                    (h, m, s)
+                };
+                // Millis since midnight
+                let millis = hour * 3600000 + min * 60000 + sec * 1000;
+                let proc = self.get_process_mut(local_id).unwrap();
+                set_reg!(*dst, GcValue::Int64(millis));
+            }
+
+            TimeFromDateTime(dst, year_reg, month_reg, day_reg, hour_reg, min_reg, sec_reg) => {
+                use chrono::NaiveDate;
+                let (year, month, day, hour, min, sec) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let y = match reg!(*year_reg) { GcValue::Int64(v) => *v as i32, _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }) };
+                    let mo = match reg!(*month_reg) { GcValue::Int64(v) => *v as u32, _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }) };
+                    let d = match reg!(*day_reg) { GcValue::Int64(v) => *v as u32, _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }) };
+                    let h = match reg!(*hour_reg) { GcValue::Int64(v) => *v as u32, _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }) };
+                    let mi = match reg!(*min_reg) { GcValue::Int64(v) => *v as u32, _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }) };
+                    let s = match reg!(*sec_reg) { GcValue::Int64(v) => *v as u32, _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }) };
+                    (y, mo, d, h, mi, s)
+                };
+                let date = NaiveDate::from_ymd_opt(year, month, day)
+                    .ok_or_else(|| RuntimeError::Panic(format!("Invalid date: {}-{}-{}", year, month, day)))?;
+                let dt = date.and_hms_opt(hour, min, sec)
+                    .ok_or_else(|| RuntimeError::Panic(format!("Invalid time: {}:{}:{}", hour, min, sec)))?;
+                let millis = dt.and_utc().timestamp_millis();
+                let proc = self.get_process_mut(local_id).unwrap();
+                set_reg!(*dst, GcValue::Int64(millis));
+            }
+
+            TimeYear(dst, ts_reg) => {
+                use chrono::{DateTime, Datelike, Utc};
+                let millis = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*ts_reg) {
+                        GcValue::Int64(v) => *v,
+                        _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }),
+                    }
+                };
+                let dt = DateTime::from_timestamp_millis(millis).unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+                let proc = self.get_process_mut(local_id).unwrap();
+                set_reg!(*dst, GcValue::Int64(dt.year() as i64));
+            }
+
+            TimeMonth(dst, ts_reg) => {
+                use chrono::{DateTime, Datelike, Utc};
+                let millis = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*ts_reg) {
+                        GcValue::Int64(v) => *v,
+                        _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }),
+                    }
+                };
+                let dt = DateTime::from_timestamp_millis(millis).unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+                let proc = self.get_process_mut(local_id).unwrap();
+                set_reg!(*dst, GcValue::Int64(dt.month() as i64));
+            }
+
+            TimeDay(dst, ts_reg) => {
+                use chrono::{DateTime, Datelike, Utc};
+                let millis = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*ts_reg) {
+                        GcValue::Int64(v) => *v,
+                        _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }),
+                    }
+                };
+                let dt = DateTime::from_timestamp_millis(millis).unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+                let proc = self.get_process_mut(local_id).unwrap();
+                set_reg!(*dst, GcValue::Int64(dt.day() as i64));
+            }
+
+            TimeHour(dst, ts_reg) => {
+                use chrono::{DateTime, Timelike, Utc};
+                let millis = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*ts_reg) {
+                        GcValue::Int64(v) => *v,
+                        _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }),
+                    }
+                };
+                let dt = DateTime::from_timestamp_millis(millis).unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+                let proc = self.get_process_mut(local_id).unwrap();
+                set_reg!(*dst, GcValue::Int64(dt.hour() as i64));
+            }
+
+            TimeMinute(dst, ts_reg) => {
+                use chrono::{DateTime, Timelike, Utc};
+                let millis = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*ts_reg) {
+                        GcValue::Int64(v) => *v,
+                        _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }),
+                    }
+                };
+                let dt = DateTime::from_timestamp_millis(millis).unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+                let proc = self.get_process_mut(local_id).unwrap();
+                set_reg!(*dst, GcValue::Int64(dt.minute() as i64));
+            }
+
+            TimeSecond(dst, ts_reg) => {
+                use chrono::{DateTime, Timelike, Utc};
+                let millis = {
+                    let proc = self.get_process(local_id).unwrap();
+                    match reg!(*ts_reg) {
+                        GcValue::Int64(v) => *v,
+                        _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }),
+                    }
+                };
+                let dt = DateTime::from_timestamp_millis(millis).unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+                let proc = self.get_process_mut(local_id).unwrap();
+                set_reg!(*dst, GcValue::Int64(dt.second() as i64));
             }
 
             // === String Encoding ===

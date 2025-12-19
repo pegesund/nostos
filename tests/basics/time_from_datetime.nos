@@ -1,0 +1,14 @@
+# expect: 1
+# Time.fromDateTime(year, month, day, hour, min, sec) creates a full timestamp
+# and all extraction functions work on it
+
+main() = {
+    ts = Time.fromDateTime(2020, 6, 15, 10, 30, 0)
+    y = Time.year(ts)
+    mo = Time.month(ts)
+    d = Time.day(ts)
+    h = Time.hour(ts)
+    mi = Time.minute(ts)
+    s = Time.second(ts)
+    if y == 2020 && mo == 6 && d == 15 && h == 10 && mi == 30 && s == 0 then 1 else 0
+}

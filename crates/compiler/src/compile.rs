@@ -271,6 +271,17 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Pg.queryPrepared", signature: "Int -> String -> [a] -> [[a]]", doc: "Execute prepared query with params, returns rows" },
     BuiltinInfo { name: "Pg.executePrepared", signature: "Int -> String -> [a] -> Int", doc: "Execute prepared statement with params, returns affected count" },
     BuiltinInfo { name: "Pg.deallocate", signature: "Int -> String -> ()", doc: "Deallocate a prepared statement" },
+    // Time builtins
+    BuiltinInfo { name: "Time.now", signature: "() -> Int", doc: "Get current UTC timestamp in milliseconds since epoch" },
+    BuiltinInfo { name: "Time.fromDate", signature: "Int -> Int -> Int -> Int", doc: "Create timestamp from year, month, day (at midnight UTC)" },
+    BuiltinInfo { name: "Time.fromTime", signature: "Int -> Int -> Int -> Int", doc: "Create milliseconds since midnight from hour, min, sec" },
+    BuiltinInfo { name: "Time.fromDateTime", signature: "Int -> Int -> Int -> Int -> Int -> Int -> Int", doc: "Create timestamp from year, month, day, hour, min, sec" },
+    BuiltinInfo { name: "Time.year", signature: "Int -> Int", doc: "Extract year from timestamp" },
+    BuiltinInfo { name: "Time.month", signature: "Int -> Int", doc: "Extract month (1-12) from timestamp" },
+    BuiltinInfo { name: "Time.day", signature: "Int -> Int", doc: "Extract day of month (1-31) from timestamp" },
+    BuiltinInfo { name: "Time.hour", signature: "Int -> Int", doc: "Extract hour (0-23) from timestamp" },
+    BuiltinInfo { name: "Time.minute", signature: "Int -> Int", doc: "Extract minute (0-59) from timestamp" },
+    BuiltinInfo { name: "Time.second", signature: "Int -> Int", doc: "Extract second (0-59) from timestamp" },
 ];
 
 /// Extract doc comment immediately preceding a definition at the given span start.
@@ -3509,6 +3520,75 @@ impl Compiler {
                             self.chunk.emit(Instruction::PgDeallocate(dst, handle_reg, name_reg), line);
                             return Ok(dst);
                         }
+                        // Time builtins
+                        "Time.now" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeNow(dst), line);
+                            return Ok(dst);
+                        }
+                        "Time.fromDate" if args.len() == 3 => {
+                            let year_reg = self.compile_expr_tail(&args[0], false)?;
+                            let month_reg = self.compile_expr_tail(&args[1], false)?;
+                            let day_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeFromDate(dst, year_reg, month_reg, day_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.fromTime" if args.len() == 3 => {
+                            let hour_reg = self.compile_expr_tail(&args[0], false)?;
+                            let min_reg = self.compile_expr_tail(&args[1], false)?;
+                            let sec_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeFromTime(dst, hour_reg, min_reg, sec_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.fromDateTime" if args.len() == 6 => {
+                            let year_reg = self.compile_expr_tail(&args[0], false)?;
+                            let month_reg = self.compile_expr_tail(&args[1], false)?;
+                            let day_reg = self.compile_expr_tail(&args[2], false)?;
+                            let hour_reg = self.compile_expr_tail(&args[3], false)?;
+                            let min_reg = self.compile_expr_tail(&args[4], false)?;
+                            let sec_reg = self.compile_expr_tail(&args[5], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeFromDateTime(dst, year_reg, month_reg, day_reg, hour_reg, min_reg, sec_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.year" if args.len() == 1 => {
+                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeYear(dst, ts_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.month" if args.len() == 1 => {
+                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeMonth(dst, ts_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.day" if args.len() == 1 => {
+                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeDay(dst, ts_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.hour" if args.len() == 1 => {
+                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeHour(dst, ts_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.minute" if args.len() == 1 => {
+                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeMinute(dst, ts_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.second" if args.len() == 1 => {
+                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeSecond(dst, ts_reg), line);
+                            return Ok(dst);
+                        }
                         // String encoding functions
                         "Base64.encode" if args.len() == 1 => {
                             let str_reg = self.compile_expr_tail(&args[0], false)?;
@@ -4087,6 +4167,75 @@ impl Compiler {
                             let name_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgDeallocate(dst, handle_reg, name_reg), line);
+                            return Ok(dst);
+                        }
+                        // Time builtins
+                        "Time.now" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeNow(dst), line);
+                            return Ok(dst);
+                        }
+                        "Time.fromDate" if args.len() == 3 => {
+                            let year_reg = self.compile_expr_tail(&args[0], false)?;
+                            let month_reg = self.compile_expr_tail(&args[1], false)?;
+                            let day_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeFromDate(dst, year_reg, month_reg, day_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.fromTime" if args.len() == 3 => {
+                            let hour_reg = self.compile_expr_tail(&args[0], false)?;
+                            let min_reg = self.compile_expr_tail(&args[1], false)?;
+                            let sec_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeFromTime(dst, hour_reg, min_reg, sec_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.fromDateTime" if args.len() == 6 => {
+                            let year_reg = self.compile_expr_tail(&args[0], false)?;
+                            let month_reg = self.compile_expr_tail(&args[1], false)?;
+                            let day_reg = self.compile_expr_tail(&args[2], false)?;
+                            let hour_reg = self.compile_expr_tail(&args[3], false)?;
+                            let min_reg = self.compile_expr_tail(&args[4], false)?;
+                            let sec_reg = self.compile_expr_tail(&args[5], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeFromDateTime(dst, year_reg, month_reg, day_reg, hour_reg, min_reg, sec_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.year" if args.len() == 1 => {
+                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeYear(dst, ts_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.month" if args.len() == 1 => {
+                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeMonth(dst, ts_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.day" if args.len() == 1 => {
+                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeDay(dst, ts_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.hour" if args.len() == 1 => {
+                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeHour(dst, ts_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.minute" if args.len() == 1 => {
+                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeMinute(dst, ts_reg), line);
+                            return Ok(dst);
+                        }
+                        "Time.second" if args.len() == 1 => {
+                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TimeSecond(dst, ts_reg), line);
                             return Ok(dst);
                         }
                         // === Process introspection ===
