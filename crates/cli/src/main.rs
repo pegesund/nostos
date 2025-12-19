@@ -611,6 +611,15 @@ fn main() -> ExitCode {
 
     if input_path.is_dir() {
         project_root = input_path;
+
+        // Check for main.nos in the directory
+        let main_file = input_path.join("main.nos");
+        if !main_file.exists() {
+            eprintln!("Error: No 'main.nos' found in directory '{}'", file_path_arg);
+            eprintln!("Projects must have a main.nos file with a main() function.");
+            return ExitCode::FAILURE;
+        }
+
         match visit_dirs(input_path, &mut source_files) {
             Ok(_) => {},
             Err(e) => {
