@@ -267,6 +267,10 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Pg.commit", signature: "Int -> ()", doc: "Commit the current transaction" },
     BuiltinInfo { name: "Pg.rollback", signature: "Int -> ()", doc: "Rollback the current transaction" },
     BuiltinInfo { name: "Pg.transaction", signature: "Int -> (() -> a) -> a", doc: "Execute function in transaction with auto-rollback on error" },
+    BuiltinInfo { name: "Pg.prepare", signature: "Int -> String -> String -> ()", doc: "Prepare a statement with name and query" },
+    BuiltinInfo { name: "Pg.queryPrepared", signature: "Int -> String -> [a] -> [[a]]", doc: "Execute prepared query with params, returns rows" },
+    BuiltinInfo { name: "Pg.executePrepared", signature: "Int -> String -> [a] -> Int", doc: "Execute prepared statement with params, returns affected count" },
+    BuiltinInfo { name: "Pg.deallocate", signature: "Int -> String -> ()", doc: "Deallocate a prepared statement" },
 ];
 
 /// Extract doc comment immediately preceding a definition at the given span start.
@@ -3474,6 +3478,37 @@ impl Compiler {
 
                             return Ok(dst);
                         }
+                        "Pg.prepare" if args.len() == 3 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let name_reg = self.compile_expr_tail(&args[1], false)?;
+                            let query_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgPrepare(dst, handle_reg, name_reg, query_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.queryPrepared" if args.len() == 3 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let name_reg = self.compile_expr_tail(&args[1], false)?;
+                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgQueryPrepared(dst, handle_reg, name_reg, params_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.executePrepared" if args.len() == 3 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let name_reg = self.compile_expr_tail(&args[1], false)?;
+                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgExecutePrepared(dst, handle_reg, name_reg, params_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.deallocate" if args.len() == 2 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let name_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgDeallocate(dst, handle_reg, name_reg), line);
+                            return Ok(dst);
+                        }
                         // String encoding functions
                         "Base64.encode" if args.len() == 1 => {
                             let str_reg = self.compile_expr_tail(&args[0], false)?;
@@ -4021,6 +4056,37 @@ impl Compiler {
                             let end = self.chunk.code.len();
                             self.chunk.patch_jump(skip_catch, end);
 
+                            return Ok(dst);
+                        }
+                        "Pg.prepare" if args.len() == 3 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let name_reg = self.compile_expr_tail(&args[1], false)?;
+                            let query_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgPrepare(dst, handle_reg, name_reg, query_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.queryPrepared" if args.len() == 3 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let name_reg = self.compile_expr_tail(&args[1], false)?;
+                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgQueryPrepared(dst, handle_reg, name_reg, params_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.executePrepared" if args.len() == 3 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let name_reg = self.compile_expr_tail(&args[1], false)?;
+                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgExecutePrepared(dst, handle_reg, name_reg, params_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.deallocate" if args.len() == 2 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let name_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgDeallocate(dst, handle_reg, name_reg), line);
                             return Ok(dst);
                         }
                         // === Process introspection ===

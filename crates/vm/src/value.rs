@@ -1002,6 +1002,14 @@ pub enum Instruction {
     PgCommit(Reg, Reg),
     /// Rollback transaction: dst = Pg.rollback(handle)
     PgRollback(Reg, Reg),
+    /// Prepare statement: dst = Pg.prepare(handle, name, query)
+    PgPrepare(Reg, Reg, Reg, Reg),
+    /// Query with prepared statement: dst = Pg.queryPrepared(handle, name, params)
+    PgQueryPrepared(Reg, Reg, Reg, Reg),
+    /// Execute with prepared statement: dst = Pg.executePrepared(handle, name, params)
+    PgExecutePrepared(Reg, Reg, Reg, Reg),
+    /// Deallocate prepared statement: dst = Pg.deallocate(handle, name)
+    PgDeallocate(Reg, Reg, Reg),
 
     // === IO/Debug builtins ===
     /// Print value, return string representation: dst = print(value)
