@@ -604,6 +604,17 @@ impl ReplPanel {
         let scroll_x = self.scroll_offset.0;
         let view_width = printer.size.x.saturating_sub(x_offset);
 
+        // First draw the entire line in white as a base (handles unrecognized chars like unclosed quotes)
+        let base_style = Style::from(Color::Rgb(255, 255, 255));
+        let visible_line: String = line.chars()
+            .skip(scroll_x)
+            .take(view_width)
+            .collect();
+        printer.with_style(base_style, |p| {
+            p.print((x_offset, y), &visible_line);
+        });
+
+        // Then overlay syntax highlighting for recognized tokens
         for (token, span) in lex(line) {
             let color = match token {
                 Token::Type | Token::Var | Token::If | Token::Then | Token::Else |
