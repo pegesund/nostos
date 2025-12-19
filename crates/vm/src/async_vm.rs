@@ -1668,14 +1668,24 @@ impl AsyncProcess {
                 let value = reg!(src);
                 let s = self.heap.display_value(&value);
                 self.output.push(s.clone());
-                println!("{}", s);
+                // Send to output channel if available (for REPL/TUI)
+                if let Some(ref sender) = self.shared.output_sender {
+                    let _ = sender.send(s.clone());
+                } else {
+                    println!("{}", s);
+                }
             }
 
             Println(src) => {
                 let value = reg!(src);
                 let s = self.heap.display_value(&value);
                 self.output.push(s.clone());
-                println!("{}", s);
+                // Send to output channel if available (for REPL/TUI)
+                if let Some(ref sender) = self.shared.output_sender {
+                    let _ = sender.send(s.clone());
+                } else {
+                    println!("{}", s);
+                }
             }
 
             // === Tail call (replaces current frame) ===
