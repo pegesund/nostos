@@ -1,31 +1,31 @@
-# Deriving Advanced
+# Advanced Builtin Traits
 #
-# Demonstrates more advanced uses of automatic trait derivation:
-# - Nested types (types containing other derived types)
+# Demonstrates builtin traits with more complex types:
+# - Nested types (types containing other types)
 # - Complex variant types
 # - Record types with many fields
-# - Using derived types in data structures
+# - Using types in data structures
 
 # ========== Nested Types ==========
-# When you derive traits for a type that contains another type,
-# the inner type's derived methods are called automatically.
+# All types have builtin traits, and nested types
+# automatically use the inner type's methods.
 
-type Email = Email(String) deriving (Hash + Eq + Show)
+type Email = Email(String)
 
-type Address = { street: String, city: String, zip: Int } deriving (Hash + Eq + Show)
+type Address = { street: String, city: String, zip: Int }
 
-type Contact = { name: String, email: Email, address: Address } deriving (Hash + Eq + Show)
+type Contact = { name: String, email: Email, address: Address }
 
 # ========== Complex Variant Types ==========
-# Deriving works with variants that have different field counts
+# Variants with different field counts all have builtin traits
 
-type Expression = Number(Int) | Variable(String) | Add(Expression, Expression) | Multiply(Expression, Expression) deriving (Eq + Show)
+type Expression = Number(Int) | Variable(String) | Add(Expression, Expression) | Multiply(Expression, Expression)
 
 # ========== Building a Simple Key-Value Store ==========
 # Using Hash and Eq for a custom key type
 
-type UserId = UserId(Int) deriving (Hash + Eq + Show)
-type UserData = { name: String, score: Int } deriving (Eq + Show)
+type UserId = UserId(Int)
+type UserData = { name: String, score: Int }
 
 # Simple association list operations
 put([], key, value) = [(key, value)]
@@ -35,7 +35,7 @@ put([(k, v) | rest], key, value) = [(k, v) | put(rest, key, value)]
 get([], _) = None
 get([(k, v) | rest], key) = if k == key then Some(v) else get(rest, key)
 
-type Option = Some(UserData) | None deriving (Eq + Show)
+type Option = Some(UserData) | None
 
 # ========== Main Demo ==========
 

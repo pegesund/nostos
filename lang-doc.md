@@ -469,26 +469,14 @@ impl Show[Bool] {
 }
 ```
 
-## Deriving
+## Builtin Traits
 
-Instead of manually implementing traits like `Hash`, `Eq`, `Show`, or `Copy`, you can use the `deriving` keyword to have them generated automatically.
+All types in Nostos automatically have implementations for the core traits `Hash`, `Eq`, `Show`, and `Copy`. No special syntax is needed - these capabilities are always available.
 
-### Basic Syntax
+### Available Traits
 
-```nos
-# Derive a single trait
-type Point = Point(Int, Int) deriving Hash
-
-# Derive multiple traits
-type Person = { name: String, age: Int } deriving (Hash + Show + Eq + Copy)
-```
-
-### Derivable Traits
-
-Four traits can be automatically derived:
-
-| Trait | Generated Function | Description |
-|-------|-------------------|-------------|
+| Trait | Function | Description |
+|-------|----------|-------------|
 | `Hash` | `hash(x) -> Int` | Hash function for maps/sets |
 | `Show` | `show(x) -> String` | String representation |
 | `Eq` | `==`, `!=` operators | Equality comparison |
@@ -497,38 +485,36 @@ Four traits can be automatically derived:
 ### Examples
 
 ```nos
-# Variant types
-type Color = Red | Green | Blue deriving (Hash + Show + Eq)
-type Result = Ok(Int) | Err(String) deriving (Hash + Show + Eq + Copy)
+# All types automatically support Hash, Show, Eq, Copy
+type Color = Red | Green | Blue
+type Result = Ok(Int) | Err(String)
+type Address = { street: String, city: String, zip: Int }
 
-# Record types
-type Address = { street: String, city: String, zip: Int } deriving (Hash + Eq + Show)
-
-# Nested types - inner types' derived methods are called automatically
-type Email = Email(String) deriving (Hash + Eq + Show)
-type Contact = { name: String, email: Email } deriving (Hash + Eq + Show)
+# Nested types work automatically
+type Email = Email(String)
+type Contact = { name: String, email: Email }
 ```
 
-### Using Derived Traits
+### Using Builtin Traits
 
 ```nos
-type Person = { name: String, age: Int } deriving (Hash + Show + Eq + Copy)
+type Person = { name: String, age: Int }
 
 main() = {
     alice = Person("Alice", 30)
     bob = Person("Bob", 25)
 
-    # Using derived Eq
+    # Using Eq
     println("alice == alice: " ++ show(alice == alice))  # true
     println("alice == bob: " ++ show(alice == bob))      # false
 
-    # Using derived Show
-    println("Person: " ++ show(alice))  # Person("Alice", 30)
+    # Using Show
+    println("Person: " ++ show(alice))  # Person{name: Alice, age: 30}
 
-    # Using derived Hash
+    # Using Hash
     println("Hash: " ++ show(hash(alice)))
 
-    # Using derived Copy
+    # Using Copy
     alice_copy = copy(alice)
     println("Copy equals original: " ++ show(alice == alice_copy))  # true
 }
@@ -575,15 +561,15 @@ lookup[K: Eq, V](items: List, key: K) -> V = match items
     [(k, v) | rest] -> if k == key then v else lookup(rest, key)
 end
 
-# Works with any type that derives Eq
-type UserId = UserId(Int) deriving (Hash + Eq)
+# Works with any type that implements Eq (all types do)
+type UserId = UserId(Int)
 
 main() = {
-    # Primitives implement Eq, Hash, Show
+    # All types implement Eq, Hash, Show
     println(show(are_equal(42, 42)))      # true
     println(show(are_equal("a", "b")))    # false
 
-    # Custom types with derived traits
+    # Custom types automatically have these traits
     println(show(are_equal(UserId(1), UserId(1))))  # true
 }
 ```
@@ -602,18 +588,24 @@ Built-in primitive types automatically implement common traits:
 
 ### Compile-Time Checking
 
-Trait bounds are checked at compile time. If you try to use a type that doesn't implement the required trait, you get a compile error:
+Trait bounds are checked at compile time. This is most useful for custom traits that you define yourself. If you try to use a type that doesn't implement the required trait, you get a compile error:
 
 ```nos
-type NotHashable = NotHashable(Int)  # No deriving!
+trait Printable
+    toText(x) -> String
+end
 
-hashable[T: Hash](x: T) -> Int = hash(x)
+printable[T: Printable](x: T) -> String = toText(x)
+
+type MyType = MyType(Int)  # No Printable impl
 
 main() = {
-    x = NotHashable(42)
-    hashable(x)  # Compile error: NotHashable does not implement trait `Hash`
+    x = MyType(42)
+    printable(x)  # Compile error: MyType does not implement trait `Printable`
 }
 ```
+
+Note: All types automatically implement the builtin traits `Hash`, `Eq`, `Show`, and `Copy`.
 
 ## Concurrency (Erlang-style)
 
@@ -992,7 +984,7 @@ The following are reserved keywords:
 - `spawn`, `spawn_link`, `spawn_monitor`
 - `self`
 - `true`, `false`
-- `type`, `trait`, `impl`, `deriving`
+- `type`, `trait`, `impl`
 - `when`
 
 **Note**: `end` is a keyword and cannot be used as a variable name (use `stop`, `limit`, etc. instead).

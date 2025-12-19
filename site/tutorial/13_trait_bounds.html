@@ -70,7 +70,7 @@
                     <li><a href="09_type_system.html" class="block text-slate-400 hover:text-white transition">9. Type System</a></li>
                     <li><a href="10_error_handling.html" class="block text-slate-400 hover:text-white transition">10. Error Handling</a></li>
                     <li><a href="11_traits.html" class="block text-slate-400 hover:text-white transition">11. Traits</a></li>
-                    <li><a href="12_deriving.html" class="block text-slate-400 hover:text-white transition">12. Deriving</a></li>
+                    <li><a href="12_deriving.html" class="block text-slate-400 hover:text-white transition">12. Builtin Traits</a></li>
                     <li><a href="13_trait_bounds.html" class="block text-blue-400 font-medium">13. Trait Bounds</a></li>
                 </ul>
             </div>
@@ -108,7 +108,7 @@ main() = {
 
                 <!-- Multiple Constraints -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Multiple Constraints</h2>
-                <p class="text-slate-400 mb-4">Use <code class="text-emerald-400">+</code> to require a type to implement multiple traits. This is the same syntax used in <code class="text-emerald-400">deriving</code>.</p>
+                <p class="text-slate-400 mb-4">Use <code class="text-emerald-400">+</code> to require a type to implement multiple traits.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos"># T must implement both Hash AND Show
 hash_and_show[T: Hash + Show](x: T) -> String = {
@@ -157,23 +157,27 @@ main() = {
 
                 <!-- Compile-Time Checking -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Compile-Time Checking</h2>
-                <p class="text-slate-400 mb-4">Trait bounds are checked at compile time. If you try to use a type that doesn't implement the required trait, you get a helpful error message.</p>
+                <p class="text-slate-400 mb-4">Trait bounds are checked at compile time. This is most useful for custom traits you define yourself. If you try to use a type that doesn't implement the required trait, you get a helpful error message.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos"># A type WITHOUT any deriving
-type NotHashable = NotHashable(Int)
+<pre><code class="language-nostos"># Define a custom trait
+trait Printable
+    toText(x) -> String
+end
 
-hashable[T: Hash](x: T) -> Int = hash(x)
+printable[T: Printable](x: T) -> String = toText(x)
+
+type MyType = MyType(Int)  # No Printable impl
 
 main() = {
-    x = NotHashable(42)
-    hashable(x)  # Compile error!
+    x = MyType(42)
+    printable(x)  # Compile error!
 }
 
-# Error: NotHashable does not implement trait `Hash`
+# Error: MyType does not implement trait `Printable`
 </code></pre>
                 </div>
-                <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-4 mb-8">
-                    <p class="text-amber-200"><strong>Tip:</strong> The error message tells you exactly which trait is missing. Add <code class="text-emerald-400">deriving Hash</code> to fix it!</p>
+                <div class="bg-blue-900/20 border border-blue-700/50 rounded-lg p-4 mb-8">
+                    <p class="text-blue-200"><strong>Note:</strong> All types automatically have the builtin traits <code class="text-emerald-400">Hash</code>, <code class="text-emerald-400">Eq</code>, <code class="text-emerald-400">Show</code>, and <code class="text-emerald-400">Copy</code>. Trait bounds are most useful for custom traits.</p>
                 </div>
 
                 <!-- Primitive Types -->
@@ -226,9 +230,9 @@ lookup[K: Eq, V](items: List, key: K) = match items
     [(k, v) | rest] -> if k == key then Found(v) else lookup(rest, key)
 end
 
-# Custom types with derived Eq
-type UserId = UserId(Int) deriving (Hash + Eq + Show)
-type Email = Email(String) deriving (Hash + Eq + Show)
+# Custom types - all have builtin Eq
+type UserId = UserId(Int)
+type Email = Email(String)
 
 main() = {
     # Works with UserId keys
@@ -293,7 +297,7 @@ main() = {
                         </li>
                         <li class="flex items-start">
                             <span class="text-emerald-400 mr-2">5.</span>
-                            <span><strong class="text-white">Works with deriving:</strong> Add traits to custom types with <code class="text-emerald-400">deriving</code></span>
+                            <span><strong class="text-white">Builtin traits:</strong> All types have <code class="text-emerald-400">Hash</code>, <code class="text-emerald-400">Eq</code>, <code class="text-emerald-400">Show</code>, <code class="text-emerald-400">Copy</code> automatically</span>
                         </li>
                     </ul>
                 </div>
@@ -303,7 +307,7 @@ main() = {
             <div class="flex justify-between border-t border-slate-800 pt-8">
                 <a href="12_deriving.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
                     <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
-                    Previous: Deriving
+                    Previous: Builtin Traits
                 </a>
                 <div></div>
             </div>
