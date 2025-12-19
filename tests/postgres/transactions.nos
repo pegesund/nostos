@@ -141,12 +141,11 @@ test_transaction_helper_commit(conn) = {
     # Test Pg.transaction with successful commit
     Pg.execute(conn, "CREATE TEMP TABLE tx_helper1 (id INT, name TEXT)", [])
 
-    fn = _ => {
+    result = Pg.transaction(conn, () => {
         Pg.execute(conn, "INSERT INTO tx_helper1 VALUES ($1, $2)", [1, "alice"])
         Pg.execute(conn, "INSERT INTO tx_helper1 VALUES ($1, $2)", [2, "bob"])
         "success"
-    }
-    result = Pg.transaction(conn, fn)
+    })
     assert_eq(result, "success")
 
     rows = Pg.query(conn, "SELECT COUNT(*) FROM tx_helper1", [])
@@ -160,12 +159,11 @@ test_transaction_helper_user_exception(conn) = {
     # Test Pg.transaction with user exception - auto rollback
     Pg.execute(conn, "CREATE TEMP TABLE tx_helper2 (id INT)", [])
 
-    fn = _ => {
+    result = try Pg.transaction(conn, () => {
         Pg.execute(conn, "INSERT INTO tx_helper2 VALUES ($1)", [1])
         throw("user error")
         ()
-    }
-    result = try Pg.transaction(conn, fn) catch
+    }) catch
         e -> "caught"
     end
     assert_eq(result, "caught")
@@ -183,12 +181,11 @@ test_transaction_helper_sql_error(conn) = {
     Pg.execute(conn, "CREATE TEMP TABLE tx_helper3 (id INT)", [])
     Pg.execute(conn, "INSERT INTO tx_helper3 VALUES ($1)", [100])
 
-    fn = _ => {
+    result = try Pg.transaction(conn, () => {
         Pg.execute(conn, "INSERT INTO tx_helper3 VALUES ($1)", [200])
         Pg.query(conn, "INVALID SQL SYNTAX", [])
         ()
-    }
-    result = try Pg.transaction(conn, fn) catch
+    }) catch
         ("query_error", msg) -> "sql_error"
         e -> "other"
     end
@@ -206,12 +203,11 @@ test_transaction_helper_return_value(conn) = {
     # Test that Pg.transaction returns the closure result
     Pg.execute(conn, "CREATE TEMP TABLE tx_helper4 (id INT, value INT)", [])
 
-    fn = _ => {
+    result = Pg.transaction(conn, () => {
         Pg.execute(conn, "INSERT INTO tx_helper4 VALUES ($1, $2)", [1, 42])
         rows = Pg.query(conn, "SELECT value FROM tx_helper4 WHERE id = $1", [1])
         head(head(rows))
-    }
-    result = Pg.transaction(conn, fn)
+    })
     assert_eq(result, 42)
 
     Pg.execute(conn, "DROP TABLE tx_helper4", [])

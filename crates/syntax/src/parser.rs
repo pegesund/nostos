@@ -764,11 +764,17 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                 }
             });
 
-        // Lambda: x => expr or (a, b) => expr
+        // Lambda: x => expr or (a, b) => expr or () => expr
         let lambda_params = choice((
+            // Empty parens: () => expr (must be first to avoid parsing as unit pattern)
+            just(Token::LParen)
+                .ignore_then(just(Token::RParen))
+                .to(vec![]),
+            // Multiple params: (a, b) => expr
             pattern()
                 .separated_by(just(Token::Comma))
                 .delimited_by(just(Token::LParen), just(Token::RParen)),
+            // Single param: x => expr
             pattern().map(|p| vec![p]),
         ));
 
