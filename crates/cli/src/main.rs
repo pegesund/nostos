@@ -18,6 +18,7 @@ use nostos_vm::value::RuntimeError;
 use std::env;
 use std::fs;
 use std::process::ExitCode;
+use std::sync::atomic::Ordering;
 
 use repl::{Repl, ReplConfig};
 
@@ -137,6 +138,9 @@ fn get_error_type_and_message(error: &RuntimeError) -> (String, String) {
         }
         RuntimeError::WithStackTrace { error, .. } => {
             get_error_type_and_message(error)
+        }
+        RuntimeError::Interrupted => {
+            ("Interrupted".to_string(), "Execution interrupted (Ctrl+C)".to_string())
         }
     }
 }
@@ -452,6 +456,14 @@ fn run_with_async_vm(
     }
     }
 
+    // Set up Ctrl+C handler for interrupting running code
+    let interrupt_handle = vm.get_interrupt_handle();
+    if let Err(e) = ctrlc::set_handler(move || {
+        interrupt_handle.interrupt.store(true, Ordering::SeqCst);
+    }) {
+        eprintln!("Warning: Could not set Ctrl+C handler: {}", e);
+    }
+
     // Run the program
     match vm.run(entry_point_name) {
         Ok(result) => {
@@ -459,6 +471,10 @@ fn run_with_async_vm(
                 println!("{}", result.display());
             }
             ExitCode::SUCCESS
+        }
+        Err(e) if e.contains("Interrupted") => {
+            eprintln!("Interrupted");
+            ExitCode::FAILURE
         }
         Err(e) => {
             eprintln!("Runtime error: {}", e);
