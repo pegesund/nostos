@@ -3782,6 +3782,14 @@ impl ReplEngine {
                             async_vm.register_jit_loop_array_function(idx as u16, jit_fn);
                             jit_registered_count += 1;
                         }
+                        if let Some(jit_fn) = jit.get_recursive_array_fill_function(idx as u16) {
+                            async_vm.register_jit_array_fill_function(idx as u16, jit_fn);
+                            jit_registered_count += 1;
+                        }
+                        if let Some(jit_fn) = jit.get_recursive_array_sum_function(idx as u16) {
+                            async_vm.register_jit_array_sum_function(idx as u16, jit_fn);
+                            jit_registered_count += 1;
+                        }
                     }
                 }
             }

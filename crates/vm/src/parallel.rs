@@ -113,6 +113,10 @@ pub type JitIntFn2 = fn(i64, i64) -> i64;
 pub type JitIntFn3 = fn(i64, i64, i64) -> i64;
 pub type JitIntFn4 = fn(i64, i64, i64, i64) -> i64;
 pub type JitLoopArrayFn = fn(*const i64, i64) -> i64;
+/// Recursive array fill function: (arr_ptr, len, idx) -> i64 (unit)
+pub type JitArrayFillFn = fn(*const i64, i64, i64) -> i64;
+/// Recursive array sum function: (arr_ptr, len, idx, acc) -> i64
+pub type JitArraySumFn = fn(*const i64, i64, i64, i64) -> i64;
 
 /// Result from running a function, including captured output.
 #[derive(Debug)]
@@ -191,6 +195,10 @@ pub struct SharedState {
     pub jit_int_functions_4: HashMap<u16, JitIntFn4>,
     /// JIT-compiled loop array functions (func_index → native fn)
     pub jit_loop_array_functions: HashMap<u16, JitLoopArrayFn>,
+    /// JIT-compiled recursive array fill functions (func_index → native fn)
+    pub jit_array_fill_functions: HashMap<u16, JitArrayFillFn>,
+    /// JIT-compiled recursive array sum functions (func_index → native fn)
+    pub jit_array_sum_functions: HashMap<u16, JitArraySumFn>,
     /// Shutdown signal
     pub shutdown: AtomicBool,
     /// Spawn counter for round-robin distribution across threads
@@ -1045,6 +1053,8 @@ impl ParallelVM {
             jit_int_functions_3: HashMap::new(),
             jit_int_functions_4: HashMap::new(),
             jit_loop_array_functions: HashMap::new(),
+            jit_array_fill_functions: HashMap::new(),
+            jit_array_sum_functions: HashMap::new(),
             shutdown: AtomicBool::new(false),
             spawn_counter: AtomicU64::new(0),
             thread_local_ids,
@@ -1143,6 +1153,22 @@ impl ParallelVM {
         Arc::get_mut(&mut self.shared)
             .expect("Cannot register after threads started")
             .jit_loop_array_functions
+            .insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT-compiled recursive array fill function.
+    pub fn register_jit_array_fill_function(&mut self, func_index: u16, jit_fn: JitArrayFillFn) {
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot register after threads started")
+            .jit_array_fill_functions
+            .insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT-compiled recursive array sum function.
+    pub fn register_jit_array_sum_function(&mut self, func_index: u16, jit_fn: JitArraySumFn) {
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot register after threads started")
+            .jit_array_sum_functions
             .insert(func_index, jit_fn);
     }
 
@@ -6577,6 +6603,42 @@ impl ThreadWorker {
                     }
                 }
 
+                // Check for recursive array fill JIT (arity 2: arr, idx)
+                if args.len() == 2 {
+                    if let Some(&jit_fn) = self.shared.jit_array_fill_functions.get(func_idx) {
+                        if let GcValue::Int64(idx) = reg!(args[1]).clone() {
+                            if let GcValue::Int64Array(arr_ptr) = reg!(args[0]).clone() {
+                                let proc = self.get_process_mut(local_id).unwrap();
+                                if let Some(arr) = proc.heap.get_int64_array_mut(arr_ptr) {
+                                    let ptr = arr.items.as_mut_ptr();
+                                    let len = arr.items.len() as i64;
+                                    let _ = jit_fn(ptr as *const i64, len, idx);
+                                    set_reg!(*dst, GcValue::Unit);
+                                    return Ok(StepResult::Continue);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Check for recursive array sum JIT (arity 3: arr, idx, acc)
+                if args.len() == 3 {
+                    if let Some(&jit_fn) = self.shared.jit_array_sum_functions.get(func_idx) {
+                        if let (GcValue::Int64(idx), GcValue::Int64(acc)) = (reg!(args[1]).clone(), reg!(args[2]).clone()) {
+                            if let GcValue::Int64Array(arr_ptr) = reg!(args[0]).clone() {
+                                let proc = self.get_process_mut(local_id).unwrap();
+                                if let Some(arr) = proc.heap.get_int64_array_mut(arr_ptr) {
+                                    let ptr = arr.items.as_mut_ptr();
+                                    let len = arr.items.len() as i64;
+                                    let result = jit_fn(ptr as *const i64, len, idx, acc);
+                                    set_reg!(*dst, GcValue::Int64(result));
+                                    return Ok(StepResult::Continue);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Fall back to interpreted execution
                 let func = self.shared.function_list.get(*func_idx as usize)
                     .ok_or_else(|| RuntimeError::UnknownFunction(format!("index {}", func_idx)))?
@@ -6634,6 +6696,64 @@ impl ThreadWorker {
                                     let return_reg = proc.frames.last().and_then(|f| f.return_reg);
                                     proc.frames.pop();
                                     // If no more frames, this is the final result
+                                    if proc.frames.is_empty() {
+                                        return Ok(StepResult::Finished(result_val));
+                                    }
+                                    if let Some(dst) = return_reg {
+                                        if let Some(parent) = proc.frames.last_mut() {
+                                            parent.registers[dst as usize] = result_val;
+                                        }
+                                    }
+                                    return Ok(StepResult::Continue);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Check for recursive array fill JIT (arity 2: arr, idx)
+                if args.len() == 2 {
+                    if let Some(&jit_fn) = self.shared.jit_array_fill_functions.get(func_idx) {
+                        if let GcValue::Int64(idx) = reg!(args[1]).clone() {
+                            if let GcValue::Int64Array(arr_ptr) = reg!(args[0]).clone() {
+                                let proc = self.get_process_mut(local_id).unwrap();
+                                if let Some(arr) = proc.heap.get_int64_array_mut(arr_ptr) {
+                                    let ptr = arr.items.as_mut_ptr();
+                                    let len = arr.items.len() as i64;
+                                    let _ = jit_fn(ptr as *const i64, len, idx);
+                                    let result_val = GcValue::Unit;
+                                    // For tail call: pop current frame, set result in parent
+                                    let return_reg = proc.frames.last().and_then(|f| f.return_reg);
+                                    proc.frames.pop();
+                                    if proc.frames.is_empty() {
+                                        return Ok(StepResult::Finished(result_val));
+                                    }
+                                    if let Some(dst) = return_reg {
+                                        if let Some(parent) = proc.frames.last_mut() {
+                                            parent.registers[dst as usize] = result_val;
+                                        }
+                                    }
+                                    return Ok(StepResult::Continue);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Check for recursive array sum JIT (arity 3: arr, idx, acc)
+                if args.len() == 3 {
+                    if let Some(&jit_fn) = self.shared.jit_array_sum_functions.get(func_idx) {
+                        if let (GcValue::Int64(idx), GcValue::Int64(acc)) = (reg!(args[1]).clone(), reg!(args[2]).clone()) {
+                            if let GcValue::Int64Array(arr_ptr) = reg!(args[0]).clone() {
+                                let proc = self.get_process_mut(local_id).unwrap();
+                                if let Some(arr) = proc.heap.get_int64_array_mut(arr_ptr) {
+                                    let ptr = arr.items.as_mut_ptr();
+                                    let len = arr.items.len() as i64;
+                                    let result = jit_fn(ptr as *const i64, len, idx, acc);
+                                    let result_val = GcValue::Int64(result);
+                                    // For tail call: pop current frame, set result in parent
+                                    let return_reg = proc.frames.last().and_then(|f| f.return_reg);
+                                    proc.frames.pop();
                                     if proc.frames.is_empty() {
                                         return Ok(StepResult::Finished(result_val));
                                     }

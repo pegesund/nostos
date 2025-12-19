@@ -93,6 +93,10 @@ pub struct AsyncSharedState {
     pub jit_int_functions_3: HashMap<u16, crate::parallel::JitIntFn3>,
     pub jit_int_functions_4: HashMap<u16, crate::parallel::JitIntFn4>,
     pub jit_loop_array_functions: HashMap<u16, crate::parallel::JitLoopArrayFn>,
+    /// JIT recursive array fill functions (arity 2: arr, idx)
+    pub jit_array_fill_functions: HashMap<u16, crate::parallel::JitArrayFillFn>,
+    /// JIT recursive array sum functions (arity 3: arr, idx, acc)
+    pub jit_array_sum_functions: HashMap<u16, crate::parallel::JitArraySumFn>,
 
     /// Shutdown signal.
     pub shutdown: AtomicBool,
@@ -1191,6 +1195,7 @@ impl AsyncProcess {
                         }
                     }
                     2 => {
+                        // Try numeric JIT first
                         if let Some(jit_fn) = self.shared.jit_int_functions_2.get(&func_idx_u16) {
                             if let (GcValue::Int64(a), GcValue::Int64(b)) = (reg!(args[0]), reg!(args[1])) {
                                 let (result, duration) = if profiling {
@@ -1208,8 +1213,35 @@ impl AsyncProcess {
                                 return Ok(StepResult::Continue);
                             }
                         }
+                        // Recursive array fill JIT: (arr, idx)
+                        if let Some(&jit_fn) = self.shared.jit_array_fill_functions.get(&func_idx_u16) {
+                            if let GcValue::Int64(idx) = reg!(args[1]) {
+                                if let GcValue::Int64Array(arr_ptr) = reg!(args[0]) {
+                                    if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
+                                        let ptr = arr.items.as_mut_ptr();
+                                        let len = arr.items.len() as i64;
+                                        let (result, duration) = if profiling {
+                                            let start = Instant::now();
+                                            let r = jit_fn(ptr as *const i64, len, idx);
+                                            (r, Some(start.elapsed()))
+                                        } else {
+                                            (jit_fn(ptr as *const i64, len, idx), None)
+                                        };
+                                        // Returns unit, but function may modify array in place
+                                        let _ = result;
+                                        set_reg!(dst, GcValue::Unit);
+                                        if let Some(d) = duration {
+                                            let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                            self.profile_jit_call(&name, d);
+                                        }
+                                        return Ok(StepResult::Continue);
+                                    }
+                                }
+                            }
+                        }
                     }
                     3 => {
+                        // Try numeric JIT first
                         if let Some(jit_fn) = self.shared.jit_int_functions_3.get(&func_idx_u16) {
                             if let (GcValue::Int64(a), GcValue::Int64(b), GcValue::Int64(c)) =
                                 (reg!(args[0]), reg!(args[1]), reg!(args[2])) {
@@ -1226,6 +1258,30 @@ impl AsyncProcess {
                                     self.profile_jit_call(&name, d);
                                 }
                                 return Ok(StepResult::Continue);
+                            }
+                        }
+                        // Recursive array sum JIT: (arr, idx, acc)
+                        if let Some(&jit_fn) = self.shared.jit_array_sum_functions.get(&func_idx_u16) {
+                            if let (GcValue::Int64(idx), GcValue::Int64(acc)) = (reg!(args[1]), reg!(args[2])) {
+                                if let GcValue::Int64Array(arr_ptr) = reg!(args[0]) {
+                                    if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
+                                        let ptr = arr.items.as_mut_ptr();
+                                        let len = arr.items.len() as i64;
+                                        let (result, duration) = if profiling {
+                                            let start = Instant::now();
+                                            let r = jit_fn(ptr as *const i64, len, idx, acc);
+                                            (r, Some(start.elapsed()))
+                                        } else {
+                                            (jit_fn(ptr as *const i64, len, idx, acc), None)
+                                        };
+                                        set_reg!(dst, GcValue::Int64(result));
+                                        if let Some(d) = duration {
+                                            let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                            self.profile_jit_call(&name, d);
+                                        }
+                                        return Ok(StepResult::Continue);
+                                    }
+                                }
                             }
                         }
                     }
@@ -1641,6 +1697,7 @@ impl AsyncProcess {
                         }
                     }
                     2 => {
+                        // Try numeric JIT first
                         if let Some(jit_fn) = self.shared.jit_int_functions_2.get(&func_idx_u16) {
                             if let (GcValue::Int64(a), GcValue::Int64(b)) = (reg!(args[0]), reg!(args[1])) {
                                 let (res, duration) = if profiling {
@@ -1664,6 +1721,100 @@ impl AsyncProcess {
                                     frame.registers[ret_reg as usize] = result;
                                 }
                                 return Ok(StepResult::Continue);
+                            }
+                        }
+                        // Recursive array fill JIT: (arr, idx)
+                        if let Some(&jit_fn) = self.shared.jit_array_fill_functions.get(&func_idx_u16) {
+                            if let GcValue::Int64(idx) = reg!(args[1]) {
+                                if let GcValue::Int64Array(arr_ptr) = reg!(args[0]) {
+                                    if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
+                                        let ptr = arr.items.as_mut_ptr();
+                                        let len = arr.items.len() as i64;
+                                        let (res, duration) = if profiling {
+                                            let start = Instant::now();
+                                            let r = jit_fn(ptr as *const i64, len, idx);
+                                            (r, Some(start.elapsed()))
+                                        } else {
+                                            (jit_fn(ptr as *const i64, len, idx), None)
+                                        };
+                                        let _ = res;
+                                        if let Some(d) = duration {
+                                            let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                            self.profile_jit_call(&name, d);
+                                        }
+                                        let result = GcValue::Unit;
+                                        let return_reg = self.frames.last().unwrap().return_reg;
+                                        self.frames.pop();
+                                        if self.frames.is_empty() {
+                                            return Ok(StepResult::Finished(result));
+                                        } else if let Some(ret_reg) = return_reg {
+                                            let frame = self.frames.last_mut().unwrap();
+                                            frame.registers[ret_reg as usize] = result;
+                                        }
+                                        return Ok(StepResult::Continue);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    3 => {
+                        // Try numeric JIT first
+                        if let Some(jit_fn) = self.shared.jit_int_functions_3.get(&func_idx_u16) {
+                            if let (GcValue::Int64(a), GcValue::Int64(b), GcValue::Int64(c)) =
+                                (reg!(args[0]), reg!(args[1]), reg!(args[2])) {
+                                let (res, duration) = if profiling {
+                                    let start = Instant::now();
+                                    let r = jit_fn(a, b, c);
+                                    (r, Some(start.elapsed()))
+                                } else {
+                                    (jit_fn(a, b, c), None)
+                                };
+                                if let Some(d) = duration {
+                                    let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    self.profile_jit_call(&name, d);
+                                }
+                                let result = GcValue::Int64(res);
+                                let return_reg = self.frames.last().unwrap().return_reg;
+                                self.frames.pop();
+                                if self.frames.is_empty() {
+                                    return Ok(StepResult::Finished(result));
+                                } else if let Some(ret_reg) = return_reg {
+                                    let frame = self.frames.last_mut().unwrap();
+                                    frame.registers[ret_reg as usize] = result;
+                                }
+                                return Ok(StepResult::Continue);
+                            }
+                        }
+                        // Recursive array sum JIT: (arr, idx, acc)
+                        if let Some(&jit_fn) = self.shared.jit_array_sum_functions.get(&func_idx_u16) {
+                            if let (GcValue::Int64(idx), GcValue::Int64(acc)) = (reg!(args[1]), reg!(args[2])) {
+                                if let GcValue::Int64Array(arr_ptr) = reg!(args[0]) {
+                                    if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
+                                        let ptr = arr.items.as_mut_ptr();
+                                        let len = arr.items.len() as i64;
+                                        let (res, duration) = if profiling {
+                                            let start = Instant::now();
+                                            let r = jit_fn(ptr as *const i64, len, idx, acc);
+                                            (r, Some(start.elapsed()))
+                                        } else {
+                                            (jit_fn(ptr as *const i64, len, idx, acc), None)
+                                        };
+                                        if let Some(d) = duration {
+                                            let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                            self.profile_jit_call(&name, d);
+                                        }
+                                        let result = GcValue::Int64(res);
+                                        let return_reg = self.frames.last().unwrap().return_reg;
+                                        self.frames.pop();
+                                        if self.frames.is_empty() {
+                                            return Ok(StepResult::Finished(result));
+                                        } else if let Some(ret_reg) = return_reg {
+                                            let frame = self.frames.last_mut().unwrap();
+                                            frame.registers[ret_reg as usize] = result;
+                                        }
+                                        return Ok(StepResult::Continue);
+                                    }
+                                }
                             }
                         }
                     }
@@ -4524,6 +4675,8 @@ impl AsyncVM {
             jit_int_functions_3: HashMap::new(),
             jit_int_functions_4: HashMap::new(),
             jit_loop_array_functions: HashMap::new(),
+            jit_array_fill_functions: HashMap::new(),
+            jit_array_sum_functions: HashMap::new(),
             shutdown: AtomicBool::new(false),
             process_registry: TokioRwLock::new(HashMap::new()),
             mvars: HashMap::new(),
@@ -4634,6 +4787,22 @@ impl AsyncVM {
         Arc::get_mut(&mut self.shared)
             .expect("Cannot register after execution started")
             .jit_loop_array_functions
+            .insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT recursive array fill function (arity 2).
+    pub fn register_jit_array_fill_function(&mut self, func_index: u16, jit_fn: crate::parallel::JitArrayFillFn) {
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot register after execution started")
+            .jit_array_fill_functions
+            .insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT recursive array sum function (arity 3).
+    pub fn register_jit_array_sum_function(&mut self, func_index: u16, jit_fn: crate::parallel::JitArraySumFn) {
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot register after execution started")
+            .jit_array_sum_functions
             .insert(func_index, jit_fn);
     }
 

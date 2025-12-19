@@ -189,6 +189,8 @@ pub struct JitCompiler {
     array_cache: HashMap<(u16, ArrayElementType), CompiledArrayFunction>,
     /// Cache of compiled loop-based array functions
     loop_array_cache: HashMap<(u16, ArrayElementType), CompiledLoopArrayFunction>,
+    /// Cache of compiled arity-2 array fill functions: (arr, idx) -> unit
+    array_fill_cache: HashMap<(u16, ArrayElementType), CompiledArrayFunction>,
     /// Configuration
     #[allow(dead_code)]
     config: JitConfig,
@@ -233,6 +235,7 @@ impl JitCompiler {
             cache: HashMap::new(),
             array_cache: HashMap::new(),
             loop_array_cache: HashMap::new(),
+            array_fill_cache: HashMap::new(),
             config,
             compile_queue: Vec::new(),
             declared_funcs: HashMap::new(),
@@ -376,6 +379,27 @@ impl JitCompiler {
         })
     }
 
+    /// Check if a function is compiled as a recursive array fill function (arity 2)
+    pub fn is_array_fill_compiled(&self, func_index: u16, elem_type: ArrayElementType) -> bool {
+        self.array_fill_cache.contains_key(&(func_index, elem_type))
+    }
+
+    /// Get compiled recursive array fill function: fn(arr_ptr, len, idx) -> i64
+    /// For fillArray(arr, i) style functions that write to arrays
+    pub fn get_recursive_array_fill_function(&self, func_index: u16) -> Option<fn(*const i64, i64, i64) -> i64> {
+        self.array_fill_cache.get(&(func_index, ArrayElementType::Int64)).map(|f| {
+            unsafe { std::mem::transmute::<*const u8, fn(*const i64, i64, i64) -> i64>(f.code_ptr) }
+        })
+    }
+
+    /// Get compiled recursive array sum function: fn(arr_ptr, len, idx, acc) -> i64
+    /// For sumArray(arr, i, acc) style functions that read arrays with accumulator
+    pub fn get_recursive_array_sum_function(&self, func_index: u16) -> Option<fn(*const i64, i64, i64, i64) -> i64> {
+        self.array_cache.get(&(func_index, ArrayElementType::Int64)).map(|f| {
+            unsafe { std::mem::transmute::<*const u8, fn(*const i64, i64, i64, i64) -> i64>(f.code_ptr) }
+        })
+    }
+
     /// Queue a function for compilation
     pub fn queue_compilation(&mut self, func_index: u16) {
         if !self.is_compiled(func_index) && !self.compile_queue.contains(&func_index) {
@@ -420,6 +444,28 @@ impl JitCompiler {
 
                     // Try loop-based array JIT
                     match self.compile_loop_array_function(func_index, func) {
+                        Ok(_) => {
+                            compiled += 1;
+                            made_progress = true;
+                            continue;
+                        }
+                        Err(JitError::NotSuitable(_)) => {}
+                        Err(_) => {}
+                    }
+
+                    // Try recursive array fill JIT (arity 2: fillArray pattern)
+                    match self.compile_array_fill_function(func_index, func) {
+                        Ok(_) => {
+                            compiled += 1;
+                            made_progress = true;
+                            continue;
+                        }
+                        Err(JitError::NotSuitable(_)) => {}
+                        Err(_) => {}
+                    }
+
+                    // Try recursive array sum JIT (arity 3: sumArray pattern)
+                    match self.compile_array_function(func_index, func) {
                         Ok(_) => {
                             compiled += 1;
                             made_progress = true;
@@ -1170,6 +1216,500 @@ impl JitCompiler {
 
         // Default to Int64 if no type hints
         Ok(array_type.unwrap_or(ArrayElementType::Int64))
+    }
+
+    /// Detect if a function is an array fill function (arity 2).
+    /// Pattern: fillArray(arr, i) - uses IndexSet to write to arrays, with tail recursion.
+    /// Returns the array element type if suitable.
+    fn detect_array_fill_function(&self, func: &FunctionValue) -> Result<ArrayElementType, JitError> {
+        // Must have 2 arguments: (arr, index)
+        if func.arity != 2 {
+            return Err(JitError::NotSuitable(format!(
+                "array fill function must have 2 args (arr, idx), got {}", func.arity
+            )));
+        }
+
+        let mut has_index_set = false;
+        let mut has_length = false;
+        let mut has_tail_call = false;
+        let mut array_type: Option<ArrayElementType> = None;
+
+        for instr in func.code.code.iter() {
+            match instr {
+                // IndexSet instruction: arr[idx] = val
+                // First arg (reg 0) should be the array
+                Instruction::IndexSet(arr_reg, _, _) if *arr_reg == 0 => {
+                    has_index_set = true;
+                }
+                // Length instruction: dst = length(arr)
+                Instruction::Length(_, arr_reg) if *arr_reg == 0 => {
+                    has_length = true;
+                }
+                // Check for tail recursion
+                Instruction::TailCallSelf(_) => {
+                    has_tail_call = true;
+                }
+                // Check constants for type hints
+                Instruction::LoadConst(_, idx) => {
+                    if let Some(val) = func.code.constants.get(*idx as usize) {
+                        match val {
+                            Value::Int64(_) => {
+                                if array_type.is_none() {
+                                    array_type = Some(ArrayElementType::Int64);
+                                }
+                            }
+                            Value::Float64(_) => {
+                                if array_type.is_none() {
+                                    array_type = Some(ArrayElementType::Float64);
+                                }
+                            }
+                            Value::Bool(_) => {} // OK
+                            _ => return Err(JitError::NotSuitable(
+                                format!("non-numeric constant in array fill function: {:?}", val)
+                            )),
+                        }
+                    }
+                }
+                // Allow these instructions
+                Instruction::Move(_, _) |
+                Instruction::LoadTrue(_) | Instruction::LoadFalse(_) |
+                Instruction::LoadUnit(_) |
+                Instruction::Jump(_) |
+                Instruction::JumpIfTrue(_, _) | Instruction::JumpIfFalse(_, _) |
+                Instruction::Return(_) |
+                Instruction::CallSelf(_, _) | Instruction::TailCallSelf(_) |
+                Instruction::AddInt(_, _, _) | Instruction::SubInt(_, _, _) |
+                Instruction::MulInt(_, _, _) | Instruction::NegInt(_, _) |
+                Instruction::EqInt(_, _, _) | Instruction::NeInt(_, _, _) |
+                Instruction::LtInt(_, _, _) | Instruction::LeInt(_, _, _) |
+                Instruction::GtInt(_, _, _) | Instruction::GeInt(_, _, _) |
+                Instruction::AddFloat(_, _, _) | Instruction::SubFloat(_, _, _) |
+                Instruction::MulFloat(_, _, _) | Instruction::DivFloat(_, _, _) |
+                Instruction::NegFloat(_, _) |
+                Instruction::LtFloat(_, _, _) | Instruction::LeFloat(_, _, _) |
+                Instruction::EqFloat(_, _, _) |
+                Instruction::Index(_, _, _) | Instruction::IndexSet(_, _, _) | Instruction::Length(_, _) => {}
+
+                other => return Err(JitError::NotSuitable(
+                    format!("unsupported instruction in array fill function: {:?}", other)
+                )),
+            }
+        }
+
+        if !has_index_set {
+            return Err(JitError::NotSuitable("no array IndexSet found".to_string()));
+        }
+        if !has_length {
+            return Err(JitError::NotSuitable("no length check found".to_string()));
+        }
+        if !has_tail_call {
+            return Err(JitError::NotSuitable("no tail recursion found".to_string()));
+        }
+
+        // Default to Int64 if no type hints
+        Ok(array_type.unwrap_or(ArrayElementType::Int64))
+    }
+
+    /// Compile an array fill function (arity 2).
+    /// Transforms (arr, idx) → native fn(arr_ptr, arr_len, idx)
+    pub fn compile_array_fill_function(
+        &mut self,
+        func_index: u16,
+        func: &FunctionValue,
+    ) -> Result<(), JitError> {
+        let elem_type = self.detect_array_fill_function(func)?;
+
+        if self.is_array_fill_compiled(func_index, elem_type) {
+            return Ok(());
+        }
+
+        let elem_cl_type = elem_type.cranelift_type();
+
+        // Signature: fn(arr_ptr: i64, arr_len: i64, idx: i64) -> i64 (returns unit as 0)
+        // Use tail calling convention to support tail recursion
+        let mut sig = self.module.make_signature();
+        sig.call_conv = cranelift_codegen::isa::CallConv::Tail;
+        sig.params.push(AbiParam::new(I64)); // arr_ptr
+        sig.params.push(AbiParam::new(I64)); // arr_len
+        sig.params.push(AbiParam::new(I64)); // idx
+        sig.returns.push(AbiParam::new(I64)); // return type (unit = 0)
+
+        let func_name = format!("nos_arr_fill_{}_{}",
+            if elem_type.is_float() { "f64" } else { "i64" },
+            func_index);
+        let func_id = self.module
+            .declare_function(&func_name, Linkage::Local, &sig)
+            .map_err(|e| JitError::Module(e.to_string()))?;
+
+        self.declared_array_funcs.insert((func_index, elem_type), func_id);
+
+        self.ctx.func.signature = sig.clone();
+        self.ctx.func.name = UserFuncName::user(2, func_index as u32);
+
+        {
+            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
+
+            let entry_block = builder.create_block();
+            builder.append_block_params_for_function_params(entry_block);
+            builder.switch_to_block(entry_block);
+
+            // Get function parameters
+            let params = builder.block_params(entry_block).to_vec();
+            let arr_ptr_val = params[0]; // i64 pointer
+            let arr_len_val = params[1]; // i64 length
+            // params[2] is idx
+
+            // Map bytecode registers to Cranelift variables
+            let reg_count = func.code.register_count;
+            let mut regs: Vec<Variable> = Vec::with_capacity(reg_count);
+
+            for i in 0..reg_count {
+                let var = Variable::from_u32(i as u32);
+                // For Int64Array, use I64 for all registers
+                let var_type = if elem_type == ArrayElementType::Int64 {
+                    I64
+                } else if i <= 1 {
+                    I64  // ptr and idx are always i64
+                } else {
+                    F64
+                };
+                builder.declare_var(var, var_type);
+                regs.push(var);
+            }
+
+            // Initialize registers from parameters
+            builder.def_var(regs[0], arr_ptr_val);  // arr -> arr_ptr
+            builder.def_var(regs[1], params[2]);    // idx
+
+            // Special variable for arr_len (used by Length instruction)
+            let arr_len_var = Variable::from_u32(reg_count as u32);
+            builder.declare_var(arr_len_var, I64);
+            builder.def_var(arr_len_var, arr_len_val);
+
+            // Create blocks for jump targets
+            let mut jump_targets: HashMap<usize, Block> = HashMap::new();
+            for (ip, instr) in func.code.code.iter().enumerate() {
+                match instr {
+                    Instruction::Jump(offset) => {
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        jump_targets.entry(target).or_insert_with(|| builder.create_block());
+                    }
+                    Instruction::JumpIfTrue(_, offset) | Instruction::JumpIfFalse(_, offset) => {
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        jump_targets.entry(target).or_insert_with(|| builder.create_block());
+                        jump_targets.entry(ip + 1).or_insert_with(|| builder.create_block());
+                    }
+                    _ => {}
+                }
+            }
+
+            let self_func_ref = self.module.declare_func_in_func(func_id, builder.func);
+
+            let mut ip = 0;
+            let mut block_terminated = false;
+
+            while ip < func.code.code.len() {
+                if let Some(&block) = jump_targets.get(&ip) {
+                    if !block_terminated {
+                        builder.ins().jump(block, &[]);
+                    }
+                    builder.switch_to_block(block);
+                    block_terminated = false;
+                }
+
+                let instr = &func.code.code[ip];
+
+                match instr {
+                    Instruction::LoadConst(dst, idx) => {
+                        let v = Self::load_array_const(&mut builder, &func.code.constants, *idx, elem_type, elem_cl_type)?;
+                        builder.def_var(regs[*dst as usize], v);
+                    }
+
+                    Instruction::Move(dst, src) => {
+                        let v = builder.use_var(regs[*src as usize]);
+                        builder.def_var(regs[*dst as usize], v);
+                    }
+
+                    Instruction::LoadTrue(dst) => {
+                        let v = builder.ins().iconst(I64, 1);
+                        builder.def_var(regs[*dst as usize], v);
+                    }
+
+                    Instruction::LoadFalse(dst) => {
+                        let v = builder.ins().iconst(I64, 0);
+                        builder.def_var(regs[*dst as usize], v);
+                    }
+
+                    Instruction::LoadUnit(dst) => {
+                        let v = builder.ins().iconst(I64, 0);
+                        builder.def_var(regs[*dst as usize], v);
+                    }
+
+                    // Length(dst, arr_reg) - return the stored length
+                    Instruction::Length(dst, _arr_reg) => {
+                        let len = builder.use_var(arr_len_var);
+                        builder.def_var(regs[*dst as usize], len);
+                    }
+
+                    // Index(dst, arr_reg, idx_reg) - load from memory
+                    Instruction::Index(dst, _arr_reg, idx_reg) => {
+                        let ptr = builder.use_var(regs[0]); // arr_ptr is in reg 0
+                        let idx = builder.use_var(regs[*idx_reg as usize]);
+
+                        // Calculate offset: ptr + idx * sizeof(element)
+                        let elem_size = 8i64;
+                        let size_val = builder.ins().iconst(I64, elem_size);
+                        let offset = builder.ins().imul(idx, size_val);
+                        let addr = builder.ins().iadd(ptr, offset);
+
+                        // Load from memory (trusted heap access)
+                        let mut flags = cranelift_codegen::ir::MemFlags::new();
+                        flags.set_notrap();
+                        flags.set_aligned();
+                        let loaded = builder.ins().load(elem_cl_type, flags, addr, 0);
+                        builder.def_var(regs[*dst as usize], loaded);
+                    }
+
+                    // IndexSet(arr_reg, idx_reg, val_reg) - store to memory
+                    Instruction::IndexSet(_arr_reg, idx_reg, val_reg) => {
+                        let ptr = builder.use_var(regs[0]); // arr_ptr is in reg 0
+                        let idx = builder.use_var(regs[*idx_reg as usize]);
+                        let val = builder.use_var(regs[*val_reg as usize]);
+
+                        // Calculate offset: ptr + idx * sizeof(element)
+                        let elem_size = 8i64;
+                        let size_val = builder.ins().iconst(I64, elem_size);
+                        let offset = builder.ins().imul(idx, size_val);
+                        let addr = builder.ins().iadd(ptr, offset);
+
+                        // Store to memory
+                        let mut flags = cranelift_codegen::ir::MemFlags::new();
+                        flags.set_notrap();
+                        flags.set_aligned();
+                        builder.ins().store(flags, val, addr, 0);
+                    }
+
+                    // Integer arithmetic
+                    Instruction::AddInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().iadd(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::SubInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().isub(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::MulInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().imul(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::NegInt(dst, src) => {
+                        let v = builder.use_var(regs[*src as usize]);
+                        let result = builder.ins().ineg(v);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    // Integer comparisons
+                    Instruction::EqInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::Equal, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::NeInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::NotEqual, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::LtInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::SignedLessThan, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::LeInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::SignedLessThanOrEqual, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::GtInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::SignedGreaterThan, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::GeInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    // Float arithmetic
+                    Instruction::AddFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().fadd(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::SubFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().fsub(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::MulFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().fmul(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::DivFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().fdiv(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::NegFloat(dst, src) => {
+                        let v = builder.use_var(regs[*src as usize]);
+                        let result = builder.ins().fneg(v);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::LtFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().fcmp(FloatCC::LessThan, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::LeFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().fcmp(FloatCC::LessThanOrEqual, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::EqFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cmp = builder.ins().fcmp(FloatCC::Equal, va, vb);
+                        let result = builder.ins().uextend(I64, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    // Control flow
+                    Instruction::Jump(offset) => {
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        let target_block = jump_targets[&target];
+                        builder.ins().jump(target_block, &[]);
+                        block_terminated = true;
+                    }
+
+                    Instruction::JumpIfTrue(cond, offset) => {
+                        let cond_val = builder.use_var(regs[*cond as usize]);
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        let target_block = jump_targets[&target];
+                        let next_block = jump_targets[&(ip + 1)];
+                        builder.ins().brif(cond_val, target_block, &[], next_block, &[]);
+                        block_terminated = true;
+                    }
+
+                    Instruction::JumpIfFalse(cond, offset) => {
+                        let cond_val = builder.use_var(regs[*cond as usize]);
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        let target_block = jump_targets[&target];
+                        let next_block = jump_targets[&(ip + 1)];
+                        builder.ins().brif(cond_val, next_block, &[], target_block, &[]);
+                        block_terminated = true;
+                    }
+
+                    Instruction::Return(src) => {
+                        let v = builder.use_var(regs[*src as usize]);
+                        builder.ins().return_(&[v]);
+                        block_terminated = true;
+                    }
+
+                    // Self-recursion: pass (arr_ptr, arr_len, new_idx)
+                    Instruction::CallSelf(dst, arg_regs) => {
+                        // arg_regs contains [arr, idx] in bytecode
+                        // We need to pass [arr_ptr, arr_len, idx] to native
+                        let arr_ptr = builder.use_var(regs[0]); // arr_ptr is in reg 0
+                        let arr_len = builder.use_var(arr_len_var);
+                        let idx = builder.use_var(regs[arg_regs[1] as usize]);
+
+                        let call = builder.ins().call(self_func_ref, &[arr_ptr, arr_len, idx]);
+                        let result = builder.inst_results(call)[0];
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::TailCallSelf(arg_regs) => {
+                        let arr_ptr = builder.use_var(regs[0]);
+                        let arr_len = builder.use_var(arr_len_var);
+                        let idx = builder.use_var(regs[arg_regs[1] as usize]);
+
+                        builder.ins().return_call(self_func_ref, &[arr_ptr, arr_len, idx]);
+                        block_terminated = true;
+                    }
+
+                    other => {
+                        return Err(JitError::UnsupportedInstruction(format!("{:?}", other)));
+                    }
+                }
+
+                ip += 1;
+            }
+
+            builder.seal_all_blocks();
+            builder.finalize();
+        }
+
+        self.module
+            .define_function(func_id, &mut self.ctx)
+            .map_err(|e| JitError::Module(format!("define_function error: {}", e)))?;
+
+        self.module.finalize_definitions()
+            .map_err(|e| JitError::Module(e.to_string()))?;
+
+        let code_ptr = self.module.get_finalized_function(func_id);
+
+        self.array_fill_cache.insert((func_index, elem_type), CompiledArrayFunction {
+            code_ptr,
+            func_id,
+            extra_args: 1, // just idx (arr_ptr and arr_len are implicit)
+            element_type: elem_type,
+        });
+
+        self.module.clear_context(&mut self.ctx);
+
+        Ok(())
     }
 
     /// Compile an array processing function.
