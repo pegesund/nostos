@@ -1576,6 +1576,16 @@ fn use_stmt() -> impl Parser<Token, UseStmt, Error = Simple<Token>> + Clone {
         })
 }
 
+/// Parser for import statement: `import module` or `import module.submodule`
+fn import_stmt() -> impl Parser<Token, ImportStmt, Error = Simple<Token>> + Clone {
+    just(Token::Import)
+        .ignore_then(any_ident().separated_by(just(Token::Dot)).at_least(1))
+        .map_with_span(|path, span| ImportStmt {
+            path,
+            span: to_span(span),
+        })
+}
+
 /// Parser for test definition.
 fn test_def() -> impl Parser<Token, TestDef, Error = Simple<Token>> + Clone {
     just(Token::Test)
@@ -1665,6 +1675,7 @@ fn item() -> impl Parser<Token, Item, Error = Simple<Token>> + Clone {
             test_def().map(Item::Test),
             extern_decl().map(Item::Extern),
             use_stmt().map(Item::Use),
+            import_stmt().map(Item::Import),
             fn_def().map(Item::FnDef),
             mvar_def().map(Item::MvarDef),  // Must be before binding() to parse 'mvar x = ...'
             binding().map(Item::Binding),
