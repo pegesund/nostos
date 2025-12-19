@@ -329,6 +329,21 @@ pub enum IoRequest {
         handle: u64,
         response: IoResponse,
     },
+    /// Begin a transaction
+    PgBegin {
+        handle: u64,
+        response: IoResponse,
+    },
+    /// Commit a transaction
+    PgCommit {
+        handle: u64,
+        response: IoResponse,
+    },
+    /// Rollback a transaction
+    PgRollback {
+        handle: u64,
+        response: IoResponse,
+    },
 
     // Shutdown
     Shutdown,
@@ -1148,6 +1163,66 @@ impl IoRuntime {
                     } else {
                         let _ = response.send(Err(IoError::InvalidHandle));
                     }
+                }
+
+                IoRequest::PgBegin { handle, response } => {
+                    let pg_conns = pg_connections.clone();
+
+                    tokio::spawn(async move {
+                        let conns = pg_conns.lock().await;
+                        if let Some(client) = conns.get(&handle) {
+                            match client.batch_execute("BEGIN").await {
+                                Ok(_) => {
+                                    let _ = response.send(Ok(IoResponseValue::Unit));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::PgError(e.to_string())));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::PgCommit { handle, response } => {
+                    let pg_conns = pg_connections.clone();
+
+                    tokio::spawn(async move {
+                        let conns = pg_conns.lock().await;
+                        if let Some(client) = conns.get(&handle) {
+                            match client.batch_execute("COMMIT").await {
+                                Ok(_) => {
+                                    let _ = response.send(Ok(IoResponseValue::Unit));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::PgError(e.to_string())));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::PgRollback { handle, response } => {
+                    let pg_conns = pg_connections.clone();
+
+                    tokio::spawn(async move {
+                        let conns = pg_conns.lock().await;
+                        if let Some(client) = conns.get(&handle) {
+                            match client.batch_execute("ROLLBACK").await {
+                                Ok(_) => {
+                                    let _ = response.send(Ok(IoResponseValue::Unit));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::PgError(e.to_string())));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
                 }
             }
         }

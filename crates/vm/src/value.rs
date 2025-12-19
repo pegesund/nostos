@@ -996,6 +996,12 @@ pub enum Instruction {
     PgExecute(Reg, Reg, Reg, Reg),
     /// Close PostgreSQL connection: dst = Pg.close(handle)
     PgClose(Reg, Reg),
+    /// Begin transaction: dst = Pg.begin(handle)
+    PgBegin(Reg, Reg),
+    /// Commit transaction: dst = Pg.commit(handle)
+    PgCommit(Reg, Reg),
+    /// Rollback transaction: dst = Pg.rollback(handle)
+    PgRollback(Reg, Reg),
 
     // === IO/Debug builtins ===
     /// Print value, return string representation: dst = print(value)
