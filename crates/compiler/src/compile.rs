@@ -7470,6 +7470,26 @@ impl Compiler {
         let idx = self.function_list.len() as u16;
         self.function_indices.insert(name.to_string(), idx);
         self.function_list.push(name.to_string());
+
+        // Extract module prefix from qualified names like "module.submodule.func/"
+        // and register each level as a known module
+        if let Some(slash_pos) = name.find('/') {
+            let name_without_sig = &name[..slash_pos];
+            let mut parts: Vec<&str> = name_without_sig.split('.').collect();
+            if parts.len() > 1 {
+                // Remove the function name (last part)
+                parts.pop();
+                // Register each module prefix level
+                let mut prefix = String::new();
+                for part in parts {
+                    if !prefix.is_empty() {
+                        prefix.push('.');
+                    }
+                    prefix.push_str(part);
+                    self.known_modules.insert(prefix.clone());
+                }
+            }
+        }
     }
 
     /// Register an externally defined type (e.g., from a previous eval).
@@ -7509,6 +7529,12 @@ impl Compiler {
         }
     }
 
+    /// Register a known module prefix.
+    /// This allows the compiler to recognize module-qualified names like `mymodule.func()`.
+    pub fn register_known_module(&mut self, module: &str) {
+        self.known_modules.insert(module.to_string());
+    }
+
     /// Register all external functions at once, preserving their indices.
     /// This is important for eval because compiled bytecode contains CallDirect
     /// instructions with hardcoded function indices that must be preserved.
@@ -7528,9 +7554,29 @@ impl Compiler {
             self.function_indices.insert(name.clone(), idx as u16);
         }
 
-        // Copy all functions
+        // Copy all functions and extract module names
         for (name, func) in functions {
             self.functions.insert(name.clone(), func.clone());
+
+            // Extract module prefix from qualified names like "module.submodule.func/"
+            // and register each level as a known module
+            if let Some(slash_pos) = name.find('/') {
+                let name_without_sig = &name[..slash_pos];
+                let mut parts: Vec<&str> = name_without_sig.split('.').collect();
+                if parts.len() > 1 {
+                    // Remove the function name (last part)
+                    parts.pop();
+                    // Register each module prefix level
+                    let mut prefix = String::new();
+                    for part in parts {
+                        if !prefix.is_empty() {
+                            prefix.push('.');
+                        }
+                        prefix.push_str(part);
+                        self.known_modules.insert(prefix.clone());
+                    }
+                }
+            }
         }
     }
 
