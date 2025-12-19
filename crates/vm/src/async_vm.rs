@@ -7245,6 +7245,66 @@ impl AsyncVM {
         self.run(main_fn_name)
     }
 
+    /// Run in a background thread, returning a channel receiver for the result.
+    /// This allows the caller to poll for completion while remaining responsive.
+    pub fn run_threaded(&self, main_fn_name: &str) -> std::sync::mpsc::Receiver<Result<SendableValue, String>> {
+        let shared = Arc::clone(&self.shared);
+        let fn_name = main_fn_name.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let result = Self::run_in_thread(shared, &fn_name);
+            let _ = tx.send(result);
+        });
+
+        rx
+    }
+
+    /// Internal: run execution in the current thread with given shared state.
+    fn run_in_thread(shared: Arc<AsyncSharedState>, main_fn_name: &str) -> Result<SendableValue, String> {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
+
+        rt.block_on(Self::run_async_inner(shared, main_fn_name))
+    }
+
+    /// Internal: async execution with shared state only.
+    async fn run_async_inner(shared: Arc<AsyncSharedState>, main_fn_name: &str) -> Result<SendableValue, String> {
+        // Find main function
+        let main_fn = shared.functions.get(main_fn_name)
+            .ok_or_else(|| format!("Main function '{}' not found", main_fn_name))?
+            .clone();
+
+        // Create main process
+        let pid = shared.alloc_pid();
+        let mut process = AsyncProcess::new(pid, Arc::clone(&shared));
+        let sender = process.mailbox_sender.clone();
+        shared.register_process(pid, sender).await;
+
+        // Set up initial call frame
+        let registers = vec![GcValue::Unit; main_fn.code.register_count as usize];
+        process.frames.push(CallFrame {
+            function: main_fn,
+            ip: 0,
+            registers,
+            captures: Vec::new(),
+            return_reg: None,
+        });
+
+        // Run main process (blocks until complete)
+        let result = process.run().await;
+
+        match result {
+            Ok(value) => {
+                let sendable = SendableValue::from_gc_value(&value, &process.heap);
+                Ok(sendable)
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
     /// Async entry point for running main with profile data.
     async fn run_async_with_profile(&self, main_fn_name: &str) -> Result<(SendableValue, Option<String>), String> {
         // Find main function

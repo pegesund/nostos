@@ -552,10 +552,6 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         }
     }
 
-    // NOTE: Ctrl+C interrupt is NOT supported in TUI mode.
-    // Signal handlers conflict with cursive's terminal handling and cause crashes.
-    // If stuck in an infinite loop, you must kill the process externally (pkill nostos).
-
     let engine = Rc::new(RefCell::new(engine));
 
     // Initialize State
@@ -695,6 +691,16 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         });
     }
 
+    // Set up auto-refresh for async evaluation polling
+    // Refresh at 30 FPS to poll for eval results
+    siv.set_autorefresh(true);
+    siv.set_fps(30);
+
+    // Handle refresh events to poll for async eval results
+    siv.set_on_pre_event(Event::Refresh, move |s| {
+        poll_repl_evals(s);
+    });
+
     siv.run();
     ExitCode::SUCCESS
 }
@@ -710,6 +716,20 @@ fn poll_output(s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>) {
     let output = engine.borrow().drain_output();
     for line in output {
         log_to_repl(s, &line);
+    }
+}
+
+/// Poll for async evaluation results from all REPL panels.
+fn poll_repl_evals(s: &mut Cursive) {
+    let repl_ids: Vec<usize> = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().open_repls.clone()
+    }).unwrap_or_default();
+
+    for repl_id in repl_ids {
+        let panel_id = format!("repl_panel_{}", repl_id);
+        s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
+            panel.poll_eval_result();
+        });
     }
 }
 

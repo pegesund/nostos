@@ -184,6 +184,16 @@ pub struct ReplEngine {
     dynamic_mvars: Arc<std::sync::RwLock<HashMap<String, Arc<std::sync::RwLock<nostos_vm::ThreadSafeValue>>>>>,
     /// Track which dynamic mvars have been synced to compiler
     synced_dynamic_mvars: HashSet<String>,
+    /// Pending async evaluation (for TUI non-blocking eval)
+    pending_eval: Option<PendingEval>,
+}
+
+/// State for a pending async evaluation
+struct PendingEval {
+    /// Channel receiver for the result
+    result_rx: std::sync::mpsc::Receiver<Result<nostos_vm::SendableValue, String>>,
+    /// Name of the eval function (for cleanup)
+    _eval_name: String,
 }
 
 impl ReplEngine {
@@ -557,6 +567,7 @@ impl ReplEngine {
             synced_dynamic_types: HashSet::new(),
             dynamic_mvars: dynamic_mvars_for_self,
             synced_dynamic_mvars: HashSet::new(),
+            pending_eval: None,
         }
     }
 
@@ -3661,6 +3672,121 @@ impl ReplEngine {
     /// Check if the VM is currently interrupted.
     pub fn is_interrupted(&self) -> bool {
         self.vm.is_interrupted()
+    }
+
+    /// Start an async evaluation (non-blocking, for TUI).
+    /// Returns Ok(()) if evaluation started, Err if there was a parse/compile error.
+    /// Use `poll_eval()` to check for results.
+    ///
+    /// Note: This is intended for expression evaluation only. For definitions and
+    /// REPL commands, use the synchronous `eval()` method.
+    pub fn start_eval_async(&mut self, input: &str) -> Result<(), String> {
+        // Cancel any pending evaluation first
+        if self.pending_eval.is_some() {
+            self.cancel_eval();
+        }
+
+        let input = input.trim();
+
+        // Handle REPL commands synchronously (they're quick)
+        if input.starts_with(':') {
+            return Err("Use eval() for commands".to_string());
+        }
+
+        // Parse and compile the expression
+        self.eval_counter += 1;
+        let eval_name = format!("__repl_eval_{}__", self.eval_counter);
+
+        let bindings_preamble = if self.var_bindings.is_empty() {
+            String::new()
+        } else {
+            let bindings: Vec<String> = self.var_bindings
+                .iter()
+                .map(|(name, binding)| format!("{} = {}()", name, binding.thunk_name))
+                .collect();
+            bindings.join("\n    ") + "\n    "
+        };
+
+        let wrapper = if bindings_preamble.is_empty() {
+            format!("{}() = {}", eval_name, input)
+        } else {
+            format!("{}() = {{\n    {}{}\n}}", eval_name, bindings_preamble, input)
+        };
+
+        let (wrapper_module_opt, errors) = parse(&wrapper);
+
+        if !errors.is_empty() {
+            return Err(format!("Parse error: {:?}", errors));
+        }
+
+        let wrapper_module = wrapper_module_opt.ok_or("Failed to parse expression")?;
+
+        self.compiler.add_module(&wrapper_module, vec![], Arc::new(wrapper.clone()), "<repl>".to_string())
+            .map_err(|e| format!("Error: {}", e))?;
+
+        if let Err((e, _, _)) = self.compiler.compile_all() {
+            return Err(format!("Compilation error: {}", e));
+        }
+
+        self.sync_vm();
+
+        // Clear any pending interrupt before execution
+        self.vm.clear_interrupt();
+
+        // Start threaded evaluation
+        let fn_name = format!("{}/", eval_name);
+        let result_rx = self.vm.run_threaded(&fn_name);
+
+        self.pending_eval = Some(PendingEval {
+            result_rx,
+            _eval_name: eval_name,
+        });
+
+        Ok(())
+    }
+
+    /// Poll for async evaluation result.
+    /// Returns Some(result) if evaluation completed, None if still running.
+    pub fn poll_eval(&mut self) -> Option<Result<String, String>> {
+        let pending = self.pending_eval.as_ref()?;
+
+        match pending.result_rx.try_recv() {
+            Ok(Ok(result)) => {
+                self.pending_eval = None;
+                let output = if result.is_unit() {
+                    String::new()
+                } else {
+                    result.display()
+                };
+                Some(Ok(output))
+            }
+            Ok(Err(e)) => {
+                self.pending_eval = None;
+                if e.contains("Interrupted") {
+                    Some(Err("Interrupted".to_string()))
+                } else {
+                    Some(Err(format!("Runtime error: {}", e)))
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.pending_eval = None;
+                Some(Err("Evaluation thread crashed".to_string()))
+            }
+        }
+    }
+
+    /// Cancel the current async evaluation by setting the interrupt flag.
+    pub fn cancel_eval(&mut self) {
+        if self.pending_eval.is_some() {
+            self.vm.interrupt();
+            // Don't clear pending_eval yet - let poll_eval handle the result
+        }
+    }
+
+    /// Check if there's a pending async evaluation.
+    pub fn has_pending_eval(&self) -> bool {
+        self.pending_eval.is_some()
     }
 
     /// Profile an expression and return formatted results
