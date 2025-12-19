@@ -3677,6 +3677,24 @@ impl ReplEngine {
             return Err("Use eval() for commands".to_string());
         }
 
+        // First, check if this is a definition (function, type, trait, etc.)
+        // Definitions should be handled synchronously since they're compile-time operations
+        let (module_opt, _) = parse(input);
+        let has_definitions = module_opt.as_ref().map(|m| Self::has_definitions(m)).unwrap_or(false);
+        if has_definitions {
+            return Err("Use eval() for definitions".to_string());
+        }
+
+        // Also check for variable bindings - they should use sync eval
+        if Self::is_var_binding(input).is_some() {
+            return Err("Use eval() for definitions".to_string());
+        }
+
+        // Also check for tuple bindings
+        if Self::is_tuple_binding(input).is_some() {
+            return Err("Use eval() for definitions".to_string());
+        }
+
         // Parse and compile the expression
         self.eval_counter += 1;
         let eval_name = format!("__repl_eval_{}__", self.eval_counter);

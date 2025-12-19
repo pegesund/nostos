@@ -304,8 +304,8 @@ impl ReplPanel {
                 self.eval_in_progress = true;
                 self.current.output = Some(ReplOutput::Definition("Evaluating...".to_string()));
             }
-            Err(e) if e == "Use eval() for commands" => {
-                // This shouldn't happen since we handle : above, but fallback to sync
+            Err(e) if e == "Use eval() for commands" || e == "Use eval() for definitions" => {
+                // Definitions (functions, types, variables) use sync eval
                 let result = self.engine.borrow_mut().eval(&input_text);
                 self.finish_eval_with_result(result);
             }
