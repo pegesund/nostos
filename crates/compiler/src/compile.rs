@@ -93,6 +93,10 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "sum", signature: "[Num] -> Num", doc: "Sum of all elements" },
     BuiltinInfo { name: "product", signature: "[Num] -> Num", doc: "Product of all elements" },
 
+    // === Typed Arrays ===
+    BuiltinInfo { name: "newInt64Array", signature: "Int -> Int64Array", doc: "Create a new Int64 array of given size" },
+    BuiltinInfo { name: "newFloat64Array", signature: "Int -> Float64Array", doc: "Create a new Float64 array of given size" },
+
     // === File I/O ===
     BuiltinInfo { name: "File.readAll", signature: "String -> Result String String", doc: "Read entire file contents as string" },
     BuiltinInfo { name: "File.writeAll", signature: "String -> String -> Result () String", doc: "Write string to file (overwrites)" },
@@ -8352,7 +8356,7 @@ impl Compiler {
         let resolved_ret = ctx.env.apply_subst(&func_ty.ret);
 
         // Debug: uncomment to see resolved types
-        // eprintln!("DEBUG: {} params={:?} ret={:?}", def.name.node, resolved_params, resolved_ret);
+        // eprintln!("DEBUG HM: {} params={:?} ret={:?}", def.name.node, resolved_params, resolved_ret);
 
         // Collect all type variable IDs in order of first appearance
         let mut var_order: Vec<u32> = Vec::new();
