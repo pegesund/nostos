@@ -25,7 +25,6 @@ pub use inspect::*;
 pub use io_runtime::*;
 pub use shared_types::*;
 pub use parallel::{
-    ParallelVM, ParallelConfig, SharedState, RunResult,
     SendableValue, SendableRecord, SendableVariant, SendableMapKey,
     InspectEntry, InspectSender, InspectReceiver,
     OutputSender, OutputReceiver,

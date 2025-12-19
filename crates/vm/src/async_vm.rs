@@ -123,11 +123,23 @@ pub struct AsyncSharedState {
     /// Prelude imports - uses std RwLock for compatibility.
     pub prelude_imports: Arc<RwLock<HashMap<String, String>>>,
 
+    /// Stdlib function list (ordered names) - preserves indices for CallDirect.
+    pub stdlib_function_list: Arc<RwLock<Vec<String>>>,
+
     /// Eval callback - uses std RwLock for compatibility.
     pub eval_callback: Arc<RwLock<Option<Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>>>>,
 
     /// IO request sender.
     pub io_sender: Option<mpsc::UnboundedSender<crate::io_runtime::IoRequest>>,
+
+    /// Inspect sender (for sending values to TUI inspector).
+    pub inspect_sender: Option<crate::parallel::InspectSender>,
+
+    /// Output sender (for println from any process to TUI console).
+    pub output_sender: Option<crate::parallel::OutputSender>,
+
+    /// Panel command sender (for Panel.* calls from Nostos code).
+    pub panel_command_sender: Option<crate::parallel::PanelCommandSender>,
 
     /// PID counter for generating unique PIDs.
     pub next_pid: AtomicU64,
@@ -4521,8 +4533,12 @@ impl AsyncVM {
             stdlib_functions: Arc::new(RwLock::new(HashMap::new())),
             stdlib_types: Arc::new(RwLock::new(HashMap::new())),
             prelude_imports: Arc::new(RwLock::new(HashMap::new())),
+            stdlib_function_list: Arc::new(RwLock::new(Vec::new())),
             eval_callback: Arc::new(RwLock::new(None)),
             io_sender: Some(io_sender),
+            inspect_sender: None,
+            output_sender: None,
+            panel_command_sender: None,
             next_pid: AtomicU64::new(1),
             profiling_enabled: config.profiling_enabled,
         });
@@ -4671,6 +4687,175 @@ impl AsyncVM {
     /// Set prelude imports.
     pub fn set_prelude_imports(&self, imports: HashMap<String, String>) {
         *self.shared.prelude_imports.write().unwrap() = imports;
+    }
+
+    /// Get stdlib function list (ordered names for CallDirect).
+    pub fn get_stdlib_function_list(&self) -> Arc<RwLock<Vec<String>>> {
+        self.shared.stdlib_function_list.clone()
+    }
+
+    /// Set stdlib function list.
+    pub fn set_stdlib_function_list(&self, names: Vec<String>) {
+        *self.shared.stdlib_function_list.write().unwrap() = names;
+    }
+
+    /// Setup inspect channel and register inspect native function.
+    /// Returns a receiver that will receive InspectEntry messages.
+    pub fn setup_inspect(&mut self) -> crate::parallel::InspectReceiver {
+        let (sender, receiver) = crossbeam::channel::unbounded();
+
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot setup inspect after execution started")
+            .inspect_sender = Some(sender.clone());
+
+        // Register the inspect native function
+        self.register_native("inspect", Arc::new(GcNativeFn {
+            name: "inspect".to_string(),
+            arity: 2,
+            func: Box::new(move |args, heap| {
+                let name = match &args[1] {
+                    GcValue::String(ptr) => {
+                        heap.get_string(*ptr).map(|s| s.data.clone()).unwrap_or_else(|| String::new())
+                    }
+                    _ => return Err(RuntimeError::Panic("inspect: second argument must be a string".to_string())),
+                };
+                let value = crate::process::ThreadSafeValue::from_gc_value(&args[0], heap)
+                    .unwrap_or(crate::process::ThreadSafeValue::Unit);
+                let entry = crate::parallel::InspectEntry { name, value };
+                let _ = sender.send(entry);
+                Ok(GcValue::Unit)
+            }),
+        }));
+
+        receiver
+    }
+
+    /// Setup output channel for println.
+    /// Returns a receiver that will receive output strings.
+    pub fn setup_output(&mut self) -> crate::parallel::OutputReceiver {
+        let (sender, receiver) = crossbeam::channel::unbounded();
+
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot setup output after execution started")
+            .output_sender = Some(sender);
+
+        receiver
+    }
+
+    /// Setup panel channel and register Panel.* native functions.
+    /// Returns a receiver that will receive PanelCommand messages.
+    pub fn setup_panel(&mut self) -> crate::parallel::PanelCommandReceiver {
+        use std::sync::atomic::AtomicU64;
+        let (sender, receiver) = crossbeam::channel::unbounded();
+
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot setup panel after execution started")
+            .panel_command_sender = Some(sender.clone());
+
+        let next_panel_id = Arc::new(AtomicU64::new(1));
+
+        // Helper to extract string from GcValue
+        fn get_string(val: &GcValue, heap: &Heap, name: &str) -> Result<String, RuntimeError> {
+            match val {
+                GcValue::String(ptr) => {
+                    heap.get_string(*ptr)
+                        .map(|s| s.data.clone())
+                        .ok_or_else(|| RuntimeError::Panic(format!("{}: invalid string pointer", name)))
+                }
+                _ => Err(RuntimeError::Panic(format!("{}: expected string", name))),
+            }
+        }
+
+        // Panel.create(title: String) -> Int (panel ID)
+        let sender_create = sender.clone();
+        let next_id = next_panel_id.clone();
+        self.register_native("Panel.create", Arc::new(GcNativeFn {
+            name: "Panel.create".to_string(),
+            arity: 1,
+            func: Box::new(move |args, heap| {
+                let title = get_string(&args[0], heap, "Panel.create")?;
+                let id = next_id.fetch_add(1, Ordering::SeqCst);
+                let _ = sender_create.send(crate::parallel::PanelCommand::Create { id, title });
+                Ok(GcValue::Int64(id as i64))
+            }),
+        }));
+
+        // Panel.setContent(id: Int, content: String) -> ()
+        let sender_content = sender.clone();
+        self.register_native("Panel.setContent", Arc::new(GcNativeFn {
+            name: "Panel.setContent".to_string(),
+            arity: 2,
+            func: Box::new(move |args, heap| {
+                let id = match &args[0] {
+                    GcValue::Int64(n) => *n as u64,
+                    _ => return Err(RuntimeError::Panic("Panel.setContent: expected int".to_string())),
+                };
+                let content = get_string(&args[1], heap, "Panel.setContent")?;
+                let _ = sender_content.send(crate::parallel::PanelCommand::SetContent { id, content });
+                Ok(GcValue::Unit)
+            }),
+        }));
+
+        // Panel.show(id: Int) -> ()
+        let sender_show = sender.clone();
+        self.register_native("Panel.show", Arc::new(GcNativeFn {
+            name: "Panel.show".to_string(),
+            arity: 1,
+            func: Box::new(move |args, _heap| {
+                let id = match &args[0] {
+                    GcValue::Int64(n) => *n as u64,
+                    _ => return Err(RuntimeError::Panic("Panel.show: expected int".to_string())),
+                };
+                let _ = sender_show.send(crate::parallel::PanelCommand::Show { id });
+                Ok(GcValue::Unit)
+            }),
+        }));
+
+        // Panel.hide(id: Int) -> ()
+        let sender_hide = sender.clone();
+        self.register_native("Panel.hide", Arc::new(GcNativeFn {
+            name: "Panel.hide".to_string(),
+            arity: 1,
+            func: Box::new(move |args, _heap| {
+                let id = match &args[0] {
+                    GcValue::Int64(n) => *n as u64,
+                    _ => return Err(RuntimeError::Panic("Panel.hide: expected int".to_string())),
+                };
+                let _ = sender_hide.send(crate::parallel::PanelCommand::Hide { id });
+                Ok(GcValue::Unit)
+            }),
+        }));
+
+        // Panel.onKey(id: Int, handler: String) -> ()
+        let sender_onkey = sender.clone();
+        self.register_native("Panel.onKey", Arc::new(GcNativeFn {
+            name: "Panel.onKey".to_string(),
+            arity: 2,
+            func: Box::new(move |args, heap| {
+                let id = match &args[0] {
+                    GcValue::Int64(n) => *n as u64,
+                    _ => return Err(RuntimeError::Panic("Panel.onKey: expected int".to_string())),
+                };
+                let handler_fn = get_string(&args[1], heap, "Panel.onKey")?;
+                let _ = sender_onkey.send(crate::parallel::PanelCommand::OnKey { id, handler_fn });
+                Ok(GcValue::Unit)
+            }),
+        }));
+
+        // Panel.registerHotkey(key: String, callback: String) -> ()
+        let sender_hotkey = sender.clone();
+        self.register_native("Panel.registerHotkey", Arc::new(GcNativeFn {
+            name: "Panel.registerHotkey".to_string(),
+            arity: 2,
+            func: Box::new(move |args, heap| {
+                let key = get_string(&args[0], heap, "Panel.registerHotkey")?;
+                let callback_fn = get_string(&args[1], heap, "Panel.registerHotkey")?;
+                let _ = sender_hotkey.send(crate::parallel::PanelCommand::RegisterHotkey { key, callback_fn });
+                Ok(GcValue::Unit)
+            }),
+        }));
+
+        receiver
     }
 
     /// Get a function by name.

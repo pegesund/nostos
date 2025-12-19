@@ -25,7 +25,7 @@ use nostos_repl::CallGraph;
 use nostos_syntax::ast::Item;
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_syntax::lexer::{Token, lex};
-use nostos_vm::parallel::{ParallelVM, ParallelConfig};
+use nostos_vm::async_vm::{AsyncVM, AsyncConfig};
 
 use reedline::{
     Reedline, Signal, FileBackedHistory, Highlighter, StyledText, 
@@ -241,7 +241,7 @@ struct VarBinding {
 
 pub struct Repl {
     compiler: Compiler,
-    vm: ParallelVM,
+    vm: AsyncVM,
     loaded_files: Vec<PathBuf>,
     config: ReplConfig,
     stdlib_path: Option<PathBuf>,
@@ -261,11 +261,11 @@ impl Repl {
     /// Create a new REPL instance
     pub fn new(config: ReplConfig) -> Self {
         let compiler = Compiler::new_empty();
-        let vm_config = ParallelConfig {
+        let vm_config = AsyncConfig {
             num_threads: config.num_threads,
             ..Default::default()
         };
-        let mut vm = ParallelVM::new(vm_config);
+        let mut vm = AsyncVM::new(vm_config);
         vm.register_default_natives();
 
         Self {
@@ -1325,26 +1325,21 @@ impl Repl {
         // Sync VM and execute
         self.sync_vm();
 
-        if let Some(func) = self.compiler.get_function(&eval_name) {
-            match self.vm.run(func.clone()) {
-                Ok(result) => {
-                    // Output is already printed to stdout by the VM
-                    // Return the value for display if not Unit
-                    if let Some(val) = result.value {
-                        if !val.is_unit() {
-                            return Some(val.display());
-                        }
-                    }
-                    return None;
+        // eval_name is a 0-arity function, so add "/" suffix
+        let fn_name = format!("{}/", eval_name);
+        match self.vm.run(&fn_name) {
+            Ok(result) => {
+                // Output is already printed to stdout by the VM
+                // Return the value for display if not Unit
+                if !result.is_unit() {
+                    return Some(result.display());
                 }
-                Err(e) => {
-                    eprintln!("Runtime error: {}", e);
-                    return None;
-                }
+                None
             }
-        } else {
-            eprintln!("Internal error: evaluation function not found");
-            None
+            Err(e) => {
+                eprintln!("Runtime error: {}", e);
+                None
+            }
         }
     }
 

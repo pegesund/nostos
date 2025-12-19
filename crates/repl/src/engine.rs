@@ -12,8 +12,8 @@ use crate::CallGraph;
 use crate::session::extract_dependencies_from_fn;
 use nostos_syntax::ast::{Item, Pattern};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
-use nostos_vm::parallel::{ParallelVM, ParallelConfig, InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver};
 use nostos_vm::async_vm::{AsyncVM, AsyncConfig};
+use nostos_vm::parallel::{InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver};
 use nostos_vm::process::ThreadSafeValue;
 
 /// An item in the browser
@@ -138,7 +138,7 @@ pub struct PanelState {
 /// The REPL state
 pub struct ReplEngine {
     compiler: Compiler,
-    vm: ParallelVM,
+    vm: AsyncVM,
     loaded_files: Vec<PathBuf>,
     config: ReplConfig,
     stdlib_path: Option<PathBuf>,
@@ -173,15 +173,15 @@ pub struct ReplEngine {
     /// Hotkey callbacks: hotkey -> callback function name
     hotkey_callbacks: HashMap<String, String>,
     /// Dynamic functions from eval - shared with VM
-    dynamic_functions: Arc<parking_lot::RwLock<HashMap<String, Arc<nostos_vm::value::FunctionValue>>>>,
+    dynamic_functions: Arc<std::sync::RwLock<HashMap<String, Arc<nostos_vm::value::FunctionValue>>>>,
     /// Track which dynamic functions have been synced to compiler
     synced_dynamic_functions: HashSet<String>,
     /// Dynamic types from eval - shared with VM
-    dynamic_types: Arc<parking_lot::RwLock<HashMap<String, Arc<nostos_vm::value::TypeValue>>>>,
+    dynamic_types: Arc<std::sync::RwLock<HashMap<String, Arc<nostos_vm::value::TypeValue>>>>,
     /// Track which dynamic types have been synced to compiler
     synced_dynamic_types: HashSet<String>,
     /// Dynamic mvars from eval - shared with VM
-    dynamic_mvars: Arc<parking_lot::RwLock<HashMap<String, Arc<parking_lot::RwLock<nostos_vm::ThreadSafeValue>>>>>,
+    dynamic_mvars: Arc<std::sync::RwLock<HashMap<String, Arc<std::sync::RwLock<nostos_vm::ThreadSafeValue>>>>>,
     /// Track which dynamic mvars have been synced to compiler
     synced_dynamic_mvars: HashSet<String>,
 }
@@ -191,11 +191,12 @@ impl ReplEngine {
     pub fn new(config: ReplConfig) -> Self {
         let mut compiler = Compiler::new_empty();
         compiler.set_repl_mode(true); // REPL can access private functions
-        let vm_config = ParallelConfig {
+        let vm_config = AsyncConfig {
             num_threads: config.num_threads,
+            profiling_enabled: false,
             ..Default::default()
         };
-        let mut vm = ParallelVM::new(vm_config);
+        let mut vm = AsyncVM::new(vm_config);
         vm.register_default_natives();
         let inspect_receiver = Some(vm.setup_inspect());
         let output_receiver = Some(vm.setup_output());
@@ -231,14 +232,14 @@ impl ReplEngine {
 
             // Pre-populate compiler with REPL's compiled functions, preserving indices for CallDirect
             {
-                let stdlib_funcs = stdlib_functions.read();
-                let func_list = stdlib_function_list.read();
-                eval_compiler.register_external_functions_with_list(&stdlib_funcs, &func_list);
+                let stdlib_funcs = stdlib_functions.read().expect("stdlib_functions lock poisoned");
+                let func_list = stdlib_function_list.read().expect("stdlib_function_list lock poisoned");
+                eval_compiler.register_external_functions_with_list(&stdlib_funcs, &func_list[..]);
             }
 
             // Pre-populate compiler with prelude imports (local name -> qualified name mappings)
             {
-                let imports = prelude_imports.read();
+                let imports = prelude_imports.read().expect("prelude_imports lock poisoned");
                 for (local_name, qualified_name) in imports.iter() {
                     eval_compiler.add_prelude_import(local_name.clone(), qualified_name.clone());
                 }
@@ -246,7 +247,7 @@ impl ReplEngine {
 
             // Pre-populate compiler with stdlib types
             {
-                let types = stdlib_types.read();
+                let types = stdlib_types.read().expect("stdlib_types lock poisoned");
                 for (name, type_val) in types.iter() {
                     eval_compiler.register_external_type(name, type_val);
                 }
@@ -254,7 +255,7 @@ impl ReplEngine {
 
             // Pre-populate compiler with previously eval'd functions (appended after stdlib)
             {
-                let dyn_funcs = dynamic_functions.read();
+                let dyn_funcs = dynamic_functions.read().expect("dynamic_functions lock poisoned");
                 for (name, func) in dyn_funcs.iter() {
                     eval_compiler.register_external_function(name, func.clone());
                 }
@@ -262,7 +263,7 @@ impl ReplEngine {
 
             // Pre-populate compiler with previously eval'd types
             {
-                let dyn_types = dynamic_types.read();
+                let dyn_types = dynamic_types.read().expect("dynamic_types lock poisoned");
                 for (name, type_val) in dyn_types.iter() {
                     eval_compiler.register_external_type(name, type_val);
                 }
@@ -270,7 +271,7 @@ impl ReplEngine {
 
             // Pre-populate compiler with dynamic mvars (from previous evals)
             {
-                let mvars = dynamic_mvars.read();
+                let mvars = dynamic_mvars.read().expect("dynamic_mvars lock poisoned");
                 for name in mvars.keys() {
                     eval_compiler.register_dynamic_mvar(name);
                 }
@@ -355,7 +356,7 @@ impl ReplEngine {
                         .ok_or_else(|| "Failed to compile expression".to_string())?;
 
                     // Create a minimal VM to run the expression
-                    let mut eval_vm = ParallelVM::new(ParallelConfig::default());
+                    let mut eval_vm = AsyncVM::new(AsyncConfig::default());
                     eval_vm.register_default_natives();
                     eval_vm.setup_eval();
 
@@ -364,7 +365,7 @@ impl ReplEngine {
 
                     // Register all functions
                     {
-                        let dyn_funcs = dynamic_functions.read();
+                        let dyn_funcs = dynamic_functions.read().expect("dynamic_functions lock poisoned");
                         for (fname, f) in dyn_funcs.iter() {
                             eval_vm.register_function(fname, f.clone());
                         }
@@ -373,7 +374,7 @@ impl ReplEngine {
 
                     // Register dynamic types
                     {
-                        let dyn_types = dynamic_types.read();
+                        let dyn_types = dynamic_types.read().expect("dynamic_types lock poisoned");
                         for (tname, t) in dyn_types.iter() {
                             eval_vm.register_type(tname, t.clone());
                         }
@@ -384,17 +385,13 @@ impl ReplEngine {
                     eval_vm.set_function_list(func_list);
 
                     // Run and get result
-                    match eval_vm.run(func) {
+                    match eval_vm.run("__eval_var__/") {
                         Ok(result) => {
-                            if let Some(val) = result.value {
-                                // Convert to ThreadSafeValue and store in dynamic_mvars
-                                let safe_val = val.to_thread_safe();
-                                let mut mvars = dynamic_mvars.write();
-                                mvars.insert(name.clone(), Arc::new(parking_lot::RwLock::new(safe_val)));
-                                return Ok(format!("{} = {}", name, val.display()));
-                            } else {
-                                return Err("Expression returned no value".to_string());
-                            }
+                            // Convert to ThreadSafeValue and store in dynamic_mvars
+                            let safe_val = result.to_thread_safe();
+                            let mut mvars = dynamic_mvars.write().expect("dynamic_mvars lock poisoned");
+                            mvars.insert(name.clone(), Arc::new(std::sync::RwLock::new(safe_val)));
+                            return Ok(format!("{} = {}", name, result.display()));
                         }
                         Err(e) => return Err(format!("{}", e)),
                     }
@@ -425,8 +422,8 @@ impl ReplEngine {
                 // Store ONLY newly defined functions in dynamic_functions for future evals
                 // (not stdlib or previously eval'd functions that were pre-registered)
                 {
-                    let dyn_funcs_read = dynamic_functions.read();
-                    let stdlib_funcs = stdlib_functions.read();
+                    let dyn_funcs_read = dynamic_functions.read().expect("dynamic_functions lock poisoned");
+                    let stdlib_funcs = stdlib_functions.read().expect("stdlib_functions lock poisoned");
 
                     // Collect new functions (those not in stdlib or already in dynamic_functions)
                     let new_funcs: Vec<_> = eval_compiler.get_all_functions()
@@ -442,7 +439,7 @@ impl ReplEngine {
                     drop(stdlib_funcs);
 
                     // Now insert the new functions
-                    let mut dyn_funcs = dynamic_functions.write();
+                    let mut dyn_funcs = dynamic_functions.write().expect("dynamic_functions lock poisoned");
                     for (name, func) in new_funcs {
                         dyn_funcs.insert(name, func);
                     }
@@ -450,8 +447,8 @@ impl ReplEngine {
 
                 // Store ONLY newly defined types in dynamic_types for future evals
                 {
-                    let dyn_types_read = dynamic_types.read();
-                    let stdlib_types_read = stdlib_types.read();
+                    let dyn_types_read = dynamic_types.read().expect("dynamic_types lock poisoned");
+                    let stdlib_types_read = stdlib_types.read().expect("stdlib_types lock poisoned");
 
                     // Collect new types (those not in stdlib or already in dynamic_types)
                     let new_types: Vec<_> = eval_compiler.get_vm_types()
@@ -465,7 +462,7 @@ impl ReplEngine {
                     drop(stdlib_types_read);
 
                     // Now insert the new types
-                    let mut dyn_types = dynamic_types.write();
+                    let mut dyn_types = dynamic_types.write().expect("dynamic_types lock poisoned");
                     for (name, type_val) in new_types {
                         dyn_types.insert(name, type_val);
                     }
@@ -494,7 +491,7 @@ impl ReplEngine {
                     .ok_or_else(|| "Failed to compile expression".to_string())?;
 
                 // Create a minimal VM to run it with all dynamic functions available
-                let mut eval_vm = ParallelVM::new(ParallelConfig::default());
+                let mut eval_vm = AsyncVM::new(AsyncConfig::default());
                 eval_vm.register_default_natives();
                 eval_vm.setup_eval();
 
@@ -503,7 +500,7 @@ impl ReplEngine {
 
                 // Register all functions (dynamic + the eval wrapper)
                 {
-                    let dyn_funcs = dynamic_functions.read();
+                    let dyn_funcs = dynamic_functions.read().expect("dynamic_functions lock poisoned");
                     for (name, f) in dyn_funcs.iter() {
                         eval_vm.register_function(name, f.clone());
                     }
@@ -512,24 +509,20 @@ impl ReplEngine {
 
                 // Register dynamic types
                 {
-                    let dyn_types = dynamic_types.read();
+                    let dyn_types = dynamic_types.read().expect("dynamic_types lock poisoned");
                     for (name, t) in dyn_types.iter() {
                         eval_vm.register_type(name, t.clone());
                     }
                 }
 
                 // Build function list for indexed calls
-                let mut func_list: Vec<_> = eval_compiler.get_function_list();
+                let func_list: Vec<_> = eval_compiler.get_function_list();
                 eval_vm.set_function_list(func_list);
 
                 // Run and get result
-                match eval_vm.run(func) {
+                match eval_vm.run("__eval_result__/") {
                     Ok(result) => {
-                        if let Some(val) = result.value {
-                            Ok(val.display())
-                        } else {
-                            Ok("()".to_string())
-                        }
+                        Ok(result.display())
                     }
                     Err(e) => Err(format!("{}", e)),
                 }
@@ -1489,47 +1482,37 @@ impl ReplEngine {
 
         self.sync_vm();
 
-        if let Some(func) = self.compiler.get_function(&eval_name) {
-            match self.vm.run(func.clone()) {
-                Ok(result) => {
-                    let mut output = String::new();
+        // eval_name is a 0-arity function, so add "/" suffix
+        let fn_name = format!("{}/", eval_name);
+        match self.vm.run(&fn_name) {
+            Ok(result) => {
+                let mut output = String::new();
 
-                    // Add captured output (from println, print, etc.)
-                    for line in &result.output {
-                        output.push_str(line);
-                        output.push('\n');
-                    }
-
-                    // Add return value (if not Unit)
-                    if let Some(ref val) = result.value {
-                        if !val.is_unit() {
-                            output.push_str(&val.display());
-                        }
-                    }
-
-                    // Poll for any panel registrations that happened during evaluation
-                    let registrations = self.poll_panel_registrations();
-                    if !registrations.is_empty() {
-                        for (key, title) in registrations {
-                            if !output.is_empty() {
-                                output.push('\n');
-                            }
-                            output.push_str(&format!("Panel '{}' registered on {}", title, key));
-                        }
-                    }
-
-                    Ok(output.trim_end().to_string())
+                // Add return value (if not Unit)
+                if !result.is_unit() {
+                    output.push_str(&result.display());
                 }
-                Err(e) => Err(format!("Runtime error: {}", e)),
+
+                // Poll for any panel registrations that happened during evaluation
+                let registrations = self.poll_panel_registrations();
+                if !registrations.is_empty() {
+                    for (key, title) in registrations {
+                        if !output.is_empty() {
+                            output.push('\n');
+                        }
+                        output.push_str(&format!("Panel '{}' registered on {}", title, key));
+                    }
+                }
+
+                Ok(output.trim_end().to_string())
             }
-        } else {
-            Err("Internal error: evaluation function not found".to_string())
+            Err(e) => Err(format!("Runtime error: {}", e)),
         }
     }
 
     /// Sync dynamic functions (from eval) to the compiler so they can be called.
     fn sync_dynamic_functions(&mut self) {
-        let dyn_funcs = self.dynamic_functions.read();
+        let dyn_funcs = self.dynamic_functions.read().expect("dynamic_functions lock poisoned");
         for (name, func) in dyn_funcs.iter() {
             if !self.synced_dynamic_functions.contains(name) {
                 self.compiler.register_external_function(name, func.clone());
@@ -1540,7 +1523,7 @@ impl ReplEngine {
 
     /// Sync dynamic types (from eval) to the compiler so they can be used.
     fn sync_dynamic_types(&mut self) {
-        let dyn_types = self.dynamic_types.read();
+        let dyn_types = self.dynamic_types.read().expect("dynamic_types lock poisoned");
         for (name, type_val) in dyn_types.iter() {
             if !self.synced_dynamic_types.contains(name) {
                 self.compiler.register_external_type(name, type_val);
@@ -1551,7 +1534,7 @@ impl ReplEngine {
 
     /// Sync dynamic mvars (from eval) to the compiler so they can be accessed.
     fn sync_dynamic_mvars(&mut self) {
-        let dyn_mvars = self.dynamic_mvars.read();
+        let dyn_mvars = self.dynamic_mvars.read().expect("dynamic_mvars lock poisoned");
         for name in dyn_mvars.keys() {
             if !self.synced_dynamic_mvars.contains(name) {
                 self.compiler.register_dynamic_mvar(name);
@@ -1651,13 +1634,11 @@ impl ReplEngine {
     /// This is much faster than eval() because it skips parsing and compilation.
     /// Used for panel key handlers where performance is critical.
     pub fn call_function_with_string_arg(&mut self, fn_name: &str, arg: String) -> Result<(), String> {
-        if let Some(func) = self.compiler.get_function(fn_name) {
-            match self.vm.run_with_string_arg(func, arg) {
-                Ok(_) => Ok(()),
-                Err(e) => Err(format!("Runtime error: {}", e)),
-            }
-        } else {
-            Err(format!("Function not found: {}", fn_name))
+        // For now, use eval as a workaround until run_with_string_arg is implemented in AsyncVM
+        let call_expr = format!("{}(\"{}\")", fn_name, arg.replace('\\', "\\\\").replace('"', "\\\""));
+        match self.eval(&call_expr) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
         }
     }
 
@@ -2113,7 +2094,7 @@ impl ReplEngine {
 
         // Check dynamic_types (eval-created types)
         {
-            let dyn_types = self.dynamic_types.read();
+            let dyn_types = self.dynamic_types.read().expect("dynamic_types lock poisoned");
             if let Some(type_val) = dyn_types.get(name) {
                 if let Some(ref source) = type_val.source_code {
                     return source.clone();
@@ -3129,7 +3110,7 @@ impl ReplEngine {
 
         // Process types from dynamic_types (eval-created, not in compiler)
         {
-            let dyn_types = self.dynamic_types.read();
+            let dyn_types = self.dynamic_types.read().expect("dynamic_types lock poisoned");
             for name in dyn_types.keys() {
                 if prefix.is_empty() {
                     if let Some(dot_pos) = name.find('.') {
@@ -3283,9 +3264,10 @@ impl ReplEngine {
     pub fn get_var_value_raw(&mut self, name: &str) -> Option<nostos_vm::Value> {
         // First try REPL bindings
         if let Some(binding) = self.var_bindings.get(name).cloned() {
-            let func = self.compiler.get_function(&binding.thunk_name)?;
-            return match self.vm.run(func) {
-                Ok(result) => result.value.map(|v| v.to_value()),
+            // Thunk functions are 0-arity, so add "/" suffix
+            let fn_name = format!("{}/", binding.thunk_name);
+            return match self.vm.run(&fn_name) {
+                Ok(result) => Some(result.to_value()),
                 Err(_) => None,
             };
         }
@@ -3327,14 +3309,11 @@ impl ReplEngine {
             return None;
         }
 
-        // Run the thunk to get the raw value
-        if let Some(func) = self.compiler.get_function(&thunk_name) {
-            match self.vm.run(func) {
-                Ok(result) => result.value.map(|v| v.to_value()),
-                Err(_) => None,
-            }
-        } else {
-            None
+        // Run the thunk to get the raw value (0-arity function, add "/" suffix)
+        let fn_name = format!("{}/", thunk_name);
+        match self.vm.run(&fn_name) {
+            Ok(result) => Some(result.to_value()),
+            Err(_) => None,
         }
     }
 
@@ -3680,36 +3659,26 @@ impl ReplEngine {
         // Create a compiler for the profiled evaluation
         let mut eval_compiler = Compiler::new_empty();
 
-        // Pre-populate compiler with REPL's compiled functions
+        // Pre-populate compiler with REPL's compiled functions directly from compiler
         {
-            let stdlib_funcs = self.vm.get_stdlib_functions();
-            let func_list = self.vm.get_stdlib_function_list();
-            let stdlib_funcs_guard = stdlib_funcs.read();
-            let func_list_guard = func_list.read();
-            eval_compiler.register_external_functions_with_list(&stdlib_funcs_guard, &func_list_guard);
+            let all_funcs = self.compiler.get_all_functions();
+            let func_list = self.compiler.get_function_list_names();
+            eval_compiler.register_external_functions_with_list(all_funcs, func_list);
         }
 
         // Pre-populate with prelude imports
-        {
-            let imports = self.vm.get_prelude_imports();
-            let imports_guard = imports.read();
-            for (local_name, qualified_name) in imports_guard.iter() {
-                eval_compiler.add_prelude_import(local_name.clone(), qualified_name.clone());
-            }
+        for (local_name, qualified_name) in self.compiler.get_prelude_imports() {
+            eval_compiler.add_prelude_import(local_name.clone(), qualified_name.clone());
         }
 
-        // Pre-populate with stdlib types
-        {
-            let types = self.vm.get_stdlib_types();
-            let types_guard = types.read();
-            for (name, type_val) in types_guard.iter() {
-                eval_compiler.register_external_type(name, type_val);
-            }
+        // Pre-populate with types from compiler
+        for (name, type_val) in self.compiler.get_vm_types() {
+            eval_compiler.register_external_type(&name, &type_val);
         }
 
         // Pre-populate with previously eval'd functions
         {
-            let dyn_funcs = self.dynamic_functions.read();
+            let dyn_funcs = self.dynamic_functions.read().expect("dynamic_functions lock poisoned");
             for (name, func) in dyn_funcs.iter() {
                 eval_compiler.register_external_function(name, func.clone());
             }
@@ -3717,7 +3686,7 @@ impl ReplEngine {
 
         // Pre-populate with dynamic types
         {
-            let dyn_types = self.dynamic_types.read();
+            let dyn_types = self.dynamic_types.read().expect("dynamic_types lock poisoned");
             for (name, type_val) in dyn_types.iter() {
                 eval_compiler.register_external_type(name, type_val);
             }
@@ -3731,6 +3700,11 @@ impl ReplEngine {
             return Err(format!("Compile error: {}", e));
         }
 
+        // Verify that __profile_main__ was compiled
+        if eval_compiler.get_function("__profile_main__/").is_none() {
+            return Err(format!("Failed to compile expression. Function may not exist or has wrong arity."));
+        }
+
         // Create AsyncVM with profiling enabled and JIT
         let async_config = AsyncConfig {
             num_threads: self.config.num_threads,
@@ -3740,18 +3714,14 @@ impl ReplEngine {
         let mut async_vm = AsyncVM::new(async_config);
         async_vm.register_default_natives();
 
-        // Register all functions from stdlib
-        {
-            let stdlib_funcs = self.vm.get_stdlib_functions();
-            let stdlib_funcs_guard = stdlib_funcs.read();
-            for (name, func) in stdlib_funcs_guard.iter() {
-                async_vm.register_function(name, func.clone());
-            }
+        // Register all functions from REPL compiler
+        for (name, func) in self.compiler.get_all_functions().iter() {
+            async_vm.register_function(name, func.clone());
         }
 
-        // Register all dynamic functions
+        // Register all dynamic functions from eval
         {
-            let dyn_funcs = self.dynamic_functions.read();
+            let dyn_funcs = self.dynamic_functions.read().expect("dynamic_functions lock poisoned");
             for (name, func) in dyn_funcs.iter() {
                 async_vm.register_function(name, func.clone());
             }
@@ -3762,16 +3732,12 @@ impl ReplEngine {
             async_vm.register_function(name, func.clone());
         }
 
-        // Register all types
-        {
-            let types = self.vm.get_stdlib_types();
-            let types_guard = types.read();
-            for (name, type_val) in types_guard.iter() {
-                async_vm.register_type(name, type_val.clone());
-            }
+        // Register all types from REPL compiler
+        for (name, type_val) in self.compiler.get_vm_types().iter() {
+            async_vm.register_type(name, type_val.clone());
         }
         {
-            let dyn_types = self.dynamic_types.read();
+            let dyn_types = self.dynamic_types.read().expect("dynamic_types lock poisoned");
             for (name, type_val) in dyn_types.iter() {
                 async_vm.register_type(name, type_val.clone());
             }

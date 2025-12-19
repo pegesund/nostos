@@ -9618,7 +9618,7 @@ impl Compiler {
 mod tests {
     use super::*;
     use nostos_syntax::parser::parse;
-    use nostos_vm::parallel::{ParallelVM, ParallelConfig};
+    use nostos_vm::async_vm::{AsyncVM, AsyncConfig};
 
     fn compile_and_run(source: &str) -> Result<Value, String> {
         let (module_opt, errors) = parse(source);
@@ -9628,12 +9628,12 @@ mod tests {
         let module = module_opt.ok_or_else(|| "Parse returned no module".to_string())?;
         let compiler = compile_module(&module, source).map_err(|e| format!("Compile error: {:?}", e))?;
 
-        // Use ParallelVM with single thread for deterministic tests
-        let config = ParallelConfig {
+        // Use AsyncVM with single thread for deterministic tests
+        let config = AsyncConfig {
             num_threads: 1,
             ..Default::default()
         };
-        let mut vm = ParallelVM::new(config);
+        let mut vm = AsyncVM::new(config);
         vm.register_default_natives();
 
         for (name, func) in compiler.get_all_functions() {
@@ -9644,20 +9644,19 @@ mod tests {
             vm.register_type(&name, type_val);
         }
 
-        // Look for a main function
-        let main_func = if let Some(func) = compiler.get_function("main") {
-            func
-        } else if let Some((_, func)) = compiler.get_all_functions().iter().next() {
-            func.clone()
+        // Look for main function name (0-arity, so add "/" suffix)
+        let main_fn_name = if compiler.get_function("main").is_some() {
+            "main/"
+        } else if let Some((name, _)) = compiler.get_all_functions().iter().next() {
+            // Use the first function found - but need to construct the function name with arity
+            return Err(format!("TODO: handle non-main function: {}", name));
         } else {
             return Err("No functions to run".to_string());
         };
 
-        let result = vm.run(main_func)
+        let result = vm.run(main_fn_name)
             .map_err(|e| format!("Runtime error: {:?}", e))?;
-        result.value
-            .map(|v| v.to_value())
-            .ok_or_else(|| "No result returned".to_string())
+        Ok(result.to_value())
     }
 
     // ========== Doc Comment Tests ==========
