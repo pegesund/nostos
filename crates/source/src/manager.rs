@@ -642,10 +642,29 @@ impl SourceManager {
     /// If the definition is part of a "together" group, returns all definitions in the group
     /// Handles both simple names (greet) and qualified names (utils.greet)
     pub fn get_source(&self, name: &str) -> Option<String> {
-        // Strip module prefix if present (e.g., "utils.greet" -> "greet")
-        let simple_name = name.rsplit('.').next().unwrap_or(name);
+        // Parse qualified name (e.g., "utils.greet" -> module="utils", simple_name="greet")
+        let (module_name, simple_name) = if name.contains('.') {
+            let last_dot = name.rfind('.').unwrap();
+            (&name[..last_dot], &name[last_dot + 1..])
+        } else {
+            ("", name)
+        };
 
-        // Check def_index first
+        // If a module is specified, look directly in that module
+        if !module_name.is_empty() {
+            if let Some(module) = self.modules.get(module_name) {
+                // Check if this definition is part of a group
+                if let Some(group_source) = module.get_group_source(simple_name) {
+                    return Some(group_source);
+                }
+                // Otherwise return just this definition
+                if let Some(group) = module.get_definition(simple_name) {
+                    return Some(group.combined_source());
+                }
+            }
+        }
+
+        // Fall back to def_index for unqualified names
         if let Some(module_key) = self.def_index.get(simple_name) {
             if let Some(module) = self.modules.get(module_key) {
                 // Check if this definition is part of a group
@@ -671,9 +690,22 @@ impl SourceManager {
     /// (i.e., includes group members if this definition is in a group)
     /// Handles both simple names (greet) and qualified names (utils.greet)
     pub fn get_grouped_names(&self, name: &str) -> Vec<String> {
-        // Strip module prefix if present
-        let simple_name = name.rsplit('.').next().unwrap_or(name);
+        // Parse qualified name (e.g., "utils.greet" -> module="utils", simple_name="greet")
+        let (module_name, simple_name) = if name.contains('.') {
+            let last_dot = name.rfind('.').unwrap();
+            (&name[..last_dot], &name[last_dot + 1..])
+        } else {
+            ("", name)
+        };
 
+        // If a module is specified, look directly in that module
+        if !module_name.is_empty() {
+            if let Some(module) = self.modules.get(module_name) {
+                return module.get_grouped_names(simple_name);
+            }
+        }
+
+        // Fall back to def_index for unqualified names
         if let Some(module_key) = self.def_index.get(simple_name) {
             if let Some(module) = self.modules.get(module_key) {
                 return module.get_grouped_names(simple_name);
