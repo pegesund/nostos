@@ -3748,30 +3748,39 @@ impl ReplEngine {
         async_vm.set_function_list(func_list.clone());
 
         // JIT compile if enabled
+        let mut jit_compiled_count = 0usize;
+        let mut jit_registered_count = 0usize;
         if self.config.enable_jit {
             if let Ok(mut jit) = JitCompiler::new(JitConfig::default()) {
                 for idx in 0..func_list.len() {
                     jit.queue_compilation(idx as u16);
                 }
-                if let Ok(_compiled) = jit.process_queue(&func_list) {
+                if let Ok(compiled) = jit.process_queue(&func_list) {
+                    jit_compiled_count = compiled;
                     for idx in 0..func_list.len() {
                         if let Some(jit_fn) = jit.get_int_function_0(idx as u16) {
                             async_vm.register_jit_int_function_0(idx as u16, jit_fn);
+                            jit_registered_count += 1;
                         }
                         if let Some(jit_fn) = jit.get_int_function(idx as u16) {
                             async_vm.register_jit_int_function(idx as u16, jit_fn);
+                            jit_registered_count += 1;
                         }
                         if let Some(jit_fn) = jit.get_int_function_2(idx as u16) {
                             async_vm.register_jit_int_function_2(idx as u16, jit_fn);
+                            jit_registered_count += 1;
                         }
                         if let Some(jit_fn) = jit.get_int_function_3(idx as u16) {
                             async_vm.register_jit_int_function_3(idx as u16, jit_fn);
+                            jit_registered_count += 1;
                         }
                         if let Some(jit_fn) = jit.get_int_function_4(idx as u16) {
                             async_vm.register_jit_int_function_4(idx as u16, jit_fn);
+                            jit_registered_count += 1;
                         }
                         if let Some(jit_fn) = jit.get_loop_int64_array_function(idx as u16) {
                             async_vm.register_jit_loop_array_function(idx as u16, jit_fn);
+                            jit_registered_count += 1;
                         }
                     }
                 }
@@ -3785,8 +3794,20 @@ impl ReplEngine {
         match result {
             Ok((value, profile_summary)) => {
                 let mut output = format!("Result: {:?}", value);
+
+                // Add JIT compilation stats
+                if self.config.enable_jit {
+                    output.push_str(&format!("\n\nJIT: {} functions compiled, {} variants registered",
+                                            jit_compiled_count, jit_registered_count));
+                    if jit_compiled_count == 0 {
+                        output.push_str("\n  (JIT requires pure numeric functions with 0-4 args, or single-array loop patterns)");
+                    }
+                } else {
+                    output.push_str("\n\nJIT: disabled");
+                }
+
                 if let Some(summary) = profile_summary {
-                    output.push_str("\n");
+                    output.push_str("\n\n");
                     output.push_str(&summary);
                 } else {
                     output.push_str("\n\n(No profiling data collected)");
