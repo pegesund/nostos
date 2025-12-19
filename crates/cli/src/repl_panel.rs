@@ -20,21 +20,6 @@ use std::io::Write;
 
 use crate::autocomplete::{Autocomplete, CompletionContext, CompletionItem, CompletionKind, CompletionSource};
 
-/// Debug logging to /tmp/nostos_tui_debug.log
-fn debug_log(msg: &str) {
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/nostos_tui_debug.log")
-    {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let _ = writeln!(f, "[{}] repl_panel: {}", timestamp, msg);
-    }
-}
-
 /// Wrapper to implement CompletionSource for ReplEngine
 struct EngineCompletionSource<'a> {
     engine: &'a ReplEngine,
@@ -1228,31 +1213,22 @@ impl ReplPanel {
     /// Take the eval state (handle, in_progress flag, and current input) for preservation across rebuilds.
     /// Returns None if no eval is in progress.
     pub fn take_eval_state(&mut self) -> Option<(nostos_vm::ThreadedEvalHandle, Vec<String>)> {
-        debug_log(&format!("take_eval_state: instance_id={}, eval_in_progress={}, has_handle={}",
-            self.instance_id, self.eval_in_progress, self.eval_handle.is_some()));
         if self.eval_in_progress {
             self.eval_in_progress = false;
             let handle = self.eval_handle.take();
             let input = self.current.input.clone();
-            debug_log(&format!("take_eval_state: returning handle={}, input_lines={}", handle.is_some(), input.len()));
             handle.map(|h| (h, input))
         } else {
-            debug_log("take_eval_state: no eval in progress, returning None");
             None
         }
     }
 
     /// Restore eval state after a rebuild.
     pub fn restore_eval_state(&mut self, handle: nostos_vm::ThreadedEvalHandle, input: Vec<String>) {
-        debug_log(&format!("restore_eval_state: instance_id={}, input_lines={}", self.instance_id, input.len()));
         self.eval_handle = Some(handle);
         self.eval_in_progress = true;
-        // Restore the input that was being evaluated
         self.current.input = input;
-        // Show the "Evaluating..." message so user knows an eval is in progress
         self.current.output = Some(ReplOutput::Definition("Evaluating...".to_string()));
-        debug_log(&format!("restore_eval_state: eval_in_progress={}, has_handle={}",
-            self.eval_in_progress, self.eval_handle.is_some()));
     }
 
     /// Load history entry by index (or restore stashed if None)
