@@ -2347,11 +2347,33 @@ impl ReplEngine {
         // Initialize SourceManager
         let sm = SourceManager::new(path_buf.clone())?;
 
+        // First, collect module names that have definitions in .nostos/defs/
+        // These modules should be loaded from defs/ instead of the main files
+        let defs_dir = path_buf.join(".nostos").join("defs");
+        let mut modules_in_defs: HashSet<String> = HashSet::new();
+        if defs_dir.exists() && defs_dir.is_dir() {
+            if let Ok(entries) = fs::read_dir(&defs_dir) {
+                for entry in entries.flatten() {
+                    if entry.path().is_dir() {
+                        if let Some(name) = entry.file_name().to_str() {
+                            modules_in_defs.insert(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
         // Load all .nos files from the main directory (excluding .nostos/)
         let mut source_files = Vec::new();
         visit_dirs(&path_buf, &mut source_files)?;
 
         for file_path in &source_files {
+            // Skip files whose module name is in .nostos/defs/ (they'll be loaded from there)
+            if let Some(stem) = file_path.file_stem().and_then(|s| s.to_str()) {
+                if modules_in_defs.contains(stem) {
+                    continue;
+                }
+            }
             let source = fs::read_to_string(file_path)
                 .map_err(|e| format!("Failed to read {}: {}", file_path.display(), e))?;
 
@@ -7446,6 +7468,44 @@ mod call_graph_tests {
         let _ = engine.compiler.compile_all();
         
         assert_eq!(engine.is_project_function("f2"), true, "REPL function (repl) SHOULD be a project function");
+    }
+
+    #[test]
+    fn test_load_directory_multifile_module() {
+        // Test that functions from different files in the same module can see each other
+        // This tests the fix for multi-file .nostos/defs/ loading
+        use std::fs;
+
+        // Create temp directory with unique name
+        let temp_dir = std::env::temp_dir().join(format!("nostos_test_multifile_{}", std::process::id()));
+        let defs_dir = temp_dir.join(".nostos").join("defs").join("mymodule");
+        let _ = fs::remove_dir_all(&temp_dir); // Clean up from previous runs
+        fs::create_dir_all(&defs_dir).expect("Failed to create defs dir");
+
+        // Create foo.nos with a simple function
+        fs::write(defs_dir.join("foo.nos"), "foo() = 42").expect("Failed to write foo.nos");
+
+        // Create bar.nos that calls foo()
+        fs::write(defs_dir.join("bar.nos"), "bar() = foo() + 1").expect("Failed to write bar.nos");
+
+        // Create main.nos that calls both
+        fs::write(defs_dir.join("main.nos"), "main() = bar() + foo()").expect("Failed to write main.nos");
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Load the directory
+        let result = engine.load_directory(temp_dir.to_str().unwrap());
+        assert!(result.is_ok(), "Should load directory successfully: {:?}", result);
+
+        // Now verify we can call mymodule.main() and it returns the correct result
+        // main() = bar() + foo() = (foo() + 1) + foo() = 43 + 42 = 85
+        let result = engine.eval("mymodule.main()");
+        assert!(result.is_ok(), "Should evaluate mymodule.main(): {:?}", result);
+        assert_eq!(result.unwrap(), "85", "main() should return 85 (43 + 42)");
+
+        // Clean up
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
 }

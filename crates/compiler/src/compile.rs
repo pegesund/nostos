@@ -810,6 +810,28 @@ impl Compiler {
             }
         }
 
+        // Pre-populate fn_asts with all pending functions so they can see each other
+        // This is critical for multi-file modules where functions from different files
+        // need to call each other (e.g., main.nos calling benchmark.nos in the same module)
+        for (fn_def, module_path, _, _, _, _) in &pending {
+            let base_name = if module_path.is_empty() {
+                fn_def.name.node.clone()
+            } else {
+                format!("{}.{}", module_path.join("."), fn_def.name.node)
+            };
+            if let Some(clause) = fn_def.clauses.first() {
+                let param_types: Vec<String> = clause.params.iter()
+                    .map(|p| p.ty.as_ref()
+                        .map(|t| self.type_expr_to_string(t))
+                        .unwrap_or_else(|| "_".to_string()))
+                    .collect();
+                let signature = param_types.join(",");
+                let name = format!("{}/{}", base_name, signature);
+                // Insert a placeholder in fn_asts so has_function_with_base can find it
+                self.fn_asts.insert(name, fn_def.clone());
+            }
+        }
+
         // First pass: compile all functions
         for (fn_def, module_path, imports, line_starts, source, source_name) in pending {
             let saved_path = self.module_path.clone();
