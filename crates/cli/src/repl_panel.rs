@@ -12,6 +12,7 @@ use nostos_syntax::lexer::{Token, lex};
 use std::rc::Rc;
 use std::cell::RefCell;
 use nostos_repl::ReplEngine;
+use nostos_vm::ThreadedEvalHandle;
 use std::fs;
 use std::env;
 use std::path::PathBuf;
@@ -206,6 +207,8 @@ pub struct ReplPanel {
     command_history: Vec<Vec<String>>,
     /// Whether an async evaluation is in progress
     eval_in_progress: bool,
+    /// Handle for async evaluation (owned by this panel, includes independent interrupt)
+    eval_handle: Option<ThreadedEvalHandle>,
 }
 
 impl ReplPanel {
@@ -233,6 +236,7 @@ impl ReplPanel {
             stash_current: None,
             command_history: Self::load_history_from_disk(),
             eval_in_progress: false,
+            eval_handle: None,
         }
     }
 
@@ -294,8 +298,9 @@ impl ReplPanel {
         // Try async evaluation for expressions
         let async_result = self.engine.borrow_mut().start_eval_async(&input_text);
         match async_result {
-            Ok(()) => {
-                // Async eval started - mark as in progress and show "Evaluating..."
+            Ok(handle) => {
+                // Async eval started - store handle and mark as in progress
+                self.eval_handle = Some(handle);
                 self.eval_in_progress = true;
                 self.current.output = Some(ReplOutput::Definition("Evaluating...".to_string()));
             }
@@ -351,6 +356,7 @@ impl ReplPanel {
         self.history_index = None;
         self.stash_current = None;
         self.eval_in_progress = false;
+        self.eval_handle = None;
 
         // Auto-save history to disk
         self.save_history_to_disk();
@@ -372,20 +378,42 @@ impl ReplPanel {
             return false;
         }
 
-        let poll_result = self.engine.borrow_mut().poll_eval();
-        match poll_result {
-            Some(result) => {
-                self.finish_eval_with_result(result);
+        let handle = match &self.eval_handle {
+            Some(h) => h,
+            None => return false,
+        };
+
+        match handle.try_recv() {
+            Ok(Ok(result)) => {
+                let output = if result.is_unit() {
+                    String::new()
+                } else {
+                    result.display()
+                };
+                self.finish_eval_with_result(Ok(output));
                 true
             }
-            None => false,
+            Ok(Err(e)) => {
+                let err_msg = if e.contains("Interrupted") {
+                    "Interrupted".to_string()
+                } else {
+                    format!("Runtime error: {}", e)
+                };
+                self.finish_eval_with_result(Err(err_msg));
+                true
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.finish_eval_with_result(Err("Evaluation thread crashed".to_string()));
+                true
+            }
         }
     }
 
     /// Cancel the current async evaluation
     pub fn cancel_eval(&mut self) {
-        if self.eval_in_progress {
-            self.engine.borrow_mut().cancel_eval();
+        if let Some(handle) = &self.eval_handle {
+            handle.cancel();
             // The poll will pick up the interrupted result
         }
     }

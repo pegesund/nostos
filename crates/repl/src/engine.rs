@@ -184,16 +184,6 @@ pub struct ReplEngine {
     dynamic_mvars: Arc<std::sync::RwLock<HashMap<String, Arc<std::sync::RwLock<nostos_vm::ThreadSafeValue>>>>>,
     /// Track which dynamic mvars have been synced to compiler
     synced_dynamic_mvars: HashSet<String>,
-    /// Pending async evaluation (for TUI non-blocking eval)
-    pending_eval: Option<PendingEval>,
-}
-
-/// State for a pending async evaluation
-struct PendingEval {
-    /// Channel receiver for the result
-    result_rx: std::sync::mpsc::Receiver<Result<nostos_vm::SendableValue, String>>,
-    /// Name of the eval function (for cleanup)
-    _eval_name: String,
 }
 
 impl ReplEngine {
@@ -567,7 +557,6 @@ impl ReplEngine {
             synced_dynamic_types: HashSet::new(),
             dynamic_mvars: dynamic_mvars_for_self,
             synced_dynamic_mvars: HashSet::new(),
-            pending_eval: None,
         }
     }
 
@@ -3675,17 +3664,12 @@ impl ReplEngine {
     }
 
     /// Start an async evaluation (non-blocking, for TUI).
-    /// Returns Ok(()) if evaluation started, Err if there was a parse/compile error.
-    /// Use `poll_eval()` to check for results.
+    /// Returns Ok(handle) if evaluation started, Err if there was a parse/compile error.
+    /// The handle can be used to poll for results and cancel the evaluation independently.
     ///
     /// Note: This is intended for expression evaluation only. For definitions and
     /// REPL commands, use the synchronous `eval()` method.
-    pub fn start_eval_async(&mut self, input: &str) -> Result<(), String> {
-        // Cancel any pending evaluation first
-        if self.pending_eval.is_some() {
-            self.cancel_eval();
-        }
-
+    pub fn start_eval_async(&mut self, input: &str) -> Result<nostos_vm::ThreadedEvalHandle, String> {
         let input = input.trim();
 
         // Handle REPL commands synchronously (they're quick)
@@ -3730,63 +3714,12 @@ impl ReplEngine {
 
         self.sync_vm();
 
-        // Clear any pending interrupt before execution
-        self.vm.clear_interrupt();
-
-        // Start threaded evaluation
+        // Start threaded evaluation and return the handle
+        // Each eval gets its own interrupt flag, enabling independent cancellation
         let fn_name = format!("{}/", eval_name);
-        let result_rx = self.vm.run_threaded(&fn_name);
+        let handle = self.vm.run_threaded(&fn_name);
 
-        self.pending_eval = Some(PendingEval {
-            result_rx,
-            _eval_name: eval_name,
-        });
-
-        Ok(())
-    }
-
-    /// Poll for async evaluation result.
-    /// Returns Some(result) if evaluation completed, None if still running.
-    pub fn poll_eval(&mut self) -> Option<Result<String, String>> {
-        let pending = self.pending_eval.as_ref()?;
-
-        match pending.result_rx.try_recv() {
-            Ok(Ok(result)) => {
-                self.pending_eval = None;
-                let output = if result.is_unit() {
-                    String::new()
-                } else {
-                    result.display()
-                };
-                Some(Ok(output))
-            }
-            Ok(Err(e)) => {
-                self.pending_eval = None;
-                if e.contains("Interrupted") {
-                    Some(Err("Interrupted".to_string()))
-                } else {
-                    Some(Err(format!("Runtime error: {}", e)))
-                }
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => None,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.pending_eval = None;
-                Some(Err("Evaluation thread crashed".to_string()))
-            }
-        }
-    }
-
-    /// Cancel the current async evaluation by setting the interrupt flag.
-    pub fn cancel_eval(&mut self) {
-        if self.pending_eval.is_some() {
-            self.vm.interrupt();
-            // Don't clear pending_eval yet - let poll_eval handle the result
-        }
-    }
-
-    /// Check if there's a pending async evaluation.
-    pub fn has_pending_eval(&self) -> bool {
-        self.pending_eval.is_some()
+        Ok(handle)
     }
 
     /// Profile an expression and return formatted results

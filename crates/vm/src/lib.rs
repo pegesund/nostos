@@ -36,3 +36,4 @@ pub use scheduler::*;
 pub use supervisor::*;
 pub use value::*;
 pub use worker::*;
+pub use async_vm::ThreadedEvalHandle;
