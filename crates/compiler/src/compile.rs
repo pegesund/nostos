@@ -266,6 +266,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Pg.begin", signature: "Int -> ()", doc: "Begin a transaction" },
     BuiltinInfo { name: "Pg.commit", signature: "Int -> ()", doc: "Commit the current transaction" },
     BuiltinInfo { name: "Pg.rollback", signature: "Int -> ()", doc: "Rollback the current transaction" },
+    BuiltinInfo { name: "Pg.transaction", signature: "Int -> (() -> a) -> a", doc: "Execute function in transaction with auto-rollback on error" },
 ];
 
 /// Extract doc comment immediately preceding a definition at the given span start.
@@ -3422,6 +3423,57 @@ impl Compiler {
                             self.chunk.emit(Instruction::PgRollback(dst, handle_reg), line);
                             return Ok(dst);
                         }
+                        "Pg.transaction" if args.len() == 2 => {
+                            // Pg.transaction(conn, fn) expands to:
+                            // Pg.begin(conn)
+                            // result = try fn() catch e -> { Pg.rollback(conn); throw(e) } end
+                            // Pg.commit(conn)
+                            // result
+                            let conn_reg = self.compile_expr_tail(&args[0], false)?;
+                            let fn_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+
+                            // 1. Begin transaction
+                            let begin_dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgBegin(begin_dst, conn_reg), line);
+
+                            // 2. Push exception handler
+                            let handler_idx = self.chunk.emit(Instruction::PushHandler(0), line);
+
+                            // 3. Call the closure (0 arguments)
+                            self.chunk.emit(Instruction::Call(dst, fn_reg, vec![].into()), line);
+
+                            // 4. Pop handler (success path)
+                            self.chunk.emit(Instruction::PopHandler, line);
+
+                            // 5. Commit transaction
+                            let commit_dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgCommit(commit_dst, conn_reg), line);
+
+                            // 6. Jump past catch block
+                            let skip_catch = self.chunk.emit(Instruction::Jump(0), line);
+
+                            // 7. Catch block - patch handler to jump here
+                            let catch_start = self.chunk.code.len();
+                            self.chunk.patch_jump(handler_idx, catch_start);
+
+                            // 8. Get exception
+                            let exc_reg = self.alloc_reg();
+                            self.chunk.emit(Instruction::GetException(exc_reg), line);
+
+                            // 9. Rollback transaction
+                            let rollback_dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgRollback(rollback_dst, conn_reg), line);
+
+                            // 10. Re-throw the exception
+                            self.chunk.emit(Instruction::Throw(exc_reg), line);
+
+                            // 11. End - patch skip jump
+                            let end = self.chunk.code.len();
+                            self.chunk.patch_jump(skip_catch, end);
+
+                            return Ok(dst);
+                        }
                         // String encoding functions
                         "Base64.encode" if args.len() == 1 => {
                             let str_reg = self.compile_expr_tail(&args[0], false)?;
@@ -3918,6 +3970,57 @@ impl Compiler {
                             let handle_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgRollback(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.transaction" if args.len() == 2 => {
+                            // Pg.transaction(conn, fn) expands to:
+                            // Pg.begin(conn)
+                            // result = try fn() catch e -> { Pg.rollback(conn); throw(e) } end
+                            // Pg.commit(conn)
+                            // result
+                            let conn_reg = self.compile_expr_tail(&args[0], false)?;
+                            let fn_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+
+                            // 1. Begin transaction
+                            let begin_dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgBegin(begin_dst, conn_reg), line);
+
+                            // 2. Push exception handler
+                            let handler_idx = self.chunk.emit(Instruction::PushHandler(0), line);
+
+                            // 3. Call the closure (0 arguments)
+                            self.chunk.emit(Instruction::Call(dst, fn_reg, vec![].into()), line);
+
+                            // 4. Pop handler (success path)
+                            self.chunk.emit(Instruction::PopHandler, line);
+
+                            // 5. Commit transaction
+                            let commit_dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgCommit(commit_dst, conn_reg), line);
+
+                            // 6. Jump past catch block
+                            let skip_catch = self.chunk.emit(Instruction::Jump(0), line);
+
+                            // 7. Catch block - patch handler to jump here
+                            let catch_start = self.chunk.code.len();
+                            self.chunk.patch_jump(handler_idx, catch_start);
+
+                            // 8. Get exception
+                            let exc_reg = self.alloc_reg();
+                            self.chunk.emit(Instruction::GetException(exc_reg), line);
+
+                            // 9. Rollback transaction
+                            let rollback_dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgRollback(rollback_dst, conn_reg), line);
+
+                            // 10. Re-throw the exception
+                            self.chunk.emit(Instruction::Throw(exc_reg), line);
+
+                            // 11. End - patch skip jump
+                            let end = self.chunk.code.len();
+                            self.chunk.patch_jump(skip_catch, end);
+
                             return Ok(dst);
                         }
                         // === Process introspection ===
