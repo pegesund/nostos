@@ -4576,7 +4576,10 @@ impl AsyncProcess {
                             let gc_value = self.io_response_to_gc_value(resp);
                             set_reg!(dst, gc_value);
                         }
-                        Err(e) => return Err(RuntimeError::Panic(format!("Pg.connect: {}", e))),
+                        Err(e) => {
+                            // Throw catchable exception
+                            self.throw_exception(format!("Pg.connect: {}", e))?;
+                        }
                     }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
@@ -4627,7 +4630,10 @@ impl AsyncProcess {
                             let gc_value = self.io_response_to_gc_value(resp);
                             set_reg!(dst, gc_value);
                         }
-                        Err(e) => return Err(RuntimeError::Panic(format!("Pg.query: {}", e))),
+                        Err(e) => {
+                            // Throw catchable exception
+                            self.throw_exception(format!("Pg.query: {}", e))?;
+                        }
                     }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
@@ -4678,7 +4684,10 @@ impl AsyncProcess {
                             let gc_value = self.io_response_to_gc_value(resp);
                             set_reg!(dst, gc_value);
                         }
-                        Err(e) => return Err(RuntimeError::Panic(format!("Pg.execute: {}", e))),
+                        Err(e) => {
+                            // Throw catchable exception
+                            self.throw_exception(format!("Pg.execute: {}", e))?;
+                        }
                     }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
@@ -4922,6 +4931,26 @@ impl AsyncProcess {
     fn handle_exception(&mut self, _error: &RuntimeError) -> bool {
         // TODO: Implement exception handling
         false
+    }
+
+    /// Throw a catchable exception. Returns Ok(true) if caught, Err if uncaught.
+    fn throw_exception(&mut self, message: String) -> Result<bool, RuntimeError> {
+        let exception = GcValue::String(self.heap.alloc_string(message.clone()));
+        self.current_exception = Some(exception);
+
+        // Find the most recent handler
+        if let Some(handler) = self.handlers.pop() {
+            // Unwind stack to handler's frame
+            while self.frames.len() > handler.frame_index + 1 {
+                self.frames.pop();
+            }
+            // Jump to catch block
+            self.frames[handler.frame_index].ip = handler.catch_ip;
+            Ok(true)
+        } else {
+            // No handler - propagate as runtime error
+            Err(RuntimeError::Panic(format!("Uncaught exception: {}", message)))
+        }
     }
 }
 

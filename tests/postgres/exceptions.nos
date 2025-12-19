@@ -1,0 +1,68 @@
+# expect: 0
+# PostgreSQL exception handling tests
+# REQUIRES: PostgreSQL running at localhost with user/password: postgres/postgres
+
+test_query_syntax_error(conn) = {
+    # Catch SQL syntax error
+    result = try Pg.query(conn, "SELEC INVALID SYNTAX", []) catch e -> e end
+    # Result should be a string containing error info
+    assert(length(result) > 0)
+    ()
+}
+
+test_query_missing_table(conn) = {
+    # Catch missing table error
+    result = try Pg.query(conn, "SELECT * FROM nonexistent_table_xyz_123", []) catch e -> e end
+    assert(length(result) > 0)
+    ()
+}
+
+test_execute_syntax_error(conn) = {
+    # Catch SQL syntax error in execute
+    result = try Pg.execute(conn, "INSER INTO foo VALUES (1)", []) catch e -> e end
+    assert(length(result) > 0)
+    ()
+}
+
+test_no_exception_on_success(conn) = {
+    # Verify no exception on valid query
+    result = try Pg.query(conn, "SELECT 42", []) catch e -> [] end
+    # Should be [[42]] not error
+    assert_eq(head(head(result)), 42)
+    ()
+}
+
+test_exception_pattern_match(conn) = {
+    # Can pattern match on exception
+    result = try Pg.query(conn, "INVALID", []) catch
+        e -> "caught: " ++ e
+    end
+    # Should start with "caught: "
+    assert(length(result) > 7)
+    ()
+}
+
+test_nested_try_catch(conn) = {
+    # Nested try-catch blocks
+    outer = try {
+        inner = try Pg.query(conn, "BAD SQL", []) catch e -> "inner caught" end
+        inner
+    } catch e -> "outer caught" end
+    # Inner catch should handle it
+    assert_eq(outer, "inner caught")
+    ()
+}
+
+main() = {
+    conn = Pg.connect("host=localhost user=postgres password=postgres")
+
+    test_query_syntax_error(conn)
+    test_query_missing_table(conn)
+    test_execute_syntax_error(conn)
+    test_no_exception_on_success(conn)
+    test_exception_pattern_match(conn)
+    test_nested_try_catch(conn)
+
+    Pg.close(conn)
+    0
+}
