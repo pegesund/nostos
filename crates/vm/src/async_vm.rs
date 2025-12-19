@@ -7009,6 +7009,12 @@ impl AsyncVM {
     }
     /// Run the main function and return the result.
     pub fn run(&mut self, main_fn_name: &str) -> Result<SendableValue, String> {
+        let (result, _profile) = self.run_with_profile(main_fn_name)?;
+        Ok(result)
+    }
+
+    /// Run the main function and return both the result and profile summary (if profiling enabled).
+    pub fn run_with_profile(&mut self, main_fn_name: &str) -> Result<(SendableValue, Option<String>), String> {
         // Create multi-threaded tokio runtime for parallel execution
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -7016,7 +7022,7 @@ impl AsyncVM {
             .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
 
         // Run with work-stealing across multiple threads
-        rt.block_on(self.run_async(main_fn_name))
+        rt.block_on(self.run_async_with_profile(main_fn_name))
     }
 
     /// Run with multi-threaded work distribution (same as run, kept for API compat).
@@ -7024,8 +7030,8 @@ impl AsyncVM {
         self.run(main_fn_name)
     }
 
-    /// Async entry point for running main.
-    async fn run_async(&self, main_fn_name: &str) -> Result<SendableValue, String> {
+    /// Async entry point for running main with profile data.
+    async fn run_async_with_profile(&self, main_fn_name: &str) -> Result<(SendableValue, Option<String>), String> {
         // Find main function
         let main_fn = self.shared.functions.get(main_fn_name)
             .ok_or_else(|| format!("Main function '{}' not found", main_fn_name))?
@@ -7053,15 +7059,13 @@ impl AsyncVM {
         // Run main process (blocks until complete)
         let result = process.run().await;
 
-        // Print profiling summary if enabled
-        if let Some(ref profile) = process.profile {
-            profile.print_summary();
-        }
+        // Get profiling summary if enabled
+        let profile_summary = process.profile.as_ref().map(|p| p.format_summary());
 
         match result {
             Ok(value) => {
                 let sendable = SendableValue::from_gc_value(&value, &process.heap);
-                Ok(sendable)
+                Ok((sendable, profile_summary))
             }
             Err(e) => Err(e.to_string()),
         }
