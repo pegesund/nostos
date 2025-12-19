@@ -11,6 +11,110 @@
 //! - Imports (use statements)
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
+/// Get file path completions for a partial path.
+///
+/// Returns a list of completion items for files and directories that match the partial path.
+/// Prioritizes .nos files and directories, but shows all files.
+pub fn get_file_completions(partial_path: &str) -> Vec<CompletionItem> {
+    let mut completions = Vec::new();
+
+    // Determine the directory to list and the prefix to match
+    let (dir_path, file_prefix) = if partial_path.is_empty() {
+        // Empty path - list current directory
+        (Path::new("."), "")
+    } else if partial_path.ends_with('/') || partial_path.ends_with(std::path::MAIN_SEPARATOR) {
+        // Path ends with separator - list that directory
+        (Path::new(partial_path), "")
+    } else {
+        // Path has a partial filename - split into dir and prefix
+        let path = Path::new(partial_path);
+        match (path.parent(), path.file_name()) {
+            (Some(parent), Some(name)) => {
+                let parent_str = if parent.as_os_str().is_empty() { "." } else { parent.to_str().unwrap_or(".") };
+                (Path::new(parent_str), name.to_str().unwrap_or(""))
+            }
+            _ => (Path::new("."), partial_path),
+        }
+    };
+
+    // Read directory entries
+    let entries = match std::fs::read_dir(dir_path) {
+        Ok(entries) => entries,
+        Err(_) => return completions,
+    };
+
+    // Collect matching entries
+    for entry in entries.flatten() {
+        let file_name = match entry.file_name().into_string() {
+            Ok(name) => name,
+            Err(_) => continue,
+        };
+
+        // Skip hidden files (starting with .)
+        if file_name.starts_with('.') {
+            continue;
+        }
+
+        // Check if it matches the prefix (case-insensitive)
+        if !file_prefix.is_empty() && !file_name.to_lowercase().starts_with(&file_prefix.to_lowercase()) {
+            continue;
+        }
+
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let is_nos_file = file_name.ends_with(".nos");
+
+        // Build the completion text (just the filename, not the full path)
+        let completion_text = if is_dir {
+            format!("{}/", file_name)
+        } else {
+            file_name.clone()
+        };
+
+        let kind = if is_dir {
+            CompletionKind::Directory
+        } else {
+            CompletionKind::File
+        };
+
+        // Build label with indicator
+        let label = if is_dir {
+            format!("{}  [dir]", file_name)
+        } else if is_nos_file {
+            format!("{}  [nos]", file_name)
+        } else {
+            file_name.clone()
+        };
+
+        completions.push(CompletionItem {
+            text: completion_text,
+            label,
+            kind,
+            doc: None,
+        });
+    }
+
+    // Sort: directories first, then .nos files, then other files
+    completions.sort_by(|a, b| {
+        let a_is_dir = matches!(a.kind, CompletionKind::Directory);
+        let b_is_dir = matches!(b.kind, CompletionKind::Directory);
+        let a_is_nos = a.text.ends_with(".nos");
+        let b_is_nos = b.text.ends_with(".nos");
+
+        match (a_is_dir, b_is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => match (a_is_nos, b_is_nos) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.text.to_lowercase().cmp(&b.text.to_lowercase()),
+            }
+        }
+    });
+
+    completions
+}
 
 /// Parse `use` statements from source code and extract imported names.
 ///
@@ -102,6 +206,8 @@ pub enum CompletionKind {
     Field,
     Variable,
     Constructor,
+    File,
+    Directory,
 }
 
 impl CompletionKind {
@@ -114,6 +220,8 @@ impl CompletionKind {
             CompletionKind::Field => "field",
             CompletionKind::Variable => "var",
             CompletionKind::Constructor => "ctor",
+            CompletionKind::File => "file",
+            CompletionKind::Directory => "dir",
         }
     }
 
@@ -126,6 +234,8 @@ impl CompletionKind {
             CompletionKind::Field => (150, 255, 150),      // Light green
             CompletionKind::Variable => (255, 150, 255),   // Pink
             CompletionKind::Constructor => (255, 255, 100), // Yellow
+            CompletionKind::File => (200, 255, 200),       // Light green
+            CompletionKind::Directory => (100, 150, 255),  // Blue
         }
     }
 }
@@ -166,6 +276,8 @@ pub enum CompletionContext {
     ModuleMember { module: String, prefix: String },
     /// Dot completion after a type/variable (field access)
     FieldAccess { receiver: String, prefix: String },
+    /// File path completion (inside :load "...")
+    FilePath { partial_path: String },
 }
 
 /// Autocomplete engine
@@ -222,8 +334,13 @@ impl Autocomplete {
         // Get text before cursor
         let before_cursor: String = line.chars().take(cursor_col).collect();
 
+        // Check for file path context first (inside :load "...")
+        if let Some(partial_path) = self.extract_load_path(&before_cursor) {
+            return CompletionContext::FilePath { partial_path };
+        }
+
         // Find the start of the current identifier/expression
-        let (expr_start, expr) = self.extract_expression(&before_cursor);
+        let (_expr_start, expr) = self.extract_expression(&before_cursor);
 
         // Check if there's a dot in the expression
         if let Some(dot_pos) = expr.rfind('.') {
@@ -246,6 +363,36 @@ impl Autocomplete {
         }
 
         CompletionContext::Identifier { prefix: expr.to_string() }
+    }
+
+    /// Check if cursor is inside a :load "..." command and extract the partial path
+    fn extract_load_path(&self, before_cursor: &str) -> Option<String> {
+        // Look for :load " pattern followed by text without closing quote
+        // Pattern: :load "partial_path  (no closing quote before cursor)
+        let trimmed = before_cursor.trim_start();
+
+        // Check for :load command
+        if !trimmed.starts_with(":load ") {
+            return None;
+        }
+
+        let after_load = &trimmed[6..]; // Skip ":load "
+        let after_load = after_load.trim_start();
+
+        // Must start with a quote
+        if !after_load.starts_with('"') {
+            return None;
+        }
+
+        let path_part = &after_load[1..]; // Skip the opening quote
+
+        // If there's a closing quote, we're not inside the string
+        if path_part.contains('"') {
+            return None;
+        }
+
+        // Return the partial path (everything after the opening quote)
+        Some(path_part.to_string())
     }
 
     /// Extract the expression being completed from text before cursor
@@ -307,6 +454,10 @@ impl Autocomplete {
             }
             CompletionContext::FieldAccess { receiver, prefix } => {
                 self.complete_field_access(receiver, prefix, source)
+            }
+            CompletionContext::FilePath { partial_path } => {
+                // File path completions are handled separately via get_file_completions
+                get_file_completions(partial_path)
             }
         }
     }

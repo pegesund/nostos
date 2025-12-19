@@ -18,7 +18,7 @@ use std::env;
 use std::path::PathBuf;
 use std::io::Write;
 
-use crate::autocomplete::{Autocomplete, CompletionContext, CompletionItem, CompletionKind, CompletionSource};
+use crate::autocomplete::{Autocomplete, CompletionContext, CompletionItem, CompletionKind, CompletionSource, get_file_completions};
 
 /// Wrapper to implement CompletionSource for ReplEngine
 struct EngineCompletionSource<'a> {
@@ -547,16 +547,26 @@ impl ReplPanel {
         let line = &self.current.input[self.cursor.1];
         let context = self.autocomplete.parse_context(line, self.cursor.0);
 
-        // Get completions
-        let eng = self.engine.borrow();
-        let source = EngineCompletionSource { engine: &eng };
-        let candidates = self.autocomplete.get_completions(&context, &source);
+        // Get completions based on context type
+        let candidates = match &context {
+            CompletionContext::FilePath { partial_path } => {
+                // File path completion for :load command
+                get_file_completions(partial_path)
+            }
+            _ => {
+                // Regular code completions
+                let eng = self.engine.borrow();
+                let source = EngineCompletionSource { engine: &eng };
+                self.autocomplete.get_completions(&context, &source)
+            }
+        };
 
-        // Only show popup if we have candidates and a non-empty prefix (or dot completion)
+        // Only show popup if we have candidates and appropriate context
         let show_popup = match &context {
             CompletionContext::Identifier { prefix } => !prefix.is_empty() && !candidates.is_empty(),
             CompletionContext::ModuleMember { .. } => !candidates.is_empty(),
             CompletionContext::FieldAccess { .. } => !candidates.is_empty(),
+            CompletionContext::FilePath { .. } => !candidates.is_empty(),
         };
 
         if show_popup {
@@ -578,12 +588,22 @@ impl ReplPanel {
 
         let item = &self.ac_state.candidates[self.ac_state.selected];
         let context = self.ac_state.context.as_ref().unwrap();
+        let is_directory = item.text.ends_with('/');
+        let is_file_path_context = matches!(context, CompletionContext::FilePath { .. });
 
         // Calculate how much to replace
         let prefix_len = match context {
             CompletionContext::Identifier { prefix } => prefix.len(),
             CompletionContext::ModuleMember { prefix, .. } => prefix.len(),
             CompletionContext::FieldAccess { prefix, .. } => prefix.len(),
+            CompletionContext::FilePath { partial_path } => {
+                // For file paths, only replace the filename part (after last /)
+                if let Some(last_sep) = partial_path.rfind('/') {
+                    partial_path.len() - last_sep - 1
+                } else {
+                    partial_path.len()
+                }
+            }
         };
 
         // Replace prefix with completion text
@@ -597,6 +617,11 @@ impl ReplPanel {
         self.cursor.0 = self.cursor.0 - prefix_len + item.text.chars().count();
 
         self.ac_state.reset();
+
+        // If we selected a directory in file path context, re-open autocomplete
+        if is_file_path_context && is_directory {
+            self.update_autocomplete();
+        }
     }
 
     /// Draw a line with syntax highlighting

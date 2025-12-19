@@ -386,6 +386,7 @@ impl CodeEditor {
             CompletionContext::Identifier { prefix } => !prefix.is_empty() && !candidates.is_empty(),
             CompletionContext::ModuleMember { .. } => !candidates.is_empty(),
             CompletionContext::FieldAccess { .. } => !candidates.is_empty(),
+            CompletionContext::FilePath { .. } => false, // File path completion not used in editor
         };
 
         if show_popup {
@@ -473,6 +474,7 @@ impl CodeEditor {
             CompletionContext::Identifier { prefix } => prefix.len(),
             CompletionContext::ModuleMember { prefix, .. } => prefix.len(),
             CompletionContext::FieldAccess { prefix, .. } => prefix.len(),
+            CompletionContext::FilePath { .. } => return, // File path completion not used in editor
         };
 
         // Replace prefix with completion text
