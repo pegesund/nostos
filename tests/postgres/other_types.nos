@@ -1,0 +1,88 @@
+# expect: 0
+# PostgreSQL boolean, NULL, and mixed type tests
+# REQUIRES: PostgreSQL running at localhost with user/password: postgres/postgres
+
+test_boolean_true(conn) = {
+    r1 = Pg.query(conn, "SELECT $1", [true])
+    assert_eq(head(head(r1)), true)
+
+    r2 = Pg.query(conn, "SELECT $1 AND true", [true])
+    assert_eq(head(head(r2)), true)
+    ()
+}
+
+test_boolean_false(conn) = {
+    r1 = Pg.query(conn, "SELECT $1", [false])
+    assert_eq(head(head(r1)), false)
+
+    r2 = Pg.query(conn, "SELECT $1 OR false", [false])
+    assert_eq(head(head(r2)), false)
+    ()
+}
+
+test_boolean_logic(conn) = {
+    r1 = Pg.query(conn, "SELECT $1 AND $2", [true, true])
+    assert_eq(head(head(r1)), true)
+
+    r2 = Pg.query(conn, "SELECT $1 AND $2", [true, false])
+    assert_eq(head(head(r2)), false)
+
+    r3 = Pg.query(conn, "SELECT $1 OR $2", [false, true])
+    assert_eq(head(head(r3)), true)
+
+    r4 = Pg.query(conn, "SELECT NOT $1", [true])
+    assert_eq(head(head(r4)), false)
+    ()
+}
+
+test_null(conn) = {
+    r1 = Pg.query(conn, "SELECT $1 IS NULL", [()])
+    assert_eq(head(head(r1)), true)
+
+    r2 = Pg.query(conn, "SELECT $1 IS NOT NULL", [()])
+    assert_eq(head(head(r2)), false)
+    ()
+}
+
+test_null_coalesce(conn) = {
+    r1 = Pg.query(conn, "SELECT COALESCE($1::text, 'default')", [()])
+    assert_eq(head(head(r1)), "default")
+
+    r2 = Pg.query(conn, "SELECT COALESCE($1, 'actual')", ["provided"])
+    assert_eq(head(head(r2)), "provided")
+    ()
+}
+
+test_mixed_types(conn) = {
+    r1 = Pg.query(conn, "SELECT $1, $2, $3, $4", [42, 3.14, "hello", true])
+    row = head(r1)
+    assert_eq(head(row), 42)
+    # Note: can't easily test float equality here
+    # head(tail(row)) should be ~3.14
+    ()
+}
+
+test_multiple_rows(conn) = {
+    r1 = Pg.query(conn, "SELECT * FROM (VALUES (1,'a'), (2,'b'), (3,'c')) AS t(num, letter)", [])
+    assert_eq(length(r1), 3)
+
+    row1 = head(r1)
+    assert_eq(head(row1), 1)
+    assert_eq(head(tail(row1)), "a")
+    ()
+}
+
+main() = {
+    conn = Pg.connect("host=localhost user=postgres password=postgres")
+
+    test_boolean_true(conn)
+    test_boolean_false(conn)
+    test_boolean_logic(conn)
+    test_null(conn)
+    test_null_coalesce(conn)
+    test_mixed_types(conn)
+    test_multiple_rows(conn)
+
+    Pg.close(conn)
+    0
+}

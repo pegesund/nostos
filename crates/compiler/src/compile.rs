@@ -258,6 +258,11 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Set.union", signature: "Set a -> Set a -> Set a", doc: "Union of two sets" },
     BuiltinInfo { name: "Set.intersection", signature: "Set a -> Set a -> Set a", doc: "Intersection of two sets" },
     BuiltinInfo { name: "Set.difference", signature: "Set a -> Set a -> Set a", doc: "Elements in first set but not in second" },
+    // === PostgreSQL ===
+    BuiltinInfo { name: "Pg.connect", signature: "String -> Int", doc: "Connect to PostgreSQL database, returns handle" },
+    BuiltinInfo { name: "Pg.query", signature: "Int -> String -> [a] -> [[a]]", doc: "Execute query with params, returns rows as list of lists" },
+    BuiltinInfo { name: "Pg.execute", signature: "Int -> String -> [a] -> Int", doc: "Execute statement with params, returns affected row count" },
+    BuiltinInfo { name: "Pg.close", signature: "Int -> ()", doc: "Close PostgreSQL connection" },
 ];
 
 /// Extract doc comment immediately preceding a definition at the given span start.
@@ -729,6 +734,7 @@ impl Compiler {
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
+            "Pg",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -1097,6 +1103,7 @@ impl Compiler {
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
+            "Pg",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -3365,6 +3372,35 @@ impl Compiler {
                             self.chunk.emit(Instruction::ServerClose(dst, handle_reg), line);
                             return Ok(dst);
                         }
+                        // PostgreSQL functions
+                        "Pg.connect" if args.len() == 1 => {
+                            let conn_str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgConnect(dst, conn_str_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.query" if args.len() == 3 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let query_reg = self.compile_expr_tail(&args[1], false)?;
+                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgQuery(dst, handle_reg, query_reg, params_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.execute" if args.len() == 3 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let query_reg = self.compile_expr_tail(&args[1], false)?;
+                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgExecute(dst, handle_reg, query_reg, params_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.close" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgClose(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
                         // String encoding functions
                         "Base64.encode" if args.len() == 1 => {
                             let str_reg = self.compile_expr_tail(&args[0], false)?;
@@ -3814,6 +3850,35 @@ impl Compiler {
                             let server_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ServerClose(dst, server_reg), line);
+                            return Ok(dst);
+                        }
+                        // === PostgreSQL operations ===
+                        "Pg.connect" if args.len() == 1 => {
+                            let conn_str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgConnect(dst, conn_str_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.query" if args.len() == 3 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let query_reg = self.compile_expr_tail(&args[1], false)?;
+                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgQuery(dst, handle_reg, query_reg, params_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.execute" if args.len() == 3 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let query_reg = self.compile_expr_tail(&args[1], false)?;
+                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgExecute(dst, handle_reg, query_reg, params_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.close" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgClose(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         // === Process introspection ===

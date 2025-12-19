@@ -1,0 +1,85 @@
+# expect: 0
+# PostgreSQL execute statement tests
+# REQUIRES: PostgreSQL running at localhost with user/password: postgres/postgres
+
+test_create_insert_drop(conn) = {
+    # Create table
+    Pg.execute(conn, "CREATE TEMP TABLE test_exec (id INT, name TEXT, active BOOL)", [])
+
+    # Insert single row
+    affected1 = Pg.execute(conn, "INSERT INTO test_exec VALUES ($1, $2, $3)", [1, "alice", true])
+    assert_eq(affected1, 1)
+
+    # Insert another row
+    affected2 = Pg.execute(conn, "INSERT INTO test_exec VALUES ($1, $2, $3)", [2, "bob", false])
+    assert_eq(affected2, 1)
+
+    # Verify data
+    rows = Pg.query(conn, "SELECT * FROM test_exec ORDER BY id", [])
+    assert_eq(length(rows), 2)
+
+    # Check first row
+    row1 = head(rows)
+    assert_eq(head(row1), 1)
+    assert_eq(head(tail(row1)), "alice")
+    assert_eq(head(tail(tail(row1))), true)
+
+    # Drop table
+    Pg.execute(conn, "DROP TABLE test_exec", [])
+    ()
+}
+
+test_update(conn) = {
+    # Setup
+    Pg.execute(conn, "CREATE TEMP TABLE test_update (id INT, value INT)", [])
+    Pg.execute(conn, "INSERT INTO test_update VALUES (1, 100), (2, 200), (3, 300)", [])
+
+    # Update single row
+    affected1 = Pg.execute(conn, "UPDATE test_update SET value = $1 WHERE id = $2", [999, 2])
+    assert_eq(affected1, 1)
+
+    # Verify update
+    r1 = Pg.query(conn, "SELECT value FROM test_update WHERE id = $1", [2])
+    assert_eq(head(head(r1)), 999)
+
+    # Update multiple rows
+    affected2 = Pg.execute(conn, "UPDATE test_update SET value = value + $1", [1])
+    assert_eq(affected2, 3)
+
+    # Cleanup
+    Pg.execute(conn, "DROP TABLE test_update", [])
+    ()
+}
+
+test_delete(conn) = {
+    # Setup
+    Pg.execute(conn, "CREATE TEMP TABLE test_delete (id INT, category TEXT)", [])
+    Pg.execute(conn, "INSERT INTO test_delete VALUES (1, 'a'), (2, 'b'), (3, 'a'), (4, 'b')", [])
+
+    # Delete by category
+    affected1 = Pg.execute(conn, "DELETE FROM test_delete WHERE category = $1", ["a"])
+    assert_eq(affected1, 2)
+
+    # Verify
+    r1 = Pg.query(conn, "SELECT COUNT(*) FROM test_delete", [])
+    assert_eq(head(head(r1)), 2)
+
+    # Delete all
+    affected2 = Pg.execute(conn, "DELETE FROM test_delete", [])
+    assert_eq(affected2, 2)
+
+    # Cleanup
+    Pg.execute(conn, "DROP TABLE test_delete", [])
+    ()
+}
+
+main() = {
+    conn = Pg.connect("host=localhost user=postgres password=postgres")
+
+    test_create_insert_drop(conn)
+    test_update(conn)
+    test_delete(conn)
+
+    Pg.close(conn)
+    0
+}

@@ -983,6 +983,20 @@ pub enum Instruction {
     /// Close HTTP server: dst = Server.close(server_handle)
     ServerClose(Reg, Reg),
 
+    // === PostgreSQL Operations ===
+    /// Connect to PostgreSQL: dst = Pg.connect(connection_string)
+    /// Returns (status, handle) where handle is Int
+    PgConnect(Reg, Reg),
+    /// Execute query and return rows: dst = Pg.query(handle, query, params)
+    /// params is a list of values
+    /// Returns (status, rows) where rows is List[List[value]]
+    PgQuery(Reg, Reg, Reg, Reg),
+    /// Execute statement: dst = Pg.execute(handle, query, params)
+    /// Returns (status, affected_rows)
+    PgExecute(Reg, Reg, Reg, Reg),
+    /// Close PostgreSQL connection: dst = Pg.close(handle)
+    PgClose(Reg, Reg),
+
     // === IO/Debug builtins ===
     /// Print value, return string representation: dst = print(value)
     Print(Reg, Reg),

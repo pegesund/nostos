@@ -4552,6 +4552,166 @@ impl AsyncProcess {
                 }
             }
 
+            // PostgreSQL operations - return values directly, panic on error
+            PgConnect(dst, conn_str_reg) => {
+                let conn_string = match reg!(conn_str_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr).map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::PgConnect { connection_string: conn_string, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(resp) => {
+                            let gc_value = self.io_response_to_gc_value(resp);
+                            set_reg!(dst, gc_value);
+                        }
+                        Err(e) => return Err(RuntimeError::Panic(format!("Pg.connect: {}", e))),
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            PgQuery(dst, handle_reg, query_reg, params_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int (pg handle)".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let query = match reg!(query_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr).map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid query string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let params = match reg!(params_reg) {
+                    GcValue::List(list) => {
+                        let mut pg_params = Vec::new();
+                        for item in list.iter() {
+                            let param = self.gc_value_to_pg_param(&item)?;
+                            pg_params.push(param);
+                        }
+                        pg_params
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "List".to_string(),
+                        found: "non-list".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::PgQuery { handle, query, params, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(resp) => {
+                            let gc_value = self.io_response_to_gc_value(resp);
+                            set_reg!(dst, gc_value);
+                        }
+                        Err(e) => return Err(RuntimeError::Panic(format!("Pg.query: {}", e))),
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            PgExecute(dst, handle_reg, query_reg, params_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int (pg handle)".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let query = match reg!(query_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr).map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid query string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let params = match reg!(params_reg) {
+                    GcValue::List(list) => {
+                        let mut pg_params = Vec::new();
+                        for item in list.iter() {
+                            let param = self.gc_value_to_pg_param(&item)?;
+                            pg_params.push(param);
+                        }
+                        pg_params
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "List".to_string(),
+                        found: "non-list".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::PgExecute { handle, query, params, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(resp) => {
+                            let gc_value = self.io_response_to_gc_value(resp);
+                            set_reg!(dst, gc_value);
+                        }
+                        Err(e) => return Err(RuntimeError::Panic(format!("Pg.execute: {}", e))),
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            PgClose(dst, handle_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int (pg handle)".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::PgClose { handle, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(resp) => {
+                            let gc_value = self.io_response_to_gc_value(resp);
+                            set_reg!(dst, gc_value);
+                        }
+                        Err(e) => return Err(RuntimeError::Panic(format!("Pg.close: {}", e))),
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
             // Unimplemented instructions - add as needed
             _ => {
                 eprintln!("[AsyncVM] Unimplemented instruction: {:?}", instruction);
@@ -4698,6 +4858,63 @@ impl AsyncProcess {
             }
             IoResponseValue::ExecHandle(handle_id) => GcValue::Int64(handle_id as i64),
             IoResponseValue::ExitCode(code) => GcValue::Int64(code as i64),
+            IoResponseValue::PgHandle(handle_id) => GcValue::Int64(handle_id as i64),
+            IoResponseValue::PgRows(rows) => {
+                let row_values: Vec<GcValue> = rows
+                    .into_iter()
+                    .map(|row| {
+                        let col_values: Vec<GcValue> = row
+                            .into_iter()
+                            .map(|col| self.pg_value_to_gc_value(col))
+                            .collect();
+                        GcValue::List(GcList::from_vec(col_values))
+                    })
+                    .collect();
+                GcValue::List(GcList::from_vec(row_values))
+            }
+            IoResponseValue::PgAffected(count) => GcValue::Int64(count as i64),
+        }
+    }
+
+    /// Convert a PgValue to GcValue
+    fn pg_value_to_gc_value(&mut self, pv: crate::process::PgValue) -> GcValue {
+        use crate::process::PgValue;
+        match pv {
+            PgValue::Null => GcValue::Unit,
+            PgValue::Bool(b) => GcValue::Bool(b),
+            PgValue::Int(i) => GcValue::Int64(i),
+            PgValue::Float(f) => GcValue::Float64(f),
+            PgValue::String(s) => GcValue::String(self.heap.alloc_string(s)),
+            PgValue::Bytes(bytes) => {
+                let values: Vec<GcValue> = bytes.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
+                GcValue::List(GcList::from_vec(values))
+            }
+        }
+    }
+
+    /// Convert a GcValue to a PgParam for query parameters
+    fn gc_value_to_pg_param(&self, value: &GcValue) -> Result<crate::io_runtime::PgParam, RuntimeError> {
+        use crate::io_runtime::PgParam;
+        match value {
+            GcValue::Unit => Ok(PgParam::Null),
+            GcValue::Bool(b) => Ok(PgParam::Bool(*b)),
+            GcValue::Int64(i) => Ok(PgParam::Int(*i)),
+            GcValue::Int32(i) => Ok(PgParam::Int(*i as i64)),
+            GcValue::Int16(i) => Ok(PgParam::Int(*i as i64)),
+            GcValue::Int8(i) => Ok(PgParam::Int(*i as i64)),
+            GcValue::Float64(f) => Ok(PgParam::Float(*f)),
+            GcValue::Float32(f) => Ok(PgParam::Float(*f as f64)),
+            GcValue::String(ptr) => {
+                if let Some(s) = self.heap.get_string(*ptr) {
+                    Ok(PgParam::String(s.data.clone()))
+                } else {
+                    Err(RuntimeError::IOError("Invalid string pointer".to_string()))
+                }
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "Int, Float, String, Bool, or Unit".to_string(),
+                found: "unsupported type for Pg param".to_string(),
+            }),
         }
     }
 

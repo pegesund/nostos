@@ -16,8 +16,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
+use tokio_postgres::{Client as PgClient, NoTls};
 
-use crate::process::IoResponseValue;
+use crate::process::{IoResponseValue, PgValue};
 
 /// Unique handle for an open file
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -30,6 +31,10 @@ pub struct HttpClientHandle(pub u64);
 /// Unique handle for an HTTP server
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ServerHandle(pub u64);
+
+/// Unique handle for a Postgres connection
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PgHandle(pub u64);
 
 /// File open mode
 #[derive(Debug, Clone, Copy)]
@@ -69,6 +74,16 @@ pub struct HttpResponse {
     pub body: Vec<u8>,
 }
 
+/// PostgreSQL parameter types
+#[derive(Debug, Clone)]
+pub enum PgParam {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(String),
+}
+
 /// Result type for IO operations
 pub type IoResult<T> = Result<T, IoError>;
 
@@ -83,6 +98,7 @@ pub enum IoError {
     Timeout,
     InvalidUrl(String),
     ConnectionFailed(String),
+    PgError(String),
     Other(String),
 }
 
@@ -97,6 +113,7 @@ impl std::fmt::Display for IoError {
             IoError::Timeout => write!(f, "Operation timed out"),
             IoError::InvalidUrl(u) => write!(f, "Invalid URL: {}", u),
             IoError::ConnectionFailed(e) => write!(f, "Connection failed: {}", e),
+            IoError::PgError(e) => write!(f, "PostgreSQL error: {}", e),
             IoError::Other(e) => write!(f, "{}", e),
         }
     }
@@ -287,6 +304,32 @@ pub enum IoRequest {
         response: IoResponse,
     },
 
+    // PostgreSQL operations
+    /// Connect to a PostgreSQL database
+    PgConnect {
+        connection_string: String,
+        response: IoResponse,
+    },
+    /// Execute a query and return rows
+    PgQuery {
+        handle: u64,
+        query: String,
+        params: Vec<PgParam>,
+        response: IoResponse,
+    },
+    /// Execute a statement (INSERT, UPDATE, DELETE) and return affected rows
+    PgExecute {
+        handle: u64,
+        query: String,
+        params: Vec<PgParam>,
+        response: IoResponse,
+    },
+    /// Close a PostgreSQL connection
+    PgClose {
+        handle: u64,
+        response: IoResponse,
+    },
+
     // Shutdown
     Shutdown,
 }
@@ -391,6 +434,10 @@ impl IoRuntime {
         }
         let spawned_processes: Arc<Mutex<HashMap<u64, SpawnedProcess>>> = Arc::new(Mutex::new(HashMap::new()));
         let mut next_process_handle: u64 = 1;
+
+        // PostgreSQL connection state
+        let pg_connections: Arc<Mutex<HashMap<u64, PgClient>>> = Arc::new(Mutex::new(HashMap::new()));
+        let mut next_pg_handle: u64 = 1;
 
         while let Some(request) = request_rx.recv().await {
             match request {
@@ -1018,8 +1065,288 @@ impl IoRuntime {
                         }
                     }
                 }
+
+                // PostgreSQL operations
+                IoRequest::PgConnect { connection_string, response } => {
+                    let pg_conns = pg_connections.clone();
+                    let handle = next_pg_handle;
+                    next_pg_handle += 1;
+
+                    tokio::spawn(async move {
+                        match tokio_postgres::connect(&connection_string, NoTls).await {
+                            Ok((client, connection)) => {
+                                // Spawn a task to drive the connection
+                                tokio::spawn(async move {
+                                    if let Err(e) = connection.await {
+                                        eprintln!("PostgreSQL connection error: {}", e);
+                                    }
+                                });
+
+                                pg_conns.lock().await.insert(handle, client);
+                                let _ = response.send(Ok(IoResponseValue::PgHandle(handle)));
+                            }
+                            Err(e) => {
+                                let _ = response.send(Err(IoError::PgError(e.to_string())));
+                            }
+                        }
+                    });
+                }
+
+                IoRequest::PgQuery { handle, query, params, response } => {
+                    let pg_conns = pg_connections.clone();
+
+                    tokio::spawn(async move {
+                        let conns = pg_conns.lock().await;
+                        match conns.get(&handle) {
+                            Some(client) => {
+                                // Build params - we need to keep ownership of the boxed values
+                                let result = Self::execute_pg_query(client, &query, &params).await;
+                                match result {
+                                    Ok(rows) => {
+                                        let _ = response.send(Ok(IoResponseValue::PgRows(rows)));
+                                    }
+                                    Err(e) => {
+                                        let _ = response.send(Err(IoError::PgError(e)));
+                                    }
+                                }
+                            }
+                            None => {
+                                let _ = response.send(Err(IoError::InvalidHandle));
+                            }
+                        }
+                    });
+                }
+
+                IoRequest::PgExecute { handle, query, params, response } => {
+                    let pg_conns = pg_connections.clone();
+
+                    tokio::spawn(async move {
+                        let conns = pg_conns.lock().await;
+                        match conns.get(&handle) {
+                            Some(client) => {
+                                let result = Self::execute_pg_execute(client, &query, &params).await;
+                                match result {
+                                    Ok(count) => {
+                                        let _ = response.send(Ok(IoResponseValue::PgAffected(count)));
+                                    }
+                                    Err(e) => {
+                                        let _ = response.send(Err(IoError::PgError(e)));
+                                    }
+                                }
+                            }
+                            None => {
+                                let _ = response.send(Err(IoError::InvalidHandle));
+                            }
+                        }
+                    });
+                }
+
+                IoRequest::PgClose { handle, response } => {
+                    let mut conns = pg_connections.lock().await;
+                    if conns.remove(&handle).is_some() {
+                        let _ = response.send(Ok(IoResponseValue::Unit));
+                    } else {
+                        let _ = response.send(Err(IoError::InvalidHandle));
+                    }
+                }
             }
         }
+    }
+
+    /// Convert a row column value to PgValue
+    fn row_value_to_pg_value(row: &tokio_postgres::Row, idx: usize) -> PgValue {
+        use tokio_postgres::types::Type;
+
+        let col_type = row.columns()[idx].type_();
+
+        // Try each type in order of likelihood
+        match *col_type {
+            Type::BOOL => {
+                match row.try_get::<_, bool>(idx) {
+                    Ok(v) => PgValue::Bool(v),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::INT2 => {
+                match row.try_get::<_, i16>(idx) {
+                    Ok(v) => PgValue::Int(v as i64),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::INT4 => {
+                match row.try_get::<_, i32>(idx) {
+                    Ok(v) => PgValue::Int(v as i64),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::INT8 => {
+                match row.try_get::<_, i64>(idx) {
+                    Ok(v) => PgValue::Int(v),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::FLOAT4 => {
+                match row.try_get::<_, f32>(idx) {
+                    Ok(v) => PgValue::Float(v as f64),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::FLOAT8 => {
+                match row.try_get::<_, f64>(idx) {
+                    Ok(v) => PgValue::Float(v),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::TEXT | Type::VARCHAR | Type::NAME | Type::CHAR | Type::BPCHAR => {
+                match row.try_get::<_, String>(idx) {
+                    Ok(v) => PgValue::String(v),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::BYTEA => {
+                match row.try_get::<_, Vec<u8>>(idx) {
+                    Ok(v) => PgValue::Bytes(v),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            _ => {
+                // For other types, try to get as string
+                match row.try_get::<_, String>(idx) {
+                    Ok(v) => PgValue::String(v),
+                    Err(_) => PgValue::Null,
+                }
+            }
+        }
+    }
+
+    /// Add type casts to SQL based on param types
+    fn add_type_casts(query: &str, params: &[PgParam]) -> String {
+        let mut result = query.to_string();
+        // Replace $N with $N::type based on param type (in reverse order to not mess up indices)
+        for (i, param) in params.iter().enumerate().rev() {
+            let placeholder = format!("${}", i + 1);
+            let typed_placeholder = match param {
+                PgParam::Null => format!("{}::text", placeholder), // NULL needs a type for PostgreSQL
+                PgParam::Bool(_) => format!("{}::bool", placeholder),
+                PgParam::Int(_) => format!("{}::int8", placeholder),
+                PgParam::Float(_) => format!("{}::float8", placeholder),
+                PgParam::String(_) => format!("{}::text", placeholder),
+            };
+            // Only replace if not already typed (check for ::)
+            let check_pattern = format!("{}::", placeholder);
+            if !result.contains(&check_pattern) {
+                result = result.replace(&placeholder, &typed_placeholder);
+            }
+        }
+        result
+    }
+
+    /// Execute a Postgres query with parameters
+    async fn execute_pg_query(
+        client: &PgClient,
+        query: &str,
+        params: &[PgParam],
+    ) -> Result<Vec<Vec<PgValue>>, String> {
+        use tokio_postgres::types::Type;
+
+        let rows = if params.is_empty() {
+            client.query(query, &[]).await
+        } else {
+            // Add type casts based on param types
+            let typed_query = Self::add_type_casts(query, params);
+
+            // Prepare statement
+            let stmt = match client.prepare(&typed_query).await {
+                Ok(s) => s,
+                Err(e) => return Err(e.to_string()),
+            };
+
+            // Build typed params based on what PostgreSQL expects
+            let typed_params = Self::build_typed_params(params, stmt.params());
+            let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+                typed_params.iter().map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+
+            client.query(&stmt, &param_refs).await
+        };
+
+        match rows {
+            Ok(rows) => {
+                let result: Vec<Vec<PgValue>> = rows.iter().map(|row| {
+                    (0..row.len()).map(|i| Self::row_value_to_pg_value(row, i)).collect()
+                }).collect();
+                Ok(result)
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Execute a Postgres statement with parameters
+    async fn execute_pg_execute(
+        client: &PgClient,
+        query: &str,
+        params: &[PgParam],
+    ) -> Result<u64, String> {
+        let count = if params.is_empty() {
+            client.execute(query, &[]).await
+        } else {
+            // Add type casts based on param types
+            let typed_query = Self::add_type_casts(query, params);
+
+            let stmt = match client.prepare(&typed_query).await {
+                Ok(s) => s,
+                Err(e) => return Err(e.to_string()),
+            };
+
+            let typed_params = Self::build_typed_params(params, stmt.params());
+            let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+                typed_params.iter().map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+
+            client.execute(&stmt, &param_refs).await
+        };
+
+        count.map_err(|e| e.to_string())
+    }
+
+    /// Build typed parameters that match PostgreSQL's expected types
+    fn build_typed_params(params: &[PgParam], types: &[tokio_postgres::types::Type]) -> Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> {
+        use tokio_postgres::types::Type;
+
+        params.iter().enumerate().map(|(i, p)| {
+            let expected_type = types.get(i);
+            match p {
+                PgParam::Null => {
+                    // Use Option<String> for NULL - works with any type
+                    Box::new(None::<String>) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>
+                }
+                PgParam::Bool(b) => {
+                    Box::new(*b) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>
+                }
+                PgParam::Int(i) => {
+                    // Convert to the expected integer type, use text for unknown
+                    match expected_type {
+                        Some(t) if *t == Type::INT2 => Box::new(*i as i16) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>,
+                        Some(t) if *t == Type::INT4 => Box::new(*i as i32) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>,
+                        Some(t) if *t == Type::INT8 => Box::new(*i) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>,
+                        Some(t) if *t == Type::FLOAT4 => Box::new(*i as f32) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>,
+                        Some(t) if *t == Type::FLOAT8 => Box::new(*i as f64) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>,
+                        // For TEXT, VARCHAR, or UNKNOWN types, send as string
+                        _ => Box::new(i.to_string()) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>,
+                    }
+                }
+                PgParam::Float(f) => {
+                    match expected_type {
+                        Some(t) if *t == Type::FLOAT4 => Box::new(*f as f32) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>,
+                        Some(t) if *t == Type::FLOAT8 => Box::new(*f) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>,
+                        // For unknown types, send as string
+                        _ => Box::new(f.to_string()) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>,
+                    }
+                }
+                PgParam::String(s) => {
+                    // Strings can be used for any type - PostgreSQL will convert
+                    Box::new(s.clone()) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>
+                }
+            }
+        }).collect()
     }
 
     #[allow(dead_code)]

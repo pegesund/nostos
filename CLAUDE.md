@@ -71,9 +71,14 @@ done
 **Tests that may hang (avoid in batch runs):**
 - `tests/timeout/` - 2 tests that intentionally test timeout behavior
 
+**Tests requiring external services:**
+- `tests/postgres/` - Requires PostgreSQL running at localhost with user/password: postgres/postgres
+  - Run manually: `for f in tests/postgres/*.nos; do ./target/release/nostos "$f"; done`
+
 **Test counts:**
 - 490 tests in regular categories (all pass)
 - 2 timeout tests in `tests/timeout/` (rapid_spawn_die, running_average)
+- 5 postgres tests in `tests/postgres/` (require PostgreSQL)
 
 **Common stdlib name collisions to avoid in tests:**
 - `get` -> use `getValue` (stdlib.list.get)

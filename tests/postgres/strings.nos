@@ -1,0 +1,85 @@
+# expect: 0
+# PostgreSQL string type tests
+# REQUIRES: PostgreSQL running at localhost with user/password: postgres/postgres
+
+test_short_string(conn) = {
+    r1 = Pg.query(conn, "SELECT $1", ["hello"])
+    assert_eq(head(head(r1)), "hello")
+
+    r2 = Pg.query(conn, "SELECT $1", ["world"])
+    assert_eq(head(head(r2)), "world")
+    ()
+}
+
+test_empty_string(conn) = {
+    r1 = Pg.query(conn, "SELECT $1", [""])
+    assert_eq(head(head(r1)), "")
+    ()
+}
+
+test_long_string(conn) = {
+    # 496 character string
+    long_str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" ++
+               "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" ++
+               "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" ++
+               "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" ++
+               "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" ++
+               "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" ++
+               "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" ++
+               "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    r1 = Pg.query(conn, "SELECT $1", [long_str])
+    v1 = head(head(r1))
+    assert_eq(String.length(v1), 496)
+    assert_eq(v1, long_str)
+    ()
+}
+
+test_unicode(conn) = {
+    # Chinese characters
+    r1 = Pg.query(conn, "SELECT $1", ["你好世界"])
+    assert_eq(head(head(r1)), "你好世界")
+
+    # Mixed unicode
+    r2 = Pg.query(conn, "SELECT $1", ["Hello 世界 café"])
+    assert_eq(head(head(r2)), "Hello 世界 café")
+
+    # Emoji
+    r3 = Pg.query(conn, "SELECT $1", ["test 🎉 emoji"])
+    assert_eq(head(head(r3)), "test 🎉 emoji")
+    ()
+}
+
+test_special_chars(conn) = {
+    # Single quotes (SQL special)
+    r1 = Pg.query(conn, "SELECT $1", ["It's a test"])
+    assert_eq(head(head(r1)), "It's a test")
+
+    # Backslash
+    r2 = Pg.query(conn, "SELECT $1", ["path\\to\\file"])
+    assert_eq(head(head(r2)), "path\\to\\file")
+
+    # Newlines and tabs
+    r3 = Pg.query(conn, "SELECT $1", ["line1\nline2\ttab"])
+    assert_eq(head(head(r3)), "line1\nline2\ttab")
+    ()
+}
+
+test_string_concatenation(conn) = {
+    r1 = Pg.query(conn, "SELECT $1 || ' ' || $2", ["hello", "world"])
+    assert_eq(head(head(r1)), "hello world")
+    ()
+}
+
+main() = {
+    conn = Pg.connect("host=localhost user=postgres password=postgres")
+
+    test_short_string(conn)
+    test_empty_string(conn)
+    test_long_string(conn)
+    test_unicode(conn)
+    test_special_chars(conn)
+    test_string_concatenation(conn)
+
+    Pg.close(conn)
+    0
+}

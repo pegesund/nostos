@@ -222,6 +222,23 @@ pub enum IoResponseValue {
     ExecHandle(u64),
     /// Process exit code (from Exec.wait)
     ExitCode(i32),
+    /// PostgreSQL connection handle
+    PgHandle(u64),
+    /// PostgreSQL query result - list of rows, each row is a list of column values
+    PgRows(Vec<Vec<PgValue>>),
+    /// PostgreSQL execute result - number of affected rows
+    PgAffected(u64),
+}
+
+/// PostgreSQL column value (from a query result)
+#[derive(Debug, Clone)]
+pub enum PgValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(String),
+    Bytes(Vec<u8>),
 }
 
 /// A call frame on the stack.

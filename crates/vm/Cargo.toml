@@ -28,6 +28,7 @@ hyper-util = { workspace = true }
 chrono = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
+tokio-postgres = { workspace = true }
 
 [[bench]]
 name = "vm_vs_runtime"
