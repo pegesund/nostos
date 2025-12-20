@@ -1021,6 +1021,12 @@ impl Compiler {
                         let is_recursive_inference_error = has_untyped_params && is_recursive &&
                             message.contains("Cannot unify types:");
 
+                        // For functions with untyped params, also filter out trait implementation errors
+                        // These can be false positives during inference, especially in mutual recursion
+                        // (e.g., "Bool does not implement Num" when isEven calls isOdd and vice versa)
+                        let is_trait_inference_error = has_untyped_params &&
+                            message.contains("does not implement");
+
                         // For dynamic typing support (like heterogeneous lists), filter out
                         // unification errors in functions WITHOUT untyped params that call
                         // functions WITH untyped params
@@ -1039,6 +1045,7 @@ impl Compiler {
                             message.contains("() and ()") ||
                             is_list_element_error ||
                             is_recursive_inference_error ||
+                            is_trait_inference_error ||
                             is_call_inference_error ||
                             Self::is_type_variable_only_error(message);
                         !is_inference_limitation
