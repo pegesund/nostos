@@ -931,8 +931,6 @@ Nostos provides comprehensive JSON support for parsing, serialization, and typed
 ### Parsing JSON
 
 ```nos
-use stdlib.json.{jsonParse, jsonStringify}
-
 # Parse a JSON string into a Json value
 json = jsonParse("{\"name\": \"Alice\", \"age\": 30}")
 
@@ -944,34 +942,32 @@ json = jsonParse("{\"name\": \"Alice\", \"age\": 30}")
 ### Stringify JSON
 
 ```nos
-use stdlib.json.{jsonParse, jsonStringify}
-
 # Convert Json back to a string
 json = jsonParse("{\"x\": 1, \"y\": 2}")
 str = jsonStringify(json)  # "{\"x\":1,\"y\":2}"
 ```
 
-### Typed Deserialization with jsonToType
+### Typed Deserialization with fromJson
 
-The `jsonToType[T](json)` builtin converts JSON to typed Nostos values. This is the recommended way to work with JSON data.
+The `fromJson[T](json)` builtin converts JSON to typed Nostos values. This is the recommended way to work with JSON data.
 
 ```nos
-use stdlib.json.{jsonParse, jsonStringify}
-
 # Define your types
 type Person = { name: String, age: Int }
 
 # Parse and convert to typed value
 json = jsonParse("{\"name\": \"Alice\", \"age\": 30}")
-person = jsonToType[Person](json)
+person = fromJson[Person](json)
 
 println(person.name)  # "Alice"
 println(person.age)   # 30
 ```
 
+Note: `jsonToType[T]` is an alias for `fromJson[T]` and works identically.
+
 ### Supported Types
 
-`jsonToType` supports all Nostos types:
+`fromJson` supports all Nostos types:
 
 ```nos
 # All numeric types
@@ -1004,24 +1000,26 @@ Variants use a JSON object with the constructor name as the key:
 ```nos
 type Result = Ok(Int) | Err(String)
 
-# Ok(42) is represented as: {"Ok": {"_0": 42}}
-# Err("fail") is represented as: {"Err": {"_0": "fail"}}
+# Ok(42) is represented as: {"Ok": 42}
+# Err("fail") is represented as: {"Err": "fail"}
 
-json = jsonParse("{\"Ok\": {\"_0\": 42}}")
-result = jsonToType[Result](json)  # Ok(42)
+json = jsonParse("{\"Ok\": 42}")
+result = fromJson[Result](json)  # Ok(42)
 
-# Unit variants (no payload) use empty object:
+# Multi-field variants use _0, _1, etc:
+type Point = Coord(Int, Int)
+# Coord(10, 20) is: {"Coord": {"_0": 10, "_1": 20}}
+
+# Unit variants (no payload) use null:
 type Status = Active | Pending | Done
-# Active is: {"Active": {}}
+# Active is: {"Active": null}
 ```
 
 ### Error Handling
 
-`jsonToType` throws catchable exceptions on errors:
+`fromJson` throws catchable exceptions on errors:
 
 ```nos
-use stdlib.json.{jsonParse, jsonStringify}
-
 type Person = { name: String, age: Int }
 
 main() = {
@@ -1029,7 +1027,7 @@ main() = {
     json = jsonParse("{\"name\": \"Alice\"}")
 
     try {
-        person = jsonToType[Person](json)
+        person = fromJson[Person](json)
         "success"
     } catch e -> "Error: " ++ e end
     # Returns: "Error: Missing field: age"
@@ -1045,8 +1043,6 @@ Common errors:
 ### Round-Trip Example
 
 ```nos
-use stdlib.json.{jsonParse, jsonStringify}
-
 type User = { id: Int, name: String, active: Bool }
 
 main() = {
@@ -1059,7 +1055,7 @@ main() = {
 
     # Parse back to typed value
     parsed = jsonParse(jsonStr)
-    user2 = jsonToType[User](parsed)
+    user2 = fromJson[User](parsed)
 
     user == user2  # true
 }
@@ -1085,47 +1081,42 @@ main() = {
     # "fields" -> List of Maps with "name" and "type"
     # "constructors" -> List of Maps (for variants)
 
-    println(info.get("kind"))  # "record"
+    kind = Map.get(info, "kind")
+    println(kind)  # "record"
 }
 ```
 
-#### makeRecord and makeVariant - Dynamic Construction
+#### makeRecordByName and makeVariantByName - Dynamic Construction
 
-Construct typed values from Maps of JSON values:
+Construct typed values dynamically when the type name is known at runtime:
 
 ```nos
 type Person = { name: String, age: Int }
 type Result = Ok(Int) | Err(String)
 
 main() = {
-    # Construct a record from a Map[String, Json]
-    fields = %{"name": String("Alice"), "age": Number(30.0)}
-    person = makeRecord[Person](fields)
+    # Construct a record dynamically
+    fields = %{"name": "Alice", "age": 30}
+    person = makeRecordByName("Person", fields)
     println(person.name)  # "Alice"
 
-    # Construct a variant
-    ok_fields = %{"_0": Number(42.0)}
-    result = makeVariant[Result]("Ok", ok_fields)
+    # Construct a variant dynamically
+    result = makeVariantByName("Result", "Ok", %{"_0": 42})
     # result is Ok(42)
 }
 ```
 
-#### String-Based Variants
+#### fromJsonValue - Dynamic JSON Conversion
 
-For fully dynamic scenarios, use the string-based versions:
+For scenarios where the type name is determined at runtime, use `fromJsonValue` from the stdlib:
 
 ```nos
+import stdlib.json
+
 # When type name is known at runtime
 typeName = "Person"
-fields = %{"name": String("Bob"), "age": Number(25.0)}
-person = makeRecordByName(typeName, fields)
-
-# Same for variants
-result = makeVariantByName("Result", "Ok", %{"_0": Number(100.0)})
-
-# And for JSON conversion
 json = jsonParse("{\"name\": \"Charlie\", \"age\": 35}")
-person2 = jsonToTypeByName("Person", json)
+person = stdlib.json.fromJsonValue(typeName, json)
 ```
 
 These builtins enable metaprogramming scenarios like:
