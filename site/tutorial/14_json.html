@@ -265,6 +265,73 @@ main() = {
 }</code></pre>
                 </div>
 
+                <!-- Advanced: Type Introspection -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Advanced: Type Introspection</h2>
+                <p class="text-slate-400 mb-4">Nostos provides low-level builtins for type introspection and dynamic value construction.</p>
+
+                <h3 class="text-xl font-semibold text-white mb-3">typeInfo - Get Type Metadata</h3>
+                <p class="text-slate-400 mb-4">The <code>typeInfo(typeName)</code> builtin returns type metadata as a native Map.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">type Person = { name: String, age: Int }
+
+main() = {
+    info = typeInfo("Person")
+
+    # Returns Map with keys:
+    # "name" -> "Person"
+    # "kind" -> "record" or "variant"
+    # "fields" -> List of Maps with "name" and "type"
+    # "constructors" -> List of Maps (for variants)
+
+    println(info.get("kind"))  # "record"
+}</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">makeRecord and makeVariant - Dynamic Construction</h3>
+                <p class="text-slate-400 mb-4">Construct typed values dynamically from Maps of JSON values.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">type Person = { name: String, age: Int }
+type Result = Ok(Int) | Err(String)
+
+main() = {
+    # Construct a record from a Map[String, Json]
+    fields = %{"name": String("Alice"), "age": Number(30.0)}
+    person = makeRecord[Person](fields)
+    println(person.name)  # "Alice"
+
+    # Construct a variant
+    ok_fields = %{"_0": Number(42.0)}
+    result = makeVariant[Result]("Ok", ok_fields)
+    # result is Ok(42)
+}</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">String-Based Variants</h3>
+                <p class="text-slate-400 mb-4">For fully dynamic scenarios where the type name is known at runtime, use the string-based versions.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># When type name is known at runtime
+typeName = "Person"
+fields = %{"name": String("Bob"), "age": Number(25.0)}
+person = makeRecordByName(typeName, fields)
+
+# Same for variants
+result = makeVariantByName("Result", "Ok", %{"_0": Number(100.0)})
+
+# And for JSON conversion
+json = jsonParse("{\"name\": \"Charlie\", \"age\": 35}")
+person2 = jsonToTypeByName("Person", json)</code></pre>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <h3 class="text-lg font-semibold text-white mb-3">Use Cases</h3>
+                    <ul class="list-disc list-inside text-slate-400 space-y-2">
+                        <li>Generic serialization/deserialization libraries</li>
+                        <li>ORM-style database mapping</li>
+                        <li>Dynamic form generation from type schemas</li>
+                        <li>Plugin systems with runtime type discovery</li>
+                    </ul>
+                </div>
+
                 <!-- Navigation -->
                 <div class="mt-12 pt-8 border-t border-slate-800 flex justify-between">
                     <a href="13_trait_bounds.html" class="text-blue-400 hover:text-blue-300 transition">&larr; Previous: Trait Bounds</a>

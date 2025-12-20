@@ -1065,6 +1065,74 @@ main() = {
 }
 ```
 
+### Advanced: Type Introspection and Dynamic Construction
+
+Nostos provides low-level builtins for type introspection and dynamic value construction.
+
+#### typeInfo - Get Type Metadata
+
+The `typeInfo(typeName)` builtin returns type metadata as a native Map:
+
+```nos
+type Person = { name: String, age: Int }
+
+main() = {
+    info = typeInfo("Person")
+
+    # Returns Map with keys:
+    # "name" -> "Person"
+    # "kind" -> "record" or "variant"
+    # "fields" -> List of Maps with "name" and "type"
+    # "constructors" -> List of Maps (for variants)
+
+    println(info.get("kind"))  # "record"
+}
+```
+
+#### makeRecord and makeVariant - Dynamic Construction
+
+Construct typed values from Maps of JSON values:
+
+```nos
+type Person = { name: String, age: Int }
+type Result = Ok(Int) | Err(String)
+
+main() = {
+    # Construct a record from a Map[String, Json]
+    fields = %{"name": String("Alice"), "age": Number(30.0)}
+    person = makeRecord[Person](fields)
+    println(person.name)  # "Alice"
+
+    # Construct a variant
+    ok_fields = %{"_0": Number(42.0)}
+    result = makeVariant[Result]("Ok", ok_fields)
+    # result is Ok(42)
+}
+```
+
+#### String-Based Variants
+
+For fully dynamic scenarios, use the string-based versions:
+
+```nos
+# When type name is known at runtime
+typeName = "Person"
+fields = %{"name": String("Bob"), "age": Number(25.0)}
+person = makeRecordByName(typeName, fields)
+
+# Same for variants
+result = makeVariantByName("Result", "Ok", %{"_0": Number(100.0)})
+
+# And for JSON conversion
+json = jsonParse("{\"name\": \"Charlie\", \"age\": 35}")
+person2 = jsonToTypeByName("Person", json)
+```
+
+These builtins enable metaprogramming scenarios like:
+- Generic serialization/deserialization libraries
+- ORM-style database mapping
+- Dynamic form generation from type schemas
+
 ## Command-Line Interface
 
 ### Running Programs
