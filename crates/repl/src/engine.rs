@@ -1049,7 +1049,27 @@ impl ReplEngine {
         self.var_counter += 1;
         let thunk_name = format!("__repl_var_{}_{}", name, self.var_counter);
 
-        let wrapper = format!("{}() = {}", thunk_name, expr);
+        // Build bindings preamble to inject existing variables (excluding the one being defined)
+        let bindings_preamble = if self.var_bindings.is_empty() {
+            String::new()
+        } else {
+            let bindings: Vec<String> = self.var_bindings
+                .iter()
+                .filter(|(var_name, _)| *var_name != name) // Don't inject the variable being defined
+                .map(|(var_name, binding)| format!("{} = {}()", var_name, binding.thunk_name))
+                .collect();
+            if bindings.is_empty() {
+                String::new()
+            } else {
+                bindings.join("\n    ") + "\n    "
+            }
+        };
+
+        let wrapper = if bindings_preamble.is_empty() {
+            format!("{}() = {}", thunk_name, expr)
+        } else {
+            format!("{}() = {{\n    {}{}\n}}", thunk_name, bindings_preamble, expr)
+        };
         let (wrapper_module_opt, errors) = parse(&wrapper);
 
         if !errors.is_empty() {
@@ -4268,6 +4288,26 @@ mod tests {
         let result_str = result.unwrap();
         assert!(result_str.contains("1 entries") || result_str.contains("%{"),
             "Result should be a map: {}", result_str);
+    }
+
+    #[test]
+    fn test_var_binding_use_in_next_eval() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        // Define a list variable
+        let result = engine.eval("b = []");
+        assert!(result.is_ok(), "Should define b: {:?}", result);
+
+        // Use b in a cons expression
+        let result = engine.eval("c = 1 :: b");
+        assert!(result.is_ok(), "Should use b in cons: {:?}", result);
+
+        // Verify c has the right value
+        let result = engine.eval("c");
+        assert!(result.is_ok(), "Should evaluate c: {:?}", result);
+        assert!(result.unwrap().contains("[1]"), "c should be [1]");
     }
 
     #[test]
