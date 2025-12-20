@@ -3,6 +3,22 @@
 - build release, not debug
 - remember that comments in nostos are with # and NOT with //
 
+## Commit Early and Often
+
+**IMPORTANT: Commit working code immediately to avoid losing it.**
+
+- When a feature or fix is working, commit it RIGHT AWAY
+- Do not wait until "everything is done"
+- Session context can be lost at any time
+- Uncommitted changes will be lost if stash/checkout operations are needed
+- Small, frequent commits are better than losing hours of work
+
+**DANGER: git stash operations**
+- Before doing `git stash`, commit any important work first
+- `git stash` only saves staged AND unstaged changes that git knows about
+- If files were modified in a previous session but not committed, they may be lost
+- Prefer committing to a branch over stashing
+
 ## CRITICAL: Implement Features in Nostos, NOT Rust
 
 **READ THIS CAREFULLY - THIS HAS BEEN VIOLATED 4+ TIMES:**
