@@ -699,7 +699,7 @@ impl ThreadSafeValue {
             GcValue::NativeFunction(func) => ThreadSafeValue::NativeFunction(func.clone()),
             // Maps
             GcValue::Map(ptr) => {
-                let map = heap.get_map(*ptr)?;
+                let _map = heap.get_map(*ptr)?;
                 let shared_map = heap.gc_value_to_shared(&GcValue::Map(*ptr))?;
                 if let SharedMapValue::Map(m) = shared_map {
                     ThreadSafeValue::Map(m)
