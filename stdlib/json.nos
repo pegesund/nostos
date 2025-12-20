@@ -265,12 +265,20 @@ buildRecordFields(fields, pairs, acc) = match fields
         buildRecordFields(rest, pairs, newAcc)
     }
 
+# Check if a key exists in pairs list
+hasKey(pairs, key) = match pairs
+    [] -> false
+    [(k, _) | rest] -> if k == key then true else hasKey(rest, key)
+
 # Extract field value from Json for variant field building
 # For single-field variants with name "_0", the value is passed directly
-# For multi-field variants, extract from Object pairs
+# For multi-field variants, extract from Object pairs by name
 getVariantFieldValue(fieldName, jsonValue) = match jsonValue
-    Object(pairs) -> findField(pairs, fieldName)
-    _ -> if fieldName == "_0" then jsonValue else jsonValue
+    Object(pairs) ->
+        if hasKey(pairs, fieldName)
+        then findField(pairs, fieldName)
+        else if fieldName == "_0" then jsonValue else Null
+    _ -> jsonValue
 
 # Build field map for variant constructor
 buildVariantFields(ctorFields, jsonValue, acc) = match ctorFields
