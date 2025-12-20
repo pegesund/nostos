@@ -200,6 +200,143 @@ stringify(json) = match json
     Object(pairs) -> "{" ++ stringify_object(pairs, "") ++ "}"
 
 
+# --- JSON to Type Conversion ---
+
+# Find a value by key in Object pairs list
+findField(pairs, key) = match pairs
+    [] -> Null
+    [(k, v) | rest] -> if k == key then v else findField(rest, key)
+
+# Check if type is a numeric type
+isNumericType(typeName) =
+    typeName == "Int" || typeName == "Int8" || typeName == "Int16" ||
+    typeName == "Int32" || typeName == "Int64" ||
+    typeName == "UInt8" || typeName == "UInt16" || typeName == "UInt32" || typeName == "UInt64" ||
+    typeName == "Float" || typeName == "Float32" || typeName == "Float64" ||
+    typeName == "BigInt"
+
+# Convert a number to the expected numeric type
+convertNumber(n, typeName) =
+    if typeName == "Int" || typeName == "Int64" then toInt(n)
+    else if typeName == "Int8" then toInt8(n)
+    else if typeName == "Int16" then toInt16(n)
+    else if typeName == "Int32" then toInt32(n)
+    else if typeName == "UInt8" then toUInt8(n)
+    else if typeName == "UInt16" then toUInt16(n)
+    else if typeName == "UInt32" then toUInt32(n)
+    else if typeName == "UInt64" then toUInt64(n)
+    else if typeName == "Float32" then toFloat32(n)
+    else if typeName == "BigInt" then toBigInt(n)
+    else n  # Float64 or Float
+
+# Convert a Json value to the expected primitive type
+convertPrimitive(json, typeName) =
+    if isNumericType(typeName) then
+        match json
+            Number(n) -> convertNumber(n, typeName)
+            _ -> throw("Expected Number for " ++ typeName ++ ", got " ++ show(json))
+    else if typeName == "String" then
+        match json
+            String(s) -> s
+            _ -> throw("Expected String, got " ++ show(json))
+    else if typeName == "Bool" then
+        match json
+            Bool(b) -> b
+            _ -> throw("Expected Bool, got " ++ show(json))
+    else if typeName == "Char" then
+        match json
+            String(s) -> match String.chars(s)
+                [c | _] -> c
+                [] -> throw("Expected non-empty string for Char")
+            _ -> throw("Expected String for Char, got " ++ show(json))
+    else
+        # Nested type - recursive call
+        fromJson(typeName, json)
+
+# Build field map for record construction
+buildRecordFields(fields, pairs, acc) = match fields
+    [] -> acc
+    [field | rest] -> {
+        fieldName = Map.get(field, "name")
+        fieldType = Map.get(field, "type")
+        jsonValue = findField(pairs, fieldName)
+        convertedValue = convertPrimitive(jsonValue, fieldType)
+        newAcc = Map.insert(acc, fieldName, convertedValue)
+        buildRecordFields(rest, pairs, newAcc)
+    }
+
+# Extract field value from Json for variant field building
+# For single-field variants with name "_0", the value is passed directly
+# For multi-field variants, extract from Object pairs
+getVariantFieldValue(fieldName, jsonValue) = match jsonValue
+    Object(pairs) -> findField(pairs, fieldName)
+    _ -> if fieldName == "_0" then jsonValue else jsonValue
+
+# Build field map for variant constructor
+buildVariantFields(ctorFields, jsonValue, acc) = match ctorFields
+    [] -> acc
+    [field | rest] -> {
+        fieldName = Map.get(field, "name")
+        fieldType = Map.get(field, "type")
+        value = getVariantFieldValue(fieldName, jsonValue)
+        convertedValue = convertPrimitive(value, fieldType)
+        newAcc = Map.insert(acc, fieldName, convertedValue)
+        buildVariantFields(rest, jsonValue, newAcc)
+    }
+
+# Find constructor by name in constructors list
+findConstructor(constructors, name) = match constructors
+    [] -> %{}
+    [ctor | rest] ->
+        if Map.get(ctor, "name") == name
+        then ctor
+        else findConstructor(rest, name)
+
+# Convert Json to typed value by type name
+# This is the main conversion function
+pub fromJson(typeName, json) = {
+    info = typeInfo(typeName)
+
+    # Check for unknown type (empty map)
+    if Map.isEmpty(info) then
+        throw("Unknown type: " ++ typeName)
+    else {
+        kind = Map.get(info, "kind")
+
+        if kind == "record" then {
+            # Record: json should be Object with field values
+            match json
+                Object(pairs) -> {
+                    fields = Map.get(info, "fields")
+                    fieldMap = buildRecordFields(fields, pairs, %{})
+                    makeRecordByName(typeName, fieldMap)
+                }
+                _ -> throw("Expected Object for record type " ++ typeName)
+        }
+        else if kind == "variant" then {
+            # Variant: json should be Object with single key (constructor name)
+            match json
+                Object(pairs) -> match pairs
+                    [(ctorName, ctorValue)] -> {
+                        constructors = Map.get(info, "constructors")
+                        ctor = findConstructor(constructors, ctorName)
+                        if Map.isEmpty(ctor) then
+                            throw("Unknown constructor: " ++ ctorName ++ " for type " ++ typeName)
+                        else {
+                            ctorFields = Map.get(ctor, "fields")
+                            fieldMap = buildVariantFields(ctorFields, ctorValue, %{})
+                            makeVariantByName(typeName, ctorName, fieldMap)
+                        }
+                    }
+                    _ -> throw("Variant JSON must have exactly one key (constructor name)")
+                _ -> throw("Expected Object for variant type " ++ typeName)
+        }
+        else
+            throw("Cannot convert JSON to type: " ++ typeName ++ " (kind: " ++ kind ++ ")")
+    }
+}
+
+
 # --- Public API ---
 
 # Parse a JSON string into a Json value
