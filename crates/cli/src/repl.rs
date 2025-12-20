@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::borrow::Cow;
 
@@ -155,25 +155,52 @@ impl Prompt for NostosPrompt {
     }
 }
 
+/// Shared state for completion data between REPL and completer
+#[derive(Default)]
+struct SharedCompletionData {
+    functions: Vec<String>,
+    types: Vec<String>,
+    variables: Vec<String>,
+}
+
+type SharedCompletionState = Arc<RwLock<SharedCompletionData>>;
+
 struct NostosCompleter {
     autocomplete: Autocomplete,
+    shared_state: SharedCompletionState,
 }
 
 impl NostosCompleter {
-    fn new() -> Self {
+    fn new(shared_state: SharedCompletionState) -> Self {
         Self {
             autocomplete: Autocomplete::new(),
+            shared_state,
         }
     }
 }
 
-/// Simple completion source for REPL (provides minimal info)
-struct ReplCompletionSource;
+/// Completion source that reads from shared state
+struct ReplCompletionSource {
+    functions: Vec<String>,
+    types: Vec<String>,
+    variables: Vec<String>,
+}
+
+impl ReplCompletionSource {
+    fn from_shared(state: &SharedCompletionState) -> Self {
+        let data = state.read().unwrap();
+        Self {
+            functions: data.functions.clone(),
+            types: data.types.clone(),
+            variables: data.variables.clone(),
+        }
+    }
+}
 
 impl CompletionSource for ReplCompletionSource {
-    fn get_functions(&self) -> Vec<String> { vec![] }
-    fn get_types(&self) -> Vec<String> { vec![] }
-    fn get_variables(&self) -> Vec<String> { vec![] }
+    fn get_functions(&self) -> Vec<String> { self.functions.clone() }
+    fn get_types(&self) -> Vec<String> { self.types.clone() }
+    fn get_variables(&self) -> Vec<String> { self.variables.clone() }
     fn get_type_fields(&self, _type_name: &str) -> Vec<String> { vec![] }
     fn get_type_constructors(&self, _type_name: &str) -> Vec<String> { vec![] }
     fn get_function_signature(&self, _name: &str) -> Option<String> { None }
@@ -210,7 +237,7 @@ impl Completer for NostosCompleter {
 
         // Use the autocomplete system to parse context
         let ctx = self.autocomplete.parse_context(line, pos);
-        let source = ReplCompletionSource;
+        let source = ReplCompletionSource::from_shared(&self.shared_state);
 
         match &ctx {
             CompletionContext::FieldAccess { receiver, prefix } => {
@@ -235,7 +262,10 @@ impl Completer for NostosCompleter {
                     .collect()
             }
             CompletionContext::Identifier { prefix } if !prefix.is_empty() => {
-                // Keywords completion
+                let prefix_lower = prefix.to_lowercase();
+                let mut suggestions = Vec::new();
+
+                // Keywords
                 let keywords = vec![
                     "type", "var", "if", "then", "else", "match", "when", "trait", "module", "end",
                     "use", "private", "pub", "self", "Self", "try", "catch", "finally", "do",
@@ -243,17 +273,68 @@ impl Completer for NostosCompleter {
                     "extern", "test", "quote", "true", "false"
                 ];
 
-                keywords.iter()
-                    .filter(|kw| kw.starts_with(prefix.as_str()))
-                    .map(|kw| Suggestion {
-                        value: kw.to_string(),
-                        description: None,
-                        style: None,
-                        extra: None,
-                        span,
-                        append_whitespace: true,
-                    })
-                    .collect()
+                for kw in keywords {
+                    if kw.to_lowercase().starts_with(&prefix_lower) {
+                        suggestions.push(Suggestion {
+                            value: kw.to_string(),
+                            description: Some("keyword".to_string()),
+                            style: None,
+                            extra: None,
+                            span,
+                            append_whitespace: true,
+                        });
+                    }
+                }
+
+                // Functions from shared state
+                for func in &source.functions {
+                    // Get the local name (after last dot)
+                    let local_name = func.rsplit('.').next().unwrap_or(func);
+                    if local_name.to_lowercase().starts_with(&prefix_lower) {
+                        suggestions.push(Suggestion {
+                            value: local_name.to_string(),
+                            description: Some(format!("fn {}", func)),
+                            style: None,
+                            extra: None,
+                            span,
+                            append_whitespace: false,
+                        });
+                    }
+                }
+
+                // Types from shared state
+                for typ in &source.types {
+                    let local_name = typ.rsplit('.').next().unwrap_or(typ);
+                    if local_name.to_lowercase().starts_with(&prefix_lower) {
+                        suggestions.push(Suggestion {
+                            value: local_name.to_string(),
+                            description: Some(format!("type {}", typ)),
+                            style: None,
+                            extra: None,
+                            span,
+                            append_whitespace: true,
+                        });
+                    }
+                }
+
+                // Variables from shared state
+                for var in &source.variables {
+                    if var.to_lowercase().starts_with(&prefix_lower) {
+                        suggestions.push(Suggestion {
+                            value: var.to_string(),
+                            description: Some("variable".to_string()),
+                            style: None,
+                            extra: None,
+                            span,
+                            append_whitespace: false,
+                        });
+                    }
+                }
+
+                // Sort and deduplicate
+                suggestions.sort_by(|a, b| a.value.cmp(&b.value));
+                suggestions.dedup_by(|a, b| a.value == b.value);
+                suggestions
             }
             _ => vec![]
         }
@@ -311,6 +392,8 @@ pub struct Repl {
     var_bindings: HashMap<String, VarBinding>,
     /// Counter for unique variable thunk names
     var_counter: u64,
+    /// Shared completion state for the autocompleter
+    completion_state: SharedCompletionState,
 }
 
 impl Repl {
@@ -336,7 +419,16 @@ impl Repl {
             module_sources: HashMap::new(),
             var_bindings: HashMap::new(),
             var_counter: 0,
+            completion_state: Arc::new(RwLock::new(SharedCompletionData::default())),
         }
+    }
+
+    /// Update the shared completion state with current functions, types, and variables
+    fn update_completion_state(&self) {
+        let mut state = self.completion_state.write().unwrap();
+        state.functions = self.compiler.get_function_names().into_iter().map(|s| s.to_string()).collect();
+        state.types = self.compiler.get_type_names().into_iter().map(|s| s.to_string()).collect();
+        state.variables = self.var_bindings.keys().cloned().collect();
     }
 
     /// Load the standard library
@@ -458,11 +550,14 @@ impl Repl {
         );
         let edit_mode = Box::new(Emacs::new(keybindings));
 
+        // Update completion state with stdlib functions
+        self.update_completion_state();
+
         // Create Reedline instance with highlighter, history, completer and menu
         let mut line_editor = Reedline::create()
             .with_history(history)
             .with_highlighter(Box::new(NostosHighlighter))
-            .with_completer(Box::new(NostosCompleter::new()))
+            .with_completer(Box::new(NostosCompleter::new(self.completion_state.clone())))
             .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
             .with_edit_mode(edit_mode);
 
@@ -1176,6 +1271,9 @@ impl Repl {
         let mutability = if mutable { "var " } else { "" };
         println!("{}{} = {}", mutability, name, expr);
 
+        // Update completion state with new variable
+        self.update_completion_state();
+
         true
     }
 
@@ -1324,6 +1422,9 @@ impl Repl {
                 let type_name = type_def.full_name();
                 println!("Defined type {}{}", prefix, type_name);
             }
+
+            // Update completion state with new definitions
+            self.update_completion_state();
         }
     }
 
