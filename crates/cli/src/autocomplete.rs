@@ -206,6 +206,7 @@ pub enum CompletionKind {
     Field,
     Variable,
     Constructor,
+    Method,
     File,
     Directory,
 }
@@ -220,6 +221,7 @@ impl CompletionKind {
             CompletionKind::Field => "field",
             CompletionKind::Variable => "var",
             CompletionKind::Constructor => "ctor",
+            CompletionKind::Method => "method",
             CompletionKind::File => "file",
             CompletionKind::Directory => "dir",
         }
@@ -234,6 +236,7 @@ impl CompletionKind {
             CompletionKind::Field => (150, 255, 150),      // Light green
             CompletionKind::Variable => (255, 150, 255),   // Pink
             CompletionKind::Constructor => (255, 255, 100), // Yellow
+            CompletionKind::Method => (100, 220, 200),     // Cyan
             CompletionKind::File => (200, 255, 200),       // Light green
             CompletionKind::Directory => (100, 150, 255),  // Blue
         }
@@ -398,14 +401,45 @@ impl Autocomplete {
     /// Extract the expression being completed from text before cursor
     fn extract_expression<'a>(&self, text: &'a str) -> (usize, &'a str) {
         // Walk backwards to find expression start
-        // Valid expression chars: alphanumeric, underscore, dot
+        // Handle: identifiers, dots, and literal expressions ([...], "...", %{...}, #{...})
         let chars: Vec<char> = text.chars().collect();
         let mut start = chars.len();
+        let mut i = chars.len();
 
-        for i in (0..chars.len()).rev() {
+        while i > 0 {
+            i -= 1;
             let c = chars[i];
+
             if c.is_alphanumeric() || c == '_' || c == '.' {
                 start = i;
+            } else if c == ']' {
+                // List literal - find matching [
+                if let Some(open) = self.find_matching_bracket(&chars, i, '[', ']') {
+                    start = open;
+                    i = open;
+                } else {
+                    break;
+                }
+            } else if c == '}' {
+                // Map or Set literal - find matching { and check for %{ or #{
+                if let Some(open) = self.find_matching_bracket(&chars, i, '{', '}') {
+                    if open > 0 && (chars[open - 1] == '%' || chars[open - 1] == '#') {
+                        start = open - 1;
+                        i = open - 1;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            } else if c == '"' {
+                // String literal - find matching opening quote
+                if let Some(open) = self.find_string_start(&chars, i) {
+                    start = open;
+                    i = open;
+                } else {
+                    break;
+                }
             } else {
                 break;
             }
@@ -418,6 +452,48 @@ impl Autocomplete {
             .unwrap_or(text.len());
 
         (start, &text[byte_start..])
+    }
+
+    /// Find the matching opening bracket for a closing bracket at position `close`
+    fn find_matching_bracket(&self, chars: &[char], close: usize, open_char: char, close_char: char) -> Option<usize> {
+        let mut depth = 1;
+        let mut i = close;
+
+        while i > 0 {
+            i -= 1;
+            if chars[i] == close_char {
+                depth += 1;
+            } else if chars[i] == open_char {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+
+    /// Find the opening quote for a string literal ending at position `close`
+    fn find_string_start(&self, chars: &[char], close: usize) -> Option<usize> {
+        let mut i = close;
+
+        while i > 0 {
+            i -= 1;
+            if chars[i] == '"' {
+                // Check if escaped
+                let mut backslashes = 0;
+                let mut j = i;
+                while j > 0 && chars[j - 1] == '\\' {
+                    backslashes += 1;
+                    j -= 1;
+                }
+                // If even number of backslashes, this is the opening quote
+                if backslashes % 2 == 0 {
+                    return Some(i);
+                }
+            }
+        }
+        None
     }
 
     /// Check if string starts with uppercase (likely a module/type name)
@@ -753,6 +829,123 @@ impl Autocomplete {
         items
     }
 
+    /// Get available methods for a builtin type
+    fn get_builtin_methods(type_name: &str) -> Vec<(&'static str, &'static str)> {
+        // Returns (method_name, signature)
+        if type_name.starts_with("Map") || type_name == "Map" {
+            vec![
+                ("get", "(key) -> value"),
+                ("insert", "(key, value) -> Map"),
+                ("remove", "(key) -> Map"),
+                ("contains", "(key) -> Bool"),
+                ("keys", "() -> List"),
+                ("values", "() -> List"),
+                ("size", "() -> Int"),
+                ("isEmpty", "() -> Bool"),
+                ("merge", "(other) -> Map"),
+            ]
+        } else if type_name.starts_with("Set") || type_name == "Set" {
+            vec![
+                ("contains", "(elem) -> Bool"),
+                ("insert", "(elem) -> Set"),
+                ("remove", "(elem) -> Set"),
+                ("size", "() -> Int"),
+                ("isEmpty", "() -> Bool"),
+                ("union", "(other) -> Set"),
+                ("intersection", "(other) -> Set"),
+                ("difference", "(other) -> Set"),
+                ("toList", "() -> List"),
+            ]
+        } else if type_name == "String" {
+            vec![
+                ("length", "() -> Int"),
+                ("chars", "() -> List"),
+                ("toInt", "() -> Option Int"),
+                ("toFloat", "() -> Option Float"),
+                ("trim", "() -> String"),
+                ("trimStart", "() -> String"),
+                ("trimEnd", "() -> String"),
+                ("toUpper", "() -> String"),
+                ("toLower", "() -> String"),
+                ("contains", "(substr) -> Bool"),
+                ("startsWith", "(prefix) -> Bool"),
+                ("endsWith", "(suffix) -> Bool"),
+                ("replace", "(from, to) -> String"),
+                ("replaceAll", "(from, to) -> String"),
+                ("indexOf", "(substr) -> Int"),
+                ("lastIndexOf", "(substr) -> Int"),
+                ("substring", "(start, end) -> String"),
+                ("repeat", "(n) -> String"),
+                ("padStart", "(len, pad) -> String"),
+                ("padEnd", "(len, pad) -> String"),
+                ("reverse", "() -> String"),
+                ("lines", "() -> List"),
+                ("words", "() -> List"),
+                ("isEmpty", "() -> Bool"),
+            ]
+        } else if type_name.starts_with("List") || type_name == "List" {
+            vec![
+                ("map", "(f) -> List"),
+                ("filter", "(pred) -> List"),
+                ("fold", "(acc, f) -> a"),
+                ("foldr", "(acc, f) -> a"),
+                ("any", "(pred) -> Bool"),
+                ("all", "(pred) -> Bool"),
+                ("find", "(pred) -> Option"),
+                ("position", "(pred) -> Option Int"),
+                ("take", "(n) -> List"),
+                ("drop", "(n) -> List"),
+                ("takeWhile", "(pred) -> List"),
+                ("dropWhile", "(pred) -> List"),
+                ("reverse", "() -> List"),
+                ("sort", "() -> List"),
+                ("concat", "(other) -> List"),
+                ("flatten", "() -> List"),
+                ("unique", "() -> List"),
+                ("zip", "(other) -> List"),
+                ("zipWith", "(other, f) -> List"),
+                ("partition", "(pred) -> (List, List)"),
+                ("splitAt", "(n) -> (List, List)"),
+                ("count", "(pred) -> Int"),
+                ("contains", "(elem) -> Bool"),
+                ("interleave", "(other) -> List"),
+                ("group", "() -> List"),
+                ("scanl", "(acc, f) -> List"),
+                ("maximum", "() -> a"),
+                ("minimum", "() -> a"),
+            ]
+        } else {
+            vec![]
+        }
+    }
+
+    /// Detect the type of a literal expression
+    fn detect_literal_type(expr: &str) -> Option<&'static str> {
+        let trimmed = expr.trim();
+
+        // String literal: "..." or starts with "
+        if trimmed.starts_with('"') {
+            return Some("String");
+        }
+
+        // List literal: [...] or starts with [
+        if trimmed.starts_with('[') {
+            return Some("List");
+        }
+
+        // Map literal: %{...} or starts with %{
+        if trimmed.starts_with("%{") {
+            return Some("Map");
+        }
+
+        // Set literal: #{...} or starts with #{
+        if trimmed.starts_with("#{") {
+            return Some("Set");
+        }
+
+        None
+    }
+
     /// Complete fields of a type
     fn complete_field_access(
         &self,
@@ -767,6 +960,9 @@ impl Autocomplete {
         let type_name = if self.is_upper_ident(receiver) {
             // Uppercase - it's a type name directly
             receiver.to_string()
+        } else if let Some(literal_type) = Self::detect_literal_type(receiver) {
+            // Literal expression like [1,2,3], "hello", %{...}, #{...}
+            literal_type.to_string()
         } else {
             // Lowercase - try to look up the variable's type
             if let Some(var_type) = source.get_variable_type(receiver) {
@@ -775,6 +971,18 @@ impl Autocomplete {
                 receiver.to_string()
             }
         };
+
+        // Get methods for builtin types (Map, Set, String, List)
+        for (method_name, signature) in Self::get_builtin_methods(&type_name) {
+            if method_name.to_lowercase().starts_with(&prefix_lower) {
+                items.push(CompletionItem {
+                    text: method_name.to_string(),
+                    label: format!("{}{}", method_name, signature),
+                    kind: CompletionKind::Method,
+                    doc: None,
+                });
+            }
+        }
 
         // Get fields from known type definitions
         for field in source.get_type_fields(&type_name) {
@@ -1046,6 +1254,58 @@ mod tests {
         assert_eq!(ctx, CompletionContext::FieldAccess {
             receiver: "point".to_string(),
             prefix: "x".to_string()
+        });
+    }
+
+    #[test]
+    fn test_parse_context_list_literal() {
+        let ac = Autocomplete::new();
+
+        // [1,2,3]. should be parsed as field access with list literal receiver
+        let ctx = ac.parse_context("[1,2,3].", 8);
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "[1,2,3]".to_string(),
+            prefix: "".to_string()
+        });
+
+        // [1,2,3].ma should match "map" prefix
+        let ctx = ac.parse_context("[1,2,3].ma", 10);
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "[1,2,3]".to_string(),
+            prefix: "ma".to_string()
+        });
+    }
+
+    #[test]
+    fn test_parse_context_string_literal() {
+        let ac = Autocomplete::new();
+
+        let ctx = ac.parse_context("\"hello\".", 8);
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "\"hello\"".to_string(),
+            prefix: "".to_string()
+        });
+    }
+
+    #[test]
+    fn test_parse_context_map_literal() {
+        let ac = Autocomplete::new();
+
+        let ctx = ac.parse_context("%{\"a\": 1}.", 10);
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "%{\"a\": 1}".to_string(),
+            prefix: "".to_string()
+        });
+    }
+
+    #[test]
+    fn test_parse_context_set_literal() {
+        let ac = Autocomplete::new();
+
+        let ctx = ac.parse_context("#{1,2,3}.", 9);
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "#{1,2,3}".to_string(),
+            prefix: "".to_string()
         });
     }
 
@@ -1724,5 +1984,196 @@ mod tests {
         // Edge cases
         assert_eq!(extract_module_from_editor_name(""), None);
         assert_eq!(extract_module_from_editor_name(".nos"), None);  // Empty module name
+    }
+
+    // Tests for method completion on builtin types
+
+    #[test]
+    fn test_complete_map_methods() {
+        let source = MockSource::new()
+            .with_variables(&["m"])
+            .with_variable_type("m", "Map");
+
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "m".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        // Should have Map methods
+        assert!(items.iter().any(|i| i.text == "get" && i.kind == CompletionKind::Method));
+        assert!(items.iter().any(|i| i.text == "insert" && i.kind == CompletionKind::Method));
+        assert!(items.iter().any(|i| i.text == "contains" && i.kind == CompletionKind::Method));
+        assert!(items.iter().any(|i| i.text == "keys" && i.kind == CompletionKind::Method));
+        assert!(items.iter().any(|i| i.text == "size" && i.kind == CompletionKind::Method));
+    }
+
+    #[test]
+    fn test_complete_string_methods() {
+        let source = MockSource::new()
+            .with_variables(&["s"])
+            .with_variable_type("s", "String");
+
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "s".to_string(),
+            prefix: "to".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        // Should have String methods starting with "to"
+        assert!(items.iter().any(|i| i.text == "toUpper"));
+        assert!(items.iter().any(|i| i.text == "toLower"));
+        assert!(items.iter().any(|i| i.text == "toInt"));
+        assert!(items.iter().any(|i| i.text == "toFloat"));
+    }
+
+    #[test]
+    fn test_complete_list_methods() {
+        let source = MockSource::new()
+            .with_variables(&["lst"])
+            .with_variable_type("lst", "List");
+
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "lst".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        // Should have List methods
+        assert!(items.iter().any(|i| i.text == "map" && i.kind == CompletionKind::Method));
+        assert!(items.iter().any(|i| i.text == "filter" && i.kind == CompletionKind::Method));
+        assert!(items.iter().any(|i| i.text == "fold" && i.kind == CompletionKind::Method));
+        assert!(items.iter().any(|i| i.text == "reverse" && i.kind == CompletionKind::Method));
+    }
+
+    #[test]
+    fn test_complete_set_methods() {
+        let source = MockSource::new()
+            .with_variables(&["set1"])
+            .with_variable_type("set1", "Set");
+
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "set1".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        // Should have Set methods
+        assert!(items.iter().any(|i| i.text == "union" && i.kind == CompletionKind::Method));
+        assert!(items.iter().any(|i| i.text == "intersection" && i.kind == CompletionKind::Method));
+        assert!(items.iter().any(|i| i.text == "difference" && i.kind == CompletionKind::Method));
+        assert!(items.iter().any(|i| i.text == "contains" && i.kind == CompletionKind::Method));
+    }
+
+    #[test]
+    fn test_complete_methods_with_signature() {
+        let source = MockSource::new()
+            .with_variables(&["m"])
+            .with_variable_type("m", "Map");
+
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "m".to_string(),
+            prefix: "ins".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        // Should have insert method with signature in label
+        assert!(items.len() == 1);
+        assert_eq!(items[0].text, "insert");
+        assert!(items[0].label.contains("(key, value) -> Map"));
+    }
+
+    // Tests for literal type detection
+
+    #[test]
+    fn test_complete_list_literal_methods() {
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        // [1,2,3]. should suggest List methods
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "[1,2,3]".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        assert!(items.iter().any(|i| i.text == "map" && i.kind == CompletionKind::Method));
+        assert!(items.iter().any(|i| i.text == "filter" && i.kind == CompletionKind::Method));
+    }
+
+    #[test]
+    fn test_complete_string_literal_methods() {
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        // "hello". should suggest String methods
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "\"hello\"".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        assert!(items.iter().any(|i| i.text == "toUpper" && i.kind == CompletionKind::Method));
+        assert!(items.iter().any(|i| i.text == "trim" && i.kind == CompletionKind::Method));
+    }
+
+    #[test]
+    fn test_complete_map_literal_methods() {
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        // %{"key": "value"}. should suggest Map methods
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "%{\"key\": \"value\"}".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        assert!(items.iter().any(|i| i.text == "get" && i.kind == CompletionKind::Method));
+        assert!(items.iter().any(|i| i.text == "insert" && i.kind == CompletionKind::Method));
+    }
+
+    #[test]
+    fn test_complete_set_literal_methods() {
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        // #{1,2,3}. should suggest Set methods
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "#{1,2,3}".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        assert!(items.iter().any(|i| i.text == "union" && i.kind == CompletionKind::Method));
+        assert!(items.iter().any(|i| i.text == "contains" && i.kind == CompletionKind::Method));
+    }
+
+    #[test]
+    fn test_complete_literal_with_prefix() {
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        // [1,2,3].ma should suggest map
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "[1,2,3]".to_string(),
+            prefix: "ma".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        // Should match "map" and "maximum"
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().any(|i| i.text == "map"));
+        assert!(items.iter().any(|i| i.text == "maximum"));
     }
 }
