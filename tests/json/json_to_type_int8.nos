@@ -1,0 +1,11 @@
+# expect: -128i8
+# Test jsonToType with Int8
+use stdlib.json.{jsonParse, jsonStringify}
+
+type SmallVal = { value: Int8 }
+
+main() = {
+    json = jsonParse("{\"value\": -128}")
+    s = jsonToType[SmallVal](json)
+    s.value
+}

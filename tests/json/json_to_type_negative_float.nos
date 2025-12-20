@@ -1,0 +1,10 @@
+# expect: -3.14
+# Test jsonToType with negative float
+use stdlib.json.{jsonParse, jsonStringify}
+type Temp = { celsius: Float }
+
+main() = {
+    json = jsonParse("{\"celsius\": -3.14}")
+    t = jsonToType[Temp](json)
+    t.celsius
+}

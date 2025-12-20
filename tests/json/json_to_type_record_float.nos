@@ -1,0 +1,10 @@
+# expect: 3.14
+# Test jsonToType with float field
+use stdlib.json.{jsonParse, jsonStringify}
+type Measurement = { value: Float, unit: String }
+
+main() = {
+    json = jsonParse("{\"value\": 3.14, \"unit\": \"m\"}")
+    m = jsonToType[Measurement](json)
+    m.value
+}

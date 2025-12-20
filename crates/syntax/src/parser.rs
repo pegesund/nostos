@@ -960,12 +960,22 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
             .then_ignore(call_nl.clone())
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
+        // Type arguments for type-applied calls: f[Type](args)
+        let type_args = type_expr()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .delimited_by(just(Token::LBracket), just(Token::RBracket));
+
         let postfix = primary.then(
             choice((
-                // Function call: f(x, y)
+                // Type-applied function call: f[Type](x, y)
+                type_args.clone()
+                    .then(call_args.clone())
+                    .map_with_span(|(type_args, args), span| (PostfixOp::Call(type_args, args), to_span(span))),
+                // Regular function call: f(x, y)
                 call_args
                     .clone()
-                    .map_with_span(|args, span| (PostfixOp::Call(args), to_span(span))),
+                    .map_with_span(|args, span| (PostfixOp::Call(vec![], args), to_span(span))),
                 // Method call or field access: .foo or .foo(args) or tuple index .0 .1
                 just(Token::Dot)
                     .ignore_then(
@@ -993,9 +1003,9 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         );
 
         let postfix = postfix.foldl(|lhs, (op, span)| match op {
-            PostfixOp::Call(args) => {
+            PostfixOp::Call(type_args, args) => {
                 let full_span = get_span(&lhs).merge(span);
-                Expr::Call(Box::new(lhs), args, full_span)
+                Expr::Call(Box::new(lhs), type_args, args, full_span)
             }
             PostfixOp::MethodCall(name, args) => {
                 let full_span = get_span(&lhs).merge(span);
@@ -1171,7 +1181,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
 /// Helper enum for postfix operations during parsing.
 #[derive(Clone)]
 enum PostfixOp {
-    Call(Vec<Expr>),
+    Call(Vec<TypeExpr>, Vec<Expr>),  // (type_args, value_args)
     MethodCall(Ident, Vec<Expr>),
     FieldAccess(Ident),
     Index(Expr),
@@ -1201,7 +1211,7 @@ fn get_span(expr: &Expr) -> Span {
         Expr::Var(id) => id.span,
         Expr::BinOp(_, _, _, s) => *s,
         Expr::UnaryOp(_, _, s) => *s,
-        Expr::Call(_, _, s) => *s,
+        Expr::Call(_, _, _, s) => *s,
         Expr::MethodCall(_, _, _, s) => *s,
         Expr::FieldAccess(_, _, s) => *s,
         Expr::Index(_, _, s) => *s,

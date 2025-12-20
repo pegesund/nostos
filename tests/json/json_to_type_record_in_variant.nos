@@ -1,0 +1,14 @@
+# expect: 30
+# Test jsonToType with record inside variant
+use stdlib.json.{jsonParse, jsonStringify}
+type Point = { x: Int, y: Int }
+type Shape = Circle(Point, Int) | Square(Point, Int)
+
+getOriginSum(Circle(p, _)) = p.x + p.y
+getOriginSum(Square(p, _)) = p.x + p.y
+
+main() = {
+    json = jsonParse("{\"Circle\": {\"_0\": {\"x\": 10, \"y\": 20}, \"_1\": 5}}")
+    shape = jsonToType[Shape](json)
+    getOriginSum(shape)
+}

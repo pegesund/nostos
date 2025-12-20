@@ -1,0 +1,13 @@
+# expect: 100
+# Test jsonToType with Some variant
+use stdlib.json.{jsonParse, jsonStringify}
+type Option = Some(Int) | None
+
+getOrDefault(Some(n)) = n
+getOrDefault(None) = 0
+
+main() = {
+    json = jsonParse("{\"Some\": {\"_0\": 100}}")
+    opt = jsonToType[Option](json)
+    getOrDefault(opt)
+}

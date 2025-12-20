@@ -1,0 +1,10 @@
+# expect: alice
+# Test jsonToType with string field
+use stdlib.json.{jsonParse, jsonStringify}
+type User = { name: String, age: Int }
+
+main() = {
+    json = jsonParse("{\"name\": \"alice\", \"age\": 30}")
+    user = jsonToType[User](json)
+    user.name
+}

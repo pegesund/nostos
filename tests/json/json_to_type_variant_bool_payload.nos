@@ -1,0 +1,13 @@
+# expect: true
+# Test jsonToType with bool payload in variant
+use stdlib.json.{jsonParse, jsonStringify}
+type Response = Success(Bool) | Failure(String)
+
+getResult(Success(b)) = b
+getResult(Failure(_)) = false
+
+main() = {
+    json = jsonParse("{\"Success\": {\"_0\": true}}")
+    resp = jsonToType[Response](json)
+    getResult(resp)
+}

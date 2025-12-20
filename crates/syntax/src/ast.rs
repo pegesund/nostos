@@ -413,8 +413,9 @@ pub enum Expr {
     BinOp(Box<Expr>, BinOp, Box<Expr>, Span),
     /// Unary operation
     UnaryOp(UnaryOp, Box<Expr>, Span),
-    /// Function call: `f(x, y)`
-    Call(Box<Expr>, Vec<Expr>, Span),
+    /// Function call: `f(x, y)` or with type args: `f[T](x, y)`
+    /// Fields: (callee, type_args, value_args, span)
+    Call(Box<Expr>, Vec<TypeExpr>, Vec<Expr>, Span),
     /// Method call: `x.f(y)`
     MethodCall(Box<Expr>, Ident, Vec<Expr>, Span),
     /// Field access: `point.x`
@@ -491,7 +492,7 @@ impl Expr {
             Expr::Var(ident) => ident.span,
             Expr::BinOp(_, _, _, s) => *s,
             Expr::UnaryOp(_, _, s) => *s,
-            Expr::Call(_, _, s) => *s,
+            Expr::Call(_, _, _, s) => *s,
             Expr::MethodCall(_, _, _, s) => *s,
             Expr::FieldAccess(_, _, s) => *s,
             Expr::Index(_, _, s) => *s,
@@ -937,7 +938,7 @@ impl FnDef {
                         }
                     }
                 }
-                Expr::Call(func, args, _) => {
+                Expr::Call(func, _, args, _) => {
                     collect_constraints(func, parent);
                     for arg in args {
                         collect_constraints(arg, parent);
@@ -989,7 +990,7 @@ impl FnDef {
                     collect_vars_inner(r, vars);
                 }
                 Expr::UnaryOp(_, e, _) => collect_vars_inner(e, vars),
-                Expr::Call(f, args, _) => {
+                Expr::Call(f, _, args, _) => {
                     collect_vars_inner(f, vars);
                     for arg in args {
                         collect_vars_inner(arg, vars);

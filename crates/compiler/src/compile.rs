@@ -287,6 +287,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "typeOf", signature: "a -> String", doc: "Get type name of a value (Int, Float, String, Bool, List, Record, Variant, etc.)" },
     BuiltinInfo { name: "tagOf", signature: "a -> String", doc: "Get variant tag name, or empty string for non-variants" },
     BuiltinInfo { name: "reflect", signature: "a -> Json", doc: "Convert any value to Json type for inspection/serialization" },
+    BuiltinInfo { name: "jsonToType", signature: "[T] Json -> T", doc: "Convert Json to typed value: jsonToType[Person](json)" },
 ];
 
 /// Extract doc comment immediately preceding a definition at the given span start.
@@ -1396,7 +1397,7 @@ impl Compiler {
             // Function calls: assume non-float by default.
             // We can't know the return type without proper type inference,
             // and assuming float based on arguments is incorrect (e.g., show(3.14) returns String).
-            Expr::Call(_, _, _) => false,
+            Expr::Call(_, _, _, _) => false,
             _ => false, // Assume non-float by default for other expressions
         }
     }
@@ -1464,7 +1465,7 @@ impl Compiler {
                 }).unwrap_or(false)
             }
             // Function calls: assume non-int by default
-            Expr::Call(_, _, _) => false,
+            Expr::Call(_, _, _, _) => false,
             _ => false,
         }
     }
@@ -1521,7 +1522,7 @@ impl Compiler {
                     _ => false,
                 }).unwrap_or(false)
             }
-            Expr::Call(_, _, _) => false,
+            Expr::Call(_, _, _, _) => false,
             _ => false,
         }
     }
@@ -1865,7 +1866,7 @@ impl Compiler {
                 }
             }
             // Function call
-            Expr::Call(func, args, _) => {
+            Expr::Call(func, _type_args, args, _) => {
                 self.collect_mvar_access(func, reads, writes);
                 for arg in args {
                     self.collect_mvar_access(arg, reads, writes);
@@ -3238,8 +3239,8 @@ impl Compiler {
             }
 
             // Function call
-            Expr::Call(func, args, _) => {
-                self.compile_call(func, args, is_tail)
+            Expr::Call(func, type_args, args, _) => {
+                self.compile_call(func, type_args, args, is_tail)
             }
 
             // If expression
@@ -4606,7 +4607,7 @@ impl Compiler {
                 all_args.extend(args.iter().cloned());
 
                 let func_expr = Expr::Var(method.clone());
-                self.compile_call(&func_expr, &all_args, is_tail)
+                self.compile_call(&func_expr, &[], &all_args, is_tail)
             }
 
             // Index access
@@ -5015,7 +5016,7 @@ impl Compiler {
             BinOp::Or => return self.compile_or(left, right),
             BinOp::Pipe => {
                 // a |> f is f(a)
-                return self.compile_call(right, &[left.clone()], false);
+                return self.compile_call(right, &[], &[left.clone()], false);
             }
             _ => {}
         }
@@ -5235,7 +5236,7 @@ impl Compiler {
     }
 
     /// Compile a function call, with tail call optimization.
-    fn compile_call(&mut self, func: &Expr, args: &[Expr], is_tail: bool) -> Result<Reg, CompileError> {
+    fn compile_call(&mut self, func: &Expr, type_args: &[TypeExpr], args: &[Expr], is_tail: bool) -> Result<Reg, CompileError> {
         // Get line number for this call expression
         let line = self.span_line(func.span());
 
@@ -5445,6 +5446,18 @@ impl Compiler {
                     "typeInfo" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::TypeInfo(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "jsonToType" if arg_regs.len() == 1 && !type_args.is_empty() => {
+                        // Extract type name from type argument
+                        let type_name = self.type_expr_to_string(&type_args[0]);
+                        // Load the type name as a string constant
+                        let type_reg = self.alloc_reg();
+                        let const_idx = self.chunk.add_constant(Value::String(Arc::new(type_name)));
+                        self.chunk.emit(Instruction::LoadConst(type_reg, const_idx as u16), 0);
+                        // Emit Construct instruction
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::Construct(dst, type_reg, arg_regs[0]), 0);
                         return Ok(dst);
                     }
                     // === Math builtins (type-aware - use typed instruction if we can infer type) ===
@@ -6024,7 +6037,7 @@ impl Compiler {
             Expr::Set(_, _) => Some("Set".to_string()),
             // For Call expressions on uppercase identifiers (variant constructors),
             // check if it's a known type
-            Expr::Call(func, args, _) => {
+            Expr::Call(func, _type_args, args, _) => {
                 if let Expr::Var(ident) = func.as_ref() {
                     // Check for copy/hash/show builtins - these return the same type as their argument
                     // or a known type (hash -> Int, show -> String)
@@ -7524,7 +7537,7 @@ impl Compiler {
             Expr::UnaryOp(_, operand, _) => {
                 self.collect_mvar_writes_inner(operand, writes);
             }
-            Expr::Call(func, args, _) => {
+            Expr::Call(func, _type_args, args, _) => {
                 self.collect_mvar_writes_inner(func, writes);
                 for arg in args {
                     self.collect_mvar_writes_inner(arg, writes);
@@ -7566,7 +7579,7 @@ impl Compiler {
             Expr::UnaryOp(_, operand, _) => {
                 self.collect_mvar_refs_inner(operand, refs);
             }
-            Expr::Call(func, args, _) => {
+            Expr::Call(func, _type_args, args, _) => {
                 self.collect_mvar_refs_inner(func, refs);
                 for arg in args {
                     self.collect_mvar_refs_inner(arg, refs);
@@ -7646,7 +7659,7 @@ impl Compiler {
                 self.expr_has_blocking(left) || self.expr_has_blocking(right)
             }
             Expr::UnaryOp(_, operand, _) => self.expr_has_blocking(operand),
-            Expr::Call(func, args, _) => {
+            Expr::Call(func, _type_args, args, _) => {
                 self.expr_has_blocking(func) || args.iter().any(|a| self.expr_has_blocking(a))
             }
             Expr::Tuple(elems, _) | Expr::List(elems, None, _) => {
@@ -9284,7 +9297,7 @@ impl Compiler {
     /// Check if an expression contains a call to the given function name
     fn expr_contains_call(expr: &Expr, fn_name: &str) -> bool {
         match expr {
-            Expr::Call(callee, args, _) => {
+            Expr::Call(callee, _type_args, args, _) => {
                 // Check if this is a direct call to fn_name
                 if let Expr::Var(ident) = callee.as_ref() {
                     if ident.node == fn_name {
@@ -9382,7 +9395,7 @@ impl Compiler {
     /// Check if an expression calls any function with untyped params.
     fn expr_calls_function_with_untyped_params(&self, expr: &Expr) -> bool {
         match expr {
-            Expr::Call(func, args, _) => {
+            Expr::Call(func, _type_args, args, _) => {
                 // Check the called function
                 if let Expr::Var(ident) = func.as_ref() {
                     let name = &ident.node;
@@ -9887,7 +9900,7 @@ fn free_vars(expr: &Expr, bound: &std::collections::HashSet<String>) -> std::col
         Expr::UnaryOp(_, e, _) => {
             free.extend(free_vars(e, bound));
         }
-        Expr::Call(f, args, _) => {
+        Expr::Call(f, _type_args, args, _) => {
             free.extend(free_vars(f, bound));
             for arg in args {
                 free.extend(free_vars(arg, bound));

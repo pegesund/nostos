@@ -1,0 +1,13 @@
+# expect: 42
+# Test jsonToType with variant and extract value
+use stdlib.json.{jsonParse, jsonStringify}
+type Result = Ok(Int) | Err(String)
+
+getValue(Ok(n)) = n
+getValue(Err(_)) = 0
+
+main() = {
+    json = jsonParse("{\"Ok\": {\"_0\": 42}}")
+    r = jsonToType[Result](json)
+    getValue(r)
+}

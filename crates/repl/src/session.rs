@@ -388,7 +388,7 @@ fn extract_dependencies_from_expr(expr: &Expr, deps: &mut HashSet<String>) {
         Expr::Var(ident) => {
             deps.insert(ident.node.clone());
         }
-        Expr::Call(callee, args, _) => {
+        Expr::Call(callee, _type_args, args, _) => {
             extract_dependencies_from_expr(callee, deps);
             for arg in args {
                 extract_dependencies_from_expr(arg, deps);
@@ -634,7 +634,7 @@ mod tests {
 
     /// Helper to create a call expression.
     fn call_expr(name: &str, args: Vec<Expr>) -> Expr {
-        Expr::Call(Box::new(var_expr(name)), args, Span::default())
+        Expr::Call(Box::new(var_expr(name)), vec![], args, Span::default())
     }
 
     /// Helper to create a binary operation.

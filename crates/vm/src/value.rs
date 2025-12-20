@@ -1043,6 +1043,9 @@ pub enum Instruction {
     /// Reflect value to Json: dst = reflect(value)
     /// Converts any value to the Json sum type
     Reflect(Reg, Reg),
+    /// Construct typed value from Json: dst = construct(type_name, json)
+    /// Creates a record or variant from type name string and Json data
+    Construct(Reg, Reg, Reg),
 
     // === IO/Debug builtins ===
     /// Print value, return string representation: dst = print(value)

@@ -1,0 +1,10 @@
+# expect: -42
+# Test jsonToType with negative integer
+use stdlib.json.{jsonParse, jsonStringify}
+type Value = { n: Int }
+
+main() = {
+    json = jsonParse("{\"n\": -42}")
+    v = jsonToType[Value](json)
+    v.n
+}

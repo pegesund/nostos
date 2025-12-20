@@ -1,0 +1,14 @@
+# expect: active
+# Test jsonToType with variant inside record
+use stdlib.json.{jsonParse, jsonStringify}
+type Status = Active | Inactive
+type User = { name: String, status: Status }
+
+statusName(Active) = "active"
+statusName(Inactive) = "inactive"
+
+main() = {
+    json = jsonParse("{\"name\": \"alice\", \"status\": {\"Active\": {}}}")
+    user = jsonToType[User](json)
+    statusName(user.status)
+}

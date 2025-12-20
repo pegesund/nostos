@@ -1,0 +1,10 @@
+# expect: true
+# Test jsonToType with boolean field
+use stdlib.json.{jsonParse, jsonStringify}
+type Config = { enabled: Bool, count: Int }
+
+main() = {
+    json = jsonParse("{\"enabled\": true, \"count\": 5}")
+    cfg = jsonToType[Config](json)
+    cfg.enabled
+}

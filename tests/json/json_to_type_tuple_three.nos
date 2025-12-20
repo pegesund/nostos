@@ -1,0 +1,11 @@
+# expect: (1, test, true)
+# Test jsonToType with 3-element tuple
+use stdlib.json.{jsonParse, jsonStringify}
+
+type Triple = { data: (Int, String, Bool) }
+
+main() = {
+    json = jsonParse("{\"data\": [1, \"test\", true]}")
+    t = jsonToType[Triple](json)
+    t.data
+}

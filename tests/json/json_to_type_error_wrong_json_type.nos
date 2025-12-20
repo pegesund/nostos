@@ -1,0 +1,13 @@
+# expect: caught: Expected Json Object, found Array
+# Test jsonToType throws catchable exception for wrong JSON type
+use stdlib.json.{jsonParse, jsonStringify}
+
+type Person = { name: String }
+
+main() = {
+    json = jsonParse("[1, 2, 3]")
+    try {
+        p = jsonToType[Person](json)
+        "success"
+    } catch e -> "caught: " ++ e end
+}

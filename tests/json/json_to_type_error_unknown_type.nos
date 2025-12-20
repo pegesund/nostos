@@ -1,0 +1,11 @@
+# expect: caught: Unknown type: NonExistentType
+# Test jsonToType throws catchable exception for unknown type
+use stdlib.json.{jsonParse, jsonStringify}
+
+main() = {
+    json = jsonParse("{\"x\": 1}")
+    try {
+        p = jsonToType[NonExistentType](json)
+        "success"
+    } catch e -> "caught: " ++ e end
+}

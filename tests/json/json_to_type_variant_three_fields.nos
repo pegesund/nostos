@@ -1,0 +1,13 @@
+# expect: RGB(255, 128, 0)
+# Test jsonToType with three-field variant
+use stdlib.json.{jsonParse, jsonStringify}
+type Color = RGB(Int, Int, Int) | Named(String)
+
+describe(RGB(r, g, b)) = "RGB(" ++ show(r) ++ ", " ++ show(g) ++ ", " ++ show(b) ++ ")"
+describe(Named(name)) = name
+
+main() = {
+    json = jsonParse("{\"RGB\": {\"_0\": 255, \"_1\": 128, \"_2\": 0}}")
+    c = jsonToType[Color](json)
+    describe(c)
+}

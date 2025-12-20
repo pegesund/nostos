@@ -1,0 +1,14 @@
+# expect: loading 75
+# Test jsonToType with mixed unit and data variants
+use stdlib.json.{jsonParse, jsonStringify}
+type State = Loading(Int) | Ready | Error(String)
+
+describe(Loading(pct)) = "loading " ++ show(pct)
+describe(Ready) = "ready"
+describe(Error(msg)) = "error: " ++ msg
+
+main() = {
+    json = jsonParse("{\"Loading\": {\"_0\": 75}}")
+    s = jsonToType[State](json)
+    describe(s)
+}

@@ -1,0 +1,10 @@
+# expect: 999999999
+# Test jsonToType with large integer
+use stdlib.json.{jsonParse, jsonStringify}
+type BigValue = { n: Int }
+
+main() = {
+    json = jsonParse("{\"n\": 999999999}")
+    v = jsonToType[BigValue](json)
+    v.n
+}

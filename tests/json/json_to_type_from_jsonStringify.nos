@@ -1,0 +1,16 @@
+# expect: true
+# Test jsonToType from jsonStringify round-trip
+use stdlib.json.{jsonParse, jsonStringify}
+type Config = { debug: Bool, level: Int }
+
+main() = {
+    json = jsonParse("{\"debug\": true, \"level\": 3}")
+    cfg = jsonToType[Config](json)
+
+    # Convert to string and back
+    str = jsonStringify(reflect(cfg))
+    json2 = jsonParse(str)
+    cfg2 = jsonToType[Config](json2)
+
+    cfg.debug == cfg2.debug && cfg.level == cfg2.level
+}

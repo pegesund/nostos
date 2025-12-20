@@ -1,11 +1,11 @@
 # expect: true
 # Deep mutual recursion
 
-is_even(n) =
+is_even(n: Int) =
     if n == 0 then true
     else is_odd(n - 1)
 
-is_odd(n) =
+is_odd(n: Int) =
     if n == 0 then false
     else is_even(n - 1)
 

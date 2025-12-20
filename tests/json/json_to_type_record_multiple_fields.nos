@@ -1,0 +1,10 @@
+# expect: User alice is 30 years old and active
+# Test jsonToType with multiple fields
+use stdlib.json.{jsonParse, jsonStringify}
+type User = { id: Int, name: String, age: Int, active: Bool }
+
+main() = {
+    json = jsonParse("{\"id\": 1, \"name\": \"alice\", \"age\": 30, \"active\": true}")
+    user = jsonToType[User](json)
+    "User " ++ user.name ++ " is " ++ show(user.age) ++ " years old and " ++ (if user.active then "active" else "inactive")
+}

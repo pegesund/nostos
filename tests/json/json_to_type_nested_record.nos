@@ -1,0 +1,11 @@
+# expect: 30
+# Test jsonToType with nested record
+use stdlib.json.{jsonParse, jsonStringify}
+type Point = { x: Int, y: Int }
+type Rect = { origin: Point, width: Int, height: Int }
+
+main() = {
+    json = jsonParse("{\"origin\": {\"x\": 10, \"y\": 20}, \"width\": 100, \"height\": 50}")
+    rect = jsonToType[Rect](json)
+    rect.origin.x + rect.origin.y
+}

@@ -1,0 +1,10 @@
+# expect: Hello 世界
+# Test jsonToType with unicode string
+use stdlib.json.{jsonParse, jsonStringify}
+type Greeting = { message: String }
+
+main() = {
+    json = jsonParse("{\"message\": \"Hello 世界\"}")
+    g = jsonToType[Greeting](json)
+    g.message
+}

@@ -8975,6 +8975,52 @@ impl ThreadWorker {
                 set_reg!(*dst, json_value);
             }
 
+            Construct(dst, type_reg, json_reg) => {
+                // Construct a typed value from type name and Json
+                let (type_name, json_val) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let tn = match reg!(*type_reg) {
+                        GcValue::String(ptr) => {
+                            proc.heap.get_string(*ptr)
+                                .map(|s| s.data.clone())
+                                .ok_or_else(|| RuntimeError::Panic("Invalid string".to_string()))?
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    let jv = reg!(*json_reg).clone();
+                    (tn, jv)
+                };
+                match self.construct_from_json(local_id, &type_name, json_val) {
+                    Ok(result) => {
+                        let proc = self.get_process_mut(local_id).unwrap();
+                        set_reg!(*dst, result);
+                    }
+                    Err(e) => {
+                        // Convert error to catchable exception
+                        let error_msg = match e {
+                            RuntimeError::Panic(msg) => msg,
+                            other => format!("{:?}", other),
+                        };
+                        let proc = self.get_process_mut(local_id).unwrap();
+                        let str_ptr = proc.heap.alloc_string(error_msg.clone());
+                        proc.current_exception = Some(GcValue::String(str_ptr));
+
+                        // Find handler (same as Throw instruction)
+                        if let Some(handler) = proc.handlers.pop() {
+                            while proc.frames.len() > handler.frame_index + 1 {
+                                proc.frames.pop();
+                            }
+                            proc.frames[handler.frame_index].ip = handler.catch_ip;
+                        } else {
+                            return Err(RuntimeError::Panic(format!("Uncaught exception: {}", error_msg)));
+                        }
+                    }
+                }
+            }
+
             // === String Encoding ===
             Base64Encode(dst, str_reg) => {
                 use base64::{Engine as _, engine::general_purpose};
@@ -11686,6 +11732,269 @@ impl ThreadWorker {
         let obj_list = GcList::from_vec(obj_pairs);
         let ptr = proc.heap.alloc_variant(json_type, Arc::new("Object".to_string()), vec![GcValue::List(obj_list)]);
         Ok(GcValue::Variant(ptr))
+    }
+
+    /// Construct a typed value from Json (for construct builtin)
+    fn construct_from_json(&mut self, local_id: u64, type_name: &str, json: GcValue) -> Result<GcValue, RuntimeError> {
+        // Look up type info
+        let type_val = self.shared.types.get(type_name).cloned()
+            .or_else(|| self.shared.dynamic_types.read().get(type_name).cloned())
+            .or_else(|| self.shared.stdlib_types.read().get(type_name).cloned())
+            .ok_or_else(|| RuntimeError::Panic(format!("Unknown type: {}", type_name)))?;
+
+        // Extract Json object pairs from the json value
+        let pairs = self.extract_json_object_pairs(local_id, &json)?;
+
+        if type_val.constructors.is_empty() {
+            // Record type - fields are directly in the json object
+            let mut field_values = Vec::new();
+            let mut is_float = Vec::new();
+
+            for field in &type_val.fields {
+                let field_json = pairs.iter()
+                    .find(|(k, _)| k == &field.name)
+                    .map(|(_, v)| v.clone())
+                    .ok_or_else(|| RuntimeError::Panic(format!("Missing field: {}", field.name)))?;
+                let field_value = self.json_to_primitive(local_id, &field_json, &field.type_name)?;
+                is_float.push(field.type_name == "Float" || field.type_name == "Float64" || field.type_name == "Float32");
+                field_values.push(field_value);
+            }
+
+            let proc = self.get_process_mut(local_id).unwrap();
+            let rec_ptr = proc.heap.alloc_record(
+                type_name.to_string(),
+                type_val.fields.iter().map(|f| f.name.clone()).collect(),
+                field_values,
+                is_float,
+            );
+            Ok(GcValue::Record(rec_ptr))
+        } else {
+            // Variant type - json object has a single key (constructor name) with fields object
+            if pairs.len() != 1 {
+                return Err(RuntimeError::Panic(format!(
+                    "Variant json must have exactly one key (constructor), found {}",
+                    pairs.len()
+                )));
+            }
+
+            let (ctor_name, fields_json) = &pairs[0];
+
+            // Find the constructor
+            let ctor = type_val.constructors.iter()
+                .find(|c| &c.name == ctor_name)
+                .ok_or_else(|| RuntimeError::Panic(format!("Unknown constructor: {}", ctor_name)))?
+                .clone();
+
+            if ctor.fields.is_empty() {
+                // Unit variant
+                let proc = self.get_process_mut(local_id).unwrap();
+                let var_ptr = proc.heap.alloc_variant(
+                    Arc::new(type_name.to_string()),
+                    Arc::new(ctor_name.clone()),
+                    vec![],
+                );
+                Ok(GcValue::Variant(var_ptr))
+            } else {
+                // Variant with fields
+                let field_pairs = self.extract_json_object_pairs(local_id, fields_json)?;
+                let mut field_values = Vec::new();
+
+                for field in &ctor.fields {
+                    let field_json = field_pairs.iter()
+                        .find(|(k, _)| k == &field.name)
+                        .map(|(_, v)| v.clone())
+                        .ok_or_else(|| RuntimeError::Panic(format!("Missing field: {}", field.name)))?;
+                    let field_value = self.json_to_primitive(local_id, &field_json, &field.type_name)?;
+                    field_values.push(field_value);
+                }
+
+                let proc = self.get_process_mut(local_id).unwrap();
+                let var_ptr = proc.heap.alloc_variant(
+                    Arc::new(type_name.to_string()),
+                    Arc::new(ctor_name.clone()),
+                    field_values,
+                );
+                Ok(GcValue::Variant(var_ptr))
+            }
+        }
+    }
+
+    /// Extract key-value pairs from a Json Object variant
+    fn extract_json_object_pairs(&self, local_id: u64, json: &GcValue) -> Result<Vec<(String, GcValue)>, RuntimeError> {
+        match json {
+            GcValue::Variant(var_ptr) => {
+                let proc = self.get_process(local_id).unwrap();
+                let variant = proc.heap.get_variant(*var_ptr)
+                    .ok_or_else(|| RuntimeError::Panic("Invalid variant".to_string()))?;
+
+                if variant.constructor.as_str() != "Object" {
+                    return Err(RuntimeError::Panic(format!(
+                        "Expected Json Object, found {}",
+                        variant.constructor
+                    )));
+                }
+
+                if variant.fields.is_empty() {
+                    return Ok(vec![]);
+                }
+
+                match &variant.fields[0] {
+                    GcValue::List(list) => {
+                        let mut pairs = Vec::new();
+                        for item in list.data.iter() {
+                            match item {
+                                GcValue::Tuple(tup_ptr) => {
+                                    let tup = proc.heap.get_tuple(*tup_ptr)
+                                        .ok_or_else(|| RuntimeError::Panic("Invalid tuple".to_string()))?;
+                                    if tup.items.len() >= 2 {
+                                        let key = match &tup.items[0] {
+                                            GcValue::String(s) => proc.heap.get_string(*s)
+                                                .map(|st| st.data.clone())
+                                                .unwrap_or_default(),
+                                            _ => return Err(RuntimeError::Panic("Object key must be string".to_string())),
+                                        };
+                                        pairs.push((key, tup.items[1].clone()));
+                                    }
+                                }
+                                _ => return Err(RuntimeError::Panic("Object entry must be tuple".to_string())),
+                            }
+                        }
+                        Ok(pairs)
+                    }
+                    _ => Err(RuntimeError::Panic("Object fields must be list".to_string())),
+                }
+            }
+            _ => Err(RuntimeError::Panic("Expected Json variant".to_string())),
+        }
+    }
+
+    /// Convert a Json value to a primitive GcValue based on expected type
+    fn json_to_primitive(&mut self, local_id: u64, json: &GcValue, expected_type: &str) -> Result<GcValue, RuntimeError> {
+        match json {
+            GcValue::Variant(var_ptr) => {
+                let (ctor, fields) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let variant = proc.heap.get_variant(*var_ptr)
+                        .ok_or_else(|| RuntimeError::Panic("Invalid variant".to_string()))?;
+                    (variant.constructor.clone(), variant.fields.clone())
+                };
+
+                let ctor_str = ctor.as_str();
+                if ctor_str == "Null" {
+                    Ok(GcValue::Unit)
+                } else if ctor_str == "Bool" {
+                    if fields.is_empty() {
+                        Ok(GcValue::Bool(false))
+                    } else {
+                        match &fields[0] {
+                            GcValue::Bool(b) => Ok(GcValue::Bool(*b)),
+                            _ => Ok(GcValue::Bool(false)),
+                        }
+                    }
+                } else if ctor_str == "Number" {
+                    if fields.is_empty() {
+                        Ok(GcValue::Float64(0.0))
+                    } else {
+                        match &fields[0] {
+                            GcValue::Float64(f) => {
+                                match expected_type {
+                                    "Int" | "Int64" => Ok(GcValue::Int64(*f as i64)),
+                                    "Int32" => Ok(GcValue::Int32(*f as i32)),
+                                    "Int16" => Ok(GcValue::Int16(*f as i16)),
+                                    "Int8" => Ok(GcValue::Int8(*f as i8)),
+                                    "UInt64" => Ok(GcValue::UInt64(*f as u64)),
+                                    "UInt32" => Ok(GcValue::UInt32(*f as u32)),
+                                    "UInt16" => Ok(GcValue::UInt16(*f as u16)),
+                                    "UInt8" => Ok(GcValue::UInt8(*f as u8)),
+                                    "Float32" => Ok(GcValue::Float32(*f as f32)),
+                                    _ => Ok(GcValue::Float64(*f)),
+                                }
+                            }
+                            GcValue::Int64(n) => Ok(GcValue::Int64(*n)),
+                            _ => Ok(GcValue::Float64(0.0)),
+                        }
+                    }
+                } else if ctor_str == "String" {
+                    if fields.is_empty() {
+                        let proc = self.get_process_mut(local_id).unwrap();
+                        Ok(GcValue::String(proc.heap.alloc_string(String::new())))
+                    } else {
+                        match &fields[0] {
+                            GcValue::String(s) => Ok(GcValue::String(*s)),
+                            _ => {
+                                let proc = self.get_process_mut(local_id).unwrap();
+                                Ok(GcValue::String(proc.heap.alloc_string(String::new())))
+                            }
+                        }
+                    }
+                } else if ctor_str == "Array" {
+                    if fields.is_empty() {
+                        // Check if expected type is a tuple
+                        if expected_type.starts_with('(') && expected_type.ends_with(')') {
+                            let proc = self.get_process_mut(local_id).unwrap();
+                            let tup_ptr = proc.heap.alloc_tuple(vec![]);
+                            Ok(GcValue::Tuple(tup_ptr))
+                        } else {
+                            Ok(GcValue::List(GcList::from_vec(vec![])))
+                        }
+                    } else {
+                        match &fields[0] {
+                            GcValue::List(list) => {
+                                // Check if expected type is a tuple like (Int, String, Bool)
+                                if expected_type.starts_with('(') && expected_type.ends_with(')') {
+                                    // Parse tuple element types
+                                    let inner = &expected_type[1..expected_type.len()-1];
+                                    let element_types: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
+                                    let list_items: Vec<GcValue> = list.data.iter().cloned().collect();
+
+                                    let mut items = Vec::new();
+                                    for (i, item) in list_items.iter().enumerate() {
+                                        let elem_type = element_types.get(i).copied().unwrap_or("a");
+                                        items.push(self.json_to_primitive(local_id, item, elem_type)?);
+                                    }
+                                    let proc = self.get_process_mut(local_id).unwrap();
+                                    let tup_ptr = proc.heap.alloc_tuple(items);
+                                    Ok(GcValue::Tuple(tup_ptr))
+                                } else {
+                                    // Recursively convert each item as list
+                                    let inner_type = if expected_type.starts_with("List[") {
+                                        expected_type[5..expected_type.len()-1].to_string()
+                                    } else {
+                                        "a".to_string()
+                                    };
+                                    let list_items: Vec<GcValue> = list.data.iter().cloned().collect();
+                                    let mut items = Vec::new();
+                                    for item in list_items {
+                                        items.push(self.json_to_primitive(local_id, &item, &inner_type)?);
+                                    }
+                                    Ok(GcValue::List(GcList::from_vec(items)))
+                                }
+                            }
+                            _ => Ok(GcValue::List(GcList::from_vec(vec![]))),
+                        }
+                    }
+                } else if ctor_str == "Object" {
+                    // Check if this is a nested record or variant
+                    let _pairs = self.extract_json_object_pairs(local_id, json)?;
+
+                    // Try to look up as a type
+                    let type_info = self.shared.types.get(expected_type).cloned()
+                        .or_else(|| self.shared.dynamic_types.read().get(expected_type).cloned())
+                        .or_else(|| self.shared.stdlib_types.read().get(expected_type).cloned());
+
+                    if type_info.is_some() {
+                        // Recursively construct the nested type
+                        return self.construct_from_json(local_id, expected_type, json.clone());
+                    }
+
+                    // Unknown object type - return as-is
+                    Ok(json.clone())
+                } else {
+                    Ok(json.clone())
+                }
+            }
+            _ => Ok(json.clone()),
+        }
     }
 }
 

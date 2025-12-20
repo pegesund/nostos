@@ -1,0 +1,12 @@
+# expect: 5
+# Test jsonToType with deeply nested structure
+use stdlib.json.{jsonParse, jsonStringify}
+type Inner = { value: Int }
+type Middle = { inner: Inner }
+type Outer = { middle: Middle }
+
+main() = {
+    json = jsonParse("{\"middle\": {\"inner\": {\"value\": 5}}}")
+    outer = jsonToType[Outer](json)
+    outer.middle.inner.value
+}

@@ -980,3 +980,158 @@ mod file_io {
     #[test]
     fn handle_flush() { run_category_test("handle_flush"); }
 }
+
+mod json {
+    use super::*;
+
+    fn run_category_test(name: &str) {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let workspace_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let file = workspace_root.join("tests").join("json").join(format!("{}.nos", name));
+
+        if let Err(e) = run_test_file(&file) {
+            panic!("{}", e);
+        }
+    }
+
+    #[test]
+    fn json_to_type_all_primitives() { run_category_test("json_to_type_all_primitives"); }
+
+    #[test]
+    fn json_to_type_deeply_nested() { run_category_test("json_to_type_deeply_nested"); }
+
+    #[test]
+    fn json_to_type_from_jsonStringify() { run_category_test("json_to_type_from_jsonStringify"); }
+
+    #[test]
+    fn json_to_type_large_int() { run_category_test("json_to_type_large_int"); }
+
+    #[test]
+    fn json_to_type_many_variants() { run_category_test("json_to_type_many_variants"); }
+
+    #[test]
+    fn json_to_type_negative_float() { run_category_test("json_to_type_negative_float"); }
+
+    #[test]
+    fn json_to_type_nested_record() { run_category_test("json_to_type_nested_record"); }
+
+    #[test]
+    fn json_to_type_record_bool() { run_category_test("json_to_type_record_bool"); }
+
+    #[test]
+    fn json_to_type_record_empty_string() { run_category_test("json_to_type_record_empty_string"); }
+
+    #[test]
+    fn json_to_type_record_false() { run_category_test("json_to_type_record_false"); }
+
+    #[test]
+    fn json_to_type_record_float() { run_category_test("json_to_type_record_float"); }
+
+    #[test]
+    fn json_to_type_record_in_variant() { run_category_test("json_to_type_record_in_variant"); }
+
+    #[test]
+    fn json_to_type_record_multiple_fields() { run_category_test("json_to_type_record_multiple_fields"); }
+
+    #[test]
+    fn json_to_type_record_negative_int() { run_category_test("json_to_type_record_negative_int"); }
+
+    #[test]
+    fn json_to_type_record_simple() { run_category_test("json_to_type_record_simple"); }
+
+    #[test]
+    fn json_to_type_record_string() { run_category_test("json_to_type_record_string"); }
+
+    #[test]
+    fn json_to_type_record_zero() { run_category_test("json_to_type_record_zero"); }
+
+    #[test]
+    fn json_to_type_roundtrip_record() { run_category_test("json_to_type_roundtrip_record"); }
+
+    #[test]
+    fn json_to_type_roundtrip_variant() { run_category_test("json_to_type_roundtrip_variant"); }
+
+    #[test]
+    fn json_to_type_special_chars() { run_category_test("json_to_type_special_chars"); }
+
+    #[test]
+    fn json_to_type_unicode_string() { run_category_test("json_to_type_unicode_string"); }
+
+    #[test]
+    fn json_to_type_variant_bool_payload() { run_category_test("json_to_type_variant_bool_payload"); }
+
+    #[test]
+    fn json_to_type_variant_error() { run_category_test("json_to_type_variant_error"); }
+
+    #[test]
+    fn json_to_type_variant_extract_value() { run_category_test("json_to_type_variant_extract_value"); }
+
+    #[test]
+    fn json_to_type_variant_float_payload() { run_category_test("json_to_type_variant_float_payload"); }
+
+    #[test]
+    fn json_to_type_variant_in_record() { run_category_test("json_to_type_variant_in_record"); }
+
+    #[test]
+    fn json_to_type_variant_mixed() { run_category_test("json_to_type_variant_mixed"); }
+
+    #[test]
+    fn json_to_type_variant_multi_field() { run_category_test("json_to_type_variant_multi_field"); }
+
+    #[test]
+    fn json_to_type_variant_single_field() { run_category_test("json_to_type_variant_single_field"); }
+
+    #[test]
+    fn json_to_type_variant_some() { run_category_test("json_to_type_variant_some"); }
+
+    #[test]
+    fn json_to_type_variant_string_payload() { run_category_test("json_to_type_variant_string_payload"); }
+
+    #[test]
+    fn json_to_type_variant_three_cases() { run_category_test("json_to_type_variant_three_cases"); }
+
+    #[test]
+    fn json_to_type_variant_three_fields() { run_category_test("json_to_type_variant_three_fields"); }
+
+    #[test]
+    fn json_to_type_variant_unit() { run_category_test("json_to_type_variant_unit"); }
+
+    #[test]
+    fn json_to_type_int8() { run_category_test("json_to_type_int8"); }
+
+    #[test]
+    fn json_to_type_uint8() { run_category_test("json_to_type_uint8"); }
+
+    #[test]
+    fn json_to_type_uint16() { run_category_test("json_to_type_uint16"); }
+
+    #[test]
+    fn json_to_type_uint32() { run_category_test("json_to_type_uint32"); }
+
+    #[test]
+    fn json_to_type_uint64() { run_category_test("json_to_type_uint64"); }
+
+    #[test]
+    fn json_to_type_tuple() { run_category_test("json_to_type_tuple"); }
+
+    #[test]
+    fn json_to_type_tuple_three() { run_category_test("json_to_type_tuple_three"); }
+
+    #[test]
+    fn json_to_type_error_missing_field() { run_category_test("json_to_type_error_missing_field"); }
+
+    #[test]
+    fn json_to_type_error_unknown_constructor() { run_category_test("json_to_type_error_unknown_constructor"); }
+
+    #[test]
+    fn json_to_type_error_unknown_type() { run_category_test("json_to_type_error_unknown_type"); }
+
+    #[test]
+    fn json_to_type_error_variant_missing_field() { run_category_test("json_to_type_error_variant_missing_field"); }
+
+    #[test]
+    fn json_to_type_error_variant_multiple_keys() { run_category_test("json_to_type_error_variant_multiple_keys"); }
+
+    #[test]
+    fn json_to_type_error_wrong_json_type() { run_category_test("json_to_type_error_wrong_json_type"); }
+}

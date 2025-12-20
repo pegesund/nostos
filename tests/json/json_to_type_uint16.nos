@@ -1,0 +1,11 @@
+# expect: 65535u16
+# Test jsonToType with UInt16
+use stdlib.json.{jsonParse, jsonStringify}
+
+type Port = { port: UInt16 }
+
+main() = {
+    json = jsonParse("{\"port\": 65535}")
+    p = jsonToType[Port](json)
+    p.port
+}

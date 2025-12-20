@@ -1,0 +1,14 @@
+# expect: caught: Missing field: _0
+# Test jsonToType throws exception when variant is missing a field
+use stdlib.json.{jsonParse, jsonStringify}
+
+type Result = Ok(Int) | Err(String)
+
+main() = {
+    # Invalid: Ok needs _0 field
+    json = jsonParse("{\"Ok\": {}}")
+    try {
+        r = jsonToType[Result](json)
+        "success"
+    } catch e -> "caught: " ++ e end
+}

@@ -693,8 +693,8 @@ impl<'a> InferCtx<'a> {
                 }
             }
 
-            // Function call
-            Expr::Call(func, args, _) => {
+            // Function call (with optional type args)
+            Expr::Call(func, _type_args, args, _) => {
                 let func_ty = self.infer_expr(func)?;
                 let mut arg_types = Vec::new();
                 for arg in args {
@@ -2372,6 +2372,7 @@ mod tests {
         );
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("f"))),
+            vec![],
             vec![Expr::Int(42, span())],
             span(),
         );
@@ -2393,6 +2394,7 @@ mod tests {
         );
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("f"))),
+            vec![],
             vec![Expr::String(nostos_syntax::ast::StringLit::Plain("hello".to_string()), span())],
             span(),
         );
@@ -2616,6 +2618,7 @@ mod tests {
         let mut env = crate::standard_env();
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("Some"))),
+            vec![],
             vec![Expr::Int(42, span())],
             span(),
         );
@@ -2928,6 +2931,7 @@ mod tests {
         // make_adder(5)
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("make_adder"))),
+            vec![],
             vec![Expr::Int(5, span())],
             span(),
         );
@@ -2992,6 +2996,7 @@ mod tests {
         // id_int(42) should be Int
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("id_int"))),
+            vec![],
             vec![Expr::Int(42, span())],
             span(),
         );
@@ -3089,6 +3094,7 @@ mod tests {
         // Ok(42)
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("Ok"))),
+            vec![],
             vec![Expr::Int(42, span())],
             span(),
         );
@@ -3107,6 +3113,7 @@ mod tests {
         // Err("error")
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("Err"))),
+            vec![],
             vec![Expr::String(nostos_syntax::ast::StringLit::Plain("error".to_string()), span())],
             span(),
         );
@@ -3213,6 +3220,7 @@ mod tests {
         // add(1) - missing one argument
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("add"))),
+            vec![],
             vec![Expr::Int(1, span())],
             span(),
         );

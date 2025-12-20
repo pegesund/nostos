@@ -1,0 +1,14 @@
+# expect: pending
+# Test jsonToType with three-case unit variant
+use stdlib.json.{jsonParse, jsonStringify}
+type Status = Active | Pending | Inactive
+
+statusName(Active) = "active"
+statusName(Pending) = "pending"
+statusName(Inactive) = "inactive"
+
+main() = {
+    json = jsonParse("{\"Pending\": {}}")
+    s = jsonToType[Status](json)
+    statusName(s)
+}

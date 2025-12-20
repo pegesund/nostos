@@ -1,0 +1,10 @@
+# expect: 11
+# Test jsonToType with special characters in string (newline)
+use stdlib.json.{jsonParse, jsonStringify}
+type Message = { text: String }
+
+main() = {
+    json = jsonParse("{\"text\": \"hello\\nworld\"}")
+    m = jsonToType[Message](json)
+    length(m.text)
+}

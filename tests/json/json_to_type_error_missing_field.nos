@@ -1,0 +1,13 @@
+# expect: caught: Missing field: age
+# Test jsonToType throws catchable exception for missing field
+use stdlib.json.{jsonParse, jsonStringify}
+
+type Person = { name: String, age: Int }
+
+main() = {
+    json = jsonParse("{\"name\": \"Alice\"}")
+    try {
+        p = jsonToType[Person](json)
+        "success: " ++ p.name
+    } catch e -> "caught: " ++ e end
+}

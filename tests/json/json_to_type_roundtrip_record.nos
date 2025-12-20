@@ -1,0 +1,15 @@
+# expect: true
+# Test round-trip: record -> json -> record
+use stdlib.json.{jsonParse, jsonStringify}
+type Point = { x: Int, y: Int }
+
+main() = {
+    json = jsonParse("{\"x\": 10, \"y\": 20}")
+    p = jsonToType[Point](json)
+
+    # Convert back to json and parse again
+    json2 = reflect(p)
+    p2 = jsonToType[Point](json2)
+
+    p.x == p2.x && p.y == p2.y
+}

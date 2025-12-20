@@ -1,0 +1,13 @@
+# expect: caught: Unknown constructor: Unknown
+# Test jsonToType throws catchable exception for unknown variant constructor
+use stdlib.json.{jsonParse, jsonStringify}
+
+type Result = Ok(Int) | Err(String)
+
+main() = {
+    json = jsonParse("{\"Unknown\": {}}")
+    try {
+        r = jsonToType[Result](json)
+        "success"
+    } catch e -> "caught: " ++ e end
+}

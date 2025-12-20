@@ -1,0 +1,13 @@
+# expect: something went wrong
+# Test jsonToType with error variant
+use stdlib.json.{jsonParse, jsonStringify}
+type Result = Ok(Int) | Err(String)
+
+getMessage(Ok(_)) = "no error"
+getMessage(Err(msg)) = msg
+
+main() = {
+    json = jsonParse("{\"Err\": {\"_0\": \"something went wrong\"}}")
+    r = jsonToType[Result](json)
+    getMessage(r)
+}

@@ -1,0 +1,11 @@
+# expect: (42, hello)
+# Test jsonToType with tuple in record
+use stdlib.json.{jsonParse, jsonStringify}
+
+type Pair = { data: (Int, String) }
+
+main() = {
+    json = jsonParse("{\"data\": [42, \"hello\"]}")
+    p = jsonToType[Pair](json)
+    p.data
+}

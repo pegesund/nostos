@@ -1,0 +1,18 @@
+# expect: wednesday
+# Test jsonToType with many variant cases
+use stdlib.json.{jsonParse, jsonStringify}
+type Day = Mon | Tue | Wed | Thu | Fri | Sat | Sun
+
+dayName(Mon) = "monday"
+dayName(Tue) = "tuesday"
+dayName(Wed) = "wednesday"
+dayName(Thu) = "thursday"
+dayName(Fri) = "friday"
+dayName(Sat) = "saturday"
+dayName(Sun) = "sunday"
+
+main() = {
+    json = jsonParse("{\"Wed\": {}}")
+    d = jsonToType[Day](json)
+    dayName(d)
+}

@@ -1,0 +1,10 @@
+# expect: 42-hello-true-3.14
+# Test jsonToType with all primitive types
+use stdlib.json.{jsonParse, jsonStringify}
+type AllTypes = { i: Int, s: String, b: Bool, f: Float }
+
+main() = {
+    json = jsonParse("{\"i\": 42, \"s\": \"hello\", \"b\": true, \"f\": 3.14}")
+    a = jsonToType[AllTypes](json)
+    show(a.i) ++ "-" ++ a.s ++ "-" ++ show(a.b) ++ "-" ++ show(a.f)
+}

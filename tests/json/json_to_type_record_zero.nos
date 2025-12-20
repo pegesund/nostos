@@ -1,0 +1,10 @@
+# expect: 0
+# Test jsonToType with zero value
+use stdlib.json.{jsonParse, jsonStringify}
+type Counter = { count: Int }
+
+main() = {
+    json = jsonParse("{\"count\": 0}")
+    c = jsonToType[Counter](json)
+    c.count
+}

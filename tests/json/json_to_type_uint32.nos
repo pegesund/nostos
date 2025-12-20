@@ -1,0 +1,11 @@
+# expect: 4000000000u32
+# Test jsonToType with UInt32
+use stdlib.json.{jsonParse, jsonStringify}
+
+type Counter = { count: UInt32 }
+
+main() = {
+    json = jsonParse("{\"count\": 4000000000}")
+    c = jsonToType[Counter](json)
+    c.count
+}

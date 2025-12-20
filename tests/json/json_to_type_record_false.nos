@@ -1,0 +1,10 @@
+# expect: false
+# Test jsonToType with false boolean
+use stdlib.json.{jsonParse, jsonStringify}
+type Flag = { enabled: Bool }
+
+main() = {
+    json = jsonParse("{\"enabled\": false}")
+    f = jsonToType[Flag](json)
+    f.enabled
+}

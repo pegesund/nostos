@@ -1,0 +1,11 @@
+# expect: 255u8
+# Test jsonToType with UInt8
+use stdlib.json.{jsonParse, jsonStringify}
+
+type ByteVal = { value: UInt8 }
+
+main() = {
+    json = jsonParse("{\"value\": 255}")
+    b = jsonToType[ByteVal](json)
+    b.value
+}

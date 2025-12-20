@@ -1,0 +1,10 @@
+# expect: 42
+# Test jsonToType with simple record
+use stdlib.json.{jsonParse, jsonStringify}
+type Point = { x: Int, y: Int }
+
+main() = {
+    json = jsonParse("{\"x\": 42, \"y\": 10}")
+    p = jsonToType[Point](json)
+    p.x
+}

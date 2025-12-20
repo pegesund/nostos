@@ -1,0 +1,10 @@
+# expect: Ok
+# Test jsonToType with single-field variant
+use stdlib.json.{jsonParse, jsonStringify}
+type Result = Ok(Int) | Err(String)
+
+main() = {
+    json = jsonParse("{\"Ok\": {\"_0\": 42}}")
+    r = jsonToType[Result](json)
+    tagOf(r)
+}

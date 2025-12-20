@@ -1,0 +1,14 @@
+# expect: caught: Variant json must have exactly one key (constructor), found 2
+# Test jsonToType throws exception when variant JSON has multiple keys
+use stdlib.json.{jsonParse, jsonStringify}
+
+type Result = Ok(Int) | Err(String)
+
+main() = {
+    # Invalid: variant JSON should have exactly one key
+    json = jsonParse("{\"Ok\": {\"_0\": 1}, \"Err\": {\"_0\": \"bad\"}}")
+    try {
+        r = jsonToType[Result](json)
+        "success"
+    } catch e -> "caught: " ++ e end
+}

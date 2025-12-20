@@ -1,0 +1,11 @@
+# expect: 9999999999u64
+# Test jsonToType with UInt64
+use stdlib.json.{jsonParse, jsonStringify}
+
+type BigId = { id: UInt64 }
+
+main() = {
+    json = jsonParse("{\"id\": 9999999999}")
+    b = jsonToType[BigId](json)
+    b.id
+}
