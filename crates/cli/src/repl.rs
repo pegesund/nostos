@@ -477,8 +477,13 @@ impl Repl {
                 state.variable_types.insert(name.clone(), type_ann.clone());
             } else if let Some(sig) = self.compiler.get_function_signature(&binding.thunk_name) {
                 // Fall back to getting the thunk's return type
-                if let Some(arrow_pos) = sig.find("-> ") {
-                    let return_type = sig[arrow_pos + 3..].trim().to_string();
+                // For 0-arity functions, the signature IS the return type (no "->")
+                let return_type = if let Some(arrow_pos) = sig.find("-> ") {
+                    sig[arrow_pos + 3..].trim().to_string()
+                } else {
+                    sig.trim().to_string()
+                };
+                if !return_type.is_empty() {
                     state.variable_types.insert(name.clone(), return_type);
                 }
             }
