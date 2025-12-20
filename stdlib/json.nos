@@ -251,7 +251,7 @@ convertPrimitive(json, typeName) =
             _ -> throw("Expected String for Char, got " ++ show(json))
     else
         # Nested type - recursive call
-        fromJson(typeName, json)
+        fromJsonValue(typeName, json)
 
 # Build field map for record construction
 buildRecordFields(fields, pairs, acc) = match fields
@@ -301,8 +301,9 @@ findConstructor(constructors, name) = match constructors
         else findConstructor(rest, name)
 
 # Convert Json to typed value by type name
-# This is the main conversion function
-pub fromJson(typeName, json) = {
+# Use this when you already have a parsed Json value
+# For parsing from string, use the builtin: fromJson[Type](jsonParse(str))
+pub fromJsonValue(typeName, json) = {
     info = typeInfo(typeName)
 
     # Check for unknown type (empty map)
