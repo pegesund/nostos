@@ -5232,6 +5232,82 @@ impl AsyncProcess {
                 }
             }
 
+            MakeRecordDyn(dst, type_reg, fields_reg) => {
+                let type_name = match reg!(type_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr.clone())
+                            .map(|s| s.data.clone())
+                            .unwrap_or_default()
+                    }
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "non-string".to_string() }),
+                };
+                let fields_map = reg!(fields_reg).clone();
+                match self.make_record_from_map(&type_name, fields_map) {
+                    Ok(result) => {
+                        set_reg!(dst, result);
+                    }
+                    Err(e) => {
+                        let error_msg = match e {
+                            RuntimeError::Panic(msg) => msg,
+                            other => format!("{:?}", other),
+                        };
+                        let str_ptr = self.heap.alloc_string(error_msg.clone());
+                        self.current_exception = Some(GcValue::String(str_ptr));
+
+                        if let Some(handler) = self.handlers.pop() {
+                            while self.frames.len() > handler.frame_index + 1 {
+                                self.frames.pop();
+                            }
+                            self.frames[handler.frame_index].ip = handler.catch_ip;
+                        } else {
+                            return Err(RuntimeError::Panic(format!("Uncaught exception: {}", error_msg)));
+                        }
+                    }
+                }
+            }
+
+            MakeVariantDyn(dst, type_reg, ctor_reg, fields_reg) => {
+                let type_name = match reg!(type_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr.clone())
+                            .map(|s| s.data.clone())
+                            .unwrap_or_default()
+                    }
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "non-string".to_string() }),
+                };
+                let ctor_name = match reg!(ctor_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr.clone())
+                            .map(|s| s.data.clone())
+                            .unwrap_or_default()
+                    }
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "non-string".to_string() }),
+                };
+                let fields_map = reg!(fields_reg).clone();
+                match self.make_variant_from_map(&type_name, &ctor_name, fields_map) {
+                    Ok(result) => {
+                        set_reg!(dst, result);
+                    }
+                    Err(e) => {
+                        let error_msg = match e {
+                            RuntimeError::Panic(msg) => msg,
+                            other => format!("{:?}", other),
+                        };
+                        let str_ptr = self.heap.alloc_string(error_msg.clone());
+                        self.current_exception = Some(GcValue::String(str_ptr));
+
+                        if let Some(handler) = self.handlers.pop() {
+                            while self.frames.len() > handler.frame_index + 1 {
+                                self.frames.pop();
+                            }
+                            self.frames[handler.frame_index].ip = handler.catch_ip;
+                        } else {
+                            return Err(RuntimeError::Panic(format!("Uncaught exception: {}", error_msg)));
+                        }
+                    }
+                }
+            }
+
             // Unimplemented instructions - add as needed
             _ => {
                 eprintln!("[AsyncVM] Unimplemented instruction: {:?}", instruction);
@@ -6118,6 +6194,127 @@ impl AsyncProcess {
             }
             _ => Ok(json.clone()),
         }
+    }
+
+    /// Construct a record from a Map[String, Json] (for makeRecord builtin)
+    fn make_record_from_map(&mut self, type_name: &str, fields_map: GcValue) -> Result<GcValue, RuntimeError> {
+        use crate::gc::GcMapKey;
+
+        // Look up type info
+        let type_info = self.shared.types.read().unwrap().get(type_name).cloned()
+            .or_else(|| self.shared.dynamic_types.read().unwrap().get(type_name).cloned())
+            .or_else(|| self.shared.stdlib_types.read().unwrap().get(type_name).cloned());
+
+        let type_val = match type_info {
+            Some(t) => t,
+            None => return Err(RuntimeError::Panic(format!("Unknown type: {}", type_name))),
+        };
+
+        // Ensure it's a record type (no constructors)
+        if !type_val.constructors.is_empty() {
+            return Err(RuntimeError::Panic(format!(
+                "makeRecord cannot be used for variant type '{}', use makeVariant instead",
+                type_name
+            )));
+        }
+
+        // Extract entries from the Map
+        let map_entries = match &fields_map {
+            GcValue::Map(ptr) => {
+                let map = self.heap.get_map(ptr.clone())
+                    .ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                map.entries.clone()
+            }
+            _ => return Err(RuntimeError::TypeError {
+                expected: "Map".to_string(),
+                found: "non-map".to_string(),
+            }),
+        };
+
+        // Build field values in the correct order
+        let mut field_values = Vec::new();
+        let mut is_float = Vec::new();
+
+        for field in &type_val.fields {
+            let key = GcMapKey::String(field.name.clone());
+            let field_json = map_entries.get(&key)
+                .ok_or_else(|| RuntimeError::Panic(format!("Missing field: {}", field.name)))?
+                .clone();
+            let field_value = self.json_to_primitive(&field_json, &field.type_name)?;
+            is_float.push(field.type_name == "Float" || field.type_name == "Float64" || field.type_name == "Float32");
+            field_values.push(field_value);
+        }
+
+        let rec_ptr = self.heap.alloc_record(
+            type_name.to_string(),
+            type_val.fields.iter().map(|f| f.name.clone()).collect(),
+            field_values,
+            is_float,
+        );
+        Ok(GcValue::Record(rec_ptr))
+    }
+
+    /// Construct a variant from a Map[String, Json] (for makeVariant builtin)
+    fn make_variant_from_map(&mut self, type_name: &str, ctor_name: &str, fields_map: GcValue) -> Result<GcValue, RuntimeError> {
+        use crate::gc::GcMapKey;
+
+        // Look up type info
+        let type_info = self.shared.types.read().unwrap().get(type_name).cloned()
+            .or_else(|| self.shared.dynamic_types.read().unwrap().get(type_name).cloned())
+            .or_else(|| self.shared.stdlib_types.read().unwrap().get(type_name).cloned());
+
+        let type_val = match type_info {
+            Some(t) => t,
+            None => return Err(RuntimeError::Panic(format!("Unknown type: {}", type_name))),
+        };
+
+        // Find the constructor
+        let ctor = type_val.constructors.iter()
+            .find(|c| c.name == ctor_name)
+            .ok_or_else(|| RuntimeError::Panic(format!("Unknown constructor '{}' for type '{}'", ctor_name, type_name)))?
+            .clone();
+
+        if ctor.fields.is_empty() {
+            // Unit variant - no fields needed
+            let var_ptr = self.heap.alloc_variant(
+                Arc::new(type_name.to_string()),
+                Arc::new(ctor_name.to_string()),
+                vec![],
+            );
+            return Ok(GcValue::Variant(var_ptr));
+        }
+
+        // Extract entries from the Map
+        let map_entries = match &fields_map {
+            GcValue::Map(ptr) => {
+                let map = self.heap.get_map(ptr.clone())
+                    .ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                map.entries.clone()
+            }
+            _ => return Err(RuntimeError::TypeError {
+                expected: "Map".to_string(),
+                found: "non-map".to_string(),
+            }),
+        };
+
+        // Build field values in the correct order
+        let mut field_values = Vec::new();
+
+        for field in &ctor.fields {
+            let key = GcMapKey::String(field.name.clone());
+            let field_json = map_entries.get(&key)
+                .ok_or_else(|| RuntimeError::Panic(format!("Missing field '{}' for constructor '{}'", field.name, ctor_name)))?
+                .clone();
+            let field_value = self.json_to_primitive(&field_json, &field.type_name)?;
+            field_values.push(field_value);
+        }
+
+        let var_ptr = self.heap.alloc_variant(
+            Arc::new(type_name.to_string()),
+            Arc::new(ctor_name.to_string()),
+            field_values,
+        );
+        Ok(GcValue::Variant(var_ptr))
     }
 }
 

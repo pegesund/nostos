@@ -1,0 +1,25 @@
+# expect: true
+
+type Result = Ok(Int) | Err(String)
+
+main() = {
+    # Unit variant with positional field
+    ok_fields = %{"_0": Number(42.0)}
+    result_ok = makeVariant[Result]("Ok", ok_fields)
+
+    err_fields = %{"_0": String("error message")}
+    result_err = makeVariant[Result]("Err", err_fields)
+
+    # Check the variants
+    check_ok = match result_ok
+        Ok(n) -> n == 42
+        Err(_) -> false
+    end
+
+    check_err = match result_err
+        Ok(_) -> false
+        Err(msg) -> msg == "error message"
+    end
+
+    check_ok && check_err
+}

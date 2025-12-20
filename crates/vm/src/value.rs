@@ -1046,6 +1046,12 @@ pub enum Instruction {
     /// Construct typed value from Json: dst = construct(type_name, json)
     /// Creates a record or variant from type name string and Json data
     Construct(Reg, Reg, Reg),
+    /// Make record from field map: dst = makeRecord[T](fields_map)
+    /// fields_map is a Map[String, Json] where keys are field names
+    MakeRecordDyn(Reg, Reg, Reg),
+    /// Make variant from constructor name and fields: dst = makeVariant[T](ctor_name, fields_map)
+    /// fields_map is a Map[String, Json] where keys are field names
+    MakeVariantDyn(Reg, Reg, Reg, Reg),
 
     // === IO/Debug builtins ===
     /// Print value, return string representation: dst = print(value)

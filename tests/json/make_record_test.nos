@@ -1,0 +1,14 @@
+# expect: true
+
+type Person = { name: String, age: Int }
+
+main() = {
+    fields = %{
+        "name": String("Alice"),
+        "age": Number(30.0)
+    }
+
+    person = makeRecord[Person](fields)
+
+    person.name == "Alice" && person.age == 30
+}

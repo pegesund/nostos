@@ -1,0 +1,11 @@
+# expect: true
+# Test jsonToTypeByName builtin for records
+use stdlib.json.{jsonParse}
+
+type Person = { name: String, age: Int }
+
+main() = {
+    json = jsonParse("{\"name\": \"Alice\", \"age\": 30}")
+    person = jsonToTypeByName("Person", json)
+    person.name == "Alice" && person.age == 30
+}

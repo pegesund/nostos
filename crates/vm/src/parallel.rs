@@ -8955,7 +8955,7 @@ impl ThreadWorker {
             }
 
             TypeInfo(dst, name_reg) => {
-                // Get type metadata by name, return as Json
+                // Get type metadata by name, return as Map
                 let type_name = {
                     let proc = self.get_process(local_id).unwrap();
                     match reg!(*name_reg) {
@@ -8970,9 +8970,9 @@ impl ThreadWorker {
                         }),
                     }
                 };
-                let json_value = self.type_info_to_json(local_id, &type_name)?;
+                let map_value = self.type_info_to_map(local_id, &type_name)?;
                 let proc = self.get_process_mut(local_id).unwrap();
-                set_reg!(*dst, json_value);
+                set_reg!(*dst, map_value);
             }
 
             Construct(dst, type_reg, json_reg) => {
@@ -9009,6 +9009,107 @@ impl ThreadWorker {
                         proc.current_exception = Some(GcValue::String(str_ptr));
 
                         // Find handler (same as Throw instruction)
+                        if let Some(handler) = proc.handlers.pop() {
+                            while proc.frames.len() > handler.frame_index + 1 {
+                                proc.frames.pop();
+                            }
+                            proc.frames[handler.frame_index].ip = handler.catch_ip;
+                        } else {
+                            return Err(RuntimeError::Panic(format!("Uncaught exception: {}", error_msg)));
+                        }
+                    }
+                }
+            }
+
+            MakeRecordDyn(dst, type_reg, fields_reg) => {
+                // Make a record from type name and field map
+                let (type_name, fields_map) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let tn = match reg!(*type_reg) {
+                        GcValue::String(ptr) => {
+                            proc.heap.get_string(*ptr)
+                                .map(|s| s.data.clone())
+                                .ok_or_else(|| RuntimeError::Panic("Invalid string".to_string()))?
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    let fm = reg!(*fields_reg).clone();
+                    (tn, fm)
+                };
+                match self.make_record_from_map(local_id, &type_name, fields_map) {
+                    Ok(result) => {
+                        let proc = self.get_process_mut(local_id).unwrap();
+                        set_reg!(*dst, result);
+                    }
+                    Err(e) => {
+                        // Convert error to catchable exception
+                        let error_msg = match e {
+                            RuntimeError::Panic(msg) => msg,
+                            other => format!("{:?}", other),
+                        };
+                        let proc = self.get_process_mut(local_id).unwrap();
+                        let str_ptr = proc.heap.alloc_string(error_msg.clone());
+                        proc.current_exception = Some(GcValue::String(str_ptr));
+
+                        if let Some(handler) = proc.handlers.pop() {
+                            while proc.frames.len() > handler.frame_index + 1 {
+                                proc.frames.pop();
+                            }
+                            proc.frames[handler.frame_index].ip = handler.catch_ip;
+                        } else {
+                            return Err(RuntimeError::Panic(format!("Uncaught exception: {}", error_msg)));
+                        }
+                    }
+                }
+            }
+
+            MakeVariantDyn(dst, type_reg, ctor_reg, fields_reg) => {
+                // Make a variant from type name, constructor name, and field map
+                let (type_name, ctor_name, fields_map) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let tn = match reg!(*type_reg) {
+                        GcValue::String(ptr) => {
+                            proc.heap.get_string(*ptr)
+                                .map(|s| s.data.clone())
+                                .ok_or_else(|| RuntimeError::Panic("Invalid string".to_string()))?
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    let cn = match reg!(*ctor_reg) {
+                        GcValue::String(ptr) => {
+                            proc.heap.get_string(*ptr)
+                                .map(|s| s.data.clone())
+                                .ok_or_else(|| RuntimeError::Panic("Invalid string".to_string()))?
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    let fm = reg!(*fields_reg).clone();
+                    (tn, cn, fm)
+                };
+                match self.make_variant_from_map(local_id, &type_name, &ctor_name, fields_map) {
+                    Ok(result) => {
+                        let proc = self.get_process_mut(local_id).unwrap();
+                        set_reg!(*dst, result);
+                    }
+                    Err(e) => {
+                        // Convert error to catchable exception
+                        let error_msg = match e {
+                            RuntimeError::Panic(msg) => msg,
+                            other => format!("{:?}", other),
+                        };
+                        let proc = self.get_process_mut(local_id).unwrap();
+                        let str_ptr = proc.heap.alloc_string(error_msg.clone());
+                        proc.current_exception = Some(GcValue::String(str_ptr));
+
                         if let Some(handler) = proc.handlers.pop() {
                             while proc.frames.len() > handler.frame_index + 1 {
                                 proc.frames.pop();
@@ -11734,6 +11835,123 @@ impl ThreadWorker {
         Ok(GcValue::Variant(ptr))
     }
 
+    /// Get type info as a native Map (for typeInfo builtin)
+    fn type_info_to_map(&mut self, local_id: u64, type_name: &str) -> Result<GcValue, RuntimeError> {
+        use imbl::HashMap as ImblHashMap;
+        use crate::gc::GcMapKey;
+
+        // Look up type in static types, then dynamic types
+        let type_info = self.shared.types.get(type_name).cloned()
+            .or_else(|| self.shared.dynamic_types.read().get(type_name).cloned())
+            .or_else(|| self.shared.stdlib_types.read().get(type_name).cloned());
+
+        let type_val = match type_info {
+            Some(t) => t,
+            None => {
+                // Return empty map for unknown types
+                let proc = self.get_process_mut(local_id).unwrap();
+                let empty_map: ImblHashMap<GcMapKey, GcValue> = ImblHashMap::new();
+                let ptr = proc.heap.alloc_map(empty_map);
+                return Ok(GcValue::Map(ptr));
+            }
+        };
+
+        // Build Map structure: %{ "name": ..., "kind": ..., "fields": [...], "constructors": [...] }
+        let mut entries: ImblHashMap<GcMapKey, GcValue> = ImblHashMap::new();
+
+        // name
+        entries.insert(
+            GcMapKey::String("name".to_string()),
+            {
+                let proc = self.get_process_mut(local_id).unwrap();
+                let s = proc.heap.alloc_string(type_val.name.clone());
+                GcValue::String(s)
+            }
+        );
+
+        // kind
+        let kind_str = match &type_val.kind {
+            crate::value::TypeKind::Primitive => "primitive",
+            crate::value::TypeKind::Record { .. } => "record",
+            crate::value::TypeKind::Variant => "variant",
+            crate::value::TypeKind::Alias { .. } => "alias",
+        };
+        entries.insert(
+            GcMapKey::String("kind".to_string()),
+            {
+                let proc = self.get_process_mut(local_id).unwrap();
+                let s = proc.heap.alloc_string(kind_str.to_string());
+                GcValue::String(s)
+            }
+        );
+
+        // fields (for records) - List of Maps
+        let mut field_list = Vec::new();
+        for field in &type_val.fields {
+            let mut field_map: ImblHashMap<GcMapKey, GcValue> = ImblHashMap::new();
+
+            let proc = self.get_process_mut(local_id).unwrap();
+            let name_str = proc.heap.alloc_string(field.name.clone());
+            field_map.insert(GcMapKey::String("name".to_string()), GcValue::String(name_str));
+
+            let proc = self.get_process_mut(local_id).unwrap();
+            let type_str = proc.heap.alloc_string(field.type_name.clone());
+            field_map.insert(GcMapKey::String("type".to_string()), GcValue::String(type_str));
+
+            let proc = self.get_process_mut(local_id).unwrap();
+            let field_map_ptr = proc.heap.alloc_map(field_map);
+            field_list.push(GcValue::Map(field_map_ptr));
+        }
+        entries.insert(
+            GcMapKey::String("fields".to_string()),
+            GcValue::List(GcList::from_vec(field_list))
+        );
+
+        // constructors (for variants) - List of Maps
+        let mut ctor_list = Vec::new();
+        for ctor in &type_val.constructors {
+            let mut ctor_map: ImblHashMap<GcMapKey, GcValue> = ImblHashMap::new();
+
+            let proc = self.get_process_mut(local_id).unwrap();
+            let name_str = proc.heap.alloc_string(ctor.name.clone());
+            ctor_map.insert(GcMapKey::String("name".to_string()), GcValue::String(name_str));
+
+            // Constructor fields
+            let mut cfield_list = Vec::new();
+            for cfield in &ctor.fields {
+                let mut cfield_map: ImblHashMap<GcMapKey, GcValue> = ImblHashMap::new();
+
+                let proc = self.get_process_mut(local_id).unwrap();
+                let fname_str = proc.heap.alloc_string(cfield.name.clone());
+                cfield_map.insert(GcMapKey::String("name".to_string()), GcValue::String(fname_str));
+
+                let proc = self.get_process_mut(local_id).unwrap();
+                let ftype_str = proc.heap.alloc_string(cfield.type_name.clone());
+                cfield_map.insert(GcMapKey::String("type".to_string()), GcValue::String(ftype_str));
+
+                let proc = self.get_process_mut(local_id).unwrap();
+                let cfield_map_ptr = proc.heap.alloc_map(cfield_map);
+                cfield_list.push(GcValue::Map(cfield_map_ptr));
+            }
+            ctor_map.insert(
+                GcMapKey::String("fields".to_string()),
+                GcValue::List(GcList::from_vec(cfield_list))
+            );
+
+            let proc = self.get_process_mut(local_id).unwrap();
+            let ctor_map_ptr = proc.heap.alloc_map(ctor_map);
+            ctor_list.push(GcValue::Map(ctor_map_ptr));
+        }
+        entries.insert(
+            GcMapKey::String("constructors".to_string()),
+            GcValue::List(GcList::from_vec(ctor_list))
+        );
+
+        let proc = self.get_process_mut(local_id).unwrap();
+        let ptr = proc.heap.alloc_map(entries);
+        Ok(GcValue::Map(ptr))
+    }
+
     /// Construct a typed value from Json (for construct builtin)
     fn construct_from_json(&mut self, local_id: u64, type_name: &str, json: GcValue) -> Result<GcValue, RuntimeError> {
         // Look up type info
@@ -11995,6 +12213,120 @@ impl ThreadWorker {
             }
             _ => Ok(json.clone()),
         }
+    }
+
+    /// Construct a record from a Map[String, Json] (for makeRecord builtin)
+    fn make_record_from_map(&mut self, local_id: u64, type_name: &str, fields_map: GcValue) -> Result<GcValue, RuntimeError> {
+        // Look up type info
+        let type_val = self.shared.types.get(type_name).cloned()
+            .or_else(|| self.shared.dynamic_types.read().get(type_name).cloned())
+            .or_else(|| self.shared.stdlib_types.read().get(type_name).cloned())
+            .ok_or_else(|| RuntimeError::Panic(format!("Unknown type: {}", type_name)))?;
+
+        // Ensure it's a record type (no constructors)
+        if !type_val.constructors.is_empty() {
+            return Err(RuntimeError::Panic(format!(
+                "makeRecord cannot be used for variant type '{}', use makeVariant instead",
+                type_name
+            )));
+        }
+
+        // Extract entries from the Map
+        let map_entries = match &fields_map {
+            GcValue::Map(ptr) => {
+                let proc = self.get_process(local_id).unwrap();
+                let map = proc.heap.get_map(*ptr)
+                    .ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                map.entries.clone()
+            }
+            _ => return Err(RuntimeError::TypeError {
+                expected: "Map".to_string(),
+                found: "non-map".to_string(),
+            }),
+        };
+
+        // Build field values in the correct order
+        let mut field_values = Vec::new();
+        let mut is_float = Vec::new();
+
+        for field in &type_val.fields {
+            let key = GcMapKey::String(field.name.clone());
+            let field_json = map_entries.get(&key)
+                .ok_or_else(|| RuntimeError::Panic(format!("Missing field: {}", field.name)))?
+                .clone();
+            let field_value = self.json_to_primitive(local_id, &field_json, &field.type_name)?;
+            is_float.push(field.type_name == "Float" || field.type_name == "Float64" || field.type_name == "Float32");
+            field_values.push(field_value);
+        }
+
+        let proc = self.get_process_mut(local_id).unwrap();
+        let rec_ptr = proc.heap.alloc_record(
+            type_name.to_string(),
+            type_val.fields.iter().map(|f| f.name.clone()).collect(),
+            field_values,
+            is_float,
+        );
+        Ok(GcValue::Record(rec_ptr))
+    }
+
+    /// Construct a variant from a Map[String, Json] (for makeVariant builtin)
+    fn make_variant_from_map(&mut self, local_id: u64, type_name: &str, ctor_name: &str, fields_map: GcValue) -> Result<GcValue, RuntimeError> {
+        // Look up type info
+        let type_val = self.shared.types.get(type_name).cloned()
+            .or_else(|| self.shared.dynamic_types.read().get(type_name).cloned())
+            .or_else(|| self.shared.stdlib_types.read().get(type_name).cloned())
+            .ok_or_else(|| RuntimeError::Panic(format!("Unknown type: {}", type_name)))?;
+
+        // Find the constructor
+        let ctor = type_val.constructors.iter()
+            .find(|c| c.name == ctor_name)
+            .ok_or_else(|| RuntimeError::Panic(format!("Unknown constructor '{}' for type '{}'", ctor_name, type_name)))?
+            .clone();
+
+        if ctor.fields.is_empty() {
+            // Unit variant - no fields needed
+            let proc = self.get_process_mut(local_id).unwrap();
+            let var_ptr = proc.heap.alloc_variant(
+                Arc::new(type_name.to_string()),
+                Arc::new(ctor_name.to_string()),
+                vec![],
+            );
+            return Ok(GcValue::Variant(var_ptr));
+        }
+
+        // Extract entries from the Map
+        let map_entries = match &fields_map {
+            GcValue::Map(ptr) => {
+                let proc = self.get_process(local_id).unwrap();
+                let map = proc.heap.get_map(*ptr)
+                    .ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                map.entries.clone()
+            }
+            _ => return Err(RuntimeError::TypeError {
+                expected: "Map".to_string(),
+                found: "non-map".to_string(),
+            }),
+        };
+
+        // Build field values in the correct order
+        let mut field_values = Vec::new();
+
+        for field in &ctor.fields {
+            let key = GcMapKey::String(field.name.clone());
+            let field_json = map_entries.get(&key)
+                .ok_or_else(|| RuntimeError::Panic(format!("Missing field '{}' for constructor '{}'", field.name, ctor_name)))?
+                .clone();
+            let field_value = self.json_to_primitive(local_id, &field_json, &field.type_name)?;
+            field_values.push(field_value);
+        }
+
+        let proc = self.get_process_mut(local_id).unwrap();
+        let var_ptr = proc.heap.alloc_variant(
+            Arc::new(type_name.to_string()),
+            Arc::new(ctor_name.to_string()),
+            field_values,
+        );
+        Ok(GcValue::Variant(var_ptr))
     }
 }
 

@@ -288,6 +288,11 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "tagOf", signature: "a -> String", doc: "Get variant tag name, or empty string for non-variants" },
     BuiltinInfo { name: "reflect", signature: "a -> Json", doc: "Convert any value to Json type for inspection/serialization" },
     BuiltinInfo { name: "jsonToType", signature: "[T] Json -> T", doc: "Convert Json to typed value: jsonToType[Person](json)" },
+    BuiltinInfo { name: "makeRecord", signature: "[T] Map[String, Json] -> T", doc: "Construct record from field map: makeRecord[Person](fields)" },
+    BuiltinInfo { name: "makeVariant", signature: "[T] (String, Map[String, Json]) -> T", doc: "Construct variant from constructor name and fields: makeVariant[Result](\"Ok\", fields)" },
+    BuiltinInfo { name: "makeRecordByName", signature: "(String, Map[String, Json]) -> a", doc: "Construct record by type name string: makeRecordByName(\"Person\", fields)" },
+    BuiltinInfo { name: "makeVariantByName", signature: "(String, String, Map[String, Json]) -> a", doc: "Construct variant by type name: makeVariantByName(\"Result\", \"Ok\", fields)" },
+    BuiltinInfo { name: "jsonToTypeByName", signature: "(String, Json) -> a", doc: "Convert Json to typed value by type name: jsonToTypeByName(\"Person\", json)" },
 ];
 
 /// Extract doc comment immediately preceding a definition at the given span start.
@@ -5458,6 +5463,47 @@ impl Compiler {
                         // Emit Construct instruction
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::Construct(dst, type_reg, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "makeRecord" if arg_regs.len() == 1 && !type_args.is_empty() => {
+                        // makeRecord[T](fields_map)
+                        let type_name = self.type_expr_to_string(&type_args[0]);
+                        let type_reg = self.alloc_reg();
+                        let const_idx = self.chunk.add_constant(Value::String(Arc::new(type_name)));
+                        self.chunk.emit(Instruction::LoadConst(type_reg, const_idx as u16), 0);
+                        // Emit MakeRecordDyn instruction: dst, type_reg, fields_reg
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::MakeRecordDyn(dst, type_reg, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "makeVariant" if arg_regs.len() == 2 && !type_args.is_empty() => {
+                        // makeVariant[T](ctor_name, fields_map)
+                        let type_name = self.type_expr_to_string(&type_args[0]);
+                        let type_reg = self.alloc_reg();
+                        let const_idx = self.chunk.add_constant(Value::String(Arc::new(type_name)));
+                        self.chunk.emit(Instruction::LoadConst(type_reg, const_idx as u16), 0);
+                        // Emit MakeVariantDyn instruction: dst, type_reg, ctor_reg, fields_reg
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::MakeVariantDyn(dst, type_reg, arg_regs[0], arg_regs[1]), 0);
+                        return Ok(dst);
+                    }
+                    // String-based variants for use in pure Nostos code
+                    "makeRecordByName" if arg_regs.len() == 2 => {
+                        // makeRecordByName(type_name, fields_map)
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::MakeRecordDyn(dst, arg_regs[0], arg_regs[1]), 0);
+                        return Ok(dst);
+                    }
+                    "makeVariantByName" if arg_regs.len() == 3 => {
+                        // makeVariantByName(type_name, ctor_name, fields_map)
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::MakeVariantDyn(dst, arg_regs[0], arg_regs[1], arg_regs[2]), 0);
+                        return Ok(dst);
+                    }
+                    "jsonToTypeByName" if arg_regs.len() == 2 => {
+                        // jsonToTypeByName(type_name, json)
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::Construct(dst, arg_regs[0], arg_regs[1]), 0);
                         return Ok(dst);
                     }
                     // === Math builtins (type-aware - use typed instruction if we can infer type) ===
