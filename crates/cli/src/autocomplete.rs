@@ -2176,4 +2176,50 @@ mod tests {
         assert!(items.iter().any(|i| i.text == "map"));
         assert!(items.iter().any(|i| i.text == "maximum"));
     }
+
+    #[test]
+    fn test_full_flow_list_literal_completions() {
+        // Test the complete flow from parse_context to get_completions
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        // Simulate typing "[1,2,3]." and pressing Tab
+        let line = "[1,2,3].";
+        let cursor_pos = line.len(); // cursor is at position 8
+
+        // Step 1: parse_context should extract the literal
+        let ctx = ac.parse_context(line, cursor_pos);
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "[1,2,3]".to_string(),
+            prefix: "".to_string()
+        });
+
+        // Step 2: get_completions should return List methods
+        let items = ac.get_completions(&ctx, &source);
+        assert!(!items.is_empty(), "Should have completions for list literal");
+        assert!(items.iter().any(|i| i.text == "map"), "Should suggest map");
+        assert!(items.iter().any(|i| i.text == "filter"), "Should suggest filter");
+        assert!(items.iter().any(|i| i.text == "fold"), "Should suggest fold");
+    }
+
+    #[test]
+    fn test_full_flow_string_literal_completions() {
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "\"hello\".";
+        let cursor_pos = line.len();
+
+        let ctx = ac.parse_context(line, cursor_pos);
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "\"hello\"".to_string(),
+            prefix: "".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert!(!items.is_empty(), "Should have completions for string literal");
+        assert!(items.iter().any(|i| i.text == "trim"), "Should suggest trim");
+        assert!(items.iter().any(|i| i.text == "toUpper"), "Should suggest toUpper");
+    }
+
 }

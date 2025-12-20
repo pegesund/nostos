@@ -36,6 +36,8 @@ use reedline::{
 };
 use nu_ansi_term::{Color, Style};
 
+use crate::autocomplete::{Autocomplete, CompletionContext, CompletionSource};
+
 /// Syntax highlighter for Nostos
 pub struct NostosHighlighter;
 
@@ -153,13 +155,38 @@ impl Prompt for NostosPrompt {
     }
 }
 
-struct NostosCompleter;
+struct NostosCompleter {
+    autocomplete: Autocomplete,
+}
+
+impl NostosCompleter {
+    fn new() -> Self {
+        Self {
+            autocomplete: Autocomplete::new(),
+        }
+    }
+}
+
+/// Simple completion source for REPL (provides minimal info)
+struct ReplCompletionSource;
+
+impl CompletionSource for ReplCompletionSource {
+    fn get_functions(&self) -> Vec<String> { vec![] }
+    fn get_types(&self) -> Vec<String> { vec![] }
+    fn get_variables(&self) -> Vec<String> { vec![] }
+    fn get_type_fields(&self, _type_name: &str) -> Vec<String> { vec![] }
+    fn get_type_constructors(&self, _type_name: &str) -> Vec<String> { vec![] }
+    fn get_function_signature(&self, _name: &str) -> Option<String> { None }
+    fn get_function_doc(&self, _name: &str) -> Option<String> { None }
+    fn get_variable_type(&self, _var_name: &str) -> Option<String> { None }
+}
 
 impl Completer for NostosCompleter {
     fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
         let (start, word) = find_word_at_pos(line, pos);
         let span = Span::new(start, pos);
 
+        // Check for REPL commands first
         if word.starts_with(':') {
             let commands = vec![
                 ":help", ":quit", ":exit", ":load", ":reload", ":browse", ":info",
@@ -167,8 +194,8 @@ impl Completer for NostosCompleter {
                 ":traits", ":module", ":vars", ":bindings",
                 ":h", ":q", ":l", ":r", ":b", ":i", ":v", ":t", ":d", ":rd", ":fns", ":m"
             ];
-            
-            commands.iter()
+
+            return commands.iter()
                 .filter(|cmd| cmd.starts_with(word))
                 .map(|cmd| Suggestion {
                     value: cmd.to_string(),
@@ -178,29 +205,57 @@ impl Completer for NostosCompleter {
                     span,
                     append_whitespace: true,
                 })
-                .collect()
-        } else if !word.is_empty() {
-            // Keywords
-            let keywords = vec![
-                "type", "var", "if", "then", "else", "match", "when", "trait", "module", "end",
-                "use", "private", "pub", "self", "Self", "try", "catch", "finally", "do",
-                "while", "for", "to", "break", "continue", "spawn", "receive", "after", "panic",
-                "extern", "test", "quote", "true", "false"
-            ];
+                .collect();
+        }
 
-            keywords.iter()
-                .filter(|kw| kw.starts_with(word))
-                .map(|kw| Suggestion {
-                    value: kw.to_string(),
-                    description: None,
-                    style: None,
-                    extra: None,
-                    span,
-                    append_whitespace: true,
-                })
-                .collect()
-        } else {
-            vec![]
+        // Use the autocomplete system to parse context
+        let ctx = self.autocomplete.parse_context(line, pos);
+        let source = ReplCompletionSource;
+
+        match &ctx {
+            CompletionContext::FieldAccess { receiver, prefix } => {
+                // Method completion - find the span for just the prefix after the dot
+                let prefix_start = if prefix.is_empty() {
+                    pos
+                } else {
+                    pos - prefix.len()
+                };
+                let method_span = Span::new(prefix_start, pos);
+
+                let items = self.autocomplete.get_completions(&ctx, &source);
+                items.into_iter()
+                    .map(|item| Suggestion {
+                        value: item.text,
+                        description: Some(item.label),
+                        style: None,
+                        extra: None,
+                        span: method_span,
+                        append_whitespace: false,
+                    })
+                    .collect()
+            }
+            CompletionContext::Identifier { prefix } if !prefix.is_empty() => {
+                // Keywords completion
+                let keywords = vec![
+                    "type", "var", "if", "then", "else", "match", "when", "trait", "module", "end",
+                    "use", "private", "pub", "self", "Self", "try", "catch", "finally", "do",
+                    "while", "for", "to", "break", "continue", "spawn", "receive", "after", "panic",
+                    "extern", "test", "quote", "true", "false"
+                ];
+
+                keywords.iter()
+                    .filter(|kw| kw.starts_with(prefix.as_str()))
+                    .map(|kw| Suggestion {
+                        value: kw.to_string(),
+                        description: None,
+                        style: None,
+                        extra: None,
+                        span,
+                        append_whitespace: true,
+                    })
+                    .collect()
+            }
+            _ => vec![]
         }
     }
 }
@@ -407,7 +462,7 @@ impl Repl {
         let mut line_editor = Reedline::create()
             .with_history(history)
             .with_highlighter(Box::new(NostosHighlighter))
-            .with_completer(Box::new(NostosCompleter))
+            .with_completer(Box::new(NostosCompleter::new()))
             .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
             .with_edit_mode(edit_mode);
 
