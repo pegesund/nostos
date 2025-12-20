@@ -840,7 +840,14 @@ impl Autocomplete {
     /// Get available methods for a builtin type
     /// Returns (method_name, signature, docstring)
     fn get_builtin_methods(type_name: &str) -> Vec<(&'static str, &'static str, &'static str)> {
-        if type_name.starts_with("Map") || type_name == "Map" {
+        // Strip trait bounds prefix (e.g., "Eq a, Hash a => Map[a, b]" -> "Map[a, b]")
+        let base_type = if let Some(arrow_pos) = type_name.find("=>") {
+            type_name[arrow_pos + 2..].trim()
+        } else {
+            type_name
+        };
+
+        if base_type.starts_with("Map") || base_type == "Map" {
             vec![
                 ("get", "(key) -> value", "Get the value associated with a key"),
                 ("insert", "(key, value) -> Map", "Insert a key-value pair, returning a new map"),
@@ -852,7 +859,7 @@ impl Autocomplete {
                 ("isEmpty", "() -> Bool", "Check if the map is empty"),
                 ("merge", "(other) -> Map", "Merge two maps, with other's values taking precedence"),
             ]
-        } else if type_name.starts_with("Set") || type_name == "Set" {
+        } else if base_type.starts_with("Set") || base_type == "Set" {
             vec![
                 ("contains", "(elem) -> Bool", "Check if the set contains an element"),
                 ("insert", "(elem) -> Set", "Insert an element, returning a new set"),
@@ -864,7 +871,7 @@ impl Autocomplete {
                 ("difference", "(other) -> Set", "Return elements in this set but not in other"),
                 ("toList", "() -> List", "Convert the set to a list"),
             ]
-        } else if type_name == "String" {
+        } else if base_type == "String" {
             vec![
                 ("length", "() -> Int", "Get the length of the string"),
                 ("chars", "() -> List", "Get the characters as a list"),
@@ -891,7 +898,7 @@ impl Autocomplete {
                 ("words", "() -> List", "Split into words"),
                 ("isEmpty", "() -> Bool", "Check if the string is empty"),
             ]
-        } else if type_name.starts_with("List") || type_name == "List" {
+        } else if base_type.starts_with("List") || base_type == "List" {
             vec![
                 ("map", "(f) -> List", "Apply a function to each element"),
                 ("filter", "(pred) -> List", "Keep elements that satisfy the predicate"),

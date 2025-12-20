@@ -4142,6 +4142,36 @@ mod tests {
     }
 
     #[test]
+    fn test_get_variable_type_for_map() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Empty map binding
+        let result = engine.eval("a = %{}");
+        assert!(result.is_ok(), "Should define a: {:?}", result);
+
+        let a_type = engine.get_variable_type("a");
+        assert!(a_type.is_some(), "Should have type for a");
+        let type_str = a_type.unwrap();
+        assert!(type_str.contains("Map"), "a should be Map, got: {}", type_str);
+    }
+
+    #[test]
+    fn test_get_variable_type_for_list() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // List binding
+        let result = engine.eval("b = [1, 2, 3]");
+        assert!(result.is_ok(), "Should define b: {:?}", result);
+
+        let b_type = engine.get_variable_type("b");
+        assert!(b_type.is_some(), "Should have type for b");
+        let type_str = b_type.unwrap();
+        assert!(type_str.contains("List"), "b should be List, got: {}", type_str);
+    }
+
+    #[test]
     fn test_find_doc_comment_start() {
         // Test that find_doc_comment_start finds comments above a definition
         let input = "# This is a doc comment\nfoo(x) = x + 1";
