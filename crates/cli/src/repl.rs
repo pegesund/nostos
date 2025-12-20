@@ -161,6 +161,7 @@ struct SharedCompletionData {
     functions: Vec<String>,
     types: Vec<String>,
     variables: Vec<String>,
+    variable_types: HashMap<String, String>,
 }
 
 type SharedCompletionState = Arc<RwLock<SharedCompletionData>>;
@@ -184,6 +185,7 @@ struct ReplCompletionSource {
     functions: Vec<String>,
     types: Vec<String>,
     variables: Vec<String>,
+    variable_types: HashMap<String, String>,
 }
 
 impl ReplCompletionSource {
@@ -193,6 +195,7 @@ impl ReplCompletionSource {
             functions: data.functions.clone(),
             types: data.types.clone(),
             variables: data.variables.clone(),
+            variable_types: data.variable_types.clone(),
         }
     }
 }
@@ -205,7 +208,9 @@ impl CompletionSource for ReplCompletionSource {
     fn get_type_constructors(&self, _type_name: &str) -> Vec<String> { vec![] }
     fn get_function_signature(&self, _name: &str) -> Option<String> { None }
     fn get_function_doc(&self, _name: &str) -> Option<String> { None }
-    fn get_variable_type(&self, _var_name: &str) -> Option<String> { None }
+    fn get_variable_type(&self, var_name: &str) -> Option<String> {
+        self.variable_types.get(var_name).cloned()
+    }
 }
 
 impl Completer for NostosCompleter {
@@ -463,6 +468,21 @@ impl Repl {
         state.functions = self.compiler.get_function_names().into_iter().map(|s| s.to_string()).collect();
         state.types = self.compiler.get_type_names().into_iter().map(|s| s.to_string()).collect();
         state.variables = self.var_bindings.keys().cloned().collect();
+
+        // Collect variable types
+        state.variable_types.clear();
+        for (name, binding) in &self.var_bindings {
+            // First try the stored type annotation
+            if let Some(ref type_ann) = binding.type_annotation {
+                state.variable_types.insert(name.clone(), type_ann.clone());
+            } else if let Some(sig) = self.compiler.get_function_signature(&binding.thunk_name) {
+                // Fall back to getting the thunk's return type
+                if let Some(arrow_pos) = sig.find("-> ") {
+                    let return_type = sig[arrow_pos + 3..].trim().to_string();
+                    state.variable_types.insert(name.clone(), return_type);
+                }
+            }
+        }
     }
 
     /// Load the standard library
