@@ -2222,4 +2222,384 @@ mod tests {
         assert!(items.iter().any(|i| i.text == "toUpper"), "Should suggest toUpper");
     }
 
+    // ============================================================
+    // Comprehensive autocomplete tests for REPL and editor
+    // ============================================================
+
+    #[test]
+    fn test_nested_list_literal_completions() {
+        // Nested lists should still be recognized as List type
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "[[1,2], [3,4]].";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "[[1,2], [3,4]]".to_string(),
+            prefix: "".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert!(items.iter().any(|i| i.text == "flatten"), "Nested list should suggest flatten");
+        assert!(items.iter().any(|i| i.text == "map"), "Nested list should suggest map");
+    }
+
+    #[test]
+    fn test_map_literal_with_prefix() {
+        // Map literal with partial method name
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "%{\"a\": 1}.ge";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "%{\"a\": 1}".to_string(),
+            prefix: "ge".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert_eq!(items.len(), 1, "Should only match 'get'");
+        assert_eq!(items[0].text, "get");
+    }
+
+    #[test]
+    fn test_set_literal_with_prefix() {
+        // Set literal with partial method name
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "#{1, 2, 3}.con";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "#{1, 2, 3}".to_string(),
+            prefix: "con".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert_eq!(items.len(), 1, "Should only match 'contains'");
+        assert_eq!(items[0].text, "contains");
+    }
+
+    #[test]
+    fn test_string_with_escaped_quotes() {
+        // String containing escaped quotes
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = r#""hello \"world\""."#;
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: r#""hello \"world\"""#.to_string(),
+            prefix: "".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert!(items.iter().any(|i| i.text == "length"), "Should suggest string methods");
+    }
+
+    #[test]
+    fn test_list_after_assignment() {
+        // List literal after assignment operator
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "x = [1,2,3].";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "[1,2,3]".to_string(),
+            prefix: "".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert!(items.iter().any(|i| i.text == "map"), "Should suggest List methods after assignment");
+    }
+
+    #[test]
+    fn test_empty_list_literal() {
+        // Empty list should still get completions
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "[].";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "[]".to_string(),
+            prefix: "".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert!(!items.is_empty(), "Empty list should still have completions");
+        assert!(items.iter().any(|i| i.text == "map"));
+    }
+
+    #[test]
+    fn test_empty_string_literal() {
+        // Empty string should still get completions
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "\"\".";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "\"\"".to_string(),
+            prefix: "".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert!(items.iter().any(|i| i.text == "isEmpty"), "Empty string should suggest isEmpty");
+    }
+
+    #[test]
+    fn test_empty_map_literal() {
+        // Empty map should still get completions
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "%{}.";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "%{}".to_string(),
+            prefix: "".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert!(items.iter().any(|i| i.text == "isEmpty"), "Empty map should suggest isEmpty");
+        assert!(items.iter().any(|i| i.text == "insert"), "Empty map should suggest insert");
+    }
+
+    #[test]
+    fn test_empty_set_literal() {
+        // Empty set should still get completions
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "#{}.";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "#{}".to_string(),
+            prefix: "".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert!(items.iter().any(|i| i.text == "isEmpty"), "Empty set should suggest isEmpty");
+        assert!(items.iter().any(|i| i.text == "insert"), "Empty set should suggest insert");
+    }
+
+    #[test]
+    fn test_literal_in_function_call() {
+        // List literal as function argument
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "foo([1,2,3].";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "[1,2,3]".to_string(),
+            prefix: "".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert!(items.iter().any(|i| i.text == "map"), "Should work inside function call");
+    }
+
+    #[test]
+    fn test_case_insensitive_prefix_matching() {
+        // Prefix matching should be case insensitive
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        // Uppercase prefix should match lowercase methods
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "[1,2,3]".to_string(),
+            prefix: "MAP".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+        assert!(items.iter().any(|i| i.text == "map"), "MAP should match map");
+
+        // Mixed case prefix
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "\"hello\"".to_string(),
+            prefix: "ToUp".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+        assert!(items.iter().any(|i| i.text == "toUpper"), "ToUp should match toUpper");
+    }
+
+    #[test]
+    fn test_method_signature_in_label() {
+        // Completions should include method signatures
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "[1,2,3]".to_string(),
+            prefix: "fold".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        // "fold" matches both "fold" and "foldr"
+        assert_eq!(items.len(), 2);
+        let fold_item = items.iter().find(|i| i.text == "fold").unwrap();
+        assert!(fold_item.label.contains("(acc, f)"), "Label should contain signature");
+    }
+
+    #[test]
+    fn test_all_list_methods_present() {
+        // Verify all expected List methods are available
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "[1,2,3]".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        let expected_methods = vec![
+            "map", "filter", "fold", "foldr", "any", "all", "find",
+            "take", "drop", "reverse", "sort", "concat", "flatten",
+            "unique", "zip", "partition", "contains", "maximum", "minimum"
+        ];
+
+        for method in expected_methods {
+            assert!(items.iter().any(|i| i.text == method),
+                "List should have method: {}", method);
+        }
+    }
+
+    #[test]
+    fn test_all_string_methods_present() {
+        // Verify all expected String methods are available
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "\"test\"".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        let expected_methods = vec![
+            "length", "chars", "trim", "trimStart", "trimEnd",
+            "toUpper", "toLower", "contains", "startsWith", "endsWith",
+            "replace", "indexOf", "substring", "repeat", "reverse", "isEmpty"
+        ];
+
+        for method in expected_methods {
+            assert!(items.iter().any(|i| i.text == method),
+                "String should have method: {}", method);
+        }
+    }
+
+    #[test]
+    fn test_all_map_methods_present() {
+        // Verify all expected Map methods are available
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "%{}".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        let expected_methods = vec![
+            "get", "insert", "remove", "contains", "keys", "values",
+            "size", "isEmpty", "merge"
+        ];
+
+        for method in expected_methods {
+            assert!(items.iter().any(|i| i.text == method),
+                "Map should have method: {}", method);
+        }
+    }
+
+    #[test]
+    fn test_all_set_methods_present() {
+        // Verify all expected Set methods are available
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "#{}".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        let expected_methods = vec![
+            "contains", "insert", "remove", "size", "isEmpty",
+            "union", "intersection", "difference", "toList"
+        ];
+
+        for method in expected_methods {
+            assert!(items.iter().any(|i| i.text == method),
+                "Set should have method: {}", method);
+        }
+    }
+
+    #[test]
+    fn test_completion_kind_is_method() {
+        // All builtin type completions should have Method kind
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "[1,2,3]".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        for item in &items {
+            assert_eq!(item.kind, CompletionKind::Method,
+                "Completion '{}' should have Method kind", item.text);
+        }
+    }
+
+    #[test]
+    fn test_no_duplicate_completions() {
+        // Should not have duplicate method names
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "[1,2,3]".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        let mut seen = std::collections::HashSet::new();
+        for item in &items {
+            assert!(seen.insert(&item.text),
+                "Duplicate completion found: {}", item.text);
+        }
+    }
+
+    #[test]
+    fn test_complex_nested_expression() {
+        // Complex nested structure
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "%{\"users\": [{\"name\": \"Alice\"}]}.";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "%{\"users\": [{\"name\": \"Alice\"}]}".to_string(),
+            prefix: "".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert!(items.iter().any(|i| i.text == "get"), "Complex map should suggest get");
+    }
+
 }
