@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 
 use crossbeam::deque::{Injector, Stealer, Worker as WorkQueue};
 use parking_lot::Mutex;
-use smallvec::smallvec;
 
 use crate::gc::{constructor_discriminant, GcValue, InlineOp};
 use crate::process::{CallFrame, ExceptionHandler, ExitReason, ProcessState};

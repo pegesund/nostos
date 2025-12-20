@@ -10192,8 +10192,6 @@ pub fn compile_module_with_stdlib(
     source: &str,
     stdlib_path: &std::path::Path,
 ) -> Result<Compiler, CompileError> {
-    use std::sync::Arc;
-
     let mut compiler = Compiler::new(source);
 
     // Load stdlib if path exists

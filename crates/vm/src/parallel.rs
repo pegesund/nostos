@@ -26,7 +26,6 @@ use crossbeam::channel::{self, Sender, Receiver, TryRecvError};
 use imbl::HashMap as ImblHashMap;
 use imbl::HashSet as ImblHashSet;
 use parking_lot::RwLock;
-use smallvec::smallvec;
 
 // Thread-local storage for tracking which mvar locks are held by the current thread.
 // This allows MvarRead/MvarWrite to skip locking if MvarLock already holds the lock.
@@ -40,7 +39,7 @@ use tokio::sync::mpsc as tokio_mpsc;
 use crate::gc::{GcConfig, GcList, GcMapKey, GcNativeFn, GcValue, Heap, InlineOp};
 use crate::io_runtime::{IoRequest, IoRuntime};
 use crate::process::{CallFrame, ExitReason, IoResponseValue, Process, ProcessState, ThreadSafeMapKey, ThreadSafeValue};
-use crate::shared_types::{SharedMap, SharedMapKey, SharedMapValue};
+use crate::shared_types::{SharedMapKey, SharedMapValue};
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, TypeValue, Value};
 
 /// An entry for the inspect queue - a named value to display in the inspector
@@ -8271,7 +8270,6 @@ impl ThreadWorker {
             }
 
             PgQuery(dst, handle_reg, query_reg, params_reg) => {
-                use crate::io_runtime::PgParam;
                 let (handle, query, params) = {
                     let proc = self.get_process(local_id).unwrap();
                     let h = match reg!(*handle_reg) {
@@ -8329,7 +8327,6 @@ impl ThreadWorker {
             }
 
             PgExecute(dst, handle_reg, query_reg, params_reg) => {
-                use crate::io_runtime::PgParam;
                 let (handle, query, params) = {
                     let proc = self.get_process(local_id).unwrap();
                     let h = match reg!(*handle_reg) {
@@ -8560,7 +8557,6 @@ impl ThreadWorker {
             }
 
             PgQueryPrepared(dst, handle_reg, name_reg, params_reg) => {
-                use crate::io_runtime::PgParam;
                 let (handle, name, params) = {
                     let proc = self.get_process(local_id).unwrap();
                     let h = match reg!(*handle_reg) {
@@ -8618,7 +8614,6 @@ impl ThreadWorker {
             }
 
             PgExecutePrepared(dst, handle_reg, name_reg, params_reg) => {
-                use crate::io_runtime::PgParam;
                 let (handle, name, params) = {
                     let proc = self.get_process(local_id).unwrap();
                     let h = match reg!(*handle_reg) {
@@ -8726,7 +8721,7 @@ impl ThreadWorker {
             }
 
             TimeFromDate(dst, year_reg, month_reg, day_reg) => {
-                use chrono::{NaiveDate, TimeZone, Utc};
+                use chrono::NaiveDate;
                 let (year, month, day) = {
                     let proc = self.get_process(local_id).unwrap();
                     let y = match reg!(*year_reg) {
@@ -8796,7 +8791,7 @@ impl ThreadWorker {
             }
 
             TimeYear(dst, ts_reg) => {
-                use chrono::{DateTime, Datelike, Utc};
+                use chrono::{DateTime, Datelike};
                 let millis = {
                     let proc = self.get_process(local_id).unwrap();
                     match reg!(*ts_reg) {
@@ -8810,7 +8805,7 @@ impl ThreadWorker {
             }
 
             TimeMonth(dst, ts_reg) => {
-                use chrono::{DateTime, Datelike, Utc};
+                use chrono::{DateTime, Datelike};
                 let millis = {
                     let proc = self.get_process(local_id).unwrap();
                     match reg!(*ts_reg) {
@@ -8824,7 +8819,7 @@ impl ThreadWorker {
             }
 
             TimeDay(dst, ts_reg) => {
-                use chrono::{DateTime, Datelike, Utc};
+                use chrono::{DateTime, Datelike};
                 let millis = {
                     let proc = self.get_process(local_id).unwrap();
                     match reg!(*ts_reg) {
@@ -8838,7 +8833,7 @@ impl ThreadWorker {
             }
 
             TimeHour(dst, ts_reg) => {
-                use chrono::{DateTime, Timelike, Utc};
+                use chrono::{DateTime, Timelike};
                 let millis = {
                     let proc = self.get_process(local_id).unwrap();
                     match reg!(*ts_reg) {
@@ -8852,7 +8847,7 @@ impl ThreadWorker {
             }
 
             TimeMinute(dst, ts_reg) => {
-                use chrono::{DateTime, Timelike, Utc};
+                use chrono::{DateTime, Timelike};
                 let millis = {
                     let proc = self.get_process(local_id).unwrap();
                     match reg!(*ts_reg) {
@@ -8866,7 +8861,7 @@ impl ThreadWorker {
             }
 
             TimeSecond(dst, ts_reg) => {
-                use chrono::{DateTime, Timelike, Utc};
+                use chrono::{DateTime, Timelike};
                 let millis = {
                     let proc = self.get_process(local_id).unwrap();
                     match reg!(*ts_reg) {
