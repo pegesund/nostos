@@ -1,25 +1,26 @@
 # Option Type
-# 
+#
 # Demonstrates the Option monad for null-safe programming:
 # - Option[T] type with None and Some(T) variants
 # - map_opt: transform the inner value if present
 # - flat_map: chain operations that return Options (monadic bind)
 # - get_or: provide a default for None cases
 # - filter_opt: conditionally keep or discard values
-# 
+# - Method chaining: Some(5).map_opt(f).filter_opt(p)
+#
 # This pattern eliminates null pointer errors at compile time.
 
 type Option[T] = None | Some(T)
 
-# Map a function over an Option
-map_opt(_, None) = None
-map_opt(f, Some(x)) = Some(f(x))
+# Map a function over an Option (receiver-first for chaining)
+map_opt(None, _) = None
+map_opt(Some(x), f) = Some(f(x))
 
-# Flat map (bind) for Option
-flat_map(_, None) = None
-flat_map(f, Some(x)) = f(x)
+# Flat map (bind) for Option (receiver-first for chaining)
+flat_map(None, _) = None
+flat_map(Some(x), f) = f(x)
 
-# Get value or default
+# Get value or default (receiver-first for chaining)
 get_or(Some(x), _) = x
 get_or(None, default) = default
 
@@ -31,37 +32,34 @@ is_some(None) = false
 is_none(None) = true
 is_none(Some(_)) = false
 
-# Filter an Option
-filter_opt(p, Some(x)) = if p(x) then Some(x) else None
-filter_opt(_, None) = None
+# Filter an Option (receiver-first for chaining)
+filter_opt(Some(x), p) = if p(x) then Some(x) else None
+filter_opt(None, _) = None
 
 # Safe division (returns None for division by zero)
 safe_div(_, 0) = None
 safe_div(a, b) = Some(a / b)
 
-# Example: chain safe operations
+# Example: chain safe operations using method chaining
 calculate(a, b, c) = {
     # Safe chain: divide a by b, then by c
-    result = flat_map(
-        x => safe_div(x, c),
-        safe_div(a, b)
-    )
-    get_or(result, -1)
+    result = safe_div(a, b).flat_map(x => safe_div(x, c))
+    result.get_or(-1)
 }
 
 main() = {
-    # Test map_opt
-    assert_eq(Some(10), map_opt(x => x * 2, Some(5)))
-    assert_eq(None, map_opt(x => x * 2, None))
+    # Test map_opt with method chaining
+    assert_eq(Some(10), Some(5).map_opt(x => x * 2))
+    assert_eq(None, None.map_opt(x => x * 2))
 
-    # Test flat_map
-    assert_eq(Some(2), flat_map(x => safe_div(x, 5), Some(10)))
-    assert_eq(None, flat_map(x => safe_div(x, 0), Some(10)))
-    assert_eq(None, flat_map(x => safe_div(x, 5), None))
+    # Test flat_map with method chaining
+    assert_eq(Some(2), Some(10).flat_map(x => safe_div(x, 5)))
+    assert_eq(None, Some(10).flat_map(x => safe_div(x, 0)))
+    assert_eq(None, None.flat_map(x => safe_div(x, 5)))
 
-    # Test get_or
-    assert_eq(42, get_or(Some(42), 0))
-    assert_eq(0, get_or(None, 0))
+    # Test get_or with method chaining
+    assert_eq(42, Some(42).get_or(0))
+    assert_eq(0, None.get_or(0))
 
     # Test is_some and is_none
     assert_eq(true, is_some(Some(1)))
@@ -69,10 +67,10 @@ main() = {
     assert_eq(true, is_none(None))
     assert_eq(false, is_none(Some(1)))
 
-    # Test filter_opt
-    assert_eq(Some(10), filter_opt(x => x > 5, Some(10)))
-    assert_eq(None, filter_opt(x => x > 5, Some(3)))
-    assert_eq(None, filter_opt(x => x > 5, None))
+    # Test filter_opt with method chaining
+    assert_eq(Some(10), Some(10).filter_opt(x => x > 5))
+    assert_eq(None, Some(3).filter_opt(x => x > 5))
+    assert_eq(None, None.filter_opt(x => x > 5))
 
     # Test safe_div
     assert_eq(Some(5), safe_div(10, 2))
@@ -85,6 +83,10 @@ main() = {
     assert_eq(-1, calculate(100, 0, 2))
     # 100 / 5 / 0 = -1 (second division by zero)
     assert_eq(-1, calculate(100, 5, 0))
+
+    # Complex chain example
+    result = Some(100).flat_map(x => safe_div(x, 5)).map_opt(x => x * 2).filter_opt(x => x > 30)
+    assert_eq(Some(40), result)
 
     println("Option tests passed!")
     0

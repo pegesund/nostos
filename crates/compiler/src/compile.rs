@@ -4559,6 +4559,82 @@ impl Compiler {
                     }
                 }
 
+                // Type-based builtin method dispatch for receiver-style calls
+                // Handles m.get(k) where m is a Map, s.toUpper() where s is a String, etc.
+                if let Some(type_name) = self.expr_type_name(obj) {
+                    let builtin_name: Option<&str> = if type_name.starts_with("Map[") || type_name == "Map" {
+                        match method.node.as_str() {
+                            "get" => Some("Map.get"),
+                            "insert" => Some("Map.insert"),
+                            "remove" => Some("Map.remove"),
+                            "contains" => Some("Map.contains"),
+                            "keys" => Some("Map.keys"),
+                            "values" => Some("Map.values"),
+                            "size" => Some("Map.size"),
+                            "isEmpty" => Some("Map.isEmpty"),
+                            "merge" => Some("Map.merge"),
+                            _ => None,
+                        }
+                    } else if type_name.starts_with("Set[") || type_name == "Set" {
+                        match method.node.as_str() {
+                            "contains" => Some("Set.contains"),
+                            "insert" => Some("Set.insert"),
+                            "remove" => Some("Set.remove"),
+                            "size" => Some("Set.size"),
+                            "isEmpty" => Some("Set.isEmpty"),
+                            "union" => Some("Set.union"),
+                            "intersection" => Some("Set.intersection"),
+                            "difference" => Some("Set.difference"),
+                            "toList" => Some("Set.toList"),
+                            _ => None,
+                        }
+                    } else if type_name == "String" {
+                        match method.node.as_str() {
+                            "length" => Some("String.length"),
+                            "chars" => Some("String.chars"),
+                            "toInt" => Some("String.toInt"),
+                            "toFloat" => Some("String.toFloat"),
+                            "trim" => Some("String.trim"),
+                            "trimStart" => Some("String.trimStart"),
+                            "trimEnd" => Some("String.trimEnd"),
+                            "toUpper" => Some("String.toUpper"),
+                            "toLower" => Some("String.toLower"),
+                            "contains" => Some("String.contains"),
+                            "startsWith" => Some("String.startsWith"),
+                            "endsWith" => Some("String.endsWith"),
+                            "replace" => Some("String.replace"),
+                            "replaceAll" => Some("String.replaceAll"),
+                            "indexOf" => Some("String.indexOf"),
+                            "lastIndexOf" => Some("String.lastIndexOf"),
+                            "substring" => Some("String.substring"),
+                            "repeat" => Some("String.repeat"),
+                            "padStart" => Some("String.padStart"),
+                            "padEnd" => Some("String.padEnd"),
+                            "reverse" => Some("String.reverse"),
+                            "lines" => Some("String.lines"),
+                            "words" => Some("String.words"),
+                            "isEmpty" => Some("String.isEmpty"),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(native_name) = builtin_name {
+                        // Compile receiver and args
+                        let obj_reg = self.compile_expr_tail(obj, false)?;
+                        let mut arg_regs = vec![obj_reg];
+                        for arg in args {
+                            let reg = self.compile_expr_tail(arg, false)?;
+                            arg_regs.push(reg);
+                        }
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new(native_name.to_string())));
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
+                        return Ok(dst);
+                    }
+                }
+
                 // Try trait method dispatch if we can determine the type of obj
                 if let Some(type_name) = self.expr_type_name(obj) {
                     if let Some(qualified_method) = self.find_trait_method(&type_name, &method.node) {
@@ -6224,6 +6300,74 @@ impl Compiler {
                 if let Some(last) = stmts.last() {
                     if let Stmt::Expr(e) = last {
                         return self.expr_type_name(e);
+                    }
+                }
+                None
+            }
+            // Method call - determine return type based on receiver type and method
+            Expr::MethodCall(obj, method, _args, _) => {
+                if let Some(obj_type) = self.expr_type_name(obj) {
+                    // Map methods
+                    if obj_type.starts_with("Map[") || obj_type == "Map" {
+                        return match method.node.as_str() {
+                            // Methods that return Map
+                            "insert" | "remove" | "merge" => Some(obj_type),
+                            // Methods that return Bool
+                            "contains" | "isEmpty" => Some("Bool".to_string()),
+                            // Methods that return Int
+                            "size" => Some("Int".to_string()),
+                            // Methods that return List
+                            "keys" | "values" => Some("List".to_string()),
+                            // get returns unknown type (the value type)
+                            _ => None,
+                        };
+                    }
+                    // Set methods
+                    else if obj_type.starts_with("Set[") || obj_type == "Set" {
+                        return match method.node.as_str() {
+                            // Methods that return Set
+                            "insert" | "remove" | "union" | "intersection" | "difference" => Some(obj_type),
+                            // Methods that return Bool
+                            "contains" | "isEmpty" => Some("Bool".to_string()),
+                            // Methods that return Int
+                            "size" => Some("Int".to_string()),
+                            // Methods that return List
+                            "toList" => Some("List".to_string()),
+                            _ => None,
+                        };
+                    }
+                    // String methods
+                    else if obj_type == "String" {
+                        return match method.node.as_str() {
+                            // Methods that return String
+                            "toUpper" | "toLower" | "trim" | "trimStart" | "trimEnd" |
+                            "replace" | "replaceAll" | "substring" | "repeat" |
+                            "padStart" | "padEnd" | "reverse" => Some("String".to_string()),
+                            // Methods that return Bool
+                            "contains" | "startsWith" | "endsWith" | "isEmpty" => Some("Bool".to_string()),
+                            // Methods that return Int
+                            "length" | "indexOf" | "lastIndexOf" => Some("Int".to_string()),
+                            // Methods that return List
+                            "chars" | "lines" | "words" | "split" => Some("List".to_string()),
+                            _ => None,
+                        };
+                    }
+                    // List methods (from stdlib)
+                    else if obj_type.starts_with("List[") || obj_type == "List" {
+                        return match method.node.as_str() {
+                            // Methods that return List
+                            "map" | "filter" | "take" | "drop" | "reverse" | "sort" |
+                            "concat" | "flatten" | "unique" | "takeWhile" | "dropWhile" |
+                            "zip" | "zipWith" | "interleave" | "group" | "scanl" |
+                            "init" | "push" | "remove" | "removeAt" | "insertAt" |
+                            "set" | "slice" | "findIndices" => Some(obj_type),
+                            // Methods that return Bool
+                            "any" | "all" | "contains" => Some("Bool".to_string()),
+                            // Methods that return Int
+                            "count" => Some("Int".to_string()),
+                            // fold, find, etc. return unknown types
+                            _ => None,
+                        };
                     }
                 }
                 None

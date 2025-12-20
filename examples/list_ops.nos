@@ -1,72 +1,83 @@
 # List Operations
-# 
+#
 # Demonstrates higher-order functions and pattern matching on lists:
 # - map: apply a function to each element
 # - filter: keep elements matching a predicate
 # - fold: reduce a list to a single value
-# - reverse, take, drop: common list manipulations
-# 
+# - Method chaining: [1,2,3].map(f).filter(p)
+#
 # These are fundamental building blocks for functional programming.
 
-# Map a function over a list
-map(_, []) = []
-map(f, [h | t]) = [f(h) | map(f, t)]
+# Map a function over a list (receiver-first for method chaining)
+myMap([], _) = []
+myMap([h | t], f) = [f(h) | myMap(t, f)]
 
 # Filter elements that satisfy a predicate
-filter(_, []) = []
-filter(p, [h | t]) = if p(h) then [h | filter(p, t)] else filter(p, t)
+myFilter([], _) = []
+myFilter([h | t], p) = if p(h) then [h | myFilter(t, p)] else myFilter(t, p)
 
 # Fold (reduce) a list with an accumulator
-fold(_, acc, []) = acc
-fold(f, acc, [h | t]) = fold(f, f(acc, h), t)
+myFold([], acc, _) = acc
+myFold([h | t], acc, f) = myFold(t, f(acc, h), f)
 
-# Sum all elements in a list
-sum(lst) = fold((a, b) => a + b, 0, lst)
+# Sum all elements in a list (using stdlib via method chaining)
+sum(lst) = lst.fold(0, (a, b) => a + b)
 
 # Product of all elements
-product(lst) = fold((a, b) => a * b, 1, lst)
+product(lst) = lst.fold(1, (a, b) => a * b)
 
 # Length of a list
-length([]) = 0
-length([_ | t]) = 1 + length(t)
+len([]) = 0
+len([_ | t]) = 1 + len(t)
 
 # Reverse a list
-reverse(lst) = fold((acc, x) => [x | acc], [], lst)
+rev(lst) = lst.fold([], (acc, x) => [x | acc])
 
-# Take first n elements
-take(0, _) = []
-take(_, []) = []
-take(n, [h | t]) = [h | take(n - 1, t)]
+# Take first n elements (receiver-first)
+myTake([], _) = []
+myTake(_, 0) = []
+myTake([h | t], n) = [h | myTake(t, n - 1)]
 
-# Drop first n elements
-drop(0, lst) = lst
-drop(_, []) = []
-drop(n, [_ | t]) = drop(n - 1, t)
+# Drop first n elements (receiver-first)
+myDrop(lst, 0) = lst
+myDrop([], _) = []
+myDrop([_ | t], n) = myDrop(t, n - 1)
 
 main() = {
     nums = [1, 2, 3, 4, 5]
 
-    # Test map
-    doubled = map(x => x * 2, nums)
+    # Test map - both local and stdlib method chaining
+    doubled = nums.map(x => x * 2)
     assert_eq([2, 4, 6, 8, 10], doubled)
 
-    # Test filter - filter evens from original list
-    evens = filter(x => x % 2 == 0, nums)
+    # Test filter via method chaining
+    evens = nums.filter(x => x % 2 == 0)
     assert_eq([2, 4], evens)
 
-    # Test sum and product
+    # Test chained operations
+    result = nums.map(x => x * 2).filter(x => x > 4)
+    assert_eq([6, 8, 10], result)
+
+    # Test sum and product (use stdlib fold via method chaining)
     assert_eq(15, sum(nums))
     assert_eq(120, product(nums))
 
     # Test length
-    assert_eq(5, length(nums))
+    assert_eq(5, len(nums))
 
-    # Test reverse
-    assert_eq([5, 4, 3, 2, 1], reverse(nums))
+    # Test reverse via method chaining
+    assert_eq([5, 4, 3, 2, 1], rev(nums))
 
-    # Test take and drop
-    assert_eq([1, 2, 3], take(3, nums))
-    assert_eq([4, 5], drop(3, nums))
+    # Test take and drop via method chaining
+    assert_eq([1, 2, 3], nums.take(3))
+    assert_eq([4, 5], nums.drop(3))
+
+    # Complex multi-line chain example
+    complexResult = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        .filter(x => x % 2 == 0)      # [2, 4, 6, 8, 10]
+        .map(x => x * x)              # [4, 16, 36, 64, 100]
+        .fold(0, (a, b) => a + b)     # 220
+    assert_eq(220, complexResult)
 
     println("List operations tests passed!")
     sum(evens)  # 2 + 4 = 6

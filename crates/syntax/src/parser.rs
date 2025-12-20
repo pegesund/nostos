@@ -977,7 +977,9 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                     .clone()
                     .map_with_span(|args, span| (PostfixOp::Call(vec![], args), to_span(span))),
                 // Method call or field access: .foo or .foo(args) or tuple index .0 .1
-                just(Token::Dot)
+                // Allow newlines before . for multi-line method chaining
+                skip_newlines()
+                    .ignore_then(just(Token::Dot))
                     .ignore_then(
                         // Accept either an identifier (upper or lower) or an integer (for tuple indexing)
                         // We use any_ident() to allow module paths like Outer.Inner.value()
