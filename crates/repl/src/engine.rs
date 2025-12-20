@@ -186,6 +186,8 @@ pub struct ReplEngine {
     synced_dynamic_mvars: HashSet<String>,
     /// Variable types for UFCS method dispatch - shared with eval callback
     dynamic_var_types: Arc<std::sync::RwLock<HashMap<String, String>>>,
+    /// Variable bindings (name -> thunk_name) - shared with eval callback for injection
+    dynamic_var_bindings: Arc<std::sync::RwLock<HashMap<String, String>>>,
 }
 
 impl ReplEngine {
@@ -221,6 +223,11 @@ impl ReplEngine {
         let dynamic_var_types: Arc<std::sync::RwLock<HashMap<String, String>>> = Arc::new(std::sync::RwLock::new(HashMap::new()));
         let dynamic_var_types_for_eval = dynamic_var_types.clone();
         let dynamic_var_types_for_self = dynamic_var_types.clone();
+
+        // Create shared variable bindings (name -> thunk_name) for injecting into eval wrappers
+        let dynamic_var_bindings: Arc<std::sync::RwLock<HashMap<String, String>>> = Arc::new(std::sync::RwLock::new(HashMap::new()));
+        let dynamic_var_bindings_for_eval = dynamic_var_bindings.clone();
+        let dynamic_var_bindings_for_self = dynamic_var_bindings.clone();
 
         // Get stdlib_functions, function list, and prelude_imports for eval to access all REPL compiler functions
         let stdlib_functions = vm.get_stdlib_functions();
@@ -486,7 +493,25 @@ impl ReplEngine {
                 Ok("defined".to_string())
             } else {
                 // It's an expression - wrap it in a function
-                let wrapper = format!("__eval_result__() = {}", code);
+                // Inject variable bindings so method dispatch can determine types
+                let bindings_preamble = {
+                    let var_bindings = dynamic_var_bindings_for_eval.read().expect("dynamic_var_bindings lock poisoned");
+                    if var_bindings.is_empty() {
+                        String::new()
+                    } else {
+                        let bindings: Vec<String> = var_bindings
+                            .iter()
+                            .map(|(name, thunk_name)| format!("{} = {}()", name, thunk_name))
+                            .collect();
+                        bindings.join("\n    ") + "\n    "
+                    }
+                };
+
+                let wrapper = if bindings_preamble.is_empty() {
+                    format!("__eval_result__() = {}", code)
+                } else {
+                    format!("__eval_result__() = {{\n    {}{}\n}}", bindings_preamble, code)
+                };
 
                 let (module_opt, errors) = parse(&wrapper);
                 if !errors.is_empty() {
@@ -573,6 +598,7 @@ impl ReplEngine {
             dynamic_mvars: dynamic_mvars_for_self,
             synced_dynamic_mvars: HashSet::new(),
             dynamic_var_types: dynamic_var_types_for_self,
+            dynamic_var_bindings: dynamic_var_bindings_for_self,
         }
     }
 
@@ -760,6 +786,11 @@ impl ReplEngine {
                 if let Some(wrapper_module) = wrapper_module_opt {
                     if self.compiler.add_module(&wrapper_module, vec![], Arc::new(wrapper.clone()), "<file-binding>".to_string()).is_ok() {
                         if self.compiler.compile_all().is_ok() {
+                            // Update dynamic_var_bindings for eval injection
+                            {
+                                let mut var_bindings = self.dynamic_var_bindings.write().expect("dynamic_var_bindings lock poisoned");
+                                var_bindings.insert(name.clone(), thunk_name.clone());
+                            }
                             self.var_bindings.insert(name.clone(), VarBinding {
                                 thunk_name,
                                 mutable,
@@ -1035,6 +1066,12 @@ impl ReplEngine {
 
         self.sync_vm();
 
+        // Update dynamic_var_bindings for eval injection
+        {
+            let mut var_bindings = self.dynamic_var_bindings.write().expect("dynamic_var_bindings lock poisoned");
+            var_bindings.insert(name.to_string(), thunk_name.clone());
+        }
+
         self.var_bindings.insert(name.to_string(), VarBinding {
             thunk_name,
             mutable,
@@ -1111,6 +1148,12 @@ impl ReplEngine {
             // Get element type from parsed tuple type
             let element_type = element_types.as_ref()
                 .and_then(|types| types.get(i).cloned());
+
+            // Update dynamic_var_bindings for eval injection
+            {
+                let mut var_bindings_lock = self.dynamic_var_bindings.write().expect("dynamic_var_bindings lock poisoned");
+                var_bindings_lock.insert(name.clone(), var_thunk.clone());
+            }
 
             self.var_bindings.insert(name.clone(), VarBinding {
                 thunk_name: var_thunk,
