@@ -6210,6 +6210,27 @@ impl Compiler {
                             }
                         }
                     }
+
+                    // Try to get return type from function signature
+                    // This is needed for REPL variable thunks like __repl_var_a_1()
+                    if let Some(sig) = self.get_function_signature(&ident.node) {
+                        // For 0-arity functions, the signature IS the return type
+                        // For others, extract after "-> "
+                        let return_type = if let Some(arrow_pos) = sig.find("-> ") {
+                            sig[arrow_pos + 3..].trim().to_string()
+                        } else {
+                            sig.trim().to_string()
+                        };
+                        if !return_type.is_empty() {
+                            // Strip trait bounds prefix (e.g., "Eq a, Hash a => Map[a, b]" -> "Map[a, b]")
+                            let stripped = if let Some(arrow_pos) = return_type.find("=>") {
+                                return_type[arrow_pos + 2..].trim().to_string()
+                            } else {
+                                return_type
+                            };
+                            return Some(stripped);
+                        }
+                    }
                 }
                 None
             }

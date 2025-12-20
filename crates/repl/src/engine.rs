@@ -621,6 +621,7 @@ impl ReplEngine {
         let stdlib_candidates = vec![
             PathBuf::from("stdlib"),
             PathBuf::from("../stdlib"),
+            PathBuf::from("../../stdlib"),  // For tests running from crates/repl
         ];
 
         let mut stdlib_path = None;
@@ -4247,6 +4248,45 @@ mod tests {
         assert!(b_type.is_some(), "Should have type for b");
         let type_str = b_type.unwrap();
         assert!(type_str.contains("List"), "b should be List, got: {}", type_str);
+    }
+
+    #[test]
+    fn test_map_ufcs_method_dispatch() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        // Define a map variable
+        let result = engine.eval("a = %{}");
+        assert!(result.is_ok(), "Should define a: {:?}", result);
+
+        // Try to call insert method on it (UFCS)
+        let result = engine.eval("a.insert(1, 2)");
+        assert!(result.is_ok(), "Should call a.insert(1, 2): {:?}", result);
+
+        // The result should be a Map with one entry
+        let result_str = result.unwrap();
+        assert!(result_str.contains("1 entries") || result_str.contains("%{"),
+            "Result should be a map: {}", result_str);
+    }
+
+    #[test]
+    fn test_list_ufcs_method_dispatch() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        // Define a list variable
+        let result = engine.eval("b = [1, 2, 3]");
+        assert!(result.is_ok(), "Should define b: {:?}", result);
+
+        // Try to call map method on it (UFCS)
+        let result = engine.eval("b.map(x => x * 2)");
+        assert!(result.is_ok(), "Should call b.map: {:?}", result);
+
+        // The result should be [2, 4, 6]
+        let result_str = result.unwrap();
+        assert!(result_str.contains("[2, 4, 6]"), "Result should be [2, 4, 6]: {}", result_str);
     }
 
     #[test]
