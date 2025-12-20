@@ -268,6 +268,33 @@ impl Completer for NostosCompleter {
                     })
                     .collect()
             }
+            CompletionContext::ModuleMember { module, prefix } => {
+                // Module-qualified completion (e.g., "List.ma" -> "List.map")
+                let prefix_start = if prefix.is_empty() {
+                    pos
+                } else {
+                    pos - prefix.len()
+                };
+                let member_span = Span::new(prefix_start, pos);
+
+                let items = self.autocomplete.get_completions(&ctx, &source);
+                items.into_iter()
+                    .map(|item| {
+                        let desc = match &item.doc {
+                            Some(doc) => format!("{} - {}", item.label, doc),
+                            None => item.label.clone(),
+                        };
+                        Suggestion {
+                            value: item.text,
+                            description: Some(desc),
+                            style: None,
+                            extra: None,
+                            span: member_span,
+                            append_whitespace: false,
+                        }
+                    })
+                    .collect()
+            }
             CompletionContext::Identifier { prefix } if !prefix.is_empty() => {
                 let prefix_lower = prefix.to_lowercase();
                 let mut suggestions = Vec::new();
