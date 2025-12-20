@@ -179,10 +179,35 @@ parse_value(chars) = {
 }
 
 
+# --- Stringify helpers ---
+
+stringify_array([], acc) = acc
+stringify_array([x], acc) = acc ++ stringify(x)
+stringify_array([x | rest], acc) = stringify_array(rest, acc ++ stringify(x) ++ ",")
+
+stringify_object([], acc) = acc
+stringify_object([(k, v)], acc) = acc ++ "\"" ++ k ++ "\":" ++ stringify(v)
+stringify_object([(k, v) | rest], acc) =
+    stringify_object(rest, acc ++ "\"" ++ k ++ "\":" ++ stringify(v) ++ ",")
+
+stringify(json) = match json
+    Null -> "null"
+    Bool(true) -> "true"
+    Bool(false) -> "false"
+    Number(n) -> show(n)
+    String(s) -> "\"" ++ s ++ "\""
+    Array(items) -> "[" ++ stringify_array(items, "") ++ "]"
+    Object(pairs) -> "{" ++ stringify_object(pairs, "") ++ "}"
+
+
 # --- Public API ---
 
+# Parse a JSON string into a Json value
 pub jsonParse(input) = {
     chars = String.chars(input)
     (value, _) = parse_value(chars)
     value
 }
+
+# Convert a Json value back to a JSON string
+pub jsonStringify(json) = stringify(json)

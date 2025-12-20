@@ -282,6 +282,11 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Time.hour", signature: "Int -> Int", doc: "Extract hour (0-23) from timestamp" },
     BuiltinInfo { name: "Time.minute", signature: "Int -> Int", doc: "Extract minute (0-59) from timestamp" },
     BuiltinInfo { name: "Time.second", signature: "Int -> Int", doc: "Extract second (0-59) from timestamp" },
+    // Type introspection and reflection
+    BuiltinInfo { name: "typeInfo", signature: "String -> Json", doc: "Get type metadata by name as Json (fields, constructors, etc.)" },
+    BuiltinInfo { name: "typeOf", signature: "a -> String", doc: "Get type name of a value (Int, Float, String, Bool, List, Record, Variant, etc.)" },
+    BuiltinInfo { name: "tagOf", signature: "a -> String", doc: "Get variant tag name, or empty string for non-variants" },
+    BuiltinInfo { name: "reflect", signature: "a -> Json", doc: "Convert any value to Json type for inspection/serialization" },
 ];
 
 /// Extract doc comment immediately preceding a definition at the given span start.
@@ -1597,18 +1602,65 @@ impl Compiler {
     }
 
     /// Get the full name of a type expression including type parameters.
+    /// Check if a type name is a built-in type (primitives, collections, etc.)
+    fn is_builtin_type_name(&self, name: &str) -> bool {
+        matches!(name,
+            "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
+            "UInt8" | "UInt16" | "UInt32" | "UInt64" |
+            "Float" | "Float32" | "Float64" |
+            "Bool" | "Char" | "String" | "BigInt" | "Decimal" |
+            "List" | "Array" | "Set" | "Map" | "IO" | "Pid" | "Ref" |
+            "()" | "Unit" | "Never"
+        )
+    }
+
     fn type_expr_name(&self, ty: &nostos_syntax::TypeExpr) -> String {
         match ty {
-            nostos_syntax::TypeExpr::Name(ident) => ident.node.clone(),
+            nostos_syntax::TypeExpr::Name(ident) => {
+                let name = &ident.node;
+                // Skip built-in types and single-letter type params (both lowercase like 'a' and uppercase like 'T')
+                if self.is_builtin_type_name(name) ||
+                   (name.len() == 1 && name.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)) {
+                    return name.clone();
+                }
+                // Check if this is a user-defined type that needs qualification
+                let qualified = self.qualify_name(name);
+                // Check if it's a known type (already registered)
+                if self.types.contains_key(&qualified) {
+                    qualified
+                } else if self.types.contains_key(name) {
+                    // Type exists with unqualified name (from another module)
+                    name.clone()
+                } else if !self.module_path.is_empty() {
+                    // In a module context, qualify unknown type names
+                    // This handles self-referential types that haven't been registered yet
+                    qualified
+                } else {
+                    // Top-level code - use as-is
+                    name.clone()
+                }
+            }
             nostos_syntax::TypeExpr::Generic(ident, args) => {
                 // Include type parameters: List[Int], Map[String, Int], etc.
                 let args_str: Vec<String> = args.iter()
                     .map(|arg| self.type_expr_name(arg))
                     .collect();
-                if args_str.is_empty() {
-                    ident.node.clone()
+                let name = &ident.node;
+                // Built-in generic types don't get qualified
+                let base_name = if self.is_builtin_type_name(name) {
+                    name.clone()
                 } else {
-                    format!("{}[{}]", ident.node, args_str.join(", "))
+                    let qualified = self.qualify_name(name);
+                    if self.types.contains_key(&qualified) || !self.module_path.is_empty() {
+                        qualified
+                    } else {
+                        name.clone()
+                    }
+                };
+                if args_str.is_empty() {
+                    base_name
+                } else {
+                    format!("{}[{}]", base_name, args_str.join(", "))
                 }
             }
             nostos_syntax::TypeExpr::Function(params, ret) => {
@@ -2049,10 +2101,12 @@ impl Compiler {
             TypeBody::Variant(variants) => {
                 let constructors: Vec<(String, Vec<String>)> = variants.iter()
                     .map(|v| {
-                        // Register constructor name (qualified with module)
+                        // Register BOTH qualified and local constructor names
                         let qualified_ctor = self.qualify_name(&v.name.node);
-                        self.known_constructors.insert(qualified_ctor);
-                        
+                        let local_ctor = v.name.node.clone();
+                        self.known_constructors.insert(qualified_ctor.clone());
+                        self.known_constructors.insert(local_ctor.clone());
+
                         let field_types = match &v.fields {
                             VariantFields::Unit => vec![],
                             VariantFields::Positional(fields) => {
@@ -2062,7 +2116,8 @@ impl Compiler {
                                 fields.iter().map(|f| self.type_expr_name(&f.ty)).collect()
                             }
                         };
-                        (v.name.node.clone(), field_types)
+                        // Store local constructor name for type system compatibility
+                        (local_ctor, field_types)
                     })
                     .collect();
                 TypeInfoKind::Variant { constructors }
@@ -3589,6 +3644,31 @@ impl Compiler {
                             self.chunk.emit(Instruction::TimeSecond(dst, ts_reg), line);
                             return Ok(dst);
                         }
+                        // Type introspection and reflection
+                        "typeInfo" if args.len() == 1 => {
+                            let name_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TypeInfo(dst, name_reg), line);
+                            return Ok(dst);
+                        }
+                        "typeOf" if args.len() == 1 => {
+                            let val_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TypeOf(dst, val_reg), line);
+                            return Ok(dst);
+                        }
+                        "tagOf" if args.len() == 1 => {
+                            let val_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TagOf(dst, val_reg), line);
+                            return Ok(dst);
+                        }
+                        "reflect" if args.len() == 1 => {
+                            let val_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::Reflect(dst, val_reg), line);
+                            return Ok(dst);
+                        }
                         // String encoding functions
                         "Base64.encode" if args.len() == 1 => {
                             let str_reg = self.compile_expr_tail(&args[0], false)?;
@@ -4236,6 +4316,31 @@ impl Compiler {
                             let ts_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeSecond(dst, ts_reg), line);
+                            return Ok(dst);
+                        }
+                        // Type introspection and reflection
+                        "typeInfo" if args.len() == 1 => {
+                            let name_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TypeInfo(dst, name_reg), line);
+                            return Ok(dst);
+                        }
+                        "typeOf" if args.len() == 1 => {
+                            let val_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TypeOf(dst, val_reg), line);
+                            return Ok(dst);
+                        }
+                        "tagOf" if args.len() == 1 => {
+                            let val_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::TagOf(dst, val_reg), line);
+                            return Ok(dst);
+                        }
+                        "reflect" if args.len() == 1 => {
+                            let val_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::Reflect(dst, val_reg), line);
                             return Ok(dst);
                         }
                         // === Process introspection ===
@@ -5325,6 +5430,21 @@ impl Compiler {
                     "typeOf" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::TypeOf(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "tagOf" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::TagOf(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "reflect" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::Reflect(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "typeInfo" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::TypeInfo(dst, arg_regs[0]), 0);
                         return Ok(dst);
                     }
                     // === Math builtins (type-aware - use typed instruction if we can infer type) ===
@@ -6878,13 +6998,18 @@ impl Compiler {
             }
             Pattern::Variant(ctor, fields, _) => {
                 // Store constructor name in constants for exact string matching
-                // Qualify the constructor name with module path to match how variants are created
-                let qualified_ctor = self.qualify_name(&ctor.node);
-                let ctor_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_ctor.clone())));
+                // Use local constructor name (without module path) to match how variants are created
+                // Variants are created with local tags, so patterns must also use local tags
+                let local_ctor = ctor.node.rsplit('.').next().unwrap_or(&ctor.node).to_string();
+                let ctor_idx = self.chunk.add_constant(Value::String(Arc::new(local_ctor.clone())));
                 self.chunk.emit(Instruction::TestTag(success_reg, scrut_reg, ctor_idx), 0);
 
-                // Look up field types for this constructor
-                let field_types = self.get_constructor_field_types(&qualified_ctor);
+                // Look up field types for this constructor - try both qualified and local names
+                let qualified_ctor = self.qualify_name(&ctor.node);
+                let field_types = {
+                    let qt = self.get_constructor_field_types(&qualified_ctor);
+                    if !qt.is_empty() { qt } else { self.get_constructor_field_types(&local_ctor) }
+                };
 
                 // Extract and bind fields - only if tag matches (guard with conditional jump)
                 match fields {
@@ -7893,9 +8018,15 @@ impl Compiler {
         let mut is_variant_ctor = false;
         let mut parent_type_name: Option<String> = None;
 
+        // Get the local part of type_name (e.g., "Object" from "stdlib.json.Object")
+        let local_type_name = type_name.rsplit('.').next().unwrap_or(type_name);
+
         for (ty_name, info) in &self.types {
             if let TypeInfoKind::Variant { constructors } = &info.kind {
-                if constructors.iter().any(|(ctor_name, _)| ctor_name == type_name) {
+                // Check if type_name (qualified or local) matches any constructor (stored as local name)
+                if constructors.iter().any(|(ctor_name, _)| {
+                    ctor_name == type_name || ctor_name == local_type_name
+                }) {
                     is_variant_ctor = true;
                     parent_type_name = Some(ty_name.clone());
                     break;
@@ -7906,7 +8037,9 @@ impl Compiler {
         if is_variant_ctor {
             let parent_type = parent_type_name.unwrap();
             let type_idx = self.chunk.add_constant(Value::String(Arc::new(parent_type)));
-            let ctor_idx = self.chunk.add_constant(Value::String(Arc::new(type_name.to_string())));
+            // Use local constructor name (without module path) for better user experience
+            let local_ctor = type_name.rsplit('.').next().unwrap_or(type_name);
+            let ctor_idx = self.chunk.add_constant(Value::String(Arc::new(local_ctor.to_string())));
             self.chunk.emit(Instruction::MakeVariant(dst, type_idx, ctor_idx, field_regs.into()), 0);
         } else {
             let type_idx = self.chunk.add_constant(Value::String(Arc::new(type_name.to_string())));

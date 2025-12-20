@@ -1,0 +1,19 @@
+# expect: 1
+# Test typeOf builtin returns correct type names
+
+main() = {
+    intType = typeOf(42)
+    floatType = typeOf(3.14)
+    boolType = typeOf(true)
+    stringType = typeOf("hello")
+    charType = typeOf('x')
+    listType = typeOf([1, 2, 3])
+
+    if intType == "Int" &&
+       floatType == "Float" &&
+       boolType == "Bool" &&
+       stringType == "String" &&
+       charType == "Char" &&
+       listType == "List"
+    then 1 else 0
+}

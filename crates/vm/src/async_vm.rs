@@ -48,7 +48,7 @@ impl<F: Future> Future for AssertSend<F> {
     }
 }
 
-use crate::gc::{GcConfig, GcList, GcValue, Heap, GcNativeFn};
+use crate::gc::{GcConfig, GcList, GcMapKey, GcValue, Heap, GcNativeFn};
 
 /// Held mvar lock guard (owned so it can be stored).
 pub enum HeldMvarLock {
@@ -5123,6 +5123,79 @@ impl AsyncProcess {
                 set_reg!(dst, GcValue::Int64(dt.second() as i64));
             }
 
+            // === Type introspection and reflection ===
+            TypeOf(dst, val_reg) => {
+                let type_name = match reg!(val_reg) {
+                    GcValue::Unit => "Unit",
+                    GcValue::Bool(_) => "Bool",
+                    GcValue::Int8(_) => "Int8",
+                    GcValue::Int16(_) => "Int16",
+                    GcValue::Int32(_) => "Int32",
+                    GcValue::Int64(_) => "Int",
+                    GcValue::UInt8(_) => "UInt8",
+                    GcValue::UInt16(_) => "UInt16",
+                    GcValue::UInt32(_) => "UInt32",
+                    GcValue::UInt64(_) => "UInt64",
+                    GcValue::Float32(_) => "Float32",
+                    GcValue::Float64(_) => "Float",
+                    GcValue::Decimal(_) => "Decimal",
+                    GcValue::Char(_) => "Char",
+                    GcValue::String(_) => "String",
+                    GcValue::BigInt(_) => "BigInt",
+                    GcValue::List(_) => "List",
+                    GcValue::Array(_) => "Array",
+                    GcValue::Int64Array(_) => "Int64Array",
+                    GcValue::Float64Array(_) => "Float64Array",
+                    GcValue::Tuple(_) => "Tuple",
+                    GcValue::Record(_) => "Record",
+                    GcValue::Variant(_) => "Variant",
+                    GcValue::Map(_) => "Map",
+                    GcValue::SharedMap(_) => "Map",
+                    GcValue::Set(_) => "Set",
+                    GcValue::Closure(_, _) => "Closure",
+                    GcValue::Pid(_) => "Pid",
+                    GcValue::Ref(_) => "Ref",
+                    GcValue::Function(_) => "Function",
+                    GcValue::NativeFunction(_) => "NativeFunction",
+                    GcValue::Type(_) => "Type",
+                    GcValue::Pointer(_) => "Pointer",
+                }.to_string();
+                let str_ptr = self.heap.alloc_string(type_name);
+                set_reg!(dst, GcValue::String(str_ptr));
+            }
+
+            TagOf(dst, val_reg) => {
+                let tag = match reg!(val_reg) {
+                    GcValue::Variant(ptr) => {
+                        self.heap.get_variant(ptr.clone())
+                            .map(|v| v.constructor.as_ref().clone())
+                            .unwrap_or_default()
+                    }
+                    _ => String::new(),
+                };
+                let str_ptr = self.heap.alloc_string(tag);
+                set_reg!(dst, GcValue::String(str_ptr));
+            }
+
+            Reflect(dst, val_reg) => {
+                let val = reg!(val_reg).clone();
+                let json_val = self.value_to_json(val)?;
+                set_reg!(dst, json_val);
+            }
+
+            TypeInfo(dst, name_reg) => {
+                let type_name = match reg!(name_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr.clone())
+                            .map(|s| s.data.clone())
+                            .unwrap_or_default()
+                    }
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "non-string".to_string() }),
+                };
+                let json_val = self.type_info_to_json(&type_name)?;
+                set_reg!(dst, json_val);
+            }
+
             // Unimplemented instructions - add as needed
             _ => {
                 eprintln!("[AsyncVM] Unimplemented instruction: {:?}", instruction);
@@ -5359,6 +5432,404 @@ impl AsyncProcess {
             // No handler - propagate as runtime error
             Err(RuntimeError::Panic(format!("Uncaught exception: ({}, {})", kind, message)))
         }
+    }
+
+    /// Convert a value to Json variant (for reflect builtin)
+    fn value_to_json(&mut self, val: GcValue) -> Result<GcValue, RuntimeError> {
+        let json_type = Arc::new("stdlib.json.Json".to_string());
+
+        match val {
+            GcValue::Unit => {
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Null".to_string()), vec![]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Bool(b) => {
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Bool".to_string()), vec![GcValue::Bool(b)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Int64(n) => {
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Int8(n) => {
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Int16(n) => {
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Int32(n) => {
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::UInt8(n) => {
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::UInt16(n) => {
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::UInt32(n) => {
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::UInt64(n) => {
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Float64(f) => {
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(f)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Float32(f) => {
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(f as f64)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Decimal(d) => {
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(d.to_string().parse::<f64>().unwrap_or(0.0))]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Char(c) => {
+                let str_ptr = self.heap.alloc_string(c.to_string());
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("String".to_string()), vec![GcValue::String(str_ptr)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::String(str_ptr) => {
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("String".to_string()), vec![GcValue::String(str_ptr)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::BigInt(bi_ptr) => {
+                let n = self.heap.get_bigint(bi_ptr)
+                    .map(|bi| bi.value.to_string().parse::<f64>().unwrap_or(0.0))
+                    .unwrap_or(0.0);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::List(list) => {
+                let items: Vec<GcValue> = list.data.iter().cloned().collect();
+                let mut json_items = Vec::new();
+                for item in items {
+                    let json_item = self.value_to_json(item)?;
+                    json_items.push(json_item);
+                }
+                let list = GcList::from_vec(json_items);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Array".to_string()), vec![GcValue::List(list)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Array(arr_ptr) => {
+                let items = self.heap.get_array(arr_ptr)
+                    .map(|a| a.items.clone())
+                    .unwrap_or_default();
+                let mut json_items = Vec::new();
+                for item in items {
+                    let json_item = self.value_to_json(item)?;
+                    json_items.push(json_item);
+                }
+                let list = GcList::from_vec(json_items);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Array".to_string()), vec![GcValue::List(list)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Tuple(tup_ptr) => {
+                let items = self.heap.get_tuple(tup_ptr)
+                    .map(|t| t.items.clone())
+                    .unwrap_or_default();
+                let mut json_items = Vec::new();
+                for item in items {
+                    let json_item = self.value_to_json(item)?;
+                    json_items.push(json_item);
+                }
+                let list = GcList::from_vec(json_items);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Array".to_string()), vec![GcValue::List(list)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Record(rec_ptr) => {
+                let (field_names, fields) = self.heap.get_record(rec_ptr)
+                    .map(|r| (r.field_names.clone(), r.fields.clone()))
+                    .unwrap_or_default();
+                let mut pairs = Vec::new();
+                for (name, value) in field_names.into_iter().zip(fields) {
+                    let json_value = self.value_to_json(value)?;
+                    let name_ptr = self.heap.alloc_string(name);
+                    let tuple_ptr = self.heap.alloc_tuple(vec![GcValue::String(name_ptr), json_value]);
+                    pairs.push(GcValue::Tuple(tuple_ptr));
+                }
+                let list = GcList::from_vec(pairs);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Object".to_string()), vec![GcValue::List(list)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Variant(var_ptr) => {
+                let (constructor, field_names, fields) = self.heap.get_variant(var_ptr)
+                    .map(|v| {
+                        let type_name = v.type_name.as_ref();
+                        let field_names = self.shared.types.read().unwrap().get(type_name).cloned()
+                            .and_then(|t| t.constructors.iter().find(|c| c.name == *v.constructor).cloned())
+                            .map(|c| c.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>())
+                            .or_else(|| self.shared.dynamic_types.read().unwrap().get(type_name).cloned()
+                                .and_then(|t| t.constructors.iter().find(|c| c.name == *v.constructor).cloned())
+                                .map(|c| c.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>()))
+                            .unwrap_or_else(|| (0..v.fields.len()).map(|i| format!("_{}", i)).collect());
+                        (v.constructor.as_ref().clone(), field_names, v.fields.clone())
+                    })
+                    .unwrap_or_else(|| ("Unknown".to_string(), vec![], vec![]));
+
+                // Create inner object with fields
+                let mut inner_pairs = Vec::new();
+                for (name, value) in field_names.into_iter().zip(fields) {
+                    let json_value = self.value_to_json(value)?;
+                    let name_ptr = self.heap.alloc_string(name);
+                    let tuple_ptr = self.heap.alloc_tuple(vec![GcValue::String(name_ptr), json_value]);
+                    inner_pairs.push(GcValue::Tuple(tuple_ptr));
+                }
+                let inner_list = GcList::from_vec(inner_pairs);
+                let inner_obj = self.heap.alloc_variant(json_type.clone(), Arc::new("Object".to_string()), vec![GcValue::List(inner_list)]);
+
+                // Create outer object with constructor as key
+                let constructor_ptr = self.heap.alloc_string(constructor);
+                let outer_tuple = self.heap.alloc_tuple(vec![GcValue::String(constructor_ptr), GcValue::Variant(inner_obj)]);
+                let outer_list = GcList::from_vec(vec![GcValue::Tuple(outer_tuple)]);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Object".to_string()), vec![GcValue::List(outer_list)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Map(map_ptr) => {
+                let entries: Vec<(GcMapKey, GcValue)> = self.heap.get_map(map_ptr)
+                    .map(|m| m.entries.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                    .unwrap_or_default();
+                let mut pairs = Vec::new();
+                for (key, value) in entries {
+                    let key_str = match &key {
+                        GcMapKey::String(s) => s.clone(),
+                        GcMapKey::Unit => "()".to_string(),
+                        GcMapKey::Bool(b) => b.to_string(),
+                        GcMapKey::Char(c) => format!("'{}'", c),
+                        GcMapKey::Int8(n) => n.to_string(),
+                        GcMapKey::Int16(n) => n.to_string(),
+                        GcMapKey::Int32(n) => n.to_string(),
+                        GcMapKey::Int64(n) => n.to_string(),
+                        GcMapKey::UInt8(n) => n.to_string(),
+                        GcMapKey::UInt16(n) => n.to_string(),
+                        GcMapKey::UInt32(n) => n.to_string(),
+                        GcMapKey::UInt64(n) => n.to_string(),
+                        GcMapKey::Record { type_name, .. } => format!("<{}>", type_name),
+                        GcMapKey::Variant { type_name, constructor, .. } => format!("{}.{}", type_name, constructor),
+                    };
+                    let json_value = self.value_to_json(value)?;
+                    let key_ptr = self.heap.alloc_string(key_str);
+                    let tuple_ptr = self.heap.alloc_tuple(vec![GcValue::String(key_ptr), json_value]);
+                    pairs.push(GcValue::Tuple(tuple_ptr));
+                }
+                let list = GcList::from_vec(pairs);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Object".to_string()), vec![GcValue::List(list)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::SharedMap(shared_map) => {
+                let mut pairs = Vec::new();
+                for (key, value) in shared_map.iter() {
+                    let key_str = format!("{:?}", key);
+                    let gc_value = self.heap.shared_to_gc_value(value);
+                    let json_value = self.value_to_json(gc_value)?;
+                    let key_ptr = self.heap.alloc_string(key_str);
+                    let tuple_ptr = self.heap.alloc_tuple(vec![GcValue::String(key_ptr), json_value]);
+                    pairs.push(GcValue::Tuple(tuple_ptr));
+                }
+                let list = GcList::from_vec(pairs);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Object".to_string()), vec![GcValue::List(list)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Set(set_ptr) => {
+                let items: Vec<GcMapKey> = self.heap.get_set(set_ptr)
+                    .map(|s| s.items.iter().cloned().collect())
+                    .unwrap_or_default();
+                let mut json_items = Vec::new();
+                for key in items {
+                    let gc_val = key.to_gc_value(&mut self.heap);
+                    let json_item = self.value_to_json(gc_val)?;
+                    json_items.push(json_item);
+                }
+                let list = GcList::from_vec(json_items);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Array".to_string()), vec![GcValue::List(list)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Int64Array(arr_ptr) => {
+                let items = self.heap.get_int64_array(arr_ptr)
+                    .map(|a| a.items.clone())
+                    .unwrap_or_default();
+                let mut json_items = Vec::new();
+                for n in items {
+                    let ptr = self.heap.alloc_variant(json_type.clone(), Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                    json_items.push(GcValue::Variant(ptr));
+                }
+                let list = GcList::from_vec(json_items);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Array".to_string()), vec![GcValue::List(list)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Float64Array(arr_ptr) => {
+                let items = self.heap.get_float64_array(arr_ptr)
+                    .map(|a| a.items.clone())
+                    .unwrap_or_default();
+                let mut json_items = Vec::new();
+                for f in items {
+                    let ptr = self.heap.alloc_variant(json_type.clone(), Arc::new("Number".to_string()), vec![GcValue::Float64(f)]);
+                    json_items.push(GcValue::Variant(ptr));
+                }
+                let list = GcList::from_vec(json_items);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Array".to_string()), vec![GcValue::List(list)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Pid(pid) => {
+                let str_ptr = self.heap.alloc_string(format!("<pid:{}>", pid));
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("String".to_string()), vec![GcValue::String(str_ptr)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Ref(r) => {
+                let str_ptr = self.heap.alloc_string(format!("<ref:{}>", r));
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("String".to_string()), vec![GcValue::String(str_ptr)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Closure(_, _) | GcValue::Function(_) | GcValue::NativeFunction(_) => {
+                let str_ptr = self.heap.alloc_string("<function>".to_string());
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("String".to_string()), vec![GcValue::String(str_ptr)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Type(t) => {
+                let str_ptr = self.heap.alloc_string(format!("<type:{}>", t.name));
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("String".to_string()), vec![GcValue::String(str_ptr)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Pointer(p) => {
+                let str_ptr = self.heap.alloc_string(format!("<ptr:0x{:x}>", p));
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("String".to_string()), vec![GcValue::String(str_ptr)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            _ => {
+                // Fallback for any other types
+                let str_ptr = self.heap.alloc_string("<unknown>".to_string());
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("String".to_string()), vec![GcValue::String(str_ptr)]);
+                Ok(GcValue::Variant(ptr))
+            }
+        }
+    }
+
+    /// Get type info as Json (for typeInfo builtin)
+    fn type_info_to_json(&mut self, type_name: &str) -> Result<GcValue, RuntimeError> {
+        let json_type = Arc::new("stdlib.json.Json".to_string());
+
+        // Look up type in static types, then dynamic types
+        let type_info = self.shared.types.read().unwrap().get(type_name).cloned()
+            .or_else(|| self.shared.dynamic_types.read().unwrap().get(type_name).cloned())
+            .or_else(|| self.shared.stdlib_types.read().unwrap().get(type_name).cloned());
+
+        let type_val = match type_info {
+            Some(t) => t,
+            None => {
+                // Return Null for unknown types
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Null".to_string()), vec![]);
+                return Ok(GcValue::Variant(ptr));
+            }
+        };
+
+        // Build JSON structure: { name, kind, fields, constructors }
+        let mut obj_pairs = Vec::new();
+
+        // name
+        {
+            let name_key = self.heap.alloc_string("name".to_string());
+            let name_val_str = self.heap.alloc_string(type_val.name.clone());
+            let name_val = self.heap.alloc_variant(json_type.clone(), Arc::new("String".to_string()), vec![GcValue::String(name_val_str)]);
+            let pair = self.heap.alloc_tuple(vec![GcValue::String(name_key), GcValue::Variant(name_val)]);
+            obj_pairs.push(GcValue::Tuple(pair));
+        }
+
+        // kind
+        {
+            let kind_str = match &type_val.kind {
+                crate::value::TypeKind::Primitive => "primitive",
+                crate::value::TypeKind::Record { .. } => "record",
+                crate::value::TypeKind::Variant => "variant",
+                crate::value::TypeKind::Alias { .. } => "alias",
+            };
+            let kind_key = self.heap.alloc_string("kind".to_string());
+            let kind_val_str = self.heap.alloc_string(kind_str.to_string());
+            let kind_val = self.heap.alloc_variant(json_type.clone(), Arc::new("String".to_string()), vec![GcValue::String(kind_val_str)]);
+            let pair = self.heap.alloc_tuple(vec![GcValue::String(kind_key), GcValue::Variant(kind_val)]);
+            obj_pairs.push(GcValue::Tuple(pair));
+        }
+
+        // fields (for records)
+        {
+            let mut field_items = Vec::new();
+            for field in &type_val.fields {
+                let fname_key = self.heap.alloc_string("name".to_string());
+                let fname_val_str = self.heap.alloc_string(field.name.clone());
+                let fname_val = self.heap.alloc_variant(json_type.clone(), Arc::new("String".to_string()), vec![GcValue::String(fname_val_str)]);
+                let fname_pair = self.heap.alloc_tuple(vec![GcValue::String(fname_key), GcValue::Variant(fname_val)]);
+
+                let ftype_key = self.heap.alloc_string("type".to_string());
+                let ftype_val_str = self.heap.alloc_string(field.type_name.clone());
+                let ftype_val = self.heap.alloc_variant(json_type.clone(), Arc::new("String".to_string()), vec![GcValue::String(ftype_val_str)]);
+                let ftype_pair = self.heap.alloc_tuple(vec![GcValue::String(ftype_key), GcValue::Variant(ftype_val)]);
+
+                let field_list = GcList::from_vec(vec![GcValue::Tuple(fname_pair), GcValue::Tuple(ftype_pair)]);
+                let field_obj = self.heap.alloc_variant(json_type.clone(), Arc::new("Object".to_string()), vec![GcValue::List(field_list)]);
+                field_items.push(GcValue::Variant(field_obj));
+            }
+            let fields_key = self.heap.alloc_string("fields".to_string());
+            let fields_list = GcList::from_vec(field_items);
+            let fields_val = self.heap.alloc_variant(json_type.clone(), Arc::new("Array".to_string()), vec![GcValue::List(fields_list)]);
+            let pair = self.heap.alloc_tuple(vec![GcValue::String(fields_key), GcValue::Variant(fields_val)]);
+            obj_pairs.push(GcValue::Tuple(pair));
+        }
+
+        // constructors (for variants)
+        {
+            let mut ctor_items = Vec::new();
+            for ctor in &type_val.constructors {
+                let mut ctor_pairs = Vec::new();
+
+                let cname_key = self.heap.alloc_string("name".to_string());
+                let cname_val_str = self.heap.alloc_string(ctor.name.clone());
+                let cname_val = self.heap.alloc_variant(json_type.clone(), Arc::new("String".to_string()), vec![GcValue::String(cname_val_str)]);
+                let cname_pair = self.heap.alloc_tuple(vec![GcValue::String(cname_key), GcValue::Variant(cname_val)]);
+                ctor_pairs.push(GcValue::Tuple(cname_pair));
+
+                let mut cfield_items = Vec::new();
+                for field in &ctor.fields {
+                    let fname_key = self.heap.alloc_string("name".to_string());
+                    let fname_val_str = self.heap.alloc_string(field.name.clone());
+                    let fname_val = self.heap.alloc_variant(json_type.clone(), Arc::new("String".to_string()), vec![GcValue::String(fname_val_str)]);
+                    let fname_pair = self.heap.alloc_tuple(vec![GcValue::String(fname_key), GcValue::Variant(fname_val)]);
+
+                    let ftype_key = self.heap.alloc_string("type".to_string());
+                    let ftype_val_str = self.heap.alloc_string(field.type_name.clone());
+                    let ftype_val = self.heap.alloc_variant(json_type.clone(), Arc::new("String".to_string()), vec![GcValue::String(ftype_val_str)]);
+                    let ftype_pair = self.heap.alloc_tuple(vec![GcValue::String(ftype_key), GcValue::Variant(ftype_val)]);
+
+                    let field_list = GcList::from_vec(vec![GcValue::Tuple(fname_pair), GcValue::Tuple(ftype_pair)]);
+                    let field_obj = self.heap.alloc_variant(json_type.clone(), Arc::new("Object".to_string()), vec![GcValue::List(field_list)]);
+                    cfield_items.push(GcValue::Variant(field_obj));
+                }
+
+                let cfields_key = self.heap.alloc_string("fields".to_string());
+                let cfields_list = GcList::from_vec(cfield_items);
+                let cfields_val = self.heap.alloc_variant(json_type.clone(), Arc::new("Array".to_string()), vec![GcValue::List(cfields_list)]);
+                let cfields_pair = self.heap.alloc_tuple(vec![GcValue::String(cfields_key), GcValue::Variant(cfields_val)]);
+                ctor_pairs.push(GcValue::Tuple(cfields_pair));
+
+                let ctor_list = GcList::from_vec(ctor_pairs);
+                let ctor_obj = self.heap.alloc_variant(json_type.clone(), Arc::new("Object".to_string()), vec![GcValue::List(ctor_list)]);
+                ctor_items.push(GcValue::Variant(ctor_obj));
+            }
+            let ctors_key = self.heap.alloc_string("constructors".to_string());
+            let ctors_list = GcList::from_vec(ctor_items);
+            let ctors_val = self.heap.alloc_variant(json_type.clone(), Arc::new("Array".to_string()), vec![GcValue::List(ctors_list)]);
+            let pair = self.heap.alloc_tuple(vec![GcValue::String(ctors_key), GcValue::Variant(ctors_val)]);
+            obj_pairs.push(GcValue::Tuple(pair));
+        }
+
+        let obj_list = GcList::from_vec(obj_pairs);
+        let ptr = self.heap.alloc_variant(json_type, Arc::new("Object".to_string()), vec![GcValue::List(obj_list)]);
+        Ok(GcValue::Variant(ptr))
     }
 }
 
