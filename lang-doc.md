@@ -924,6 +924,147 @@ bytes = Encoding.toBytes("Hi")
 # status = "ok", str = "Hi"
 ```
 
+## JSON
+
+Nostos provides comprehensive JSON support for parsing, serialization, and typed deserialization.
+
+### Parsing JSON
+
+```nos
+use stdlib.json.{jsonParse, jsonStringify}
+
+# Parse a JSON string into a Json value
+json = jsonParse("{\"name\": \"Alice\", \"age\": 30}")
+
+# The Json type is a variant:
+# type Json = Null | Bool(Bool) | Number(Float) | String(String)
+#           | Array(List[Json]) | Object(List[(String, Json)])
+```
+
+### Stringify JSON
+
+```nos
+use stdlib.json.{jsonParse, jsonStringify}
+
+# Convert Json back to a string
+json = jsonParse("{\"x\": 1, \"y\": 2}")
+str = jsonStringify(json)  # "{\"x\":1,\"y\":2}"
+```
+
+### Typed Deserialization with jsonToType
+
+The `jsonToType[T](json)` builtin converts JSON to typed Nostos values. This is the recommended way to work with JSON data.
+
+```nos
+use stdlib.json.{jsonParse, jsonStringify}
+
+# Define your types
+type Person = { name: String, age: Int }
+
+# Parse and convert to typed value
+json = jsonParse("{\"name\": \"Alice\", \"age\": 30}")
+person = jsonToType[Person](json)
+
+println(person.name)  # "Alice"
+println(person.age)   # 30
+```
+
+### Supported Types
+
+`jsonToType` supports all Nostos types:
+
+```nos
+# All numeric types
+type Sizes = {
+    i8: Int8, i16: Int16, i32: Int32, i64: Int,
+    u8: UInt8, u16: UInt16, u32: UInt32, u64: UInt64,
+    f32: Float32, f64: Float
+}
+
+# Records with any field types
+type Point = { x: Int, y: Int }
+type Config = { name: String, enabled: Bool, value: Float }
+
+# Sum types (variants)
+type Result = Ok(Int) | Err(String)
+type Option = Some(String) | None
+
+# Nested types
+type Address = { city: String, zip: Int }
+type Person = { name: String, address: Address }
+
+# Tuples (represented as JSON arrays)
+type Pair = { data: (Int, String) }
+```
+
+### JSON Format for Variants
+
+Variants use a JSON object with the constructor name as the key:
+
+```nos
+type Result = Ok(Int) | Err(String)
+
+# Ok(42) is represented as: {"Ok": {"_0": 42}}
+# Err("fail") is represented as: {"Err": {"_0": "fail"}}
+
+json = jsonParse("{\"Ok\": {\"_0\": 42}}")
+result = jsonToType[Result](json)  # Ok(42)
+
+# Unit variants (no payload) use empty object:
+type Status = Active | Pending | Done
+# Active is: {"Active": {}}
+```
+
+### Error Handling
+
+`jsonToType` throws catchable exceptions on errors:
+
+```nos
+use stdlib.json.{jsonParse, jsonStringify}
+
+type Person = { name: String, age: Int }
+
+main() = {
+    # Missing required field
+    json = jsonParse("{\"name\": \"Alice\"}")
+
+    try {
+        person = jsonToType[Person](json)
+        "success"
+    } catch e -> "Error: " ++ e end
+    # Returns: "Error: Missing field: age"
+}
+```
+
+Common errors:
+- `Missing field: <name>` - Required field not in JSON
+- `Unknown constructor: <name>` - Variant constructor doesn't exist
+- `Unknown type: <name>` - Type not defined
+- `Expected Json Object, found <type>` - Wrong JSON structure
+
+### Round-Trip Example
+
+```nos
+use stdlib.json.{jsonParse, jsonStringify}
+
+type User = { id: Int, name: String, active: Bool }
+
+main() = {
+    # Create a user
+    user = User { id: 1, name: "Bob", active: true }
+
+    # Convert to JSON using reflect
+    json = reflect(user)
+    jsonStr = jsonStringify(json)
+
+    # Parse back to typed value
+    parsed = jsonParse(jsonStr)
+    user2 = jsonToType[User](parsed)
+
+    user == user2  # true
+}
+```
+
 ## Command-Line Interface
 
 ### Running Programs
