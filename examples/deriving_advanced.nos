@@ -2,7 +2,6 @@
 #
 # Demonstrates builtin traits with more complex types:
 # - Nested types (types containing other types)
-# - Complex variant types
 # - Record types with many fields
 # - Using types in data structures
 
@@ -16,11 +15,6 @@ type Address = { street: String, city: String, zip: Int }
 
 type Contact = { name: String, email: Email, address: Address }
 
-# ========== Complex Variant Types ==========
-# Variants with different field counts all have builtin traits
-
-type Expression = Number(Int) | Variable(String) | Add(Expression, Expression) | Multiply(Expression, Expression)
-
 # ========== Building a Simple Key-Value Store ==========
 # Using Hash and Eq for a custom key type
 
@@ -32,15 +26,15 @@ put([], key, value) = [(key, value)]
 put([(k, _) | rest], key, value) when k == key = [(key, value) | rest]
 put([(k, v) | rest], key, value) = [(k, v) | put(rest, key, value)]
 
-get([], _) = None
-get([(k, v) | rest], key) = if k == key then Some(v) else get(rest, key)
+get([], _) = NotFound
+get([(k, v) | rest], key) = if k == key then Found(v) else get(rest, key)
 
-type Option = Some(UserData) | None
+type LookupResult = Found(UserData) | NotFound
 
 # ========== Main Demo ==========
 
 main() = {
-    println("=== Advanced Deriving Demo ===")
+    println("=== Advanced Builtin Traits Demo ===")
     println("")
 
     # ----- Nested Types -----
@@ -61,22 +55,6 @@ main() = {
     # Different email makes them unequal
     contact3 = Contact("Alice", Email("other@example.com"), addr)
     println("Different email makes unequal: " ++ show(contact != contact3))
-    println("")
-
-    # ----- Complex Expressions -----
-    println("--- Expression Trees ---")
-
-    # Build: (x + 2) * 3
-    expr = Multiply(Add(Variable("x"), Number(2)), Number(3))
-    println("Expression: " ++ show(expr))
-
-    # Same expression is equal
-    expr2 = Multiply(Add(Variable("x"), Number(2)), Number(3))
-    println("Same expressions are equal: " ++ show(expr == expr2))
-
-    # Different expression is not equal
-    expr3 = Add(Variable("x"), Number(2))
-    println("Different expressions are not equal: " ++ show(expr != expr3))
     println("")
 
     # ----- Key-Value Store -----
@@ -116,6 +94,6 @@ main() = {
     println("  All equal: " ++ show(h1 == h2 && h2 == h3))
     println("")
 
-    println("=== All advanced demos completed! ===")
+    println("=== Demo completed! ===")
     0
 }
