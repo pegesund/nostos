@@ -9302,4 +9302,31 @@ main() = {
         println!("Result: {:?}", result);
         assert!(result.is_ok(), "Unknown type with correct arity should pass: {:?}", result);
     }
+
+    #[test]
+    fn test_http_server_style_code() {
+        // Reproduce exact scenario from user: tuple destructuring + many statements + wrong arity
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+serverLoop(s) = s
+clientRequest(me, path) = path
+collectResponses(a, b) = a + b
+
+main() = {
+  println("test")
+  (status, server) = ("ok", 123)
+  spawn { serverLoop(server) }
+  sleep(50)
+  me = self()
+  spawn { clientRequest(me, "/") }
+  completed = collectResponses(0, 5)
+  status.contains("s", 1)
+  println("done")
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected arity error for status.contains with 2 args");
+        assert!(result.unwrap_err().contains("expects 1 argument"), "Error should mention arity");
+    }
 }
