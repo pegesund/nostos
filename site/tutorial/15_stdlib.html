@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Standard Library - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75;
+        }
+        .hljs-function {
+            color: #e5c07b;
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/pegesund/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+
+        <!-- Sidebar -->
+        <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_concurrency.html" class="block text-slate-400 hover:text-white transition">7. Concurrency</a></li>
+                    <li><a href="08_async_io_http.html" class="block text-slate-400 hover:text-white transition">8. Async I/O & HTTP</a></li>
+                    <li><a href="09_type_system.html" class="block text-slate-400 hover:text-white transition">9. Type System</a></li>
+                    <li><a href="10_error_handling.html" class="block text-slate-400 hover:text-white transition">10. Error Handling</a></li>
+                    <li><a href="11_traits.html" class="block text-slate-400 hover:text-white transition">11. Traits</a></li>
+                    <li><a href="12_deriving.html" class="block text-slate-400 hover:text-white transition">12. Builtin Traits</a></li>
+                    <li><a href="13_trait_bounds.html" class="block text-slate-400 hover:text-white transition">13. Trait Bounds</a></li>
+                    <li><a href="14_json.html" class="block text-slate-400 hover:text-white transition">14. JSON</a></li>
+                    <li><a href="15_stdlib.html" class="block text-blue-400 font-medium">15. Standard Library</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Standard Library</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Nostos comes with a comprehensive standard library providing utilities for strings, collections, time, file system, cryptography, and more. All modules are available by default without imports.
+                </p>
+
+                <!-- Quick Reference -->
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <h3 class="text-lg font-semibold text-white mb-3">Available Modules</h3>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                        <span class="text-blue-400">String</span>
+                        <span class="text-blue-400">List</span>
+                        <span class="text-blue-400">Map</span>
+                        <span class="text-blue-400">Set</span>
+                        <span class="text-blue-400">Math</span>
+                        <span class="text-blue-400">Time</span>
+                        <span class="text-blue-400">Random</span>
+                        <span class="text-blue-400">Path</span>
+                        <span class="text-blue-400">File</span>
+                        <span class="text-blue-400">Dir</span>
+                        <span class="text-blue-400">Env</span>
+                        <span class="text-blue-400">Regex</span>
+                        <span class="text-blue-400">Uuid</span>
+                        <span class="text-blue-400">Crypto</span>
+                        <span class="text-blue-400">Http</span>
+                        <span class="text-blue-400">Json</span>
+                    </div>
+                </div>
+
+                <!-- String Module -->
+                <h2 class="text-2xl font-semibold text-white mb-4">String Module</h2>
+                <p class="text-slate-400 mb-4">String manipulation functions for common text operations.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">main() = {
+    # Length and case
+    println(String.length("hello"))          # 5
+    println(String.toUpper("hello"))         # "HELLO"
+    println(String.toLower("WORLD"))         # "world"
+
+    # Searching
+    println(String.contains("hello", "ell")) # true
+    println(String.startsWith("hello", "he")) # true
+    println(String.endsWith("hello", "lo"))  # true
+    println(String.indexOf("hello", "l"))    # 2
+
+    # Extraction
+    println(String.substring("hello", 1, 4)) # "ell"
+    println(String.charAt("hello", 0))       # "h"
+
+    # Transformation
+    println(String.trim("  hi  "))           # "hi"
+    println(String.replace("hello", "l", "L")) # "heLLo"
+    println(String.repeat("ab", 3))          # "ababab"
+    println(String.reverse("hello"))         # "olleh"
+
+    # Split and join
+    parts = String.split("a,b,c", ",")       # ["a", "b", "c"]
+    println(String.join(parts, "-"))         # "a-b-c"
+}</code></pre>
+                </div>
+
+                <!-- Collections: Map -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Map Module</h2>
+                <p class="text-slate-400 mb-4">Immutable key-value maps with efficient lookups.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">main() = {
+    # Create a map
+    m = %{"a": 1, "b": 2, "c": 3}
+
+    # Basic operations
+    println(Map.get(m, "a"))        # Some(1)
+    println(Map.get(m, "x"))        # None
+    println(Map.contains(m, "b"))   # true
+    println(Map.size(m))            # 3
+
+    # Modification (returns new map)
+    m2 = Map.insert(m, "d", 4)
+    m3 = Map.remove(m2, "a")
+
+    # Keys and values
+    println(Map.keys(m))            # ["a", "b", "c"]
+    println(Map.values(m))          # [1, 2, 3]
+    println(Map.toList(m))          # [("a", 1), ("b", 2), ("c", 3)]
+
+    # From list of tuples
+    pairs = [("x", 10), ("y", 20)]
+    m4 = Map.fromList(pairs)
+}</code></pre>
+                </div>
+
+                <!-- Collections: Set -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Set Module</h2>
+                <p class="text-slate-400 mb-4">Immutable sets with unique elements.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">main() = {
+    # Create a set
+    s = #{1, 2, 3, 4, 5}
+
+    # Basic operations
+    println(Set.contains(s, 3))     # true
+    println(Set.size(s))            # 5
+
+    # Modification (returns new set)
+    s2 = Set.insert(s, 6)
+    s3 = Set.remove(s2, 1)
+
+    # Set operations
+    a = #{1, 2, 3}
+    b = #{2, 3, 4}
+    println(Set.union(a, b))        # #{1, 2, 3, 4}
+    println(Set.intersection(a, b)) # #{2, 3}
+    println(Set.difference(a, b))   # #{1}
+
+    # Convert to list
+    println(Set.toList(s))          # [1, 2, 3, 4, 5]
+}</code></pre>
+                </div>
+
+                <!-- Time Module -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Time Module</h2>
+                <p class="text-slate-400 mb-4">Date and time operations with Unix timestamps.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">main() = {
+    # Current time
+    now = Time.now()
+    println("Timestamp: " ++ show(now))
+
+    # Format as string
+    println(Time.format(now, "%Y-%m-%d %H:%M:%S"))
+
+    # Extract components
+    println("Year: " ++ show(Time.year(now)))
+    println("Month: " ++ show(Time.month(now)))
+    println("Day: " ++ show(Time.day(now)))
+    println("Hour: " ++ show(Time.hour(now)))
+    println("Minute: " ++ show(Time.minute(now)))
+    println("Second: " ++ show(Time.second(now)))
+
+    # Parse from string
+    ts = Time.parse("2024-06-15 10:30:00", "%Y-%m-%d %H:%M:%S")
+
+    # Arithmetic (seconds)
+    tomorrow = Time.add(now, 86400)
+    yesterday = Time.subtract(now, 86400)
+}</code></pre>
+                </div>
+
+                <!-- Random Module -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Random Module</h2>
+                <p class="text-slate-400 mb-4">Random number generation and selection.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">main() = {
+    # Random integers in range [min, max]
+    n = Random.int(1, 100)
+    println("Random int: " ++ show(n))
+
+    # Random float in [0, 1)
+    f = Random.float()
+    println("Random float: " ++ show(f))
+
+    # Random boolean
+    b = Random.bool()
+    println("Random bool: " ++ show(b))
+
+    # Pick random element from list
+    colors = ["red", "green", "blue"]
+    color = Random.choice(colors)
+    println("Random color: " ++ color)
+
+    # Shuffle a list
+    nums = [1, 2, 3, 4, 5]
+    shuffled = Random.shuffle(nums)
+    println("Shuffled: " ++ show(shuffled))
+}</code></pre>
+                </div>
+
+                <!-- Path Module -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Path Module</h2>
+                <p class="text-slate-400 mb-4">File path manipulation utilities.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">main() = {
+    # Join path components
+    println(Path.join("/home", "user"))       # "/home/user"
+    println(Path.join("/home", "user", "docs")) # "/home/user/docs"
+
+    # Extract components
+    println(Path.dirname("/home/user/file.txt"))   # "/home/user"
+    println(Path.basename("/home/user/file.txt"))  # "file.txt"
+    println(Path.extension("document.pdf"))         # "pdf"
+
+    # Path type checks
+    println(Path.isAbsolute("/home"))   # true
+    println(Path.isAbsolute("./file"))  # false
+    println(Path.isRelative("./file"))  # true
+
+    # Normalize path
+    println(Path.normalize("/home/../etc"))  # "/etc"
+}</code></pre>
+                </div>
+
+                <!-- Env Module -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Env Module</h2>
+                <p class="text-slate-400 mb-4">Access environment variables.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">main() = {
+    # Get environment variable (returns Option)
+    home = Env.get("HOME")
+    match home
+        Some(path) -> println("Home: " ++ path)
+        None -> println("HOME not set")
+    end
+
+    # Get with default value
+    editor = Env.getOr("EDITOR", "nano")
+    println("Editor: " ++ editor)
+
+    # Get all environment variables
+    allEnv = Env.all()
+    # Returns Map[String, String]
+}</code></pre>
+                </div>
+
+                <!-- Regex Module -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Regex Module</h2>
+                <p class="text-slate-400 mb-4">Regular expression pattern matching.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">main() = {
+    text = "The quick brown fox"
+
+    # Check if pattern matches
+    println(Regex.isMatch("quick", text))    # true
+    println(Regex.isMatch("slow", text))     # false
+
+    # Find first match
+    match Regex.find("\\w+", text)
+        Some(m) -> println("Found: " ++ m)   # "The"
+        None -> println("No match")
+    end
+
+    # Find all matches
+    matches = Regex.findAll("\\w+", text)
+    println(matches)  # ["The", "quick", "brown", "fox"]
+
+    # Replace matches
+    result = Regex.replace("fox", text, "dog")
+    println(result)   # "The quick brown dog"
+
+    # Split by pattern
+    parts = Regex.split("\\s+", text)
+    println(parts)    # ["The", "quick", "brown", "fox"]
+}</code></pre>
+                </div>
+
+                <!-- UUID Module -->
+                <h2 class="text-2xl font-semibold text-white mb-4">UUID Module</h2>
+                <p class="text-slate-400 mb-4">Generate and validate UUIDs.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">main() = {
+    # Generate a random UUID v4
+    id = Uuid.v4()
+    println("Generated UUID: " ++ id)
+    # Example: "550e8400-e29b-41d4-a716-446655440000"
+
+    # Validate UUID format
+    println(Uuid.isValid(id))                           # true
+    println(Uuid.isValid("not-a-uuid"))                 # false
+    println(Uuid.isValid("550e8400-e29b-41d4-a716-446655440000")) # true
+}</code></pre>
+                </div>
+
+                <!-- Crypto Module -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Crypto Module</h2>
+                <p class="text-slate-400 mb-4">Cryptographic hashing and password functions.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">main() = {
+    # Hash functions (return hex strings)
+    println(Crypto.sha256("hello"))
+    # "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+
+    println(Crypto.sha512("hello"))
+    # "9b71d224bd62f3785d96d46ad3ea3d73..."
+
+    println(Crypto.md5("hello"))  # Insecure, for compatibility
+    # "5d41402abc4b2a76b9719d911017c592"
+
+    # Password hashing with bcrypt
+    password = "secret123"
+    hash = Crypto.bcryptHash(password, 10)  # cost factor 10
+    println("Hash: " ++ hash)
+
+    # Verify password
+    isValid = Crypto.bcryptVerify(password, hash)
+    println("Valid: " ++ show(isValid))  # true
+
+    isWrong = Crypto.bcryptVerify("wrong", hash)
+    println("Wrong: " ++ show(isWrong))  # false
+
+    # Generate random bytes (as hex)
+    randomHex = Crypto.randomBytes(16)
+    println("Random: " ++ randomHex)  # 32 hex chars
+}</code></pre>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <p class="text-slate-400 text-sm"><strong>Security Note:</strong> Use bcrypt for password storage. MD5 is provided only for legacy compatibility and should not be used for security purposes. SHA-256/512 are suitable for data integrity checks.</p>
+                </div>
+
+                <!-- Math Module -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Math Module</h2>
+                <p class="text-slate-400 mb-4">Mathematical functions and constants.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">main() = {
+    # Basic functions
+    println(Math.abs(-5))         # 5
+    println(Math.max(3, 7))       # 7
+    println(Math.min(3, 7))       # 3
+
+    # Rounding
+    println(Math.floor(3.7))      # 3.0
+    println(Math.ceil(3.2))       # 4.0
+    println(Math.round(3.5))      # 4.0
+
+    # Power and roots
+    println(Math.pow(2.0, 10.0))  # 1024.0
+    println(Math.sqrt(16.0))      # 4.0
+
+    # Trigonometry
+    println(Math.sin(0.0))        # 0.0
+    println(Math.cos(0.0))        # 1.0
+    println(Math.tan(0.0))        # 0.0
+
+    # Logarithms
+    println(Math.log(Math.e()))   # 1.0
+    println(Math.log10(100.0))    # 2.0
+
+    # Constants
+    println(Math.pi())            # 3.141592653589793
+    println(Math.e())             # 2.718281828459045
+}</code></pre>
+                </div>
+
+                <!-- File Module -->
+                <h2 class="text-2xl font-semibold text-white mb-4">File Module</h2>
+                <p class="text-slate-400 mb-4">File system operations for reading and writing files.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">main() = {
+    # Write to file
+    File.write("/tmp/test.txt", "Hello, World!")
+
+    # Read entire file
+    content = File.read("/tmp/test.txt")
+    println(content)  # "Hello, World!"
+
+    # Append to file
+    File.append("/tmp/test.txt", "\nMore content")
+
+    # Check if file exists
+    println(File.exists("/tmp/test.txt"))  # true
+
+    # Delete file
+    File.delete("/tmp/test.txt")
+
+    # Read lines as list
+    lines = File.readLines("/etc/hosts")
+}</code></pre>
+                </div>
+
+                <!-- Dir Module -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Dir Module</h2>
+                <p class="text-slate-400 mb-4">Directory operations.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">main() = {
+    # Create directory
+    Dir.create("/tmp/mydir")
+
+    # List directory contents
+    files = Dir.list("/tmp")
+    println(files)  # List of filenames
+
+    # Check if directory exists
+    println(Dir.exists("/tmp"))  # true
+
+    # Remove directory
+    Dir.remove("/tmp/mydir")
+
+    # Current working directory
+    cwd = Dir.current()
+    println("CWD: " ++ cwd)
+}</code></pre>
+                </div>
+
+                <!-- List Module -->
+                <h2 class="text-2xl font-semibold text-white mb-4">List Module</h2>
+                <p class="text-slate-400 mb-4">Extended list operations beyond built-in syntax.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">main() = {
+    xs = [1, 2, 3, 4, 5]
+
+    # Access
+    println(List.head(xs))        # Some(1)
+    println(List.tail(xs))        # [2, 3, 4, 5]
+    println(List.last(xs))        # Some(5)
+    println(List.get(xs, 2))      # Some(3)
+
+    # Size
+    println(List.length(xs))      # 5
+    println(List.isEmpty([]))     # true
+
+    # Transform
+    println(List.reverse(xs))     # [5, 4, 3, 2, 1]
+    println(List.take(xs, 3))     # [1, 2, 3]
+    println(List.drop(xs, 2))     # [3, 4, 5]
+
+    # Combine
+    ys = [6, 7, 8]
+    println(List.concat(xs, ys))  # [1, 2, 3, 4, 5, 6, 7, 8]
+    println(List.flatten([[1,2], [3,4]]))  # [1, 2, 3, 4]
+
+    # Search
+    println(List.contains(xs, 3)) # true
+    println(List.find(xs, x => x > 3))  # Some(4)
+}</code></pre>
+                </div>
+
+                <!-- Summary Box -->
+                <div class="bg-gradient-to-r from-blue-900/30 to-emerald-900/30 rounded-lg p-6 mb-8 border border-blue-800/50">
+                    <h3 class="text-xl font-semibold text-white mb-4">Standard Library Summary</h3>
+                    <p class="text-slate-400 mb-4">
+                        The Nostos standard library provides everything needed for practical application development:
+                    </p>
+                    <ul class="list-disc list-inside text-slate-400 space-y-2">
+                        <li><strong>Text:</strong> String, Regex for text processing</li>
+                        <li><strong>Collections:</strong> List, Map, Set with functional operations</li>
+                        <li><strong>I/O:</strong> File, Dir for file system access</li>
+                        <li><strong>System:</strong> Env, Path for system integration</li>
+                        <li><strong>Time:</strong> Time for dates and timestamps</li>
+                        <li><strong>Security:</strong> Crypto, Uuid for cryptographic operations</li>
+                        <li><strong>Network:</strong> Http, Json for web services</li>
+                        <li><strong>Math:</strong> Math for numerical computing</li>
+                        <li><strong>Random:</strong> Random for random number generation</li>
+                    </ul>
+                </div>
+
+                <!-- Navigation -->
+                <div class="mt-12 pt-8 border-t border-slate-800 flex justify-between">
+                    <a href="14_json.html" class="text-blue-400 hover:text-blue-300 transition">&larr; Previous: JSON</a>
+                    <span class="text-slate-600">End of Tutorial</span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="../js/nostos-highlight.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>
+        if (typeof nostos_highlight !== 'undefined') {
+            hljs.registerLanguage('nostos', nostos_highlight);
+        }
+        hljs.highlightAll();
+    </script>
+
+</body>
+</html>
