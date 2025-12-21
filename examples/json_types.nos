@@ -1,0 +1,132 @@
+# JSON Type Conversion Examples
+# Demonstrates fromJson[T] for typed deserialization
+
+# ===========================================
+# Basic Records
+# ===========================================
+
+type Person = { name: String, age: Int }
+
+type Address = { street: String, city: String, zip: Int }
+
+type Employee = { name: String, title: String, salary: Float, address: Address }
+
+# ===========================================
+# Variants (Sum Types)
+# ===========================================
+
+type Status = Active | Pending | Completed
+
+type ApiResult = Success(String) | Error(Int, String)
+
+type Shape = Circle(Float) | Rectangle(Float, Float) | Point
+
+type Team = { members: List[Person] }
+
+type Coordinate = { point: (Int, Int), label: String }
+
+# ===========================================
+# Examples
+# ===========================================
+
+main() = {
+    println("=== JSON to Types Examples ===\n")
+
+    # -----------------------------------------
+    # Example 1: Simple Record
+    # -----------------------------------------
+    println("1. Simple Record:")
+    personJson = jsonParse("{\"name\": \"Alice\", \"age\": 30}")
+    person = fromJson[Person](personJson)
+    println("   Name: " ++ person.name)
+    println("   Age: " ++ show(person.age))
+
+    # -----------------------------------------
+    # Example 2: Nested Record
+    # -----------------------------------------
+    println("\n2. Nested Record:")
+    employeeJson = jsonParse("{\"name\": \"Bob\", \"title\": \"Engineer\", \"salary\": 75000.50, \"address\": {\"street\": \"123 Main St\", \"city\": \"Oslo\", \"zip\": 1234}}")
+    employee = fromJson[Employee](employeeJson)
+    println("   Employee: " ++ employee.name ++ " (" ++ employee.title ++ ")")
+    println("   Salary: $" ++ show(employee.salary))
+    println("   City: " ++ employee.address.city)
+
+    # -----------------------------------------
+    # Example 3: Unit Variants (no payload)
+    # Unit variants use null in JSON
+    # -----------------------------------------
+    println("\n3. Unit Variants:")
+
+    activeJson = jsonParse("{\"Active\": null}")
+    status1 = fromJson[Status](activeJson)
+    println("   Status 1: " ++ show(status1))
+
+    pendingJson = jsonParse("{\"Pending\": null}")
+    status2 = fromJson[Status](pendingJson)
+    println("   Status 2: " ++ show(status2))
+
+    # -----------------------------------------
+    # Example 4: Single-field Variants
+    # Single field also uses _0 format
+    # -----------------------------------------
+    println("\n4. Single-field Variants:")
+
+    successJson = jsonParse("{\"Success\": {\"_0\": \"Operation completed\"}}")
+    result1 = fromJson[ApiResult](successJson)
+    println("   Result 1: " ++ show(result1))
+
+    circleJson = jsonParse("{\"Circle\": {\"_0\": 5.0}}")
+    shape1 = fromJson[Shape](circleJson)
+    println("   Shape 1: " ++ show(shape1))
+
+    # -----------------------------------------
+    # Example 5: Multi-field Variants
+    # Multiple fields use _0, _1, etc.
+    # -----------------------------------------
+    println("\n5. Multi-field Variants:")
+
+    errorJson = jsonParse("{\"Error\": {\"_0\": 404, \"_1\": \"Not found\"}}")
+    result2 = fromJson[ApiResult](errorJson)
+    println("   Result 2: " ++ show(result2))
+
+    rectJson = jsonParse("{\"Rectangle\": {\"_0\": 10.0, \"_1\": 20.0}}")
+    shape2 = fromJson[Shape](rectJson)
+    println("   Shape 2: " ++ show(shape2))
+
+    pointJson = jsonParse("{\"Point\": null}")
+    shape3 = fromJson[Shape](pointJson)
+    println("   Shape 3: " ++ show(shape3))
+
+    # -----------------------------------------
+    # Example 6: Lists
+    # -----------------------------------------
+    println("\n6. Lists:")
+    teamJson = jsonParse("{\"members\": [{\"name\": \"Alice\", \"age\": 30}, {\"name\": \"Bob\", \"age\": 25}, {\"name\": \"Charlie\", \"age\": 35}]}")
+    team = fromJson[Team](teamJson)
+    println("   Team size: " ++ show(length(team.members)))
+    team.members.map(m => println("   - " ++ m.name))
+
+    # -----------------------------------------
+    # Example 7: Tuples
+    # Tuples are represented as JSON arrays
+    # -----------------------------------------
+    println("\n7. Tuples:")
+    coordJson = jsonParse("{\"point\": [10, 20], \"label\": \"Origin\"}")
+    coord = fromJson[Coordinate](coordJson)
+    (x, y) = coord.point
+    println("   Point: (" ++ show(x) ++ ", " ++ show(y) ++ ") - " ++ coord.label)
+
+    # -----------------------------------------
+    # Example 8: Error Handling
+    # -----------------------------------------
+    println("\n8. Error Handling:")
+
+    badJson = jsonParse("{\"name\": \"Alice\"}")  # Missing 'age' field
+    result = try {
+        p = fromJson[Person](badJson)
+        "Got person: " ++ p.name
+    } catch e -> "Error: " ++ e end
+    println("   " ++ result)
+
+    println("\n=== All examples completed! ===")
+}

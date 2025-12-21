@@ -1,0 +1,110 @@
+# JSON API Examples
+# Demonstrates practical JSON handling with HTTP APIs
+
+# ===========================================
+# Type Definitions for API Responses
+# ===========================================
+
+# IP lookup response
+type IpInfo = { origin: String }
+
+# Generic API response wrapper
+type ApiResponse[T] = Ok(T) | ApiError(Int, String)
+
+# User request type
+type CreateUserRequest = { name: String, email: String, roles: List[String], settings: UserSettings }
+
+type UserSettings = { theme: String, notifications: Bool }
+
+type SafeResult = Found(IpInfo) | NotFound | NetworkError(String)
+
+# ===========================================
+# Main Examples
+# ===========================================
+
+main() = {
+    println("=== JSON API Examples ===\n")
+
+    # -----------------------------------------
+    # Example 1: Simple GET with Type Conversion
+    # -----------------------------------------
+    println("1. Fetching IP Address:")
+
+    (status, resp) = Http.get("https://httpbin.org/ip")
+    if status == "ok" then {
+        json = jsonParse(resp.body)
+        ipInfo = fromJson[IpInfo](json)
+        println("   Your IP: " ++ ipInfo.origin)
+    } else {
+        println("   Failed to fetch IP")
+    }
+
+    # -----------------------------------------
+    # Example 2: Working with HTTP Headers
+    # -----------------------------------------
+    println("\n2. HTTP Headers Response:")
+
+    (status2, resp2) = Http.get("https://httpbin.org/headers")
+    if status2 == "ok" then {
+        # Show first 100 chars of headers response
+        println("   Headers received: " ++ String.substring(resp2.body, 0, 100) ++ "...")
+    } else {
+        println("   Failed to fetch headers")
+    }
+
+    # -----------------------------------------
+    # Example 3: POST with JSON Body
+    # -----------------------------------------
+    println("\n3. POST Request with JSON:")
+
+    # Create request body using a Map
+    requestData = %{"message": "Hello from Nostos!", "timestamp": "2024-01-15"}
+    requestJson = jsonStringify(reflect(requestData))
+
+    (status3, resp3) = Http.post("https://httpbin.org/post", requestJson)
+
+    if status3 == "ok" then {
+        println("   POST successful!")
+        println("   Response (truncated): " ++ String.substring(resp3.body, 0, 150) ++ "...")
+    } else {
+        println("   POST failed")
+    }
+
+    # -----------------------------------------
+    # Example 4: Error Handling Pattern
+    # -----------------------------------------
+    println("\n4. Error Handling Pattern:")
+
+    # Using try-catch for safe HTTP requests
+    safeResult = try {
+        (s, r) = Http.get("https://httpbin.org/ip")
+        if s == "ok" then {
+            j = jsonParse(r.body)
+            Found(fromJson[IpInfo](j))
+        } else {
+            NotFound
+        }
+    } catch e -> NetworkError(e) end
+
+    match safeResult
+        Found(info) -> println("   Safe fetch succeeded: " ++ info.origin)
+        NotFound -> println("   Resource not found")
+        NetworkError(e) -> println("   Network error: " ++ e)
+    end
+
+    # -----------------------------------------
+    # Example 5: Building Complex JSON Requests
+    # -----------------------------------------
+    println("\n5. Complex JSON Request Building:")
+
+    newUser = CreateUserRequest("New User", "newuser@example.com", ["user", "editor"], UserSettings("dark", true))
+
+    requestBody = jsonStringify(reflect(newUser))
+    println("   Request body:")
+    println("   " ++ requestBody)
+
+    # In real code, you would send this:
+    # (status, resp) = Http.post("https://api.example.com/users", requestBody, headers)
+
+    println("\n=== API examples completed! ===")
+}

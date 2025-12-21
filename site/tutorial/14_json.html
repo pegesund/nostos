@@ -161,7 +161,7 @@ main() = {
 
                 <!-- Variants / Sum Types -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Variants (Sum Types)</h2>
-                <p class="text-slate-400 mb-4">Variants use a JSON object with the constructor name as the key. Single-field variants use the value directly; multi-field use <code>_0</code>, <code>_1</code>, etc.</p>
+                <p class="text-slate-400 mb-4">Variants use a JSON object with the constructor name as the key. Fields use <code>_0</code>, <code>_1</code>, etc. for positional values. Unit variants (no fields) use <code>null</code> or empty object.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">type Result = Ok(Int) | Err(String)
 
@@ -169,25 +169,25 @@ getValue(Ok(n)) = n
 getValue(Err(_)) = 0
 
 main() = {
-    # Ok(42) is represented as: {"Ok": 42}
-    json = jsonParse("{\"Ok\": 42}")
+    # Ok(42) is represented as: {"Ok": {"_0": 42}}
+    json = jsonParse("{\"Ok\": {\"_0\": 42}}")
     result = fromJson[Result](json)
 
     println(getValue(result))  # 42
 
-    # Err("fail") is: {"Err": "something went wrong"}
-    json2 = jsonParse("{\"Err\": \"something went wrong\"}")
+    # Err("fail") is: {"Err": {"_0": "something went wrong"}}
+    json2 = jsonParse("{\"Err\": {\"_0\": \"something went wrong\"}}")
     result2 = fromJson[Result](json2)
     println(tagOf(result2))  # "Err"
 }
 
-# Multi-field variants use _0, _1:
+# Multi-field variants use _0, _1, _2...:
 type Coord = Point(Int, Int)
 # Point(10, 20) is: {"Point": {"_0": 10, "_1": 20}}
 
-# Unit variants (no payload) use null:
+# Unit variants (no payload) use null or empty object:
 type Status = Active | Pending | Done
-# Active is: {"Active": null}</code></pre>
+# Active is: {"Active": null} or {"Active": {}}</code></pre>
                 </div>
 
                 <!-- Error Handling -->

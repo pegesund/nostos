@@ -995,24 +995,24 @@ type Pair = { data: (Int, String) }
 
 ### JSON Format for Variants
 
-Variants use a JSON object with the constructor name as the key:
+Variants use a JSON object with the constructor name as the key. All fields use `_0`, `_1`, etc. for positional values:
 
 ```nos
 type Result = Ok(Int) | Err(String)
 
-# Ok(42) is represented as: {"Ok": 42}
-# Err("fail") is represented as: {"Err": "fail"}
+# Ok(42) is represented as: {"Ok": {"_0": 42}}
+# Err("fail") is represented as: {"Err": {"_0": "fail"}}
 
-json = jsonParse("{\"Ok\": 42}")
+json = jsonParse("{\"Ok\": {\"_0\": 42}}")
 result = fromJson[Result](json)  # Ok(42)
 
-# Multi-field variants use _0, _1, etc:
+# Multi-field variants use _0, _1, _2...:
 type Point = Coord(Int, Int)
 # Coord(10, 20) is: {"Coord": {"_0": 10, "_1": 20}}
 
-# Unit variants (no payload) use null:
+# Unit variants (no payload) use null or empty object:
 type Status = Active | Pending | Done
-# Active is: {"Active": null}
+# Active is: {"Active": null} or {"Active": {}}
 ```
 
 ### Error Handling

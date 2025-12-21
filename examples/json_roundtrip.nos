@@ -1,0 +1,123 @@
+# JSON Round-Trip Examples
+# Demonstrates converting Nostos values to JSON and back
+
+# ===========================================
+# Type Definitions
+# ===========================================
+
+type User = { id: Int, name: String, email: String, active: Bool }
+
+type Config = { debug: Bool, maxRetries: Int, timeout: Float, endpoints: List[String] }
+
+type Message = Text(String) | Image(String, Int, Int) | Deleted
+
+type Post = { title: String, author: User, tags: List[String] }
+
+# ===========================================
+# Helper for comparing
+# ===========================================
+
+showUser(u: User) =
+    "User(" ++ show(u.id) ++ ", " ++ u.name ++ ", " ++ u.email ++ ", " ++ show(u.active) ++ ")"
+
+# ===========================================
+# Examples
+# ===========================================
+
+main() = {
+    println("=== JSON Round-Trip Examples ===\n")
+
+    # -----------------------------------------
+    # Example 1: Record Round-Trip
+    # -----------------------------------------
+    println("1. Record Round-Trip:")
+
+    # Create a user (positional constructor)
+    user = User(42, "Alice", "alice@example.com", true)
+    println("   Original: " ++ showUser(user))
+
+    # Convert to JSON using reflect()
+    userJson = reflect(user)
+    jsonStr = jsonStringify(userJson)
+    println("   JSON: " ++ jsonStr)
+
+    # Parse back to typed value
+    parsed = jsonParse(jsonStr)
+    user2 = fromJson[User](parsed)
+    println("   Restored: " ++ showUser(user2))
+
+    # Verify equality
+    println("   Equal: " ++ show(user == user2))
+
+    # -----------------------------------------
+    # Example 2: Config with List
+    # -----------------------------------------
+    println("\n2. Config with List:")
+
+    config = Config(true, 3, 30.5, ["https://api1.example.com", "https://api2.example.com"])
+    println("   Debug: " ++ show(config.debug))
+    println("   Endpoints: " ++ show(config.endpoints))
+
+    # Round-trip
+    configJson = jsonStringify(reflect(config))
+    println("   JSON: " ++ configJson)
+
+    config2 = fromJson[Config](jsonParse(configJson))
+    println("   Restored debug: " ++ show(config2.debug))
+    println("   Equal: " ++ show(config == config2))
+
+    # -----------------------------------------
+    # Example 3: Variants Round-Trip
+    # -----------------------------------------
+    println("\n3. Variants Round-Trip:")
+
+    # Text message
+    msg1 = Text("Hello, World!")
+    json1 = jsonStringify(reflect(msg1))
+    println("   Text JSON: " ++ json1)
+    restored1 = fromJson[Message](jsonParse(json1))
+    println("   Equal: " ++ show(msg1 == restored1))
+
+    # Image message (multi-field variant)
+    msg2 = Image("https://example.com/img.png", 800, 600)
+    json2 = jsonStringify(reflect(msg2))
+    println("   Image JSON: " ++ json2)
+    restored2 = fromJson[Message](jsonParse(json2))
+    println("   Equal: " ++ show(msg2 == restored2))
+
+    # Deleted (unit variant)
+    msg3 = Deleted
+    json3 = jsonStringify(reflect(msg3))
+    println("   Deleted JSON: " ++ json3)
+    restored3 = fromJson[Message](jsonParse(json3))
+    println("   Equal: " ++ show(msg3 == restored3))
+
+    # -----------------------------------------
+    # Example 4: Nested Structures
+    # -----------------------------------------
+    println("\n4. Nested Structures:")
+
+    post = Post("Introduction to Nostos", User(1, "Bob", "bob@example.com", true), ["programming", "functional", "nostos"])
+
+    postJson = jsonStringify(reflect(post))
+    println("   Post JSON (truncated): " ++ String.substring(postJson, 0, 80) ++ "...")
+
+    post2 = fromJson[Post](jsonParse(postJson))
+    println("   Author restored: " ++ post2.author.name)
+    println("   Tags restored: " ++ show(post2.tags))
+    println("   Equal: " ++ show(post == post2))
+
+    # -----------------------------------------
+    # Example 5: Working with External JSON
+    # -----------------------------------------
+    println("\n5. Parsing External JSON Format:")
+
+    # JSON that might come from an external API
+    externalJson = "{\"id\": 100, \"name\": \"External User\", \"email\": \"external@api.com\", \"active\": false}"
+
+    externalUser = fromJson[User](jsonParse(externalJson))
+    println("   Parsed external user: " ++ externalUser.name)
+    println("   Active: " ++ show(externalUser.active))
+
+    println("\n=== All round-trip tests passed! ===")
+}
