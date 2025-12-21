@@ -9490,4 +9490,176 @@ main() = {
         println!("Result: {:?}", result);
         assert!(result.is_ok(), "Valid constructor should pass: {:?}", result);
     }
+
+    #[test]
+    fn test_user_scenario_yess_unknown() {
+        // Reproduce exact user scenario: Yess should fail when only Yes|No defined
+        // TUI loads stdlib, so we should too
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Include helper functions like real TUI would have
+        let code = r#"
+type Maybe = Yes | No
+
+serverLoop(s) = s
+clientRequest(me, path) = path
+collectResponses(a, b) = a + b
+
+main() = {
+  println("test")
+  (status, server) = Server.bind(8888)
+  spawn { serverLoop(server) }
+  sleep(50)
+  me = self()
+  spawn { clientRequest(me, "/") }
+  completed = collectResponses(0, 5)
+  x = Yes
+  status.contains(1)
+  y = Yess
+  Server.close(server)
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        // Should catch either Yess (unknown constructor) or contains wrong arity
+        assert!(result.is_err(), "Expected error for Yess or wrong arity");
+    }
+
+    #[test]
+    fn test_status_contains_single_arg() {
+        // status.contains(1) should still be wrong - String.contains expects a String arg
+        // But for unknown type, we allow any single arg
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+foo() = ("ok", 123)
+main() = {
+  (status, _) = foo()
+  status.contains(1)
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        // With unknown type and 1 arg, this should pass (we don't check arg types)
+        assert!(result.is_ok(), "Unknown type with 1 arg should pass arity check");
+    }
+
+    #[test]
+    fn test_exact_user_code_yess() {
+        // Exact FULL module from user with Yess typo
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        let code = r#"# HTTP Server Example
+type Maybe = Yes | No
+
+# Route handler - determines response based on path
+handleRoute(method, path, body) = {
+  if path == "/" then
+    (200, "Welcome to Nostos HTTP Server!")
+  else if path == "/hello" then
+    (200, "Hello, World!")
+  else if path == "/echo" then
+    (200, body)
+  else if path == "/json" then
+    (200, "{\"status\": \"ok\", \"message\": \"Hello from Nostos\"}")
+  else
+    (404, "Not Found: " ++ path)
+}
+
+# Server loop - accepts requests and dispatches to handler
+serverLoop(server) = {
+  (status, req) = Server.accept(server)
+  (statusCode, responseBody) = handleRoute(req.method, req.path, req.body)
+  headers = [("Content-Type", "text/plain")]
+  Server.respond(req.id, statusCode, headers, responseBody)
+  serverLoop(server)
+}
+
+# Client that makes a request to the server
+clientRequest(parent, path) = {
+  url = "http://localhost:8888" ++ path
+  (status, response) = Http.get(url)
+  parent <- ("response", path, response.status)
+}
+
+# Collect responses from client workers
+collectResponses(count, expected) = {
+  if count == expected then
+    count
+  else
+    receive
+      ("response", path, status) -> {
+        print("  ")
+        print(path)
+        print(" -> ")
+        println(status)
+        collectResponses(count + 1, expected)
+      }
+    after 5000 ->
+      count
+    end
+}
+
+# Main - demonstrates server + client in same VM
+main() = {
+  println("=== HTTP Server Example ===")
+  println("")
+  println("Server API:")
+  println("  Server.bind(port) -> (status, handle)")
+  println("  Server.accept(handle) -> (status, request)")
+  println("  Server.respond(reqId, status, headers, body)")
+  println("  Server.close(handle)")
+  println("")
+
+  # Step 1: Bind to port
+  (status, server) = Server.bind(8888)
+  println("Server started on http://localhost:8888")
+  println("")
+
+  # Step 2: Spawn server loop in background process
+  spawn { serverLoop(server) }
+
+  # Give server time to start accepting
+  sleep(50)
+
+  # Step 3: Make concurrent client requests from same VM
+  println("Making client requests...")
+  me = self()
+
+  spawn { clientRequest(me, "/") }
+  spawn { clientRequest(me, "/hello") }
+  spawn { clientRequest(me, "/echo") }
+  spawn { clientRequest(me, "/json") }
+  spawn { clientRequest(me, "/notfound") }
+
+  # Collect all responses
+  completed = collectResponses(0, 5)
+
+  println("")
+  print("Completed ")
+  print(completed)
+  println(" requests")
+
+  x = Yes
+
+  status.contains(1)
+  y = Yess
+
+  if completed == 5 then
+    println("SUCCESS! Server and clients work in same VM!")
+  else
+    println("Some requests failed")
+
+  # Clean up
+  Server.close(server)
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for Yess constructor");
+        let err = result.unwrap_err();
+        println!("Error: {}", err);
+        assert!(err.contains("Yess") || err.contains("unknown constructor"), "Error should mention Yess");
+    }
 }
