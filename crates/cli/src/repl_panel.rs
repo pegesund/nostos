@@ -349,7 +349,14 @@ impl ReplPanel {
     fn finalize_entry(&mut self) {
         // Move current to history and start fresh
         self.history.push(self.current.clone());
-        self.command_history.push(self.current.input.clone());
+
+        // Add to command history only if non-empty and not a duplicate of the last entry
+        let input = &self.current.input;
+        let is_empty = input.is_empty() || (input.len() == 1 && input[0].trim().is_empty());
+        let is_duplicate = self.command_history.last() == Some(input);
+        if !is_empty && !is_duplicate {
+            self.command_history.push(input.clone());
+        }
         self.current = ReplEntry::new();
         self.cursor = (0, 0);
 
