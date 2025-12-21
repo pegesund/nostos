@@ -1178,10 +1178,10 @@ fn process_panel_commands(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>) {
 fn open_repl_panel(s: &mut Cursive) {
     let can_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let mut state = state.borrow_mut();
-        // Limit total windows (Console + editors + REPLs) to 6
+        // Limit total windows (Console + editors + REPLs) to 12 (2 rows of 6)
         let total = 1 + state.open_editors.len() + state.open_repls.len();
-        if total >= 6 {
-            return Err("Max 6 windows");
+        if total >= 12 {
+            return Err("Max 12 windows");
         }
         let id = state.next_repl_id;
         state.next_repl_id += 1;
@@ -2018,8 +2018,8 @@ fn open_editor(s: &mut Cursive, name: &str) {
         if state.open_editors.contains(&name_owned) {
             return Err("Editor already open");
         }
-        if state.open_editors.len() >= 5 { // 5 editors + 1 console = 6 windows max
-            return Err("Max 6 windows");
+        if state.open_editors.len() >= 11 { // 11 editors + 1 console = 12 windows max
+            return Err("Max 12 windows");
         }
         state.open_editors.push(name_owned.clone());
         Ok(())
@@ -3024,8 +3024,8 @@ fn open_variable_viewer(s: &mut Cursive, name: &str, mutable: bool, value: &str)
         if state.open_editors.contains(&viewer_name) {
             return Err("Viewer already open");
         }
-        if state.open_editors.len() >= 5 {
-            return Err("Max 6 windows");
+        if state.open_editors.len() >= 11 {
+            return Err("Max 12 windows");
         }
         state.open_editors.push(viewer_name.clone());
         Ok(())
