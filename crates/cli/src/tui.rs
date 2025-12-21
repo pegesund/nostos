@@ -824,7 +824,8 @@ fn rebuild_workspace(s: &mut Cursive) {
             rebuild_workspace(s);
         });
 
-    let console = ActiveWindow::new(repl_log_with_events, "Console").full_width();
+    // Console is smaller and shrinks first - use max_width to limit size
+    let console = ActiveWindow::new(repl_log_with_events, "Console").max_width(60);
 
     // Collect all window views: editors + REPL panels + inspector (if open)
     let mut windows: Vec<Box<dyn View>> = Vec::new();
@@ -2930,7 +2931,8 @@ fn rebuild_workspace_with_viewer(s: &mut Cursive, viewer_name: &str, viewer_cont
             }
         });
 
-    let console = ActiveWindow::new(repl_log_with_events, "Console").full_width();
+    // Console is smaller and shrinks first - use max_width to limit size
+    let console = ActiveWindow::new(repl_log_with_events, "Console").max_width(60);
 
     if total_windows <= 3 {
         let mut row = LinearLayout::horizontal().child(console);
