@@ -3121,6 +3121,73 @@ impl ReplEngine {
                         None
                     }
                 }
+                Expr::MethodCall(receiver, method, _, _) => {
+                    // Infer return type based on receiver type and method
+                    let receiver_type = infer_expr_type(receiver, local_types);
+                    if let Some(recv_type) = receiver_type {
+                        infer_method_return_type(&recv_type, &method.node)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        }
+
+        // Infer return type of a method call based on receiver type and method name
+        fn infer_method_return_type(receiver_type: &str, method: &str) -> Option<String> {
+            match receiver_type {
+                "List" => {
+                    // List methods that return List
+                    const LIST_TO_LIST: &[&str] = &[
+                        "map", "filter", "take", "drop", "reverse", "sort",
+                        "concat", "flatten", "unique", "takeWhile", "dropWhile",
+                        "zip", "zipWith", "interleave", "group", "scanl",
+                        "init", "push", "remove", "removeAt", "insertAt",
+                        "set", "slice", "findIndices", "tail", "enumerate",
+                        "partition", "span",
+                    ];
+                    // List methods that return Bool
+                    const LIST_TO_BOOL: &[&str] = &["any", "all", "contains", "isEmpty"];
+                    // List methods that return Int
+                    const LIST_TO_INT: &[&str] = &["count", "length"];
+
+                    if LIST_TO_LIST.contains(&method) {
+                        Some("List".to_string())
+                    } else if LIST_TO_BOOL.contains(&method) {
+                        Some("Bool".to_string())
+                    } else if LIST_TO_INT.contains(&method) {
+                        Some("Int".to_string())
+                    } else {
+                        None
+                    }
+                }
+                "String" => {
+                    // String methods that return String
+                    const STR_TO_STR: &[&str] = &[
+                        "trim", "trimStart", "trimEnd", "toUpper", "toLower",
+                        "replace", "replaceAll", "substring", "repeat",
+                        "padStart", "padEnd", "reverse",
+                    ];
+                    // String methods that return Int
+                    const STR_TO_INT: &[&str] = &["length", "indexOf", "lastIndexOf"];
+                    // String methods that return Bool
+                    const STR_TO_BOOL: &[&str] = &["contains", "startsWith", "endsWith", "isEmpty"];
+                    // String methods that return List
+                    const STR_TO_LIST: &[&str] = &["chars", "lines", "words"];
+
+                    if STR_TO_STR.contains(&method) {
+                        Some("String".to_string())
+                    } else if STR_TO_INT.contains(&method) {
+                        Some("Int".to_string())
+                    } else if STR_TO_BOOL.contains(&method) {
+                        Some("Bool".to_string())
+                    } else if STR_TO_LIST.contains(&method) {
+                        Some("List".to_string())
+                    } else {
+                        None
+                    }
+                }
                 _ => None,
             }
         }
@@ -8635,5 +8702,26 @@ mod check_module_tests {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_ok(), "Should compile without errors: {:?}", result);
+    }
+
+    #[test]
+    fn test_chained_method_call_invalid() {
+        // x.map(...).xxx() - map returns List, so .xxx() should fail with List.xxx
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = { x = [1]; x.map(y => y * 2).xxx() }";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for List.xxx on chained call");
+        assert!(result.unwrap_err().contains("List.xxx"), "Error should mention List.xxx");
+    }
+
+    #[test]
+    fn test_chained_method_call_valid() {
+        // x.map(...).filter(...) - both return List, should be valid
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = { x = [1]; x.map(y => y * 2).filter(y => y > 0) }";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Chained List methods should be valid: {:?}", result);
     }
 }

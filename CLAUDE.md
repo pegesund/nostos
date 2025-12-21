@@ -147,3 +147,35 @@ done
 - `count` -> use `countList` (stdlib.list.count)
 - `flatten` -> use `flattenList` (stdlib.list.flatten)
 - `interleave` -> use custom name (stdlib.list.interleave)
+
+### Testing Editor/REPL Compile Checking
+
+When working on the TUI editor's compile checking (live error detection), **do NOT debug by manually testing in the TUI**. Instead, write Rust unit tests that call the same function the editor uses.
+
+**Location:** `crates/repl/src/engine.rs` - module `check_module_tests`
+
+**How to test:**
+```rust
+#[test]
+fn test_your_scenario() {
+    let engine = ReplEngine::new(ReplConfig::default());
+    let code = "main() = { x = [1]; x.map(y => y * 2).xxx() }";
+    let result = engine.check_module_compiles("", code);
+    println!("Result: {:?}", result);
+    assert!(result.is_err(), "Expected error");
+    assert!(result.unwrap_err().contains("List.xxx"));
+}
+```
+
+**Run tests:**
+```bash
+cargo test --release -p nostos-repl check_module_tests -- --nocapture
+```
+
+**Why this approach:**
+1. Tests use the exact same `check_module_compiles` function as the TUI editor
+2. Fast iteration - no need to start/stop the TUI
+3. Can add debug output with `println!` and `--nocapture`
+4. Tests document expected behavior and prevent regressions
+
+**Key function:** `ReplEngine::check_module_compiles(&self, module_name: &str, content: &str) -> Result<(), String>`
