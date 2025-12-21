@@ -629,6 +629,14 @@ impl CodeEditor {
         self.saved_content = self.get_content();
     }
 
+    /// Set the compile error status directly (for Ctrl+E compile feedback)
+    pub fn set_compile_error(&mut self, error: Option<String>) {
+        match error {
+            Some(msg) => self.compile_status = CompileStatus::CompileError(msg),
+            None => self.compile_status = CompileStatus::Ok,
+        }
+    }
+
     /// Get the number of characters in a line
     fn line_char_count(&self, line_idx: usize) -> usize {
         self.content[line_idx].chars().count()
