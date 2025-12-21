@@ -126,6 +126,12 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Http.get", signature: "String -> Result HttpResponse String", doc: "HTTP GET request" },
     BuiltinInfo { name: "Http.request", signature: "HttpRequest -> Result HttpResponse String", doc: "HTTP request with full options" },
 
+    // === HTTP Server ===
+    BuiltinInfo { name: "Server.bind", signature: "Int -> (String, Int)", doc: "Start HTTP server on port, returns (status, handle)" },
+    BuiltinInfo { name: "Server.accept", signature: "Int -> (String, Request)", doc: "Accept next request on server handle" },
+    BuiltinInfo { name: "Server.respond", signature: "Int -> Int -> [(String, String)] -> String -> ()", doc: "Send response: respond(reqId, status, headers, body)" },
+    BuiltinInfo { name: "Server.close", signature: "Int -> ()", doc: "Close server handle" },
+
     // === Process Introspection ===
     BuiltinInfo { name: "Process.all", signature: "() -> [Pid]", doc: "Get list of all process IDs on this thread" },
     BuiltinInfo { name: "Process.time", signature: "Pid -> Int", doc: "Get process uptime in milliseconds (-1 if not found)" },

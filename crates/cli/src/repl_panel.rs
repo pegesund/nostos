@@ -726,7 +726,13 @@ impl ReplPanel {
 
         // Position popup below cursor line
         let popup_y = cursor_screen_y + 1;
-        let popup_x = prompt_width + self.cursor.0.saturating_sub(self.scroll_offset.0);
+        let cursor_x = prompt_width + self.cursor.0.saturating_sub(self.scroll_offset.0);
+        // Clamp popup_x so the popup doesn't go off the right edge of the screen
+        let popup_x = if cursor_x + popup_width > printer.size.x {
+            printer.size.x.saturating_sub(popup_width)
+        } else {
+            cursor_x
+        };
 
         // Draw popup background
         let bg_style = Style::from(ColorStyle::new(

@@ -4383,6 +4383,29 @@ mod tests {
     }
 
     #[test]
+    fn test_get_variable_type_for_server_bind() {
+        use nostos_compiler::Compiler;
+
+        // First verify the builtin signature is available
+        let sig = Compiler::get_builtin_signature("Server.bind");
+        assert!(sig.is_some(), "Server.bind should have a builtin signature");
+        let sig_str = sig.unwrap();
+        assert!(sig_str.contains("->"), "Signature should have arrow: {}", sig_str);
+
+        // Test the return type extraction
+        let return_type = ReplEngine::get_builtin_return_type("Server.bind(8888)");
+        assert!(return_type.is_some(), "Should extract return type from Server.bind");
+        let ret = return_type.unwrap();
+        assert!(ret.starts_with('('), "Return type should be tuple: {}", ret);
+
+        // Test tuple element extraction
+        let elements = ReplEngine::extract_tuple_element_types(&ret);
+        assert_eq!(elements.len(), 2, "Should have 2 tuple elements: {:?}", elements);
+        assert_eq!(elements[0], "String", "First element should be String");
+        assert_eq!(elements[1], "Int", "Second element should be Int");
+    }
+
+    #[test]
     fn test_get_variable_type_for_map() {
         let config = ReplConfig { enable_jit: false, num_threads: 1 };
         let mut engine = ReplEngine::new(config);

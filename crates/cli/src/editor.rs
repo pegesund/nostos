@@ -4,18 +4,193 @@ use cursive::view::{View, CannotFocus};
 use cursive::direction::Direction;
 use cursive::{Printer, Vec2, Rect};
 use nostos_syntax::lexer::{Token, lex};
+use nostos_compiler::Compiler;
 use std::rc::Rc;
 use std::cell::RefCell;
 use nostos_repl::ReplEngine;
 
 use crate::autocomplete::{Autocomplete, CompletionContext, CompletionItem, CompletionSource, parse_imports, extract_module_from_editor_name};
 
-/// Wrapper to implement CompletionSource for ReplEngine
-struct EngineCompletionSource<'a> {
+/// Wrapper to implement CompletionSource for ReplEngine with local variable inference
+struct EditorCompletionSource<'a> {
     engine: &'a ReplEngine,
+    /// Current buffer content for local variable inference
+    buffer_content: &'a str,
 }
 
-impl<'a> CompletionSource for EngineCompletionSource<'a> {
+impl<'a> EditorCompletionSource<'a> {
+    /// Infer type of a local variable from the buffer content
+    fn infer_local_var_type(&self, var_name: &str) -> Option<String> {
+        // Look for patterns like:
+        // 1. Simple binding: `varname = expr`
+        // 2. Tuple destructuring: `(varname, ...) = expr` or `(..., varname) = expr`
+
+        for line in self.buffer_content.lines() {
+            let trimmed = line.trim();
+
+            // Skip comments
+            if trimmed.starts_with('#') {
+                continue;
+            }
+
+            // Check for tuple destructuring: (a, b, ...) = expr
+            if let Some(type_from_tuple) = self.check_tuple_binding(trimmed, var_name) {
+                return Some(type_from_tuple);
+            }
+
+            // Check for simple binding: varname = expr
+            if let Some(type_from_simple) = self.check_simple_binding(trimmed, var_name) {
+                return Some(type_from_simple);
+            }
+        }
+
+        None
+    }
+
+    /// Check if line is a tuple binding containing var_name and infer its type
+    fn check_tuple_binding(&self, line: &str, var_name: &str) -> Option<String> {
+        // Pattern: (name1, name2, ...) = expr
+        if !line.starts_with('(') {
+            return None;
+        }
+
+        // Find the = sign (must be after closing paren)
+        let close_paren = line.find(')')?;
+        let after_paren = &line[close_paren + 1..].trim_start();
+
+        if !after_paren.starts_with('=') || after_paren.starts_with("==") {
+            return None;
+        }
+
+        let expr = after_paren[1..].trim();
+        if expr.is_empty() {
+            return None;
+        }
+
+        // Parse the tuple pattern to find var_name's position
+        let pattern = &line[1..close_paren];
+        let names: Vec<&str> = pattern.split(',').map(|s| s.trim()).collect();
+
+        let position = names.iter().position(|&n| n == var_name)?;
+
+        // Get the tuple's return type from the expression
+        let tuple_type = self.infer_expr_type(expr)?;
+
+        // Extract element at position
+        Self::extract_tuple_element(&tuple_type, position)
+    }
+
+    /// Check if line is a simple binding for var_name and infer its type
+    fn check_simple_binding(&self, line: &str, var_name: &str) -> Option<String> {
+        // Pattern: varname = expr (but not ==)
+        // Must start with the variable name followed by optional whitespace and =
+
+        let parts: Vec<&str> = line.splitn(2, '=').collect();
+        if parts.len() != 2 {
+            return None;
+        }
+
+        let lhs = parts[0].trim();
+        let rhs = parts[1];
+
+        // Make sure it's not == comparison
+        if rhs.starts_with('=') {
+            return None;
+        }
+
+        // LHS must be exactly the variable name (or var varname)
+        let actual_name = lhs.strip_prefix("var ").unwrap_or(lhs).trim();
+        if actual_name != var_name {
+            return None;
+        }
+
+        let expr = rhs.trim();
+        self.infer_expr_type(expr)
+    }
+
+    /// Infer type from an expression
+    fn infer_expr_type(&self, expr: &str) -> Option<String> {
+        let trimmed = expr.trim();
+
+        // Literal detection
+        if trimmed.starts_with('[') {
+            return Some("List".to_string());
+        }
+        if trimmed.starts_with('%') && trimmed.contains('{') {
+            return Some("Map".to_string());
+        }
+        if trimmed.starts_with('#') && trimmed.contains('{') {
+            return Some("Set".to_string());
+        }
+        if trimmed.starts_with('"') {
+            return Some("String".to_string());
+        }
+
+        // Function call: Module.func(...) or func(...)
+        if let Some(paren_pos) = trimmed.find('(') {
+            let func_name = trimmed[..paren_pos].trim();
+
+            // Try builtin signature
+            if let Some(sig) = Compiler::get_builtin_signature(func_name) {
+                if let Some(arrow_pos) = sig.rfind("->") {
+                    return Some(sig[arrow_pos + 2..].trim().to_string());
+                }
+            }
+
+            // Try engine function signature
+            if let Some(sig) = self.engine.get_function_signature(func_name) {
+                if let Some(arrow_pos) = sig.rfind("->") {
+                    return Some(sig[arrow_pos + 2..].trim().to_string());
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Extract element type from a tuple type string at given position
+    fn extract_tuple_element(tuple_type: &str, position: usize) -> Option<String> {
+        let trimmed = tuple_type.trim();
+
+        if !trimmed.starts_with('(') || !trimmed.ends_with(')') {
+            return None;
+        }
+
+        let inner = &trimmed[1..trimmed.len()-1];
+
+        // Parse comma-separated types respecting nesting
+        let mut types = Vec::new();
+        let mut current = String::new();
+        let mut depth = 0;
+
+        for c in inner.chars() {
+            match c {
+                '(' | '{' | '[' | '<' => {
+                    depth += 1;
+                    current.push(c);
+                }
+                ')' | '}' | ']' | '>' => {
+                    depth -= 1;
+                    current.push(c);
+                }
+                ',' if depth == 0 => {
+                    types.push(current.trim().to_string());
+                    current.clear();
+                }
+                _ => current.push(c),
+            }
+        }
+
+        let last = current.trim().to_string();
+        if !last.is_empty() {
+            types.push(last);
+        }
+
+        types.get(position).cloned()
+    }
+}
+
+impl<'a> CompletionSource for EditorCompletionSource<'a> {
     fn get_functions(&self) -> Vec<String> {
         self.engine.get_functions()
     }
@@ -45,7 +220,13 @@ impl<'a> CompletionSource for EngineCompletionSource<'a> {
     }
 
     fn get_variable_type(&self, var_name: &str) -> Option<String> {
-        self.engine.get_variable_type(var_name)
+        // First try REPL variables
+        if let Some(t) = self.engine.get_variable_type(var_name) {
+            return Some(t);
+        }
+
+        // Then try local variable inference from buffer
+        self.infer_local_var_type(var_name)
     }
 }
 
@@ -231,7 +412,7 @@ impl CodeEditor {
         // Initialize autocomplete from engine
         {
             let eng = engine.borrow();
-            let source = EngineCompletionSource { engine: &eng };
+            let source = EditorCompletionSource { engine: &eng, buffer_content: "" };
             self.autocomplete.update_from_source(&source);
         }
         self.engine = Some(engine);
@@ -357,8 +538,9 @@ impl CodeEditor {
         let imports = parse_imports(&full_content);
 
         // Get completions with module context and imports
+        // Use EditorCompletionSource which can infer local variable types from buffer
         let eng = engine.borrow();
-        let source = EngineCompletionSource { engine: &eng };
+        let source = EditorCompletionSource { engine: &eng, buffer_content: &full_content };
 
         // Debug: log available functions
         let funcs = source.get_functions();
@@ -412,7 +594,7 @@ impl CodeEditor {
         };
 
         let eng = engine.borrow();
-        let source = EngineCompletionSource { engine: &eng };
+        let source = EditorCompletionSource { engine: &eng, buffer_content: "" };
 
         // Get all functions from the current module
         let mut candidates: Vec<CompletionItem> = source.get_functions()
@@ -516,7 +698,12 @@ impl CodeEditor {
 
         // Position popup below cursor line
         let popup_y = cursor_screen_y + 1;
-        let popup_x = cursor_screen_x;
+        // Clamp popup_x so the popup doesn't go off the right edge of the screen
+        let popup_x = if cursor_screen_x + popup_width > printer.size.x {
+            printer.size.x.saturating_sub(popup_width)
+        } else {
+            cursor_screen_x
+        };
 
         // Draw popup background
         let bg_style = Style::from(ColorStyle::new(
