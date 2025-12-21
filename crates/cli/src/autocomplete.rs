@@ -597,12 +597,17 @@ impl Autocomplete {
             }
         }
 
-        // Add matching variables
+        // Add matching variables with type signatures
         for var_name in source.get_variables() {
             if var_name.to_lowercase().starts_with(&prefix_lower) {
+                let label = if let Some(var_type) = source.get_variable_type(&var_name) {
+                    format!("{} :: {}", var_name, var_type)
+                } else {
+                    var_name.clone()
+                };
                 items.push(CompletionItem {
                     text: var_name.clone(),
-                    label: var_name,
+                    label,
                     kind: CompletionKind::Variable,
                     doc: None,
                 });
@@ -741,13 +746,18 @@ impl Autocomplete {
             }
         }
 
-        // Add matching variables
+        // Add matching variables with type signatures
         for var_name in source.get_variables() {
             if var_name.to_lowercase().starts_with(&prefix_lower) {
                 if seen.insert(var_name.clone()) {
+                    let label = if let Some(var_type) = source.get_variable_type(&var_name) {
+                        format!("{} :: {}", var_name, var_type)
+                    } else {
+                        var_name.clone()
+                    };
                     items.push(CompletionItem {
                         text: var_name.clone(),
-                        label: var_name,
+                        label,
                         kind: CompletionKind::Variable,
                         doc: None,
                     });
