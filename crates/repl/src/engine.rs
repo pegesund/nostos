@@ -3337,6 +3337,21 @@ impl ReplEngine {
             }
         }
 
+        // Get all valid arities for a method across all known types
+        // Returns empty vec if method is unknown
+        fn get_all_valid_arities(method: &str) -> Vec<usize> {
+            let types = ["String", "List", "Map", "Set"];
+            let mut arities = Vec::new();
+            for ty in &types {
+                if let Some(arity) = get_method_arity(ty, method) {
+                    if !arities.contains(&arity) {
+                        arities.push(arity);
+                    }
+                }
+            }
+            arities
+        }
+
         // Get expected arity for a method (returns None if unknown/variable arity)
         fn get_method_arity(type_name: &str, method: &str) -> Option<usize> {
             match type_name {
@@ -3437,11 +3452,11 @@ impl ReplEngine {
                         _ => infer_expr_type(receiver, local_types, variant_constructors),
                     };
 
-                    if let Some(recv_type) = receiver_type {
-                        let call_name = format!("{}.{}", recv_type, method.node);
-                        // arg count for method = explicit args (receiver is implicit)
-                        calls.push((call_name, span.start, args.len()));
-                    }
+                    // Use "?" as marker for unknown receiver type
+                    let recv_type = receiver_type.unwrap_or_else(|| "?".to_string());
+                    let call_name = format!("{}.{}", recv_type, method.node);
+                    // arg count for method = explicit args (receiver is implicit)
+                    calls.push((call_name, span.start, args.len()));
                     collect_calls(receiver, calls, local_types, variant_constructors);
                     for arg in args {
                         collect_calls(arg, calls, local_types, variant_constructors);
@@ -3613,6 +3628,28 @@ impl ReplEngine {
             if let Some(dot_pos) = call_name.find('.') {
                 let type_name = &call_name[..dot_pos];
                 let method_name = &call_name[dot_pos + 1..];
+
+                // Handle unknown receiver type (marked with "?")
+                if type_name == "?" {
+                    // Check if arity is wrong for ALL known types with this method
+                    let valid_arities = get_all_valid_arities(method_name);
+                    if !valid_arities.is_empty() && !valid_arities.contains(&arg_count) {
+                        let (line, _col) = offset_to_line_col(content, offset);
+                        let expected = if valid_arities.len() == 1 {
+                            format!("{}", valid_arities[0])
+                        } else {
+                            valid_arities.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(" or ")
+                        };
+                        return Err(format!(
+                            "line {}: `{}` expects {} argument{}, got {}",
+                            line, method_name, expected,
+                            if valid_arities.len() == 1 && valid_arities[0] == 1 { "" } else { "s" },
+                            arg_count
+                        ));
+                    }
+                    // Skip further validation for unknown types
+                    continue;
+                }
 
                 // Check arity for known method signatures
                 if let Some(expected_arity) = get_method_arity(type_name, method_name) {
@@ -9230,5 +9267,39 @@ main() = {
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected arity error for List.length with arg");
         assert!(result.unwrap_err().contains("expects 0 arguments"), "Error should mention arity");
+    }
+
+    #[test]
+    fn test_unknown_type_contains_wrong_arity() {
+        // When type is unknown (from tuple destructuring), still check arity
+        // contains takes 1 arg for String, List, Map, Set - so 2 args is always wrong
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+foo() = ("ok", 123)
+main() = {
+  (status, _) = foo()
+  status.contains("x", 1)
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected arity error for unknown type .contains with 2 args");
+        assert!(result.unwrap_err().contains("expects 1 argument"), "Error should mention arity");
+    }
+
+    #[test]
+    fn test_unknown_type_contains_correct_arity() {
+        // When type is unknown but arity is correct, should pass
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+foo() = ("ok", 123)
+main() = {
+  (status, _) = foo()
+  status.contains("x")
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Unknown type with correct arity should pass: {:?}", result);
     }
 }
