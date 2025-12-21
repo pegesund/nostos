@@ -512,17 +512,14 @@ impl CodeEditor {
             None => return,
         };
 
-        let module_name = match &self.module_name {
-            Some(m) => m.clone(),
-            None => return,
-        };
+        // Use empty string for unnamed modules
+        let module_name = self.module_name.clone().unwrap_or_default();
 
         let content = self.content.join("\n");
 
         // Try to compile via the engine
         let eng = engine.borrow();
 
-        // Use the engine's compile check if available
         match eng.check_module_compiles(&module_name, &content) {
             Ok(()) => {
                 self.compile_status = CompileStatus::Ok;
