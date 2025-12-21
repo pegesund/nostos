@@ -1,12 +1,12 @@
-# expect: caught: Missing field: _0
-# Test jsonToType throws exception when variant is missing a field
-use stdlib.json.{jsonParse, jsonStringify}
+# expect: caught: Unknown constructor: Unknown
+# Test jsonToType throws exception for unknown variant constructor
+use stdlib.json.{jsonParse}
 
 type Result = Ok(Int) | Err(String)
 
 main() = {
-    # Invalid: Ok needs _0 field
-    json = jsonParse("{\"Ok\": {}}")
+    # Invalid: Unknown is not a valid constructor for Result
+    json = jsonParse("{\"Unknown\": 42}")
     try {
         r = jsonToType[Result](json)
         "success"

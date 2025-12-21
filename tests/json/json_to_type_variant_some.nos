@@ -7,7 +7,7 @@ getOrDefault(Some(n)) = n
 getOrDefault(None) = 0
 
 main() = {
-    json = jsonParse("{\"Some\": {\"_0\": 100}}")
+    json = jsonParse("{\"Some\": 100}")
     opt = jsonToType[Option](json)
     getOrDefault(opt)
 }

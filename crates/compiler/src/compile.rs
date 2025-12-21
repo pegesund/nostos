@@ -164,7 +164,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "String.length", signature: "String -> Int", doc: "Get string length in characters" },
     BuiltinInfo { name: "String.chars", signature: "String -> [Char]", doc: "Convert string to list of characters" },
     BuiltinInfo { name: "String.from_chars", signature: "[Char] -> String", doc: "Create string from list of characters" },
-    BuiltinInfo { name: "String.toInt", signature: "String -> Option Int", doc: "Parse string as integer, returns None if invalid" },
+    BuiltinInfo { name: "String.toInt", signature: "String -> Int", doc: "Parse string as integer" },
     BuiltinInfo { name: "String.toFloat", signature: "String -> Option Float", doc: "Parse string as float, returns None if invalid" },
     BuiltinInfo { name: "String.trim", signature: "String -> String", doc: "Remove leading and trailing whitespace" },
     BuiltinInfo { name: "String.trimStart", signature: "String -> String", doc: "Remove leading whitespace" },
@@ -247,7 +247,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     // === Map Functions ===
     BuiltinInfo { name: "Map.insert", signature: "Map k v -> k -> v -> Map k v", doc: "Insert key-value pair, returns new map" },
     BuiltinInfo { name: "Map.remove", signature: "Map k v -> k -> Map k v", doc: "Remove key from map, returns new map" },
-    BuiltinInfo { name: "Map.get", signature: "Map k v -> k -> Option v", doc: "Get value for key, returns None if not found" },
+    BuiltinInfo { name: "Map.get", signature: "Map k v -> k -> v", doc: "Get value for key, returns unit if not found" },
     BuiltinInfo { name: "Map.contains", signature: "Map k v -> k -> Bool", doc: "Check if map contains key" },
     BuiltinInfo { name: "Map.keys", signature: "Map k v -> [k]", doc: "Get list of all keys" },
     BuiltinInfo { name: "Map.values", signature: "Map k v -> [v]", doc: "Get list of all values" },
@@ -302,7 +302,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Time.minute", signature: "Int -> Int", doc: "Extract minute (0-59) from timestamp" },
     BuiltinInfo { name: "Time.second", signature: "Int -> Int", doc: "Extract second (0-59) from timestamp" },
     // Type introspection and reflection
-    BuiltinInfo { name: "typeInfo", signature: "String -> Json", doc: "Get type metadata by name as Json (fields, constructors, etc.)" },
+    BuiltinInfo { name: "typeInfo", signature: "String -> Map k v", doc: "Get type metadata by name as Map (fields, constructors, etc.)" },
     BuiltinInfo { name: "typeOf", signature: "a -> String", doc: "Get type name of a value (Int, Float, String, Bool, List, Record, Variant, etc.)" },
     BuiltinInfo { name: "tagOf", signature: "a -> String", doc: "Get variant tag name, or empty string for non-variants" },
     BuiltinInfo { name: "reflect", signature: "a -> Json", doc: "Convert any value to Json type for inspection/serialization" },

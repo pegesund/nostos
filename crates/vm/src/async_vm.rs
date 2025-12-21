@@ -62,7 +62,7 @@ pub enum HeldMvarLock {
 unsafe impl Send for HeldMvarLock {}
 use crate::process::{CallFrame, ExceptionHandler, ProcessState, ThreadSafeValue, ProfileData};
 use crate::value::{FunctionValue, Pid, TypeValue, RefId, RuntimeError, Value};
-use crate::parallel::SendableValue;
+use crate::shared_types::SendableValue;
 use crate::io_runtime::{IoRequest, IoRuntime};
 use crate::process::IoResponseValue;
 
@@ -111,16 +111,16 @@ pub struct AsyncSharedState {
     pub types: RwLock<HashMap<String, Arc<TypeValue>>>,
 
     /// JIT-compiled functions (by arity) - uses RwLock for concurrent eval support.
-    pub jit_int_functions: RwLock<HashMap<u16, crate::parallel::JitIntFn>>,
-    pub jit_int_functions_0: RwLock<HashMap<u16, crate::parallel::JitIntFn0>>,
-    pub jit_int_functions_2: RwLock<HashMap<u16, crate::parallel::JitIntFn2>>,
-    pub jit_int_functions_3: RwLock<HashMap<u16, crate::parallel::JitIntFn3>>,
-    pub jit_int_functions_4: RwLock<HashMap<u16, crate::parallel::JitIntFn4>>,
-    pub jit_loop_array_functions: RwLock<HashMap<u16, crate::parallel::JitLoopArrayFn>>,
+    pub jit_int_functions: RwLock<HashMap<u16, crate::shared_types::JitIntFn>>,
+    pub jit_int_functions_0: RwLock<HashMap<u16, crate::shared_types::JitIntFn0>>,
+    pub jit_int_functions_2: RwLock<HashMap<u16, crate::shared_types::JitIntFn2>>,
+    pub jit_int_functions_3: RwLock<HashMap<u16, crate::shared_types::JitIntFn3>>,
+    pub jit_int_functions_4: RwLock<HashMap<u16, crate::shared_types::JitIntFn4>>,
+    pub jit_loop_array_functions: RwLock<HashMap<u16, crate::shared_types::JitLoopArrayFn>>,
     /// JIT recursive array fill functions (arity 2: arr, idx)
-    pub jit_array_fill_functions: RwLock<HashMap<u16, crate::parallel::JitArrayFillFn>>,
+    pub jit_array_fill_functions: RwLock<HashMap<u16, crate::shared_types::JitArrayFillFn>>,
     /// JIT recursive array sum functions (arity 3: arr, idx, acc)
-    pub jit_array_sum_functions: RwLock<HashMap<u16, crate::parallel::JitArraySumFn>>,
+    pub jit_array_sum_functions: RwLock<HashMap<u16, crate::shared_types::JitArraySumFn>>,
 
     /// Shutdown signal (permanent).
     pub shutdown: AtomicBool,
@@ -165,13 +165,13 @@ pub struct AsyncSharedState {
     pub io_sender: Option<mpsc::UnboundedSender<crate::io_runtime::IoRequest>>,
 
     /// Inspect sender (for sending values to TUI inspector).
-    pub inspect_sender: Option<crate::parallel::InspectSender>,
+    pub inspect_sender: Option<crate::shared_types::InspectSender>,
 
     /// Output sender (for println from any process to TUI console).
-    pub output_sender: Option<crate::parallel::OutputSender>,
+    pub output_sender: Option<crate::shared_types::OutputSender>,
 
     /// Panel command sender (for Panel.* calls from Nostos code).
-    pub panel_command_sender: Option<crate::parallel::PanelCommandSender>,
+    pub panel_command_sender: Option<crate::shared_types::PanelCommandSender>,
 
     /// PID counter for generating unique PIDs.
     pub next_pid: AtomicU64,
@@ -5671,34 +5671,40 @@ impl AsyncProcess {
                 Ok(GcValue::Variant(ptr))
             }
             GcValue::Variant(var_ptr) => {
-                let (constructor, field_names, fields) = self.heap.get_variant(var_ptr)
+                let (constructor, fields) = self.heap.get_variant(var_ptr)
                     .map(|v| {
-                        let type_name = v.type_name.as_ref();
-                        let field_names = self.shared.types.read().unwrap().get(type_name).cloned()
-                            .and_then(|t| t.constructors.iter().find(|c| c.name == *v.constructor).cloned())
-                            .map(|c| c.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>())
-                            .or_else(|| self.shared.dynamic_types.read().unwrap().get(type_name).cloned()
-                                .and_then(|t| t.constructors.iter().find(|c| c.name == *v.constructor).cloned())
-                                .map(|c| c.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>()))
-                            .unwrap_or_else(|| (0..v.fields.len()).map(|i| format!("_{}", i)).collect());
-                        (v.constructor.as_ref().clone(), field_names, v.fields.clone())
+                        (v.constructor.as_ref().clone(), v.fields.clone())
                     })
-                    .unwrap_or_else(|| ("Unknown".to_string(), vec![], vec![]));
+                    .unwrap_or_else(|| ("Unknown".to_string(), vec![]));
 
-                // Create inner object with fields
-                let mut inner_pairs = Vec::new();
-                for (name, value) in field_names.into_iter().zip(fields) {
-                    let json_value = self.value_to_json(value)?;
-                    let name_ptr = self.heap.alloc_string(name);
-                    let tuple_ptr = self.heap.alloc_tuple(vec![GcValue::String(name_ptr), json_value]);
-                    inner_pairs.push(GcValue::Tuple(tuple_ptr));
-                }
-                let inner_list = GcList::from_vec(inner_pairs);
-                let inner_obj = self.heap.alloc_variant(json_type.clone(), Arc::new("Object".to_string()), vec![GcValue::List(inner_list)]);
+                // Determine the inner value based on field count
+                let inner_value = if fields.is_empty() {
+                    // Unit variant: use null
+                    self.heap.alloc_variant(json_type.clone(), Arc::new("Null".to_string()), vec![])
+                } else if fields.len() == 1 {
+                    // Single-field variant: use value directly (no _0 wrapper)
+                    let json_value = self.value_to_json(fields[0].clone())?;
+                    match json_value {
+                        GcValue::Variant(ptr) => ptr,
+                        other => {
+                            // Wrap primitive in appropriate Json variant
+                            return Err(RuntimeError::Panic(format!("Unexpected json value: {:?}", other)));
+                        }
+                    }
+                } else {
+                    // Multi-field variant: use array [val0, val1, ...]
+                    let mut array_items = Vec::new();
+                    for value in fields.into_iter() {
+                        let json_value = self.value_to_json(value)?;
+                        array_items.push(json_value);
+                    }
+                    let array_list = GcList::from_vec(array_items);
+                    self.heap.alloc_variant(json_type.clone(), Arc::new("Array".to_string()), vec![GcValue::List(array_list)])
+                };
 
                 // Create outer object with constructor as key
                 let constructor_ptr = self.heap.alloc_string(constructor);
-                let outer_tuple = self.heap.alloc_tuple(vec![GcValue::String(constructor_ptr), GcValue::Variant(inner_obj)]);
+                let outer_tuple = self.heap.alloc_tuple(vec![GcValue::String(constructor_ptr), GcValue::Variant(inner_value)]);
                 let outer_list = GcList::from_vec(vec![GcValue::Tuple(outer_tuple)]);
                 let ptr = self.heap.alloc_variant(json_type, Arc::new("Object".to_string()), vec![GcValue::List(outer_list)]);
                 Ok(GcValue::Variant(ptr))
@@ -5888,6 +5894,17 @@ impl AsyncProcess {
         }
         entries.insert(GcMapKey::String("constructors".to_string()), GcValue::List(GcList::from_vec(ctor_list)));
 
+        // type_params (for parameterized types like Option[T], Result[T, E])
+        if !type_val.type_params.is_empty() {
+            let param_list: Vec<GcValue> = type_val.type_params.iter()
+                .map(|p| {
+                    let s = self.heap.alloc_string(p.clone());
+                    GcValue::String(s)
+                })
+                .collect();
+            entries.insert(GcMapKey::String("type_params".to_string()), GcValue::List(GcList::from_vec(param_list)));
+        }
+
         let ptr = self.heap.alloc_map(entries);
         Ok(GcValue::Map(ptr))
     }
@@ -5953,17 +5970,30 @@ impl AsyncProcess {
                     vec![],
                 );
                 Ok(GcValue::Variant(var_ptr))
+            } else if ctor.fields.len() == 1 {
+                // Single-field variant: value is directly the field value (no _0 wrapper)
+                let field = &ctor.fields[0];
+                let field_value = self.json_to_primitive(fields_json, &field.type_name)?;
+                let var_ptr = self.heap.alloc_variant(
+                    Arc::new(type_name.to_string()),
+                    Arc::new(ctor_name.clone()),
+                    vec![field_value],
+                );
+                Ok(GcValue::Variant(var_ptr))
             } else {
-                // Variant with fields
-                let field_pairs = self.extract_json_object_pairs(fields_json)?;
-                let mut field_values = Vec::new();
+                // Multi-field variant: uses array [val0, val1, ...]
+                let array_items = self.extract_json_array(fields_json)?;
 
-                for field in &ctor.fields {
-                    let field_json = field_pairs.iter()
-                        .find(|(k, _)| k == &field.name)
-                        .map(|(_, v)| v.clone())
-                        .ok_or_else(|| RuntimeError::Panic(format!("Missing field: {}", field.name)))?;
-                    let field_value = self.json_to_primitive(&field_json, &field.type_name)?;
+                if array_items.len() != ctor.fields.len() {
+                    return Err(RuntimeError::Panic(format!(
+                        "Expected {} fields for {}, got {}",
+                        ctor.fields.len(), ctor_name, array_items.len()
+                    )));
+                }
+
+                let mut field_values = Vec::new();
+                for (i, field) in ctor.fields.iter().enumerate() {
+                    let field_value = self.json_to_primitive(&array_items[i], &field.type_name)?;
                     field_values.push(field_value);
                 }
 
@@ -6019,6 +6049,33 @@ impl AsyncProcess {
                         Ok(pairs)
                     }
                     _ => Err(RuntimeError::Panic("Object fields must be list".to_string())),
+                }
+            }
+            _ => Err(RuntimeError::Panic("Expected Json variant".to_string())),
+        }
+    }
+
+    /// Extract items from a Json Array variant
+    fn extract_json_array(&self, json: &GcValue) -> Result<Vec<GcValue>, RuntimeError> {
+        match json {
+            GcValue::Variant(var_ptr) => {
+                let variant = self.heap.get_variant(var_ptr.clone())
+                    .ok_or_else(|| RuntimeError::Panic("Invalid variant".to_string()))?;
+
+                if variant.constructor.as_ref() != "Array" {
+                    return Err(RuntimeError::Panic(format!(
+                        "Expected Json Array, found {}",
+                        variant.constructor
+                    )));
+                }
+
+                if variant.fields.is_empty() {
+                    return Ok(vec![]);
+                }
+
+                match &variant.fields[0] {
+                    GcValue::List(list) => Ok(list.items().to_vec()),
+                    _ => Err(RuntimeError::Panic("Array field must be list".to_string())),
                 }
             }
             _ => Err(RuntimeError::Panic("Expected Json variant".to_string())),
@@ -6388,49 +6445,49 @@ impl AsyncVM {
     }
 
     /// Register a JIT-compiled function (arity 0) - safe during concurrent evals.
-    pub fn register_jit_int_function_0(&mut self, func_index: u16, jit_fn: crate::parallel::JitIntFn0) {
+    pub fn register_jit_int_function_0(&mut self, func_index: u16, jit_fn: crate::shared_types::JitIntFn0) {
         self.shared.jit_int_functions_0.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
     /// Register a JIT-compiled function (arity 1) - safe during concurrent evals.
-    pub fn register_jit_int_function(&mut self, func_index: u16, jit_fn: crate::parallel::JitIntFn) {
+    pub fn register_jit_int_function(&mut self, func_index: u16, jit_fn: crate::shared_types::JitIntFn) {
         self.shared.jit_int_functions.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
     /// Register a JIT-compiled function (arity 2) - safe during concurrent evals.
-    pub fn register_jit_int_function_2(&mut self, func_index: u16, jit_fn: crate::parallel::JitIntFn2) {
+    pub fn register_jit_int_function_2(&mut self, func_index: u16, jit_fn: crate::shared_types::JitIntFn2) {
         self.shared.jit_int_functions_2.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
     /// Register a JIT-compiled function (arity 3) - safe during concurrent evals.
-    pub fn register_jit_int_function_3(&mut self, func_index: u16, jit_fn: crate::parallel::JitIntFn3) {
+    pub fn register_jit_int_function_3(&mut self, func_index: u16, jit_fn: crate::shared_types::JitIntFn3) {
         self.shared.jit_int_functions_3.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
     /// Register a JIT-compiled function (arity 4) - safe during concurrent evals.
-    pub fn register_jit_int_function_4(&mut self, func_index: u16, jit_fn: crate::parallel::JitIntFn4) {
+    pub fn register_jit_int_function_4(&mut self, func_index: u16, jit_fn: crate::shared_types::JitIntFn4) {
         self.shared.jit_int_functions_4.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
     /// Register a JIT loop array function - safe during concurrent evals.
-    pub fn register_jit_loop_array_function(&mut self, func_index: u16, jit_fn: crate::parallel::JitLoopArrayFn) {
+    pub fn register_jit_loop_array_function(&mut self, func_index: u16, jit_fn: crate::shared_types::JitLoopArrayFn) {
         self.shared.jit_loop_array_functions.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
     /// Register a JIT recursive array fill function (arity 2) - safe during concurrent evals.
-    pub fn register_jit_array_fill_function(&mut self, func_index: u16, jit_fn: crate::parallel::JitArrayFillFn) {
+    pub fn register_jit_array_fill_function(&mut self, func_index: u16, jit_fn: crate::shared_types::JitArrayFillFn) {
         self.shared.jit_array_fill_functions.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
     /// Register a JIT recursive array sum function (arity 3) - safe during concurrent evals.
-    pub fn register_jit_array_sum_function(&mut self, func_index: u16, jit_fn: crate::parallel::JitArraySumFn) {
+    pub fn register_jit_array_sum_function(&mut self, func_index: u16, jit_fn: crate::shared_types::JitArraySumFn) {
         self.shared.jit_array_sum_functions.write().unwrap()
             .insert(func_index, jit_fn);
     }
@@ -6521,7 +6578,7 @@ impl AsyncVM {
 
     /// Setup inspect channel and register inspect native function.
     /// Returns a receiver that will receive InspectEntry messages.
-    pub fn setup_inspect(&mut self) -> crate::parallel::InspectReceiver {
+    pub fn setup_inspect(&mut self) -> crate::shared_types::InspectReceiver {
         let (sender, receiver) = crossbeam::channel::unbounded();
 
         Arc::get_mut(&mut self.shared)
@@ -6541,7 +6598,7 @@ impl AsyncVM {
                 };
                 let value = crate::process::ThreadSafeValue::from_gc_value(&args[0], heap)
                     .unwrap_or(crate::process::ThreadSafeValue::Unit);
-                let entry = crate::parallel::InspectEntry { name, value };
+                let entry = crate::shared_types::InspectEntry { name, value };
                 let _ = sender.send(entry);
                 Ok(GcValue::Unit)
             }),
@@ -6552,7 +6609,7 @@ impl AsyncVM {
 
     /// Setup output channel for println.
     /// Returns a receiver that will receive output strings.
-    pub fn setup_output(&mut self) -> crate::parallel::OutputReceiver {
+    pub fn setup_output(&mut self) -> crate::shared_types::OutputReceiver {
         let (sender, receiver) = crossbeam::channel::unbounded();
 
         Arc::get_mut(&mut self.shared)
@@ -6564,7 +6621,7 @@ impl AsyncVM {
 
     /// Setup panel channel and register Panel.* native functions.
     /// Returns a receiver that will receive PanelCommand messages.
-    pub fn setup_panel(&mut self) -> crate::parallel::PanelCommandReceiver {
+    pub fn setup_panel(&mut self) -> crate::shared_types::PanelCommandReceiver {
         use std::sync::atomic::AtomicU64;
         let (sender, receiver) = crossbeam::channel::unbounded();
 
@@ -6595,7 +6652,7 @@ impl AsyncVM {
             func: Box::new(move |args, heap| {
                 let title = get_string(&args[0], heap, "Panel.create")?;
                 let id = next_id.fetch_add(1, Ordering::SeqCst);
-                let _ = sender_create.send(crate::parallel::PanelCommand::Create { id, title });
+                let _ = sender_create.send(crate::shared_types::PanelCommand::Create { id, title });
                 Ok(GcValue::Int64(id as i64))
             }),
         }));
@@ -6611,7 +6668,7 @@ impl AsyncVM {
                     _ => return Err(RuntimeError::Panic("Panel.setContent: expected int".to_string())),
                 };
                 let content = get_string(&args[1], heap, "Panel.setContent")?;
-                let _ = sender_content.send(crate::parallel::PanelCommand::SetContent { id, content });
+                let _ = sender_content.send(crate::shared_types::PanelCommand::SetContent { id, content });
                 Ok(GcValue::Unit)
             }),
         }));
@@ -6626,7 +6683,7 @@ impl AsyncVM {
                     GcValue::Int64(n) => *n as u64,
                     _ => return Err(RuntimeError::Panic("Panel.show: expected int".to_string())),
                 };
-                let _ = sender_show.send(crate::parallel::PanelCommand::Show { id });
+                let _ = sender_show.send(crate::shared_types::PanelCommand::Show { id });
                 Ok(GcValue::Unit)
             }),
         }));
@@ -6641,7 +6698,7 @@ impl AsyncVM {
                     GcValue::Int64(n) => *n as u64,
                     _ => return Err(RuntimeError::Panic("Panel.hide: expected int".to_string())),
                 };
-                let _ = sender_hide.send(crate::parallel::PanelCommand::Hide { id });
+                let _ = sender_hide.send(crate::shared_types::PanelCommand::Hide { id });
                 Ok(GcValue::Unit)
             }),
         }));
@@ -6657,7 +6714,7 @@ impl AsyncVM {
                     _ => return Err(RuntimeError::Panic("Panel.onKey: expected int".to_string())),
                 };
                 let handler_fn = get_string(&args[1], heap, "Panel.onKey")?;
-                let _ = sender_onkey.send(crate::parallel::PanelCommand::OnKey { id, handler_fn });
+                let _ = sender_onkey.send(crate::shared_types::PanelCommand::OnKey { id, handler_fn });
                 Ok(GcValue::Unit)
             }),
         }));
@@ -6670,7 +6727,7 @@ impl AsyncVM {
             func: Box::new(move |args, heap| {
                 let key = get_string(&args[0], heap, "Panel.registerHotkey")?;
                 let callback_fn = get_string(&args[1], heap, "Panel.registerHotkey")?;
-                let _ = sender_hotkey.send(crate::parallel::PanelCommand::RegisterHotkey { key, callback_fn });
+                let _ = sender_hotkey.send(crate::shared_types::PanelCommand::RegisterHotkey { key, callback_fn });
                 Ok(GcValue::Unit)
             }),
         }));

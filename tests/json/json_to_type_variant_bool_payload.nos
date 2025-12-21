@@ -7,7 +7,7 @@ getResult(Success(b)) = b
 getResult(Failure(_)) = false
 
 main() = {
-    json = jsonParse("{\"Success\": {\"_0\": true}}")
+    json = jsonParse("{\"Success\": true}")
     resp = jsonToType[Response](json)
     getResult(resp)
 }

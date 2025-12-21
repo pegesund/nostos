@@ -13,7 +13,7 @@ use crate::session::extract_dependencies_from_fn;
 use nostos_syntax::ast::{Item, Pattern};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::async_vm::{AsyncVM, AsyncConfig, AsyncSharedState};
-use nostos_vm::parallel::{InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver};
+use nostos_vm::{InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver};
 use nostos_vm::process::ThreadSafeValue;
 
 /// An item in the browser

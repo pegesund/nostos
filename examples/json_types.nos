@@ -67,15 +67,15 @@ main() = {
 
     # -----------------------------------------
     # Example 4: Single-field Variants
-    # Single field also uses _0 format
+    # Single field uses direct value (no _0 wrapper)
     # -----------------------------------------
     println("\n4. Single-field Variants:")
 
-    successJson = jsonParse("{\"Success\": {\"_0\": \"Operation completed\"}}")
+    successJson = jsonParse("{\"Success\": \"Operation completed\"}")
     result1 = fromJson[ApiResult](successJson)
     println("   Result 1: " ++ show(result1))
 
-    circleJson = jsonParse("{\"Circle\": {\"_0\": 5.0}}")
+    circleJson = jsonParse("{\"Circle\": 5.0}")
     shape1 = fromJson[Shape](circleJson)
     println("   Shape 1: " ++ show(shape1))
 

@@ -7,7 +7,7 @@ getMessage(Ok(_)) = "no error"
 getMessage(Err(msg)) = msg
 
 main() = {
-    json = jsonParse("{\"Err\": {\"_0\": \"something went wrong\"}}")
+    json = jsonParse("{\"Err\": \"something went wrong\"}")
     r = jsonToType[Result](json)
     getMessage(r)
 }

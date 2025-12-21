@@ -7,7 +7,7 @@ getValue(Ok(n)) = n
 getValue(Err(_)) = -1
 
 main() = {
-    json = jsonParse("{\"Ok\": {\"_0\": 42}}")
+    json = jsonParse("{\"Ok\": 42}")
     r = jsonToType[Result](json)
     json2 = reflect(r)
     r2 = jsonToType[Result](json2)

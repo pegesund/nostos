@@ -8,7 +8,7 @@ describe(Ready) = "ready"
 describe(Error(msg)) = "error: " ++ msg
 
 main() = {
-    json = jsonParse("{\"Loading\": {\"_0\": 75}}")
+    json = jsonParse("{\"Loading\": 75}")
     s = jsonToType[State](json)
     describe(s)
 }

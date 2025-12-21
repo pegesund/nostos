@@ -270,15 +270,31 @@ hasKey(pairs, key) = match pairs
     [] -> false
     [(k, _) | rest] -> if k == key then true else hasKey(rest, key)
 
+# Parse field index from name like "_0", "_1", etc.
+parseFieldIndex(name) = match String.chars(name)
+    ['_' | rest] -> String.toInt(String.from_chars(rest))
+    _ -> -1
+
+# Get element at index from list
+listGet(list, idx) = match list
+    [] -> Null
+    [x | rest] -> if idx == 0 then x else listGet(rest, idx - 1)
+
 # Extract field value from Json for variant field building
-# For single-field variants with name "_0", the value is passed directly
-# For multi-field variants, extract from Object pairs by name
+# - Single-field variants: value is passed directly (e.g., 42 for Ok(42))
+# - Multi-field variants: value is an array (e.g., [10, 20] for Click(10, 20))
 getVariantFieldValue(fieldName, jsonValue) = match jsonValue
+    Array(items) -> {
+        # Multi-field variant uses array format
+        idx = parseFieldIndex(fieldName)
+        if idx >= 0 then listGet(items, idx) else Null
+    }
     Object(pairs) ->
+        # Legacy: handle object format if present
         if hasKey(pairs, fieldName)
         then findField(pairs, fieldName)
-        else if fieldName == "_0" then jsonValue else Null
-    _ -> jsonValue
+        else jsonValue
+    _ -> jsonValue  # Single-field variant: use value directly
 
 # Build field map for variant constructor
 buildVariantFields(ctorFields, jsonValue, acc) = match ctorFields
@@ -300,16 +316,65 @@ findConstructor(constructors, name) = match constructors
         then ctor
         else findConstructor(rest, name)
 
+# Parse a parameterized type name like "Result[Int, String]"
+# Returns (baseType, [typeArgs])
+parseTypeName(typeName) = {
+    chars = String.chars(typeName)
+    parseTypeNameChars(chars, [], 0)
+}
+
+parseTypeNameChars(chars, acc, depth) = match chars
+    [] -> (String.from_chars(acc), [])
+    ['[' | rest] -> {
+        baseName = String.from_chars(acc)
+        (args, _) = parseTypeArgs(rest, [], [], 0)
+        (baseName, args)
+    }
+    [c | rest] -> parseTypeNameChars(rest, acc ++ [c], depth)
+
+parseTypeArgs(chars, currentArg, args, depth) = match chars
+    [] -> (args ++ [String.trim(String.from_chars(currentArg))], [])
+    [']' | rest] ->
+        if depth == 0 then
+            (args ++ [String.trim(String.from_chars(currentArg))], rest)
+        else
+            parseTypeArgs(rest, currentArg ++ [']'], args, depth - 1)
+    ['[' | rest] -> parseTypeArgs(rest, currentArg ++ ['['], args, depth + 1)
+    [',' | rest] ->
+        if depth == 0 then
+            parseTypeArgs(rest, [], args ++ [String.trim(String.from_chars(currentArg))], 0)
+        else
+            parseTypeArgs(rest, currentArg ++ [','], args, depth)
+    [c | rest] -> parseTypeArgs(rest, currentArg ++ [c], args, depth)
+
+# Build substitution map from type params to concrete types
+buildTypeParamMap(typeParams, typeArgs, acc) = match typeParams
+    [] -> acc
+    [param | restParams] -> match typeArgs
+        [] -> acc
+        [arg | restArgs] -> buildTypeParamMap(restParams, restArgs, Map.insert(acc, param, arg))
+
+# Substitute type parameter in a field type
+substituteTypeParam(fieldType, typeParamMap) =
+    if Map.contains(typeParamMap, fieldType)
+    then Map.get(typeParamMap, fieldType)
+    else fieldType
+
 # Convert Json to typed value by type name
-# Use this when you already have a parsed Json value
-# For parsing from string, use the builtin: fromJson[Type](jsonParse(str))
+# Supports parameterized types like "Result[Int, String]"
 pub fromJsonValue(typeName, json) = {
-    info = typeInfo(typeName)
+    (baseType, typeArgs) = parseTypeName(typeName)
+    info = typeInfo(baseType)
 
     # Check for unknown type (empty map)
     if Map.isEmpty(info) then
-        throw("Unknown type: " ++ typeName)
+        throw("Unknown type: " ++ baseType)
     else {
+        # Build type parameter substitution map
+        typeParamMap = if Map.contains(info, "type_params")
+            then buildTypeParamMap(Map.get(info, "type_params"), typeArgs, %{})
+            else %{}
+
         kind = Map.get(info, "kind")
 
         if kind == "record" then {
@@ -317,10 +382,10 @@ pub fromJsonValue(typeName, json) = {
             match json
                 Object(pairs) -> {
                     fields = Map.get(info, "fields")
-                    fieldMap = buildRecordFields(fields, pairs, %{})
-                    makeRecordByName(typeName, fieldMap)
+                    fieldMap = buildRecordFieldsWithSubs(fields, pairs, typeParamMap, %{})
+                    makeRecordByName(baseType, fieldMap)
                 }
-                _ -> throw("Expected Object for record type " ++ typeName)
+                _ -> throw("Expected Object for record type " ++ baseType)
         }
         else if kind == "variant" then {
             # Variant: json should be Object with single key (constructor name)
@@ -330,20 +395,46 @@ pub fromJsonValue(typeName, json) = {
                         constructors = Map.get(info, "constructors")
                         ctor = findConstructor(constructors, ctorName)
                         if Map.isEmpty(ctor) then
-                            throw("Unknown constructor: " ++ ctorName ++ " for type " ++ typeName)
+                            throw("Unknown constructor: " ++ ctorName ++ " for type " ++ baseType)
                         else {
                             ctorFields = Map.get(ctor, "fields")
-                            fieldMap = buildVariantFields(ctorFields, ctorValue, %{})
-                            makeVariantByName(typeName, ctorName, fieldMap)
+                            fieldMap = buildVariantFieldsWithSubs(ctorFields, ctorValue, typeParamMap, %{})
+                            makeVariantByName(baseType, ctorName, fieldMap)
                         }
                     }
                     _ -> throw("Variant JSON must have exactly one key (constructor name)")
-                _ -> throw("Expected Object for variant type " ++ typeName)
+                _ -> throw("Expected Object for variant type " ++ baseType)
         }
         else
-            throw("Cannot convert JSON to type: " ++ typeName ++ " (kind: " ++ kind ++ ")")
+            throw("Cannot convert JSON to type: " ++ baseType ++ " (kind: " ++ kind ++ ")")
     }
 }
+
+# Build field map for record construction with type param substitution
+buildRecordFieldsWithSubs(fields, pairs, typeParamMap, acc) = match fields
+    [] -> acc
+    [field | rest] -> {
+        fieldName = Map.get(field, "name")
+        rawFieldType = Map.get(field, "type")
+        fieldType = substituteTypeParam(rawFieldType, typeParamMap)
+        jsonValue = findField(pairs, fieldName)
+        convertedValue = convertPrimitive(jsonValue, fieldType)
+        newAcc = Map.insert(acc, fieldName, convertedValue)
+        buildRecordFieldsWithSubs(rest, pairs, typeParamMap, newAcc)
+    }
+
+# Build field map for variant constructor with type param substitution
+buildVariantFieldsWithSubs(ctorFields, jsonValue, typeParamMap, acc) = match ctorFields
+    [] -> acc
+    [field | rest] -> {
+        fieldName = Map.get(field, "name")
+        rawFieldType = Map.get(field, "type")
+        fieldType = substituteTypeParam(rawFieldType, typeParamMap)
+        value = getVariantFieldValue(fieldName, jsonValue)
+        convertedValue = convertPrimitive(value, fieldType)
+        newAcc = Map.insert(acc, fieldName, convertedValue)
+        buildVariantFieldsWithSubs(rest, jsonValue, typeParamMap, newAcc)
+    }
 
 
 # --- Public API ---

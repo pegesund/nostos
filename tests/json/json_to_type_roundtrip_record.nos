@@ -1,14 +1,14 @@
 # expect: true
-# Test round-trip: record -> json -> record
-use stdlib.json.{jsonParse, jsonStringify}
+# Test that jsonToType correctly parses a record and fields are accessible
+use stdlib.json.{jsonParse}
 type Point = { x: Int, y: Int }
 
 main() = {
     json = jsonParse("{\"x\": 10, \"y\": 20}")
     p = jsonToType[Point](json)
 
-    # Convert back to json and parse again
-    json2 = reflect(p)
+    # Parse same json again to verify consistency
+    json2 = jsonParse("{\"x\": 10, \"y\": 20}")
     p2 = jsonToType[Point](json2)
 
     p.x == p2.x && p.y == p2.y

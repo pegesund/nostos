@@ -4,7 +4,7 @@ use stdlib.json.{jsonParse, jsonStringify}
 type Result = Ok(Int) | Err(String)
 
 main() = {
-    json = jsonParse("{\"Ok\": {\"_0\": 42}}")
+    json = jsonParse("{\"Ok\": 42}")
     r = jsonToType[Result](json)
     tagOf(r)
 }

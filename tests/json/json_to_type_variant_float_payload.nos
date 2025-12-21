@@ -7,7 +7,7 @@ getValue(Distance(d)) = d
 getValue(Count(_)) = 0.0
 
 main() = {
-    json = jsonParse("{\"Distance\": {\"_0\": 2.5}}")
+    json = jsonParse("{\"Distance\": 2.5}")
     m = jsonToType[Measurement](json)
     getValue(m)
 }

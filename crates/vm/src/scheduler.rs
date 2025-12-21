@@ -19,7 +19,7 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::gc::{GcConfig, GcNativeFn, GcValue};
 use crate::process::{ExitReason, Process, ProcessState, ThreadSafeValue};
-use crate::parallel::{JitIntFn, JitLoopArrayFn};
+use crate::shared_types::{JitIntFn, JitLoopArrayFn};
 use crate::value::{FunctionValue, Pid, RefId, RuntimeError, TypeValue, Value};
 
 /// Configuration for JIT compilation.

@@ -7,7 +7,7 @@ getSum(Click(x, y)) = x + y
 getSum(KeyPress(_)) = 0
 
 main() = {
-    json = jsonParse("{\"Click\": {\"_0\": 10, \"_1\": 42}}")
+    json = jsonParse("{\"Click\": [10, 42]}")
     evt = jsonToType[Event](json)
     getSum(evt)
 }

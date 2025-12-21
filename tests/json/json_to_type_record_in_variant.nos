@@ -8,7 +8,7 @@ getOriginSum(Circle(p, _)) = p.x + p.y
 getOriginSum(Square(p, _)) = p.x + p.y
 
 main() = {
-    json = jsonParse("{\"Circle\": {\"_0\": {\"x\": 10, \"y\": 20}, \"_1\": 5}}")
+    json = jsonParse("{\"Circle\": [{\"x\": 10, \"y\": 20}, 5]}")
     shape = jsonToType[Shape](json)
     getOriginSum(shape)
 }
