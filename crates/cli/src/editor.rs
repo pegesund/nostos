@@ -493,9 +493,9 @@ impl CodeEditor {
                 self.compile_status = CompileStatus::ParseError("Parse error".to_string());
             }
         } else if module_opt.is_some() {
-            // Parse OK - mark for full compile check
-            self.compile_status = CompileStatus::Ok;
+            // Parse OK - run full compile check immediately
             self.needs_full_compile = true;
+            self.check_compile();
         } else {
             self.compile_status = CompileStatus::ParseError("Unknown parse error".to_string());
         }
