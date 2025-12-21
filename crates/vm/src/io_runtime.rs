@@ -468,6 +468,10 @@ impl IoRuntime {
         // Multiple ServerAccept calls can wait on the same receiver concurrently
         let server_request_receivers: Arc<Mutex<HashMap<u64, Arc<Mutex<ServerRequestRx>>>>> = Arc::new(Mutex::new(HashMap::new()));
 
+        // Maps server handle -> abort handle for the server task
+        // Used to properly shut down the server and release the port
+        let server_abort_handles: Arc<Mutex<HashMap<u64, tokio::task::AbortHandle>>> = Arc::new(Mutex::new(HashMap::new()));
+
         // Maps request_id -> oneshot sender for the response
         type ResponseSender = oneshot::Sender<(u16, Vec<(String, String)>, Vec<u8>)>;
         let pending_responses: Arc<Mutex<HashMap<u64, ResponseSender>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -848,9 +852,11 @@ impl IoRuntime {
 
                     match listener_result {
                         Ok(listener) => {
-                            tokio::spawn(async move {
+                            // Spawn the server and store its abort handle for cleanup
+                            let server_task = tokio::spawn(async move {
                                 axum::serve(listener, app).await.ok();
                             });
+                            server_abort_handles.lock().await.insert(handle, server_task.abort_handle());
                             let _ = response.send(Ok(IoResponseValue::ServerHandle(handle)));
                         }
                         Err(e) => {
@@ -911,9 +917,11 @@ impl IoRuntime {
                 }
 
                 IoRequest::ServerClose { handle, response } => {
-                    // Remove the receiver - this will cause the server to stop accepting
-                    // Note: The actual TCP listener continues but new requests will have nowhere to go
+                    // Remove the receiver and abort the server task to release the port
                     server_request_receivers.lock().await.remove(&handle);
+                    if let Some(abort_handle) = server_abort_handles.lock().await.remove(&handle) {
+                        abort_handle.abort();
+                    }
                     let _ = response.send(Ok(IoResponseValue::Unit));
                 }
 
