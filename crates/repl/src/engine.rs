@@ -3337,10 +3337,50 @@ impl ReplEngine {
             }
         }
 
+        // Get expected arity for a method (returns None if unknown/variable arity)
+        fn get_method_arity(type_name: &str, method: &str) -> Option<usize> {
+            match type_name {
+                "String" => match method {
+                    "length" | "isEmpty" | "trim" | "trimStart" | "trimEnd" |
+                    "toUpper" | "toLower" | "reverse" | "chars" | "lines" | "words" => Some(0),
+                    "contains" | "startsWith" | "endsWith" | "indexOf" | "lastIndexOf" |
+                    "repeat" | "split" => Some(1),
+                    "replace" | "padStart" | "padEnd" => Some(2),
+                    "replaceAll" | "substring" => Some(2),
+                    _ => None,
+                },
+                "List" => match method {
+                    "length" | "isEmpty" | "head" | "tail" | "last" | "init" |
+                    "reverse" | "sum" | "product" | "maximum" | "minimum" |
+                    "flatten" | "unique" | "enumerate" => Some(0),
+                    "map" | "filter" | "take" | "drop" | "contains" | "any" | "all" |
+                    "find" | "count" | "takeWhile" | "dropWhile" | "push" | "get" |
+                    "remove" | "removeAt" | "group" | "concat" | "interleave" => Some(1),
+                    "fold" | "foldl" | "foldr" | "zip" | "zipWith" | "set" |
+                    "insertAt" | "partition" | "span" | "scanl" => Some(2),
+                    "slice" | "findIndices" => Some(2),
+                    _ => None,
+                },
+                "Map" => match method {
+                    "isEmpty" | "size" | "keys" | "values" => Some(0),
+                    "contains" | "get" | "remove" => Some(1),
+                    "insert" => Some(2),
+                    _ => None,
+                },
+                "Set" => match method {
+                    "isEmpty" | "size" | "toList" => Some(0),
+                    "contains" | "insert" | "remove" => Some(1),
+                    "union" | "intersection" | "difference" => Some(1),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+
         // Collect all function calls from a statement
         fn collect_calls_stmt(
             stmt: &Stmt,
-            calls: &mut Vec<(String, usize)>,
+            calls: &mut Vec<(String, usize, usize)>,
             local_types: &mut HashMap<String, String>,
             variant_constructors: &HashMap<String, String>,
         ) {
@@ -3360,16 +3400,17 @@ impl ReplEngine {
         }
 
         // Collect all function calls from an expression
+        // Tuple: (call_name, offset, arg_count)
         fn collect_calls(
             expr: &Expr,
-            calls: &mut Vec<(String, usize)>,
+            calls: &mut Vec<(String, usize, usize)>,
             local_types: &mut HashMap<String, String>,
             variant_constructors: &HashMap<String, String>,
         ) {
             match expr {
                 Expr::Call(callee, _, args, span) => {
                     if let Some(name) = get_call_name(callee) {
-                        calls.push((name, span.start));
+                        calls.push((name, span.start, args.len()));
                     }
                     collect_calls(callee, calls, local_types, variant_constructors);
                     for arg in args {
@@ -3398,7 +3439,8 @@ impl ReplEngine {
 
                     if let Some(recv_type) = receiver_type {
                         let call_name = format!("{}.{}", recv_type, method.node);
-                        calls.push((call_name, span.start));
+                        // arg count for method = explicit args (receiver is implicit)
+                        calls.push((call_name, span.start, args.len()));
                     }
                     collect_calls(receiver, calls, local_types, variant_constructors);
                     for arg in args {
@@ -3566,8 +3608,37 @@ impl ReplEngine {
         }
 
         // Validate all calls
-        for (call_name, offset) in all_calls {
-            // Skip if it's a known function
+        for (call_name, offset, arg_count) in all_calls {
+            // Check for arity errors on Type.method calls (applies to both known and UFCS)
+            if let Some(dot_pos) = call_name.find('.') {
+                let type_name = &call_name[..dot_pos];
+                let method_name = &call_name[dot_pos + 1..];
+
+                // Check arity for known method signatures
+                if let Some(expected_arity) = get_method_arity(type_name, method_name) {
+                    if arg_count != expected_arity {
+                        let (line, _col) = offset_to_line_col(content, offset);
+                        return Err(format!(
+                            "line {}: `{}` expects {} argument{}, got {}",
+                            line, call_name, expected_arity,
+                            if expected_arity == 1 { "" } else { "s" },
+                            arg_count
+                        ));
+                    }
+                }
+
+                // Check if method exists (either as known function or UFCS)
+                if known_functions.contains(&call_name) ||
+                   is_valid_ufcs_method(type_name, method_name, &known_functions) {
+                    continue;
+                }
+
+                // Unknown method
+                let (line, _col) = offset_to_line_col(content, offset);
+                return Err(format!("line {}: unknown function `{}`", line, call_name));
+            }
+
+            // Skip if it's a known function (non-method call)
             if known_functions.contains(&call_name) {
                 continue;
             }
@@ -3576,15 +3647,6 @@ impl ReplEngine {
             // Simple heuristic: if it doesn't contain a dot and isn't capitalized, might be a variable
             if !call_name.contains('.') && call_name.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) {
                 continue;
-            }
-
-            // Check if it's a valid UFCS method call (e.g., List.map -> top-level map)
-            if let Some(dot_pos) = call_name.find('.') {
-                let type_name = &call_name[..dot_pos];
-                let method_name = &call_name[dot_pos + 1..];
-                if is_valid_ufcs_method(type_name, method_name, &known_functions) {
-                    continue;
-                }
             }
 
             // Unknown function
@@ -9083,5 +9145,90 @@ main() = {
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for Char.xxx");
         assert!(result.unwrap_err().contains("Char.xxx"), "Error should mention Char.xxx");
+    }
+
+    // Arity tests
+
+    #[test]
+    fn test_string_contains_wrong_arity() {
+        // String.contains takes 1 arg, not 2
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = { s = "hello"; s.contains("x", 1) }"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected arity error for String.contains");
+        assert!(result.unwrap_err().contains("expects 1 argument"), "Error should mention arity");
+    }
+
+    #[test]
+    fn test_string_contains_correct_arity() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = { s = "hello"; s.contains("x") }"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "String.contains with 1 arg should work: {:?}", result);
+    }
+
+    #[test]
+    fn test_list_map_wrong_arity() {
+        // List.map takes 1 arg (the function)
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = [1,2,3].map()";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected arity error for List.map with 0 args");
+        assert!(result.unwrap_err().contains("expects 1 argument"), "Error should mention arity");
+    }
+
+    #[test]
+    fn test_map_insert_wrong_arity() {
+        // Map.insert takes 2 args (key, value)
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = { m = %{"a": 1}; m.insert("b") }"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected arity error for Map.insert with 1 arg");
+        assert!(result.unwrap_err().contains("expects 2 arguments"), "Error should mention arity");
+    }
+
+    #[test]
+    fn test_map_insert_correct_arity() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = { m = %{"a": 1}; m.insert("b", 2) }"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Map.insert with 2 args should work: {:?}", result);
+    }
+
+    #[test]
+    fn test_set_contains_wrong_arity() {
+        // Set.contains takes 1 arg
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = { s = #{1,2}; s.contains() }";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected arity error for Set.contains with 0 args");
+        assert!(result.unwrap_err().contains("expects 1 argument"), "Error should mention arity");
+    }
+
+    #[test]
+    fn test_list_length_no_args() {
+        // List.length takes 0 args
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = [1,2,3].length()";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "List.length() should work: {:?}", result);
+    }
+
+    #[test]
+    fn test_list_length_wrong_arity() {
+        // List.length takes 0 args
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = [1,2,3].length(1)";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected arity error for List.length with arg");
+        assert!(result.unwrap_err().contains("expects 0 arguments"), "Error should mention arity");
     }
 }
