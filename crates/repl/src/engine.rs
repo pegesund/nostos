@@ -3631,9 +3631,21 @@ impl ReplEngine {
 
                 // Handle unknown receiver type (marked with "?")
                 if type_name == "?" {
-                    // Check if arity is wrong for ALL known types with this method
+                    // Check if method is known on any built-in type
                     let valid_arities = get_all_valid_arities(method_name);
-                    if !valid_arities.is_empty() && !valid_arities.contains(&arg_count) {
+
+                    if valid_arities.is_empty() {
+                        // Method not found on any built-in type
+                        // Check if it might be a user-defined function
+                        if !known_functions.contains(method_name) {
+                            let (line, _col) = offset_to_line_col(content, offset);
+                            return Err(format!(
+                                "line {}: unknown method `{}`",
+                                line, method_name
+                            ));
+                        }
+                    } else if !valid_arities.contains(&arg_count) {
+                        // Method exists but wrong arity
                         let (line, _col) = offset_to_line_col(content, offset);
                         let expected = if valid_arities.len() == 1 {
                             format!("{}", valid_arities[0])
@@ -9328,5 +9340,93 @@ main() = {
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected arity error for status.contains with 2 args");
         assert!(result.unwrap_err().contains("expects 1 argument"), "Error should mention arity");
+    }
+
+    #[test]
+    fn test_exact_user_full_module() {
+        // EXACT full module from user with status.contains(1,2) error
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"# HTTP Server Example
+
+handleRoute(method, path, body) = {
+  if path == "/" then
+    (200, "Welcome to Nostos HTTP Server!")
+  else if path == "/hello" then
+    (200, "Hello, World!")
+  else if path == "/echo" then
+    (200, body)
+  else if path == "/json" then
+    (200, "{\"status\": \"ok\", \"message\": \"Hello from Nostos\"}")
+  else
+    (404, "Not Found: " ++ path)
+}
+
+serverLoop(server) = {
+  (status, req) = Server.accept(server)
+  (statusCode, responseBody) = handleRoute(req.method, req.path, req.body)
+  headers = [("Content-Type", "text/plain")]
+  Server.respond(req.id, statusCode, headers, responseBody)
+  serverLoop(server)
+}
+
+clientRequest(parent, path) = {
+  url = "http://localhost:8888" ++ path
+  (status, response) = Http.get(url)
+  parent <- ("response", path, response.status)
+}
+
+collectResponses(count, expected) = {
+  if count == expected then
+    count
+  else
+    receive
+      ("response", path, status) -> {
+        print("  ")
+        print(path)
+        print(" -> ")
+        println(status)
+        collectResponses(count + 1, expected)
+      }
+    after 5000 ->
+      count
+    end
+}
+
+main() = {
+  println("=== HTTP Server Example ===")
+  (status, server) = Server.bind(8888)
+  spawn { serverLoop(server) }
+  sleep(50)
+  me = self()
+  spawn { clientRequest(me, "/") }
+  completed = collectResponses(0, 5)
+
+  status.contains(1, 2)
+
+  Server.close(server)
+}"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected arity error for status.contains(1,2)");
+        let err = result.unwrap_err();
+        println!("Error: {}", err);
+        assert!(err.contains("contains") && err.contains("expects"), "Should catch arity error");
+    }
+
+    #[test]
+    fn test_unknown_type_unknown_method() {
+        // status.xxx() should fail - xxx is not a method on any type
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+foo() = ("ok", 123)
+main() = {
+  (status, _) = foo()
+  status.xxx()
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for unknown method xxx");
+        assert!(result.unwrap_err().contains("unknown method"), "Error should mention unknown method");
     }
 }
