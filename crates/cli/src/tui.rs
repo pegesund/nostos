@@ -870,13 +870,33 @@ fn rebuild_workspace(s: &mut Cursive) {
     }
 
     // Build layout with LinearLayout for equal distribution
-    let mut row = LinearLayout::horizontal();
-    for window in windows {
-        row.add_child(window);
-    }
+    // Split into two rows if more than 6 windows
+    let mut layout = LinearLayout::vertical();
 
-    let mut layout = LinearLayout::vertical()
-        .child(row.full_width().full_height());
+    if windows.len() <= 6 {
+        // Single row
+        let mut row = LinearLayout::horizontal();
+        for window in windows {
+            row.add_child(window);
+        }
+        layout.add_child(row.full_width().full_height());
+    } else {
+        // Two rows - split evenly
+        let mid = (windows.len() + 1) / 2; // First row gets extra if odd
+        let mut row1 = LinearLayout::horizontal();
+        let mut row2 = LinearLayout::horizontal();
+
+        for (i, window) in windows.into_iter().enumerate() {
+            if i < mid {
+                row1.add_child(window);
+            } else {
+                row2.add_child(window);
+            }
+        }
+
+        layout.add_child(row1.full_width().full_height());
+        layout.add_child(row2.full_width().full_height());
+    }
 
     // Add nostos panel as separate row if open
     if let Some(nostos) = nostos_view {
