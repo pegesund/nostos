@@ -7065,16 +7065,63 @@ impl AsyncVM {
             }),
         }));
 
+        // unwrapOr - unwrap Option or return default
+        // Works with stdlib.list.Option specifically
+        self.register_native("unwrapOr", Arc::new(GcNativeFn {
+            name: "unwrapOr".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::Variant(ptr) => {
+                        if let Some(var) = heap.get_variant(*ptr) {
+                            // Check if it's Some or None from stdlib.list.Option
+                            if var.type_name.as_str() == "stdlib.list.Option" {
+                                if var.constructor.as_str() == "Some" && !var.fields.is_empty() {
+                                    Ok(var.fields[0].clone())
+                                } else {
+                                    // It's None, return the default value
+                                    Ok(args[1].clone())
+                                }
+                            } else {
+                                // Not stdlib.list.Option, just return as-is or default
+                                // This handles user-defined Option types by just checking constructor name
+                                if var.constructor.as_str() == "Some" && !var.fields.is_empty() {
+                                    Ok(var.fields[0].clone())
+                                } else {
+                                    Ok(args[1].clone())
+                                }
+                            }
+                        } else {
+                            Err(RuntimeError::Panic("Invalid variant pointer".to_string()))
+                        }
+                    }
+                    _ => {
+                        // Not a variant, return the default
+                        Ok(args[1].clone())
+                    }
+                }
+            }),
+        }));
+
         self.register_native("String.toInt", Arc::new(GcNativeFn {
             name: "String.toInt".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
+                let option_type = Arc::new("stdlib.list.Option".to_string());
                 match &args[0] {
                     GcValue::String(s) => {
                         if let Some(str_val) = heap.get_string(*s) {
                             match str_val.data.trim().parse::<i64>() {
-                                Ok(n) => Ok(GcValue::Int64(n)),
-                                Err(_) => Ok(GcValue::Unit)
+                                Ok(n) => {
+                                    // Return Some(n)
+                                    let ptr = heap.alloc_variant(option_type, Arc::new("Some".to_string()), vec![GcValue::Int64(n)]);
+                                    Ok(GcValue::Variant(ptr))
+                                }
+                                Err(_) => {
+                                    // Return None
+                                    let ptr = heap.alloc_variant(option_type, Arc::new("None".to_string()), vec![]);
+                                    Ok(GcValue::Variant(ptr))
+                                }
                             }
                         } else {
                             Err(RuntimeError::Panic("Invalid string pointer".to_string()))
@@ -7090,12 +7137,21 @@ impl AsyncVM {
             name: "String.toFloat".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
+                let option_type = Arc::new("stdlib.list.Option".to_string());
                 match &args[0] {
                     GcValue::String(s) => {
                         if let Some(str_val) = heap.get_string(*s) {
                             match str_val.data.trim().parse::<f64>() {
-                                Ok(n) => Ok(GcValue::Float64(n)),
-                                Err(_) => Ok(GcValue::Unit)
+                                Ok(n) => {
+                                    // Return Some(n)
+                                    let ptr = heap.alloc_variant(option_type, Arc::new("Some".to_string()), vec![GcValue::Float64(n)]);
+                                    Ok(GcValue::Variant(ptr))
+                                }
+                                Err(_) => {
+                                    // Return None
+                                    let ptr = heap.alloc_variant(option_type, Arc::new("None".to_string()), vec![]);
+                                    Ok(GcValue::Variant(ptr))
+                                }
                             }
                         } else {
                             Err(RuntimeError::Panic("Invalid string pointer".to_string()))

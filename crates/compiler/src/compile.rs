@@ -160,12 +160,15 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Exec.wait", signature: "Int -> (String, Int)", doc: "Wait for spawned process to exit. Returns (status, exitCode)" },
     BuiltinInfo { name: "Exec.kill", signature: "Int -> (String, ())", doc: "Kill a spawned process. Returns (status, ())" },
 
+    // === Option Functions ===
+    BuiltinInfo { name: "unwrapOr", signature: "a -> b -> b", doc: "Unwrap Option or return default value" },
+
     // === String Functions ===
     BuiltinInfo { name: "String.length", signature: "String -> Int", doc: "Get string length in characters" },
     BuiltinInfo { name: "String.chars", signature: "String -> [Char]", doc: "Convert string to list of characters" },
     BuiltinInfo { name: "String.from_chars", signature: "[Char] -> String", doc: "Create string from list of characters" },
-    BuiltinInfo { name: "String.toInt", signature: "String -> Int", doc: "Parse string as integer" },
-    BuiltinInfo { name: "String.toFloat", signature: "String -> Option Float", doc: "Parse string as float, returns None if invalid" },
+    BuiltinInfo { name: "String.toInt", signature: "String -> a", doc: "Parse string as integer, returns Option[Int] (Some(n) or None)" },
+    BuiltinInfo { name: "String.toFloat", signature: "String -> a", doc: "Parse string as float, returns Option[Float] (Some(n) or None)" },
     BuiltinInfo { name: "String.trim", signature: "String -> String", doc: "Remove leading and trailing whitespace" },
     BuiltinInfo { name: "String.trimStart", signature: "String -> String", doc: "Remove leading whitespace" },
     BuiltinInfo { name: "String.trimEnd", signature: "String -> String", doc: "Remove trailing whitespace" },
@@ -5822,6 +5825,13 @@ impl Compiler {
                     "newFloat64Array" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::MakeFloat64Array(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    // === Option unwrapping ===
+                    "unwrapOr" if arg_regs.len() == 2 => {
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("unwrapOr".to_string())));
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
                         return Ok(dst);
                     }
                     // === Trait-based builtins (show, copy, hash) ===

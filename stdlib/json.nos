@@ -75,12 +75,12 @@ collect_number_chars(chars, acc) = {
 parse_number(chars) = match chars
     ['-' | rest] -> {
         (num_chars, remaining) = collect_number_chars(rest, [])
-        num = String.toFloat(String.from_chars(num_chars))
+        num = unwrapOr(String.toFloat(String.from_chars(num_chars)), 0.0)
         (Number(0.0 - num), remaining)
     }
     _ -> {
         (num_chars, rest) = collect_number_chars(chars, [])
-        num = String.toFloat(String.from_chars(num_chars))
+        num = unwrapOr(String.toFloat(String.from_chars(num_chars)), 0.0)
         (Number(num), rest)
     }
 
@@ -272,7 +272,7 @@ hasKey(pairs, key) = match pairs
 
 # Parse field index from name like "_0", "_1", etc.
 parseFieldIndex(name) = match String.chars(name)
-    ['_' | rest] -> String.toInt(String.from_chars(rest))
+    ['_' | rest] -> unwrapOr(String.toInt(String.from_chars(rest)), -1)
     _ -> -1
 
 # Get element at index from list

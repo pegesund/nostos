@@ -9854,3 +9854,52 @@ main() = {
         assert!(result.is_err(), "Expected type error for status.contains(Int)");
     }
 }
+
+#[cfg(test)]
+mod repl_state_tests {
+    use super::*;
+
+    #[test]
+    fn test_repl_state_not_corrupted_after_type_error() {
+        // Reproduces user-reported bug: after a type error in the REPL,
+        // all subsequent commands fail with the same error
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // First, a valid command should work
+        let result1 = engine.eval("1 + 1");
+        println!("First eval (1+1): {:?}", result1);
+        assert!(result1.is_ok(), "1+1 should succeed");
+        assert_eq!(result1.unwrap(), "2");
+
+        // Now cause a type error - Option Float doesn't implement Eq
+        let result2 = engine.eval("String.toFloat(\"2.1x\") == ()");
+        println!("Second eval (type error): {:?}", result2);
+        assert!(result2.is_err(), "Should fail with type error");
+
+        // Now this valid command should still work - NOT get the previous error
+        let result3 = engine.eval("2 + 2");
+        println!("Third eval (2+2): {:?}", result3);
+        assert!(result3.is_ok(), "2+2 should succeed after type error, got: {:?}", result3);
+        assert_eq!(result3.unwrap(), "4");
+    }
+
+    #[test]
+    fn test_repl_state_not_corrupted_after_undefined_function() {
+        // Another variation - undefined function error
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Valid command
+        let result1 = engine.eval("\"hello\"");
+        assert!(result1.is_ok(), "String literal should work");
+
+        // Cause an error with undefined function
+        let result2 = engine.eval("undefinedFn(42)");
+        assert!(result2.is_err(), "Undefined function should fail");
+
+        // This should still work
+        let result3 = engine.eval("\"world\"");
+        assert!(result3.is_ok(), "String literal should work after error, got: {:?}", result3);
+    }
+}
