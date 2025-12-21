@@ -190,6 +190,60 @@ impl<'a> EditorCompletionSource<'a> {
     }
 }
 
+impl<'a> EditorCompletionSource<'a> {
+    /// Extract local variable names from the buffer
+    fn extract_local_variables(&self) -> Vec<String> {
+        let mut vars = Vec::new();
+
+        for line in self.buffer_content.lines() {
+            let trimmed = line.trim();
+
+            // Skip comments
+            if trimmed.starts_with('#') {
+                continue;
+            }
+
+            // Tuple destructuring: (a, b, ...) = expr
+            if trimmed.starts_with('(') {
+                if let Some(close_paren) = trimmed.find(')') {
+                    let after = trimmed[close_paren + 1..].trim_start();
+                    if after.starts_with('=') && !after.starts_with("==") {
+                        let pattern = &trimmed[1..close_paren];
+                        for name in pattern.split(',') {
+                            let name = name.trim();
+                            if !name.is_empty() && name != "_" && name.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) {
+                                vars.push(name.to_string());
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Simple binding: varname = expr (not ==, not function def)
+            if let Some(eq_pos) = trimmed.find('=') {
+                let lhs = trimmed[..eq_pos].trim();
+                let after_eq = &trimmed[eq_pos + 1..];
+
+                // Skip == and function definitions (contains parens before =)
+                if after_eq.starts_with('=') || lhs.contains('(') {
+                    continue;
+                }
+
+                // Handle "var name" or just "name"
+                let name = lhs.strip_prefix("var ").unwrap_or(lhs).trim();
+
+                // Must be valid identifier (lowercase start, no spaces)
+                if !name.is_empty() && !name.contains(' ') && name.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) {
+                    vars.push(name.to_string());
+                }
+            }
+        }
+
+        vars
+    }
+}
+
 impl<'a> CompletionSource for EditorCompletionSource<'a> {
     fn get_functions(&self) -> Vec<String> {
         self.engine.get_functions()
@@ -200,7 +254,12 @@ impl<'a> CompletionSource for EditorCompletionSource<'a> {
     }
 
     fn get_variables(&self) -> Vec<String> {
-        self.engine.get_variables()
+        // Combine REPL variables with local variables from buffer
+        let mut vars = self.engine.get_variables();
+        vars.extend(self.extract_local_variables());
+        vars.sort();
+        vars.dedup();
+        vars
     }
 
     fn get_type_fields(&self, type_name: &str) -> Vec<String> {
@@ -696,13 +755,40 @@ impl CodeEditor {
             .max(20) // Minimum width for status line
             .min(printer.size.x.saturating_sub(2));
 
-        // Position popup below cursor line
-        let popup_y = cursor_screen_y + 1;
+        // Calculate popup height
+        let popup_height = visible_count + 1; // +1 for status line
+
+        // Position popup: prefer below cursor, but show above if not enough space
+        let space_below = printer.size.y.saturating_sub(cursor_screen_y + 1);
+        let space_above = cursor_screen_y;
+
+        let (popup_y, show_above) = if space_below >= popup_height {
+            // Enough space below
+            (cursor_screen_y + 1, false)
+        } else if space_above >= popup_height {
+            // Show above cursor
+            (cursor_screen_y.saturating_sub(popup_height), true)
+        } else {
+            // Not enough space either way, prefer the side with more space
+            if space_below >= space_above {
+                (cursor_screen_y + 1, false)
+            } else {
+                (cursor_screen_y.saturating_sub(popup_height.min(space_above)), true)
+            }
+        };
+
         // Clamp popup_x so the popup doesn't go off the right edge of the screen
         let popup_x = if cursor_screen_x + popup_width > printer.size.x {
             printer.size.x.saturating_sub(popup_width)
         } else {
             cursor_screen_x
+        };
+
+        // Limit visible items to available space
+        let max_visible = if show_above {
+            space_above.min(visible_count)
+        } else {
+            space_below.saturating_sub(1).min(visible_count) // -1 for status line
         };
 
         // Draw popup background
@@ -714,7 +800,7 @@ impl CodeEditor {
         // Draw visible items
         for (display_idx, item) in self.ac_state.candidates.iter()
             .skip(scroll_offset)
-            .take(visible_count)
+            .take(max_visible)
             .enumerate()
         {
             let y = popup_y + display_idx;
@@ -750,7 +836,7 @@ impl CodeEditor {
         }
 
         // Show status line with pagination info
-        let status_y = popup_y + visible_count;
+        let status_y = popup_y + max_visible;
         if status_y < printer.size.y {
             let current_page = scroll_offset / AC_MAX_VISIBLE + 1;
             let total_pages = (total_items + AC_MAX_VISIBLE - 1) / AC_MAX_VISIBLE;
