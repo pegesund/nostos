@@ -3457,7 +3457,20 @@ impl ReplEngine {
                     let call_name = format!("{}.{}", recv_type, method.node);
                     // arg count for method = explicit args (receiver is implicit)
                     calls.push((call_name, span.start, args.len()));
-                    collect_calls(receiver, calls, local_types, variant_constructors);
+                    // Only collect from receiver if it's not a module name
+                    // Module names (uppercase Record/Var) are used as qualifiers, not constructors
+                    let is_module_name = match receiver.as_ref() {
+                        Expr::Record(ident, fields, _) if fields.is_empty() => {
+                            ident.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+                        }
+                        Expr::Var(ident) => {
+                            ident.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+                        }
+                        _ => false,
+                    };
+                    if !is_module_name {
+                        collect_calls(receiver, calls, local_types, variant_constructors);
+                    }
                     for arg in args {
                         collect_calls(arg, calls, local_types, variant_constructors);
                     }
@@ -3515,7 +3528,9 @@ impl ReplEngine {
                         collect_calls(e, calls, local_types, variant_constructors);
                     }
                 }
-                Expr::Record(_, fields, _) => {
+                Expr::Record(name, fields, _) => {
+                    // Add constructor name for validation (marked with "C:")
+                    calls.push((format!("C:{}", name.node), name.span.start, fields.len()));
                     for field in fields {
                         match field {
                             nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls, local_types, variant_constructors),
@@ -3624,6 +3639,19 @@ impl ReplEngine {
 
         // Validate all calls
         for (call_name, offset, arg_count) in all_calls {
+            // Check for constructor references (marked with "C:")
+            if let Some(name) = call_name.strip_prefix("C:") {
+                // Uppercase name should be a known constructor or type
+                if !known_functions.contains(name) {
+                    let (line, _col) = offset_to_line_col(content, offset);
+                    return Err(format!(
+                        "line {}: unknown constructor `{}`",
+                        line, name
+                    ));
+                }
+                continue;
+            }
+
             // Check for arity errors on Type.method calls (applies to both known and UFCS)
             if let Some(dot_pos) = call_name.find('.') {
                 let type_name = &call_name[..dot_pos];
@@ -9428,5 +9456,38 @@ main() = {
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for unknown method xxx");
         assert!(result.unwrap_err().contains("unknown method"), "Error should mention unknown method");
+    }
+
+    #[test]
+    fn test_unknown_constructor() {
+        // Noxxx should fail - it's not a known constructor
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+type Maybe = Yes | No
+main() = {
+  f = Noxxx
+  f
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for unknown constructor Noxxx");
+        assert!(result.unwrap_err().contains("unknown constructor"), "Error should mention unknown constructor");
+    }
+
+    #[test]
+    fn test_valid_constructor() {
+        // No should work - it's a valid constructor from type Maybe
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+type Maybe = Yes | No
+main() = {
+  f = No
+  f
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Valid constructor should pass: {:?}", result);
     }
 }
