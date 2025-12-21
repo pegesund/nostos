@@ -3094,10 +3094,45 @@ impl ReplEngine {
                     }
                 }
             }
+            // Add trait implementation methods as Type.method
+            if let Item::TraitImpl(trait_impl) = item {
+                // Extract type name from type expression
+                let type_name = match &trait_impl.ty {
+                    nostos_syntax::ast::TypeExpr::Name(ident) => Some(ident.node.clone()),
+                    nostos_syntax::ast::TypeExpr::Generic(ident, _) => Some(ident.node.clone()),
+                    _ => None,
+                };
+                if let Some(ty_name) = type_name {
+                    for method in &trait_impl.methods {
+                        // Register as Type.method
+                        let qualified = format!("{}.{}", ty_name, method.name.node);
+                        known_functions.insert(qualified);
+                    }
+                }
+            }
+        }
+
+        // Build variant constructor -> type mapping
+        let mut variant_constructors: HashMap<String, String> = HashMap::new();
+        for item in &module.items {
+            if let Item::TypeDef(type_def) = item {
+                if let TypeBody::Variant(variants) = &type_def.body {
+                    for variant in variants {
+                        variant_constructors.insert(
+                            variant.name.node.clone(),
+                            type_def.name.node.clone(),
+                        );
+                    }
+                }
+            }
         }
 
         // Helper to infer type from an expression (for method call validation)
-        fn infer_expr_type(expr: &Expr, local_types: &HashMap<String, String>) -> Option<String> {
+        fn infer_expr_type(
+            expr: &Expr,
+            local_types: &HashMap<String, String>,
+            variant_constructors: &HashMap<String, String>,
+        ) -> Option<String> {
             match expr {
                 Expr::Int(_, _) => Some("Int".to_string()),
                 Expr::Float(_, _) => Some("Float".to_string()),
@@ -3108,14 +3143,24 @@ impl ReplEngine {
                 Expr::Map(_, _) => Some("Map".to_string()),
                 Expr::Set(_, _) => Some("Set".to_string()),
                 Expr::Var(ident) => local_types.get(&ident.node).cloned(),
-                Expr::Record(name, _, _) => Some(name.node.clone()),
+                Expr::Record(name, _, _) => {
+                    // Check if this is a variant constructor - return parent type name
+                    if let Some(type_name) = variant_constructors.get(&name.node) {
+                        Some(type_name.clone())
+                    } else {
+                        Some(name.node.clone())
+                    }
+                }
                 Expr::Call(callee, _, _, _) => {
-                    // Infer return types for common builtin functions
+                    // Infer return types for common builtin functions and variant constructors
                     if let Some(name) = get_call_name(callee) {
                         match name.as_str() {
                             "self" => Some("Pid".to_string()),
                             "spawn" => Some("Pid".to_string()),
-                            _ => None,
+                            _ => {
+                                // Check if this is a variant constructor
+                                variant_constructors.get(&name).cloned()
+                            }
                         }
                     } else {
                         None
@@ -3123,7 +3168,7 @@ impl ReplEngine {
                 }
                 Expr::MethodCall(receiver, method, _, _) => {
                     // Infer return type based on receiver type and method
-                    let receiver_type = infer_expr_type(receiver, local_types);
+                    let receiver_type = infer_expr_type(receiver, local_types, variant_constructors);
                     if let Some(recv_type) = receiver_type {
                         infer_method_return_type(&recv_type, &method.node)
                     } else {
@@ -3183,6 +3228,50 @@ impl ReplEngine {
                     } else if STR_TO_BOOL.contains(&method) {
                         Some("Bool".to_string())
                     } else if STR_TO_LIST.contains(&method) {
+                        Some("List".to_string())
+                    } else {
+                        None
+                    }
+                }
+                "Map" => {
+                    // Map methods that return Map
+                    const MAP_TO_MAP: &[&str] = &["insert", "remove"];
+                    // Map methods that return Bool
+                    const MAP_TO_BOOL: &[&str] = &["contains", "isEmpty"];
+                    // Map methods that return Int
+                    const MAP_TO_INT: &[&str] = &["size"];
+                    // Map methods that return List
+                    const MAP_TO_LIST: &[&str] = &["keys", "values"];
+
+                    if MAP_TO_MAP.contains(&method) {
+                        Some("Map".to_string())
+                    } else if MAP_TO_BOOL.contains(&method) {
+                        Some("Bool".to_string())
+                    } else if MAP_TO_INT.contains(&method) {
+                        Some("Int".to_string())
+                    } else if MAP_TO_LIST.contains(&method) {
+                        Some("List".to_string())
+                    } else {
+                        None
+                    }
+                }
+                "Set" => {
+                    // Set methods that return Set
+                    const SET_TO_SET: &[&str] = &["insert", "remove", "union", "intersection", "difference"];
+                    // Set methods that return Bool
+                    const SET_TO_BOOL: &[&str] = &["contains", "isEmpty"];
+                    // Set methods that return Int
+                    const SET_TO_INT: &[&str] = &["size"];
+                    // Set methods that return List
+                    const SET_TO_LIST: &[&str] = &["toList"];
+
+                    if SET_TO_SET.contains(&method) {
+                        Some("Set".to_string())
+                    } else if SET_TO_BOOL.contains(&method) {
+                        Some("Bool".to_string())
+                    } else if SET_TO_INT.contains(&method) {
+                        Some("Int".to_string())
+                    } else if SET_TO_LIST.contains(&method) {
                         Some("List".to_string())
                     } else {
                         None
@@ -3249,32 +3338,42 @@ impl ReplEngine {
         }
 
         // Collect all function calls from a statement
-        fn collect_calls_stmt(stmt: &Stmt, calls: &mut Vec<(String, usize)>, local_types: &mut HashMap<String, String>) {
+        fn collect_calls_stmt(
+            stmt: &Stmt,
+            calls: &mut Vec<(String, usize)>,
+            local_types: &mut HashMap<String, String>,
+            variant_constructors: &HashMap<String, String>,
+        ) {
             match stmt {
-                Stmt::Expr(expr) => collect_calls(expr, calls, local_types),
+                Stmt::Expr(expr) => collect_calls(expr, calls, local_types, variant_constructors),
                 Stmt::Let(binding) => {
                     // Infer type from value and track it
-                    if let Some(ty) = infer_expr_type(&binding.value, local_types) {
+                    if let Some(ty) = infer_expr_type(&binding.value, local_types, variant_constructors) {
                         if let Pattern::Var(ident) = &binding.pattern {
                             local_types.insert(ident.node.clone(), ty);
                         }
                     }
-                    collect_calls(&binding.value, calls, local_types);
+                    collect_calls(&binding.value, calls, local_types, variant_constructors);
                 }
-                Stmt::Assign(_, expr, _) => collect_calls(expr, calls, local_types),
+                Stmt::Assign(_, expr, _) => collect_calls(expr, calls, local_types, variant_constructors),
             }
         }
 
         // Collect all function calls from an expression
-        fn collect_calls(expr: &Expr, calls: &mut Vec<(String, usize)>, local_types: &mut HashMap<String, String>) {
+        fn collect_calls(
+            expr: &Expr,
+            calls: &mut Vec<(String, usize)>,
+            local_types: &mut HashMap<String, String>,
+            variant_constructors: &HashMap<String, String>,
+        ) {
             match expr {
                 Expr::Call(callee, _, args, span) => {
                     if let Some(name) = get_call_name(callee) {
                         calls.push((name, span.start));
                     }
-                    collect_calls(callee, calls, local_types);
+                    collect_calls(callee, calls, local_types, variant_constructors);
                     for arg in args {
-                        collect_calls(arg, calls, local_types);
+                        collect_calls(arg, calls, local_types, variant_constructors);
                     }
                 }
                 Expr::MethodCall(receiver, method, args, span) => {
@@ -3294,157 +3393,157 @@ impl ReplEngine {
                             local_types.get(&ident.node).cloned()
                         }
                         // Try to infer from expression
-                        _ => infer_expr_type(receiver, local_types),
+                        _ => infer_expr_type(receiver, local_types, variant_constructors),
                     };
 
                     if let Some(recv_type) = receiver_type {
                         let call_name = format!("{}.{}", recv_type, method.node);
                         calls.push((call_name, span.start));
                     }
-                    collect_calls(receiver, calls, local_types);
+                    collect_calls(receiver, calls, local_types, variant_constructors);
                     for arg in args {
-                        collect_calls(arg, calls, local_types);
+                        collect_calls(arg, calls, local_types, variant_constructors);
                     }
                 }
                 Expr::BinOp(left, _, right, _) => {
-                    collect_calls(left, calls, local_types);
-                    collect_calls(right, calls, local_types);
+                    collect_calls(left, calls, local_types, variant_constructors);
+                    collect_calls(right, calls, local_types, variant_constructors);
                 }
                 Expr::UnaryOp(_, operand, _) => {
-                    collect_calls(operand, calls, local_types);
+                    collect_calls(operand, calls, local_types, variant_constructors);
                 }
                 Expr::If(cond, then_branch, else_branch, _) => {
-                    collect_calls(cond, calls, local_types);
-                    collect_calls(then_branch, calls, local_types);
-                    collect_calls(else_branch, calls, local_types);
+                    collect_calls(cond, calls, local_types, variant_constructors);
+                    collect_calls(then_branch, calls, local_types, variant_constructors);
+                    collect_calls(else_branch, calls, local_types, variant_constructors);
                 }
                 Expr::Match(scrutinee, arms, _) => {
-                    collect_calls(scrutinee, calls, local_types);
+                    collect_calls(scrutinee, calls, local_types, variant_constructors);
                     for arm in arms {
                         if let Some(guard) = &arm.guard {
-                            collect_calls(guard, calls, local_types);
+                            collect_calls(guard, calls, local_types, variant_constructors);
                         }
-                        collect_calls(&arm.body, calls, local_types);
+                        collect_calls(&arm.body, calls, local_types, variant_constructors);
                     }
                 }
                 Expr::Block(stmts, _) => {
                     for stmt in stmts {
-                        collect_calls_stmt(stmt, calls, local_types);
+                        collect_calls_stmt(stmt, calls, local_types, variant_constructors);
                     }
                 }
                 Expr::Lambda(_, body, _) => {
-                    collect_calls(body, calls, local_types);
+                    collect_calls(body, calls, local_types, variant_constructors);
                 }
                 Expr::Tuple(exprs, _) => {
                     for e in exprs {
-                        collect_calls(e, calls, local_types);
+                        collect_calls(e, calls, local_types, variant_constructors);
                     }
                 }
                 Expr::List(exprs, spread, _) => {
                     for e in exprs {
-                        collect_calls(e, calls, local_types);
+                        collect_calls(e, calls, local_types, variant_constructors);
                     }
                     if let Some(s) = spread {
-                        collect_calls(s, calls, local_types);
+                        collect_calls(s, calls, local_types, variant_constructors);
                     }
                 }
                 Expr::Map(pairs, _) => {
                     for (k, v) in pairs {
-                        collect_calls(k, calls, local_types);
-                        collect_calls(v, calls, local_types);
+                        collect_calls(k, calls, local_types, variant_constructors);
+                        collect_calls(v, calls, local_types, variant_constructors);
                     }
                 }
                 Expr::Set(exprs, _) => {
                     for e in exprs {
-                        collect_calls(e, calls, local_types);
+                        collect_calls(e, calls, local_types, variant_constructors);
                     }
                 }
                 Expr::Record(_, fields, _) => {
                     for field in fields {
                         match field {
-                            nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls, local_types),
-                            nostos_syntax::ast::RecordField::Named(_, expr) => collect_calls(expr, calls, local_types),
+                            nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls, local_types, variant_constructors),
+                            nostos_syntax::ast::RecordField::Named(_, expr) => collect_calls(expr, calls, local_types, variant_constructors),
                         }
                     }
                 }
                 Expr::RecordUpdate(_, base, fields, _) => {
-                    collect_calls(base, calls, local_types);
+                    collect_calls(base, calls, local_types, variant_constructors);
                     for field in fields {
                         match field {
-                            nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls, local_types),
-                            nostos_syntax::ast::RecordField::Named(_, expr) => collect_calls(expr, calls, local_types),
+                            nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls, local_types, variant_constructors),
+                            nostos_syntax::ast::RecordField::Named(_, expr) => collect_calls(expr, calls, local_types, variant_constructors),
                         }
                     }
                 }
                 Expr::FieldAccess(base, _, _) => {
-                    collect_calls(base, calls, local_types);
+                    collect_calls(base, calls, local_types, variant_constructors);
                 }
                 Expr::Index(base, index, _) => {
-                    collect_calls(base, calls, local_types);
-                    collect_calls(index, calls, local_types);
+                    collect_calls(base, calls, local_types, variant_constructors);
+                    collect_calls(index, calls, local_types, variant_constructors);
                 }
                 Expr::Try(try_expr, catch_arms, finally_expr, _) => {
-                    collect_calls(try_expr, calls, local_types);
+                    collect_calls(try_expr, calls, local_types, variant_constructors);
                     for arm in catch_arms {
                         if let Some(guard) = &arm.guard {
-                            collect_calls(guard, calls, local_types);
+                            collect_calls(guard, calls, local_types, variant_constructors);
                         }
-                        collect_calls(&arm.body, calls, local_types);
+                        collect_calls(&arm.body, calls, local_types, variant_constructors);
                     }
                     if let Some(f) = finally_expr {
-                        collect_calls(f, calls, local_types);
+                        collect_calls(f, calls, local_types, variant_constructors);
                     }
                 }
                 Expr::Try_(inner, _) => {
-                    collect_calls(inner, calls, local_types);
+                    collect_calls(inner, calls, local_types, variant_constructors);
                 }
                 Expr::While(cond, body, _) => {
-                    collect_calls(cond, calls, local_types);
-                    collect_calls(body, calls, local_types);
+                    collect_calls(cond, calls, local_types, variant_constructors);
+                    collect_calls(body, calls, local_types, variant_constructors);
                 }
                 Expr::For(_, start, end, body, _) => {
-                    collect_calls(start, calls, local_types);
-                    collect_calls(end, calls, local_types);
-                    collect_calls(body, calls, local_types);
+                    collect_calls(start, calls, local_types, variant_constructors);
+                    collect_calls(end, calls, local_types, variant_constructors);
+                    collect_calls(body, calls, local_types, variant_constructors);
                 }
                 Expr::Do(stmts, _) => {
                     for stmt in stmts {
                         match stmt {
-                            DoStmt::Bind(_, expr) => collect_calls(expr, calls, local_types),
-                            DoStmt::Expr(expr) => collect_calls(expr, calls, local_types),
+                            DoStmt::Bind(_, expr) => collect_calls(expr, calls, local_types, variant_constructors),
+                            DoStmt::Expr(expr) => collect_calls(expr, calls, local_types, variant_constructors),
                         }
                     }
                 }
                 Expr::Send(target, msg, _) => {
-                    collect_calls(target, calls, local_types);
-                    collect_calls(msg, calls, local_types);
+                    collect_calls(target, calls, local_types, variant_constructors);
+                    collect_calls(msg, calls, local_types, variant_constructors);
                 }
                 Expr::Receive(arms, timeout, _) => {
                     for arm in arms {
                         if let Some(guard) = &arm.guard {
-                            collect_calls(guard, calls, local_types);
+                            collect_calls(guard, calls, local_types, variant_constructors);
                         }
-                        collect_calls(&arm.body, calls, local_types);
+                        collect_calls(&arm.body, calls, local_types, variant_constructors);
                     }
                     if let Some((timeout_expr, timeout_body)) = timeout {
-                        collect_calls(timeout_expr, calls, local_types);
-                        collect_calls(timeout_body, calls, local_types);
+                        collect_calls(timeout_expr, calls, local_types, variant_constructors);
+                        collect_calls(timeout_body, calls, local_types, variant_constructors);
                     }
                 }
                 Expr::Spawn(_, callee, args, _) => {
-                    collect_calls(callee, calls, local_types);
+                    collect_calls(callee, calls, local_types, variant_constructors);
                     for arg in args {
-                        collect_calls(arg, calls, local_types);
+                        collect_calls(arg, calls, local_types, variant_constructors);
                     }
                 }
                 Expr::Break(Some(expr), _) => {
-                    collect_calls(expr, calls, local_types);
+                    collect_calls(expr, calls, local_types, variant_constructors);
                 }
                 Expr::Quote(inner, _) => {
-                    collect_calls(inner, calls, local_types);
+                    collect_calls(inner, calls, local_types, variant_constructors);
                 }
                 Expr::Splice(inner, _) => {
-                    collect_calls(inner, calls, local_types);
+                    collect_calls(inner, calls, local_types, variant_constructors);
                 }
                 // Literals and simple expressions - no calls
                 _ => {}
@@ -3458,11 +3557,11 @@ impl ReplEngine {
             if let Item::FnDef(fn_def) = item {
                 for clause in &fn_def.clauses {
                     local_types.clear();
-                    collect_calls(&clause.body, &mut all_calls, &mut local_types);
+                    collect_calls(&clause.body, &mut all_calls, &mut local_types, &variant_constructors);
                 }
             }
             if let Item::Binding(binding) = item {
-                collect_calls(&binding.value, &mut all_calls, &mut local_types);
+                collect_calls(&binding.value, &mut all_calls, &mut local_types, &variant_constructors);
             }
         }
 
@@ -8723,5 +8822,266 @@ mod check_module_tests {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_ok(), "Chained List methods should be valid: {:?}", result);
+    }
+
+    #[test]
+    fn test_map_method_chained_valid() {
+        // m.insert(...).remove(...) - both return Map
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = { m = %{"a": 1}; m.insert("b", 2).remove("a") }"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Chained Map methods should be valid: {:?}", result);
+    }
+
+    #[test]
+    fn test_map_method_chained_invalid() {
+        // m.insert(...).xxx() - insert returns Map, xxx doesn't exist
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = { m = %{"a": 1}; m.insert("b", 2).xxx() }"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for Map.xxx");
+        assert!(result.unwrap_err().contains("Map.xxx"), "Error should mention Map.xxx");
+    }
+
+    #[test]
+    fn test_set_method_chained_valid() {
+        // s.insert(...).remove(...) - both return Set
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = { s = #{1, 2}; s.insert(3).remove(1) }";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Chained Set methods should be valid: {:?}", result);
+    }
+
+    #[test]
+    fn test_set_method_chained_invalid() {
+        // s.insert(...).xxx() - insert returns Set, xxx doesn't exist
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = { s = #{1, 2}; s.insert(3).xxx() }";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for Set.xxx");
+        assert!(result.unwrap_err().contains("Set.xxx"), "Error should mention Set.xxx");
+    }
+
+    #[test]
+    fn test_user_defined_type_valid() {
+        // User-defined record type
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+type Person = { name: String, age: Int }
+
+greet(p: Person) = "Hello"
+
+main() = {
+  p = Person("John", 30)
+  greet(p)
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "User-defined type should compile: {:?}", result);
+    }
+
+    #[test]
+    fn test_user_defined_type_invalid_method() {
+        // User-defined record type with invalid method call
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+type Person = { name: String, age: Int }
+
+main() = {
+  p = Person("John", 30)
+  p.xxx()
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for Person.xxx");
+        assert!(result.unwrap_err().contains("Person.xxx"), "Error should mention Person.xxx");
+    }
+
+    #[test]
+    fn test_variant_type_invalid_method() {
+        // User-defined variant type with invalid method call
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+type MyResult[T, E] = Ok(T) | Err(E)
+main() = { r = Ok(42); r.xxx() }
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for MyResult.xxx");
+        assert!(result.unwrap_err().contains("MyResult.xxx"), "Error should mention MyResult.xxx");
+    }
+
+    #[test]
+    fn test_map_direct_literal_method() {
+        // Direct method call on Map literal
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = %{"a": 1}.insert("b", 2)"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Map literal method should be valid: {:?}", result);
+    }
+
+    #[test]
+    fn test_map_direct_literal_invalid() {
+        // Direct invalid method call on Map literal
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = %{"a": 1}.xxx()"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for Map.xxx");
+        assert!(result.unwrap_err().contains("Map.xxx"), "Error should mention Map.xxx");
+    }
+
+    #[test]
+    fn test_set_direct_literal_method() {
+        // Direct method call on Set literal
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = #{1, 2}.insert(3)";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Set literal method should be valid: {:?}", result);
+    }
+
+    #[test]
+    fn test_set_direct_literal_invalid() {
+        // Direct invalid method call on Set literal
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = #{1, 2}.xxx()";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for Set.xxx");
+        assert!(result.unwrap_err().contains("Set.xxx"), "Error should mention Set.xxx");
+    }
+
+    #[test]
+    fn test_list_direct_literal_method() {
+        // Direct method call on List literal
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = [1, 2, 3].map(x => x * 2)";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "List literal method should be valid: {:?}", result);
+    }
+
+    #[test]
+    fn test_list_direct_literal_invalid() {
+        // Direct invalid method call on List literal
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = [1, 2, 3].xxx()";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for List.xxx");
+        assert!(result.unwrap_err().contains("List.xxx"), "Error should mention List.xxx");
+    }
+
+    #[test]
+    fn test_user_type_with_method() {
+        // User-defined type with a valid method defined for it (using traits)
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+type Person = { name: String, age: Int }
+trait Greet greet(self) -> String end
+Person: Greet greet(self) = "Hello, " ++ self.name end
+main() = { p = Person("John", 30); p.greet() }
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "User-defined type with method should compile: {:?}", result);
+    }
+
+    #[test]
+    fn test_nested_record_field_access_then_method() {
+        // Access field of record, then call method on the result
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+type Person = { name: String, age: Int }
+
+main() = {
+  p = Person("John", 30)
+  p.name.length()
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Field access followed by method should work: {:?}", result);
+    }
+
+    #[test]
+    fn test_map_keys_returns_list() {
+        // m.keys() returns List, then .map() on it should be valid
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = { m = %{"a": 1}; m.keys().map(k => k) }"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Map.keys().map() should be valid: {:?}", result);
+    }
+
+    #[test]
+    fn test_set_tolist_returns_list() {
+        // s.toList() returns List, then .map() on it should be valid
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = { s = #{1, 2}; s.toList().map(x => x * 2) }";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Set.toList().map() should be valid: {:?}", result);
+    }
+
+    #[test]
+    fn test_triple_chained_list_methods() {
+        // x.map().filter().take() - all return List
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = [1,2,3].map(x => x * 2).filter(x => x > 2).take(1)";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Triple chained List methods should be valid: {:?}", result);
+    }
+
+    #[test]
+    fn test_string_chars_then_map() {
+        // s.chars() returns List, then .map() should be valid
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = "hello".chars().map(c => c)"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "String.chars().map() should be valid: {:?}", result);
+    }
+
+    #[test]
+    fn test_bool_no_methods() {
+        // Bool has no methods, so any method call should fail
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = { b = true; b.xxx() }";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for Bool.xxx");
+        assert!(result.unwrap_err().contains("Bool.xxx"), "Error should mention Bool.xxx");
+    }
+
+    #[test]
+    fn test_float_no_methods() {
+        // Float has no methods, so any method call should fail
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = { f = 3.14; f.xxx() }";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for Float.xxx");
+        assert!(result.unwrap_err().contains("Float.xxx"), "Error should mention Float.xxx");
+    }
+
+    #[test]
+    fn test_char_no_methods() {
+        // Char has no methods, so any method call should fail
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = { c = 'a'; c.xxx() }";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for Char.xxx");
+        assert!(result.unwrap_err().contains("Char.xxx"), "Error should mention Char.xxx");
     }
 }
