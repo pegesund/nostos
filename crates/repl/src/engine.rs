@@ -9745,8 +9745,8 @@ main() = 1 + "hello"
 
     #[test]
     fn test_string_contains_int_is_runtime_error() {
-        // String.contains(Int) is a runtime error, not compile-time
-        // The compiler allows it but VM catches it at runtime
+        // String.contains(Int) is NOW caught at compile-time via UFCS type checking!
+        // The type checker looks up String.contains and unifies Int against String param
         let mut engine = ReplEngine::new(ReplConfig::default());
         engine.load_stdlib().expect("Failed to load stdlib");
 
@@ -9758,8 +9758,11 @@ main() = {
 "#;
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
-        // This actually compiles fine - it's only a runtime error
-        // Dynamic typing allows this at compile time
+        // Now caught at compile time - Int doesn't unify with String
+        assert!(result.is_err(), "Expected type error");
+        let err = result.unwrap_err();
+        assert!(err.contains("unify") || err.contains("Int") || err.contains("String"),
+            "Error should mention type mismatch: {}", err);
     }
 
     #[test]
@@ -9782,5 +9785,28 @@ main() = {
         if result.is_err() {
             println!("Got error: {}", result.unwrap_err());
         }
+    }
+
+    #[test]
+    fn test_string_contains_int_type_error() {
+        // String.contains expects a String argument, not Int
+        // This SHOULD be caught at compile time now that we have UFCS type checking
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        let code = r#"
+main() = {
+  s = "hello"
+  s.contains(123)
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        // Now with UFCS type checking, this should be a type error
+        assert!(result.is_err(), "Expected type error for String.contains(Int)");
+        let err = result.unwrap_err();
+        println!("Error: {}", err);
+        assert!(err.contains("unify") || err.contains("String") || err.contains("Int"),
+            "Error should mention type mismatch: {}", err);
     }
 }

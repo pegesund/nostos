@@ -105,6 +105,45 @@ impl<'a> InferCtx<'a> {
             .push(Constraint::HasField(ty, field.to_string(), field_ty));
     }
 
+    /// Get the base type name from a resolved type (for UFCS method lookup).
+    /// Returns None for type variables or types without a clear base name.
+    fn get_type_name(&self, ty: &Type) -> Option<String> {
+        // First, resolve any type variables
+        let resolved = self.env.apply_subst(ty);
+        match resolved {
+            Type::String => Some("String".to_string()),
+            Type::Int | Type::Int64 => Some("Int".to_string()),
+            Type::Int8 => Some("Int8".to_string()),
+            Type::Int16 => Some("Int16".to_string()),
+            Type::Int32 => Some("Int32".to_string()),
+            Type::UInt8 => Some("UInt8".to_string()),
+            Type::UInt16 => Some("UInt16".to_string()),
+            Type::UInt32 => Some("UInt32".to_string()),
+            Type::UInt64 => Some("UInt64".to_string()),
+            Type::Float | Type::Float64 => Some("Float".to_string()),
+            Type::Float32 => Some("Float32".to_string()),
+            Type::BigInt => Some("BigInt".to_string()),
+            Type::Decimal => Some("Decimal".to_string()),
+            Type::Bool => Some("Bool".to_string()),
+            Type::Char => Some("Char".to_string()),
+            Type::List(_) => Some("List".to_string()),
+            Type::Array(_) => Some("Array".to_string()),
+            Type::Map(_, _) => Some("Map".to_string()),
+            Type::Set(_) => Some("Set".to_string()),
+            Type::Named { name, .. } => Some(name),
+            Type::Pid => Some("Pid".to_string()),
+            Type::Ref => Some("Ref".to_string()),
+            Type::IO(_) => Some("IO".to_string()),
+            Type::Tuple(_) => Some("Tuple".to_string()),
+            // Variant types can have methods
+            Type::Variant(vt) => Some(vt.name.clone()),
+            // Type variables can't be looked up
+            Type::Var(_) | Type::TypeParam(_) => None,
+            // These don't have methods
+            Type::Unit | Type::Never | Type::Function(_) | Type::Record(_) => None,
+        }
+    }
+
     /// Instantiate a polymorphic function type.
     /// Replaces type parameters AND existing Var types with fresh type variables.
     /// This ensures each call site gets its own type variables for proper unification.
@@ -955,18 +994,38 @@ impl<'a> InferCtx<'a> {
                     }
                 }
 
-                // Regular method call on a value
+                // Regular method call on a value - use UFCS lookup
                 let receiver_ty = self.infer_expr(receiver)?;
                 let mut arg_types = vec![receiver_ty.clone()];
                 for arg in args {
                     arg_types.push(self.infer_expr(arg)?);
                 }
 
-                // Look up method based on receiver type
+                // Try UFCS lookup: resolve receiver type and look up Type.method
+                if let Some(type_name) = self.get_type_name(&receiver_ty) {
+                    let qualified_name = format!("{}.{}", type_name, method.node);
+                    if let Some(fn_type) = self.env.functions.get(&qualified_name).cloned() {
+                        // Found the function - instantiate and unify
+                        let func_ty = self.instantiate_function(&fn_type);
+                        if let Type::Function(ft) = func_ty {
+                            // Check arity (including receiver as first arg)
+                            if ft.params.len() != arg_types.len() {
+                                return Err(TypeError::ArityMismatch {
+                                    expected: ft.params.len(),
+                                    found: arg_types.len(),
+                                });
+                            }
+                            // Unify argument types with parameter types
+                            for (param_ty, arg_ty) in ft.params.iter().zip(arg_types.iter()) {
+                                self.unify(arg_ty.clone(), param_ty.clone());
+                            }
+                            return Ok(*ft.ret);
+                        }
+                    }
+                }
+
+                // Fallback: unknown method or unresolved type - return fresh var
                 let ret_ty = self.fresh();
-                // For now, we just return a fresh var
-                // A full impl would look up method in trait/impl
-                let _ = method;
                 Ok(ret_ty)
             }
 

@@ -9311,6 +9311,17 @@ impl Compiler {
         // the inferred function signature uses type variables that don't match
         // the concrete mvar types.
 
+        // Register built-in functions from BUILTINS for type inference
+        // This enables UFCS type checking (e.g., String.contains expects String -> Bool)
+        for builtin in BUILTINS {
+            if env.functions.contains_key(builtin.name) {
+                continue; // Don't overwrite standard_env functions
+            }
+            if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
+                env.functions.insert(builtin.name.to_string(), fn_type);
+            }
+        }
+
         // Register known functions FIRST - these have actual inferred types
         // after compilation, not just type variables
         for (fn_name, fn_val) in &self.functions {
@@ -10012,8 +10023,10 @@ impl Compiler {
         let ret_str = parts.last()?;
         let param_strs = &parts[..parts.len() - 1];
 
+        // Filter out "()" which means no params in signature syntax (e.g., "() -> Pid")
         let params: Vec<nostos_types::Type> = param_strs
             .iter()
+            .filter(|s| s.trim() != "()")
             .map(|s| self.type_name_to_type(s.trim()))
             .collect();
 
