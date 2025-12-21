@@ -277,6 +277,19 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Pg.queryPrepared", signature: "Int -> String -> [a] -> [[a]]", doc: "Execute prepared query with params, returns rows" },
     BuiltinInfo { name: "Pg.executePrepared", signature: "Int -> String -> [a] -> Int", doc: "Execute prepared statement with params, returns affected count" },
     BuiltinInfo { name: "Pg.deallocate", signature: "Int -> String -> ()", doc: "Deallocate a prepared statement" },
+
+    // === UUID Functions ===
+    BuiltinInfo { name: "Uuid.v4", signature: "() -> String", doc: "Generate a random UUID v4" },
+    BuiltinInfo { name: "Uuid.isValid", signature: "String -> Bool", doc: "Check if string is a valid UUID" },
+
+    // === Crypto Functions ===
+    BuiltinInfo { name: "Crypto.sha256", signature: "String -> String", doc: "Compute SHA-256 hash, returns hex string" },
+    BuiltinInfo { name: "Crypto.sha512", signature: "String -> String", doc: "Compute SHA-512 hash, returns hex string" },
+    BuiltinInfo { name: "Crypto.md5", signature: "String -> String", doc: "Compute MD5 hash (insecure, for compatibility), returns hex string" },
+    BuiltinInfo { name: "Crypto.bcryptHash", signature: "String -> Int -> String", doc: "Hash password with bcrypt: bcryptHash(password, cost)" },
+    BuiltinInfo { name: "Crypto.bcryptVerify", signature: "String -> String -> Bool", doc: "Verify password against bcrypt hash: bcryptVerify(password, hash)" },
+    BuiltinInfo { name: "Crypto.randomBytes", signature: "Int -> String", doc: "Generate n random bytes as hex string" },
+
     // Time builtins
     BuiltinInfo { name: "Time.now", signature: "() -> Int", doc: "Get current UTC timestamp in milliseconds since epoch" },
     BuiltinInfo { name: "Time.fromDate", signature: "Int -> Int -> Int -> Int", doc: "Create timestamp from year, month, day (at midnight UTC)" },
@@ -771,7 +784,7 @@ impl Compiler {
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
-            "Pg",
+            "Pg", "Uuid", "Crypto",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -1147,7 +1160,7 @@ impl Compiler {
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
-            "Pg",
+            "Pg", "Uuid", "Crypto",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -3866,6 +3879,38 @@ impl Compiler {
                             let dst = self.alloc_reg();
                             let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
                             self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg, arg2_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // UUID functions (0 args)
+                        "Uuid.v4" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![].into()), line);
+                            return Ok(dst);
+                        }
+                        // UUID functions (1 arg)
+                        "Uuid.isValid" if args.len() == 1 => {
+                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Crypto functions (1 arg)
+                        "Crypto.sha256" | "Crypto.sha512" | "Crypto.md5" | "Crypto.randomBytes" if args.len() == 1 => {
+                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Crypto functions (2 args)
+                        "Crypto.bcryptHash" | "Crypto.bcryptVerify" if args.len() == 2 => {
+                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
                             return Ok(dst);
                         }
                         // Map functions (1 arg)

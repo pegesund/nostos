@@ -3034,6 +3034,166 @@ impl ParallelVM {
             }),
         }));
 
+        // === UUID Functions ===
+
+        self.register_native("Uuid.v4", Arc::new(GcNativeFn {
+            name: "Uuid.v4".to_string(),
+            arity: 0,
+            func: Box::new(|_args, heap| {
+                use uuid::Uuid;
+                let id = Uuid::new_v4().to_string();
+                Ok(GcValue::String(heap.alloc_string(id)))
+            }),
+        }));
+
+        self.register_native("Uuid.isValid", Arc::new(GcNativeFn {
+            name: "Uuid.isValid".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use uuid::Uuid;
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match s {
+                    Some(s) => Ok(GcValue::Bool(Uuid::parse_str(&s).is_ok())),
+                    None => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // === Crypto Functions ===
+
+        self.register_native("Crypto.sha256", Arc::new(GcNativeFn {
+            name: "Crypto.sha256".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use sha2::{Sha256, Digest};
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match s {
+                    Some(s) => {
+                        let mut hasher = Sha256::new();
+                        hasher.update(s.as_bytes());
+                        let result = hasher.finalize();
+                        let hex = result.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                        Ok(GcValue::String(heap.alloc_string(hex)))
+                    },
+                    None => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Crypto.sha512", Arc::new(GcNativeFn {
+            name: "Crypto.sha512".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use sha2::{Sha512, Digest};
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match s {
+                    Some(s) => {
+                        let mut hasher = Sha512::new();
+                        hasher.update(s.as_bytes());
+                        let result = hasher.finalize();
+                        let hex = result.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                        Ok(GcValue::String(heap.alloc_string(hex)))
+                    },
+                    None => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Crypto.md5", Arc::new(GcNativeFn {
+            name: "Crypto.md5".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use md5::{Md5, Digest};
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match s {
+                    Some(s) => {
+                        let mut hasher = Md5::new();
+                        hasher.update(s.as_bytes());
+                        let result = hasher.finalize();
+                        let hex = result.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                        Ok(GcValue::String(heap.alloc_string(hex)))
+                    },
+                    None => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Crypto.bcryptHash", Arc::new(GcNativeFn {
+            name: "Crypto.bcryptHash".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let password = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let cost = match &args[1] {
+                    GcValue::Int64(n) => *n as u32,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                match password {
+                    Some(password) => {
+                        match bcrypt::hash(password, cost) {
+                            Ok(hash) => Ok(GcValue::String(heap.alloc_string(hash))),
+                            Err(e) => Err(RuntimeError::Panic(format!("bcrypt error: {}", e)))
+                        }
+                    },
+                    None => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Crypto.bcryptVerify", Arc::new(GcNativeFn {
+            name: "Crypto.bcryptVerify".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let password = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let hash = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (password, hash) {
+                    (Some(password), Some(hash)) => {
+                        match bcrypt::verify(password, &hash) {
+                            Ok(valid) => Ok(GcValue::Bool(valid)),
+                            Err(_) => Ok(GcValue::Bool(false))
+                        }
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Crypto.randomBytes", Arc::new(GcNativeFn {
+            name: "Crypto.randomBytes".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use rand::RngCore;
+                let n = match &args[0] {
+                    GcValue::Int64(n) => *n as usize,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let mut bytes = vec![0u8; n];
+                rand::thread_rng().fill_bytes(&mut bytes);
+                let hex = bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                Ok(GcValue::String(heap.alloc_string(hex)))
+            }),
+        }));
+
         // === Map Functions ===
 
         // Map.insert(map, key, value) -> new map with key-value inserted

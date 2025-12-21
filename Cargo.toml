@@ -49,6 +49,12 @@ chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 regex = "1"
 
+# UUID, Crypto
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+md-5 = "0.10"
+bcrypt = "0.16"
+
 # Database
 tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
 
