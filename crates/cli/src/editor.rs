@@ -16,6 +16,8 @@ struct EditorCompletionSource<'a> {
     engine: &'a ReplEngine,
     /// Current buffer content for local variable inference
     buffer_content: &'a str,
+    /// Current module name for qualified function lookups
+    module_name: Option<&'a str>,
 }
 
 impl<'a> EditorCompletionSource<'a> {
@@ -137,10 +139,22 @@ impl<'a> EditorCompletionSource<'a> {
                 }
             }
 
-            // Try engine function signature
+            // Try engine function signature (unqualified name)
             if let Some(sig) = self.engine.get_function_signature(func_name) {
                 if let Some(arrow_pos) = sig.rfind("->") {
                     return Some(sig[arrow_pos + 2..].trim().to_string());
+                }
+            }
+
+            // Try with module-qualified name (e.g., "module.func")
+            if let Some(module) = self.module_name {
+                if !func_name.contains('.') {
+                    let qualified = format!("{}.{}", module, func_name);
+                    if let Some(sig) = self.engine.get_function_signature(&qualified) {
+                        if let Some(arrow_pos) = sig.rfind("->") {
+                            return Some(sig[arrow_pos + 2..].trim().to_string());
+                        }
+                    }
                 }
             }
         }
@@ -471,7 +485,11 @@ impl CodeEditor {
         // Initialize autocomplete from engine
         {
             let eng = engine.borrow();
-            let source = EditorCompletionSource { engine: &eng, buffer_content: "" };
+            let source = EditorCompletionSource {
+                engine: &eng,
+                buffer_content: "",
+                module_name: self.module_name.as_deref(),
+            };
             self.autocomplete.update_from_source(&source);
         }
         self.engine = Some(engine);
@@ -599,16 +617,11 @@ impl CodeEditor {
         // Get completions with module context and imports
         // Use EditorCompletionSource which can infer local variable types from buffer
         let eng = engine.borrow();
-        let source = EditorCompletionSource { engine: &eng, buffer_content: &full_content };
-
-        // Debug: log available functions
-        let funcs = source.get_functions();
-        eprintln!("[AC] module_name={:?}, context={:?}, funcs_count={}, imports={:?}",
-            self.module_name, context, funcs.len(), imports);
-        if funcs.len() < 20 {
-            eprintln!("[AC] functions: {:?}", funcs);
-        }
-        eprintln!("[AC] modules in autocomplete: {:?}", self.autocomplete.modules);
+        let source = EditorCompletionSource {
+            engine: &eng,
+            buffer_content: &full_content,
+            module_name: self.module_name.as_deref(),
+        };
 
         let candidates = self.autocomplete.get_completions_with_context(
             &context,
@@ -653,7 +666,11 @@ impl CodeEditor {
         };
 
         let eng = engine.borrow();
-        let source = EditorCompletionSource { engine: &eng, buffer_content: "" };
+        let source = EditorCompletionSource {
+            engine: &eng,
+            buffer_content: "",
+            module_name: Some(&module),
+        };
 
         // Get all functions from the current module
         let mut candidates: Vec<CompletionItem> = source.get_functions()
