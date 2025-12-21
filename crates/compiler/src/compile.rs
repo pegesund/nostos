@@ -8802,6 +8802,21 @@ impl Compiler {
         self.types.keys().map(|s| s.as_str()).collect()
     }
 
+    /// Get all types as TypeValue for external registration.
+    pub fn get_all_types(&self) -> HashMap<String, Arc<TypeValue>> {
+        self.get_vm_types()
+    }
+
+    /// Get all known module prefixes.
+    pub fn get_known_modules(&self) -> impl Iterator<Item = &str> {
+        self.known_modules.iter().map(|s| s.as_str())
+    }
+
+    /// Add an import alias (local name -> qualified name).
+    pub fn add_import_alias(&mut self, local_name: &str, qualified_name: &str) {
+        self.imports.insert(local_name.to_string(), qualified_name.to_string());
+    }
+
     /// Set local variable types for REPL method dispatch.
     /// This allows the compiler to know variable types from previous REPL evaluations.
     pub fn set_local_types(&mut self, types: HashMap<String, String>) {
