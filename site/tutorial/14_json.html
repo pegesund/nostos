@@ -89,10 +89,13 @@
                 <!-- Parsing JSON -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Parsing JSON</h2>
                 <p class="text-slate-400 mb-4">Use <code>jsonParse</code> to parse a JSON string into a <code>Json</code> value. It's available in the prelude, no import needed.</p>
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-4 border border-slate-700">
+                    <p class="text-slate-400 text-sm"><strong>Tip:</strong> Use single-quoted strings for JSON to avoid escaping double quotes: <code>'{"name": "Alice"}'</code> instead of <code>"{\"name\": \"Alice\"}"</code></p>
+                </div>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">main() = {
-    # Parse a JSON string
-    json = jsonParse("{\"name\": \"Alice\", \"age\": 30}")
+    # Parse a JSON string (single quotes make it cleaner!)
+    json = jsonParse('{"name": "Alice", "age": 30}')
 
     # The Json type is a variant:
     # Null | Bool(Bool) | Number(Float) | String(String)
@@ -111,7 +114,7 @@ type Person = { name: String, age: Int }
 
 main() = {
     # Parse JSON string
-    json = jsonParse("{\"name\": \"Alice\", \"age\": 30}")
+    json = jsonParse('{"name": "Alice", "age": 30}')
 
     # Convert to typed value
     person = fromJson[Person](json)
@@ -148,12 +151,12 @@ type Pair = { data: (Int, String) }
 
 main() = {
     # Nested record example
-    json = jsonParse("{\"name\": \"Bob\", \"address\": {\"city\": \"Oslo\", \"zip\": 1234}}")
+    json = jsonParse('{"name": "Bob", "address": {"city": "Oslo", "zip": 1234}}')
     person = fromJson[Person](json)
     println(person.address.city)  # "Oslo"
 
     # Tuple example
-    json2 = jsonParse("{\"data\": [42, \"hello\"]}")
+    json2 = jsonParse('{"data": [42, "hello"]}')
     pair = fromJson[Pair](json2)
     println(pair.data)  # (42, hello)
 }</code></pre>
@@ -170,13 +173,13 @@ getValue(Err(_)) = 0
 
 main() = {
     # Ok(42) is represented as: {"Ok": {"_0": 42}}
-    json = jsonParse("{\"Ok\": {\"_0\": 42}}")
+    json = jsonParse('{"Ok": {"_0": 42}}')
     result = fromJson[Result](json)
 
     println(getValue(result))  # 42
 
     # Err("fail") is: {"Err": {"_0": "something went wrong"}}
-    json2 = jsonParse("{\"Err\": {\"_0\": \"something went wrong\"}}")
+    json2 = jsonParse('{"Err": {"_0": "something went wrong"}}')
     result2 = fromJson[Result](json2)
     println(tagOf(result2))  # "Err"
 }
@@ -198,7 +201,7 @@ type Status = Active | Pending | Done
 
 main() = {
     # Missing required field
-    json = jsonParse("{\"name\": \"Alice\"}")
+    json = jsonParse('{"name": "Alice"}')
 
     try {
         person = fromJson[Person](json)
@@ -315,7 +318,7 @@ person = makeRecordByName(typeName, fields)
 result = makeVariantByName("Result", "Ok", %{"_0": Number(100.0)})
 
 # And for JSON conversion using stdlib fromJsonValue
-json = jsonParse("{\"name\": \"Charlie\", \"age\": 35}")
+json = jsonParse('{"name": "Charlie", "age": 35}')
 person2 = stdlib.json.fromJsonValue("Person", json)</code></pre>
                 </div>
 
