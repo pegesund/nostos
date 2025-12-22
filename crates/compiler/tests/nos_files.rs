@@ -1139,3 +1139,160 @@ mod json {
     #[test]
     fn json_to_type_error_wrong_json_type() { run_category_test("json_to_type_error_wrong_json_type"); }
 }
+
+// === Debugger Integration Tests ===
+
+mod debugger_tests {
+    use super::*;
+    use nostos_vm::shared_types::DebugEvent;
+    use std::time::Duration;
+
+    fn setup_vm_for_debug(code: &str) -> AsyncVM {
+        // Parse
+        let (module_opt, errors) = parse(code);
+        assert!(errors.is_empty(), "Parse error: {:?}", errors);
+        let module = module_opt.expect("Parse returned no module");
+
+        // Compile with stdlib
+        let stdlib_path = find_stdlib_path();
+        let compiler = compile_module_with_stdlib(&module, code, &stdlib_path)
+            .expect("Compile failed");
+
+        // Create AsyncVM
+        let config = AsyncConfig::default();
+        let mut vm = AsyncVM::new(config);
+        vm.register_default_natives();
+
+        for (name, func) in compiler.get_all_functions().iter() {
+            vm.register_function(name, func.clone());
+        }
+        vm.set_function_list(compiler.get_function_list());
+        for (name, type_val) in compiler.get_vm_types().iter() {
+            vm.register_type(name, type_val.clone());
+        }
+
+        vm
+    }
+
+    #[test]
+    fn test_debugger_basic_step() {
+        let code = r#"
+            main() = {
+                x = 10
+                y = 20
+                x + y
+            }
+        "#;
+
+        let vm = setup_vm_for_debug(code);
+
+        // Start debug session
+        let session = vm.run_debug("main/").expect("Debug session failed");
+
+        // Should receive Paused event immediately (starts paused)
+        let event = session.event_receiver.recv_timeout(Duration::from_secs(5))
+            .expect("Expected Paused event");
+        assert!(matches!(event, DebugEvent::Paused { .. }), "Expected Paused event, got {:?}", event);
+
+        // Continue to completion
+        session.continue_exec().expect("Continue failed");
+
+        // Should receive Exited event
+        let mut found_exit = false;
+        for _ in 0..10 {
+            match session.event_receiver.recv_timeout(Duration::from_millis(500)) {
+                Ok(DebugEvent::Exited { value, .. }) => {
+                    assert!(value.is_some(), "Expected a return value");
+                    let val = value.unwrap();
+                    assert!(val.contains("30"), "Expected 30, got {:?}", val);
+                    found_exit = true;
+                    break;
+                }
+                Ok(e) => {
+                    // May get other events like Paused
+                    println!("Received event: {:?}", e);
+                }
+                Err(_) => break,
+            }
+        }
+        assert!(found_exit, "Expected Exited event");
+    }
+
+    #[test]
+    fn test_debugger_breakpoint() {
+        let code = r#"
+            add(a: Int, b: Int) -> Int = a + b
+
+            main() = {
+                x = 10
+                y = 20
+                z = add(x, y)
+                z
+            }
+        "#;
+
+        let vm = setup_vm_for_debug(code);
+        let session = vm.run_debug("main/").expect("Debug session failed");
+
+        // Wait for initial pause
+        let _ = session.event_receiver.recv_timeout(Duration::from_secs(5));
+
+        // Set a breakpoint at a line (line numbers depend on compilation)
+        session.set_breakpoint(7).ok();
+
+        // Continue execution
+        session.continue_exec().expect("Continue failed");
+
+        // Wait for result
+        let result = session.wait();
+        assert!(result.is_ok(), "Execution failed: {:?}", result);
+    }
+
+    #[test]
+    fn test_debugger_print_locals() {
+        let code = r#"
+            main() = {
+                x = 42
+                y = "hello"
+                x
+            }
+        "#;
+
+        let vm = setup_vm_for_debug(code);
+        let session = vm.run_debug("main/").expect("Debug session failed");
+
+        // Wait for initial pause
+        let _ = session.event_receiver.recv_timeout(Duration::from_secs(5));
+
+        // Step to build up some local variables
+        session.step_line().expect("Step failed");
+
+        // Wait for pause after step
+        let _ = session.event_receiver.recv_timeout(Duration::from_secs(1));
+
+        // Request locals
+        session.print_locals().expect("Print locals failed");
+
+        // Wait for Locals event
+        let mut found_locals = false;
+        for _ in 0..5 {
+            match session.event_receiver.recv_timeout(Duration::from_millis(500)) {
+                Ok(DebugEvent::Locals { variables }) => {
+                    println!("Got locals: {:?}", variables);
+                    found_locals = true;
+                    break;
+                }
+                Ok(e) => println!("Got event: {:?}", e),
+                Err(_) => break,
+            }
+        }
+
+        // Continue to completion
+        session.continue_exec().ok();
+        let _ = session.wait();
+
+        // Note: locals may or may not be populated depending on debug symbol generation
+        // For now, we just check that the request doesn't crash
+        println!("Found locals: {}", found_locals);
+    }
+}

@@ -56,6 +56,141 @@ pub type PanelCommandSender = crossbeam::channel::Sender<PanelCommand>;
 /// Type alias for the panel command receiver channel
 pub type PanelCommandReceiver = crossbeam::channel::Receiver<PanelCommand>;
 
+// ============================================================================
+// Debugger types for stepping, breakpoints, and variable inspection
+// ============================================================================
+
+/// A breakpoint location (function name + line number)
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Breakpoint {
+    /// Source file name (optional, for disambiguation)
+    pub file: Option<String>,
+    /// Line number (1-indexed)
+    pub line: usize,
+}
+
+impl Breakpoint {
+    pub fn new(line: usize) -> Self {
+        Self { file: None, line }
+    }
+
+    pub fn with_file(file: String, line: usize) -> Self {
+        Self { file: Some(file), line }
+    }
+}
+
+/// Step mode for the debugger
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StepMode {
+    /// Run normally (no stepping)
+    Run,
+    /// Pause execution (waiting for command)
+    Paused,
+    /// Execute one instruction then pause
+    StepInstruction,
+    /// Execute until next source line then pause
+    StepLine,
+    /// Execute until current function returns then pause
+    StepOut,
+    /// Execute until next line in current function (step over calls)
+    StepOver,
+}
+
+/// Commands sent from the debugger to a process
+#[derive(Clone, Debug)]
+pub enum DebugCommand {
+    /// Continue execution
+    Continue,
+    /// Step one instruction
+    StepInstruction,
+    /// Step to next source line
+    StepLine,
+    /// Step over (next line in current function)
+    StepOver,
+    /// Step out (until current function returns)
+    StepOut,
+    /// Add a breakpoint
+    AddBreakpoint(Breakpoint),
+    /// Remove a breakpoint
+    RemoveBreakpoint(Breakpoint),
+    /// List all breakpoints
+    ListBreakpoints,
+    /// Print a variable by name
+    PrintVariable(String),
+    /// Print all local variables
+    PrintLocals,
+    /// Print the call stack
+    PrintStack,
+}
+
+/// Events sent from a process to the debugger
+#[derive(Clone, Debug)]
+pub enum DebugEvent {
+    /// Process hit a breakpoint
+    BreakpointHit {
+        pid: u64,
+        file: Option<String>,
+        line: usize,
+        function: String,
+    },
+    /// Process paused (step completed)
+    Paused {
+        pid: u64,
+        file: Option<String>,
+        line: usize,
+        function: String,
+    },
+    /// Process exited
+    Exited {
+        pid: u64,
+        value: Option<String>,
+    },
+    /// Variable value
+    Variable {
+        name: String,
+        value: String,
+        type_name: String,
+    },
+    /// List of local variables
+    Locals {
+        variables: Vec<(String, String, String)>, // (name, value, type)
+    },
+    /// Call stack
+    Stack {
+        frames: Vec<StackFrame>,
+    },
+    /// List of breakpoints
+    Breakpoints {
+        breakpoints: Vec<Breakpoint>,
+    },
+    /// Error message
+    Error {
+        message: String,
+    },
+}
+
+/// A stack frame for debug display
+#[derive(Clone, Debug)]
+pub struct StackFrame {
+    /// Function name
+    pub function: String,
+    /// Source file
+    pub file: Option<String>,
+    /// Line number
+    pub line: usize,
+    /// Local variable names (for summary)
+    pub locals: Vec<String>,
+}
+
+/// Type alias for debug command sender
+pub type DebugCommandSender = crossbeam::channel::Sender<DebugCommand>;
+/// Type alias for debug command receiver
+pub type DebugCommandReceiver = crossbeam::channel::Receiver<DebugCommand>;
+/// Type alias for debug event sender
+pub type DebugEventSender = crossbeam::channel::Sender<DebugEvent>;
+/// Type alias for debug event receiver
+pub type DebugEventReceiver = crossbeam::channel::Receiver<DebugEvent>;
+
 /// Command for evaluating code from Nostos via the main thread (which has the compiler).
 /// Uses a request-response pattern with a reply channel.
 pub struct EvalCommand {

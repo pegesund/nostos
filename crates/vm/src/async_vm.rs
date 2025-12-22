@@ -271,6 +271,26 @@ pub struct AsyncProcess {
     /// Local interrupt flag for this process (used for independent eval cancellation).
     /// If Some, this takes precedence over the shared interrupt flag.
     pub local_interrupt: Option<Arc<AtomicBool>>,
+
+    // === Debugger state ===
+
+    /// Active breakpoints
+    pub breakpoints: std::collections::HashSet<crate::shared_types::Breakpoint>,
+
+    /// Current step mode
+    pub step_mode: crate::shared_types::StepMode,
+
+    /// Last source line (for step-line detection)
+    pub debug_last_line: usize,
+
+    /// Frame depth when step-over/step-out started
+    pub debug_step_frame_depth: usize,
+
+    /// Debug command receiver (from debugger)
+    pub debug_command_receiver: Option<crate::shared_types::DebugCommandReceiver>,
+
+    /// Debug event sender (to debugger)
+    pub debug_event_sender: Option<crate::shared_types::DebugEventSender>,
 }
 
 /// Helper trait to convert register/constant indices (u8, u16, etc.) to usize.
@@ -328,6 +348,13 @@ impl AsyncProcess {
             mvar_lock_depths: HashMap::new(),
             profile: if profiling_enabled { Some(ProfileData::new()) } else { None },
             local_interrupt: None,
+            // Debugger state
+            breakpoints: std::collections::HashSet::new(),
+            step_mode: crate::shared_types::StepMode::Run,
+            debug_last_line: 0,
+            debug_step_frame_depth: 0,
+            debug_command_receiver: None,
+            debug_event_sender: None,
         }
     }
 
@@ -357,6 +384,13 @@ impl AsyncProcess {
             mvar_lock_depths: HashMap::new(),
             profile: if profiling_enabled { Some(ProfileData::new()) } else { None },
             local_interrupt: None,
+            // Debugger state
+            breakpoints: std::collections::HashSet::new(),
+            step_mode: crate::shared_types::StepMode::Run,
+            debug_last_line: 0,
+            debug_step_frame_depth: 0,
+            debug_command_receiver: None,
+            debug_event_sender: None,
         }
     }
 
@@ -404,6 +438,214 @@ impl AsyncProcess {
     #[inline]
     pub fn is_profiling(&self) -> bool {
         self.profile.is_some()
+    }
+
+    // === Debugger Methods ===
+
+    /// Get current line number from instruction pointer.
+    fn debug_current_line(&self) -> Option<usize> {
+        if let Some(frame) = self.frames.last() {
+            let ip = if frame.ip > 0 { frame.ip - 1 } else { 0 };
+            frame.function.code.lines.get(ip).copied()
+        } else {
+            None
+        }
+    }
+
+    /// Get current function name.
+    fn debug_current_function(&self) -> String {
+        self.frames.last()
+            .map(|f| f.function.name.clone())
+            .unwrap_or_else(|| "<unknown>".to_string())
+    }
+
+    /// Get current source file.
+    fn debug_current_file(&self) -> Option<String> {
+        self.frames.last().and_then(|f| f.function.source_file.clone())
+    }
+
+    /// Check if we should pause execution (breakpoint or step mode).
+    fn debug_should_pause(&mut self) -> bool {
+        use crate::shared_types::StepMode;
+
+        // Skip if not debugging
+        if self.debug_event_sender.is_none() {
+            return false;
+        }
+
+        let current_line = match self.debug_current_line() {
+            Some(line) => line,
+            None => return false,
+        };
+
+        match self.step_mode {
+            StepMode::Run => {
+                // Only pause on breakpoints
+                let file = self.debug_current_file();
+                let bp = crate::shared_types::Breakpoint { file, line: current_line };
+                if self.breakpoints.contains(&bp) {
+                    self.step_mode = StepMode::Paused;
+                    return true;
+                }
+                // Also check file-agnostic breakpoint
+                let bp_any = crate::shared_types::Breakpoint { file: None, line: current_line };
+                if self.breakpoints.contains(&bp_any) {
+                    self.step_mode = StepMode::Paused;
+                    return true;
+                }
+                false
+            }
+            StepMode::Paused => {
+                // Already paused, stay paused
+                true
+            }
+            StepMode::StepInstruction => {
+                // Pause on every instruction
+                self.step_mode = StepMode::Paused;
+                true
+            }
+            StepMode::StepLine => {
+                // Pause when line changes
+                if current_line != self.debug_last_line {
+                    self.debug_last_line = current_line;
+                    self.step_mode = StepMode::Paused;
+                    return true;
+                }
+                false
+            }
+            StepMode::StepOver => {
+                // Pause when line changes at same or lower call depth
+                if self.frames.len() <= self.debug_step_frame_depth && current_line != self.debug_last_line {
+                    self.debug_last_line = current_line;
+                    self.step_mode = StepMode::Paused;
+                    return true;
+                }
+                false
+            }
+            StepMode::StepOut => {
+                // Pause when we return to lower call depth
+                if self.frames.len() < self.debug_step_frame_depth {
+                    self.step_mode = StepMode::Paused;
+                    return true;
+                }
+                false
+            }
+        }
+    }
+
+    /// Send a debug event.
+    fn debug_send_event(&self, event: crate::shared_types::DebugEvent) {
+        if let Some(ref sender) = self.debug_event_sender {
+            let _ = sender.send(event);
+        }
+    }
+
+    /// Handle debug commands while paused.
+    fn debug_handle_commands(&mut self) {
+        use crate::shared_types::{DebugCommand, DebugEvent, StepMode, StackFrame};
+
+        let receiver = match &self.debug_command_receiver {
+            Some(r) => r.clone(),
+            None => return,
+        };
+
+        // Send paused event with current location
+        let line = self.debug_current_line().unwrap_or(0);
+        let function = self.debug_current_function();
+        let file = self.debug_current_file();
+        self.debug_send_event(DebugEvent::Paused { pid: self.pid.0, file: file.clone(), line, function: function.clone() });
+
+        // Process commands until we get a continue/step command
+        while self.step_mode == StepMode::Paused {
+            match receiver.recv() {
+                Ok(cmd) => match cmd {
+                    DebugCommand::Continue => {
+                        self.step_mode = StepMode::Run;
+                    }
+                    DebugCommand::StepInstruction => {
+                        self.step_mode = StepMode::StepInstruction;
+                    }
+                    DebugCommand::StepLine => {
+                        self.debug_last_line = line;
+                        self.step_mode = StepMode::StepLine;
+                    }
+                    DebugCommand::StepOver => {
+                        self.debug_last_line = line;
+                        self.debug_step_frame_depth = self.frames.len();
+                        self.step_mode = StepMode::StepOver;
+                    }
+                    DebugCommand::StepOut => {
+                        self.debug_step_frame_depth = self.frames.len();
+                        self.step_mode = StepMode::StepOut;
+                    }
+                    DebugCommand::AddBreakpoint(bp) => {
+                        self.breakpoints.insert(bp);
+                    }
+                    DebugCommand::RemoveBreakpoint(bp) => {
+                        self.breakpoints.remove(&bp);
+                    }
+                    DebugCommand::ListBreakpoints => {
+                        self.debug_send_event(DebugEvent::Breakpoints {
+                            breakpoints: self.breakpoints.iter().cloned().collect(),
+                        });
+                    }
+                    DebugCommand::PrintVariable(name) => {
+                        // Find variable in current frame's debug symbols
+                        if let Some(frame) = self.frames.last() {
+                            let mut found = false;
+                            for sym in &frame.function.debug_symbols {
+                                if sym.name == name {
+                                    let value = frame.registers.get(sym.register as usize)
+                                        .map(|v| format!("{:?}", v))
+                                        .unwrap_or_else(|| "<invalid register>".to_string());
+                                    self.debug_send_event(DebugEvent::Variable {
+                                        name: name.clone(),
+                                        value,
+                                        type_name: "unknown".to_string(),
+                                    });
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if !found {
+                                self.debug_send_event(DebugEvent::Error {
+                                    message: format!("Variable '{}' not found", name),
+                                });
+                            }
+                        }
+                    }
+                    DebugCommand::PrintLocals => {
+                        if let Some(frame) = self.frames.last() {
+                            let variables: Vec<(String, String, String)> = frame.function.debug_symbols.iter()
+                                .filter_map(|sym| {
+                                    frame.registers.get(sym.register as usize).map(|v| {
+                                        (sym.name.clone(), format!("{:?}", v), "unknown".to_string())
+                                    })
+                                })
+                                .collect();
+                            self.debug_send_event(DebugEvent::Locals { variables });
+                        }
+                    }
+                    DebugCommand::PrintStack => {
+                        let frames: Vec<StackFrame> = self.frames.iter().rev().map(|f| {
+                            let line = f.function.code.lines.get(f.ip.saturating_sub(1)).copied().unwrap_or(0);
+                            StackFrame {
+                                function: f.function.name.clone(),
+                                file: f.function.source_file.clone(),
+                                line,
+                                locals: f.function.debug_symbols.iter().map(|s| s.name.clone()).collect(),
+                            }
+                        }).collect();
+                        self.debug_send_event(DebugEvent::Stack { frames });
+                    }
+                },
+                Err(_) => {
+                    // Channel closed, resume execution
+                    self.step_mode = StepMode::Run;
+                    break;
+                }
+            }
+        }
     }
 
     /// Get a register vec from the pool, or allocate a new one.
@@ -662,6 +904,11 @@ impl AsyncProcess {
 
             // Yield for fairness (allow other tasks to run)
             tokio::task::yield_now().await;
+        }
+
+        // Check for debugger breakpoints/stepping
+        if self.debug_should_pause() {
+            self.debug_handle_commands();
         }
 
         // Cache frame index once - avoid repeated len() calls
@@ -9269,5 +9516,202 @@ impl AsyncVM {
             }
             Err(e) => Err(e.to_string()),
         }
+    }
+
+    /// Run the main function with debug support.
+    /// Returns a DebugSession that can be used to control execution.
+    pub fn run_debug(&self, main_fn_name: &str) -> Result<DebugSession, String> {
+        use crate::shared_types::{DebugCommand, DebugEvent, StepMode};
+
+        // Create debug channels
+        let (cmd_tx, cmd_rx) = crossbeam::channel::unbounded::<DebugCommand>();
+        let (event_tx, event_rx) = crossbeam::channel::unbounded::<DebugEvent>();
+
+        let shared = Arc::clone(&self.shared);
+        let fn_name = main_fn_name.to_string();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+
+        // Spawn execution thread
+        let handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create tokio runtime");
+
+            let result = rt.block_on(async {
+                // Find main function
+                let main_fn = shared.functions.read().unwrap().get(&fn_name)
+                    .ok_or_else(|| format!("Main function '{}' not found", fn_name))?
+                    .clone();
+
+                // Create main process with debug channels
+                let pid = shared.alloc_pid();
+                let mut process = AsyncProcess::new(pid, Arc::clone(&shared));
+                process.debug_command_receiver = Some(cmd_rx);
+                process.debug_event_sender = Some(event_tx.clone());
+                // Start paused so debugger can set breakpoints
+                process.step_mode = StepMode::Paused;
+
+                let sender = process.mailbox_sender.clone();
+                shared.register_process(pid, sender).await;
+
+                // Set up initial call frame
+                let registers = vec![GcValue::Unit; main_fn.code.register_count as usize];
+                process.frames.push(CallFrame {
+                    function: main_fn,
+                    ip: 0,
+                    registers,
+                    captures: Vec::new(),
+                    return_reg: None,
+                });
+
+                // Run main process
+                let result = process.run().await;
+
+                // Send exit event
+                match &result {
+                    Ok(value) => {
+                        let value_str = process.heap.display_value(value);
+                        let _ = event_tx.send(DebugEvent::Exited { pid: pid.0, value: Some(value_str) });
+                    }
+                    Err(_) => {
+                        let _ = event_tx.send(DebugEvent::Exited { pid: pid.0, value: None });
+                    }
+                }
+
+                match result {
+                    Ok(value) => {
+                        let sendable = SendableValue::from_gc_value(&value, &process.heap);
+                        Ok(sendable)
+                    }
+                    Err(e) => Err(e.to_string()),
+                }
+            });
+
+            let _ = result_tx.send(result);
+        });
+
+        Ok(DebugSession {
+            command_sender: cmd_tx,
+            event_receiver: event_rx,
+            result_receiver: result_rx,
+            _thread_handle: handle,
+        })
+    }
+}
+
+/// A debug session for controlling program execution.
+pub struct DebugSession {
+    /// Send commands to the running process.
+    pub command_sender: crate::shared_types::DebugCommandSender,
+    /// Receive events from the running process.
+    pub event_receiver: crate::shared_types::DebugEventReceiver,
+    /// Receive the final result when execution completes.
+    result_receiver: std::sync::mpsc::Receiver<Result<SendableValue, String>>,
+    /// Thread handle (kept alive to prevent premature join).
+    _thread_handle: std::thread::JoinHandle<()>,
+}
+
+impl DebugSession {
+    /// Send a debug command.
+    pub fn send(&self, cmd: crate::shared_types::DebugCommand) -> Result<(), String> {
+        self.command_sender.send(cmd).map_err(|e| e.to_string())
+    }
+
+    /// Receive the next debug event (blocking).
+    pub fn recv_event(&self) -> Option<crate::shared_types::DebugEvent> {
+        self.event_receiver.recv().ok()
+    }
+
+    /// Try to receive the next debug event (non-blocking).
+    pub fn try_recv_event(&self) -> Option<crate::shared_types::DebugEvent> {
+        self.event_receiver.try_recv().ok()
+    }
+
+    /// Wait for execution to complete and return the result.
+    pub fn wait(self) -> Result<SendableValue, String> {
+        self.result_receiver.recv().map_err(|e| e.to_string())?
+    }
+
+    /// Check if execution has completed (non-blocking).
+    pub fn try_result(&self) -> Option<Result<SendableValue, String>> {
+        self.result_receiver.try_recv().ok()
+    }
+
+    /// Set a breakpoint at a line.
+    pub fn set_breakpoint(&self, line: usize) -> Result<(), String> {
+        self.send(crate::shared_types::DebugCommand::AddBreakpoint(
+            crate::shared_types::Breakpoint { file: None, line }
+        ))
+    }
+
+    /// Set a breakpoint at a file:line.
+    pub fn set_breakpoint_file(&self, file: &str, line: usize) -> Result<(), String> {
+        self.send(crate::shared_types::DebugCommand::AddBreakpoint(
+            crate::shared_types::Breakpoint { file: Some(file.to_string()), line }
+        ))
+    }
+
+    /// Continue execution.
+    pub fn continue_exec(&self) -> Result<(), String> {
+        self.send(crate::shared_types::DebugCommand::Continue)
+    }
+
+    /// Step to next line.
+    pub fn step_line(&self) -> Result<(), String> {
+        self.send(crate::shared_types::DebugCommand::StepLine)
+    }
+
+    /// Step over function calls.
+    pub fn step_over(&self) -> Result<(), String> {
+        self.send(crate::shared_types::DebugCommand::StepOver)
+    }
+
+    /// Step out of current function.
+    pub fn step_out(&self) -> Result<(), String> {
+        self.send(crate::shared_types::DebugCommand::StepOut)
+    }
+
+    /// Print a variable's value.
+    pub fn print_var(&self, name: &str) -> Result<(), String> {
+        self.send(crate::shared_types::DebugCommand::PrintVariable(name.to_string()))
+    }
+
+    /// Print all local variables.
+    pub fn print_locals(&self) -> Result<(), String> {
+        self.send(crate::shared_types::DebugCommand::PrintLocals)
+    }
+
+    /// Print the call stack.
+    pub fn print_stack(&self) -> Result<(), String> {
+        self.send(crate::shared_types::DebugCommand::PrintStack)
+    }
+}
+
+#[cfg(test)]
+mod debug_tests {
+    use super::*;
+
+    #[test]
+    fn test_debug_types_exist() {
+        use crate::shared_types::{DebugCommand, DebugEvent, Breakpoint, StepMode, StackFrame};
+
+        // Test that debug types can be constructed
+        let bp = Breakpoint { file: Some("test.nos".to_string()), line: 10 };
+        assert_eq!(bp.line, 10);
+
+        let mode = StepMode::Paused;
+        assert_eq!(mode, StepMode::Paused);
+
+        let cmd = DebugCommand::Continue;
+        assert!(matches!(cmd, DebugCommand::Continue));
+
+        let frame = StackFrame {
+            function: "main".to_string(),
+            file: Some("test.nos".to_string()),
+            line: 1,
+            locals: vec!["x".to_string()],
+        };
+        assert_eq!(frame.function, "main");
     }
 }
