@@ -53,6 +53,8 @@ pub struct DebugPanel {
     locals_scroll: usize,
     /// Height for calculations
     visible_rows: usize,
+    /// Pending command from key press (polled by TUI)
+    pub pending_command: Option<DebugPanelCommand>,
 }
 
 impl DebugPanel {
@@ -65,6 +67,7 @@ impl DebugPanel {
             breakpoints: HashSet::new(),
             locals_scroll: 0,
             visible_rows: 10,
+            pending_command: None,
         }
     }
 
@@ -117,6 +120,11 @@ impl DebugPanel {
     pub fn set_locals(&mut self, locals: Vec<(String, String, String)>) {
         self.locals = locals;
         self.locals_scroll = 0;
+    }
+
+    /// Take pending command (if any) - used by TUI to poll for commands
+    pub fn take_pending_command(&mut self) -> Option<DebugPanelCommand> {
+        self.pending_command.take()
     }
 
     /// Select previous stack frame
@@ -371,31 +379,26 @@ impl View for DebugPanel {
                 self.scroll_locals_down();
                 EventResult::Consumed(None)
             }
-            // Debug commands - emit callback to send to TUI
+            // Debug commands - set pending command for TUI to poll
             Event::Key(Key::F5) | Event::Char('c') | Event::Char('C') => {
-                EventResult::with_cb(|s| {
-                    s.set_user_data(DebugPanelCommand::Continue);
-                })
+                self.pending_command = Some(DebugPanelCommand::Continue);
+                EventResult::Consumed(None)
             }
             Event::Key(Key::F10) | Event::Char('n') | Event::Char('N') => {
-                EventResult::with_cb(|s| {
-                    s.set_user_data(DebugPanelCommand::StepOver);
-                })
+                self.pending_command = Some(DebugPanelCommand::StepOver);
+                EventResult::Consumed(None)
             }
             Event::Key(Key::F11) | Event::Char('s') | Event::Char('S') => {
-                EventResult::with_cb(|s| {
-                    s.set_user_data(DebugPanelCommand::StepIn);
-                })
+                self.pending_command = Some(DebugPanelCommand::StepIn);
+                EventResult::Consumed(None)
             }
             Event::Char('o') | Event::Char('O') => {
-                EventResult::with_cb(|s| {
-                    s.set_user_data(DebugPanelCommand::StepOut);
-                })
+                self.pending_command = Some(DebugPanelCommand::StepOut);
+                EventResult::Consumed(None)
             }
             Event::Char('q') | Event::Char('Q') => {
-                EventResult::with_cb(|s| {
-                    s.set_user_data(DebugPanelCommand::Stop);
-                })
+                self.pending_command = Some(DebugPanelCommand::Stop);
+                EventResult::Consumed(None)
             }
             _ => EventResult::Ignored,
         }

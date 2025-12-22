@@ -784,10 +784,12 @@ fn poll_inspect_entries(s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>) {
     // (they were already drained from the queue)
 }
 
-/// Poll for debug panel commands (set via user_data from debug panel key events).
+/// Poll for debug panel commands (from pending_command field set by key events).
 fn poll_debug_panel_commands(s: &mut Cursive) {
-    // Check if debug panel sent a command via user_data
-    let cmd: Option<DebugPanelCommand> = s.take_user_data();
+    // Check if debug panel has a pending command
+    let cmd = s.call_on_name("debug_panel", |panel: &mut DebugPanel| {
+        panel.take_pending_command()
+    }).flatten();
 
     if let Some(cmd) = cmd {
         let debug_cmd = match cmd {
