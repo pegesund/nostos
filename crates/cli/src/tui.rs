@@ -858,7 +858,21 @@ fn poll_debug_events(s: &mut Cursive) {
         return;
     }
 
-    // Update debug panel with events
+    // Open the debug panel FIRST if not already open (so events can be processed)
+    let debug_panel_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().debug_panel_open
+    }).unwrap_or(false);
+
+    if !debug_panel_open {
+        // Auto-open debug panel when debugging starts
+        s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+            state.borrow_mut().debug_panel_open = true;
+        });
+        rebuild_workspace(s);
+        s.focus_name("debug_panel").ok();
+    }
+
+    // NOW update debug panel with events (panel exists now)
     for event in events {
         s.call_on_name("debug_panel", |panel: &mut DebugPanel| {
             match event {
@@ -881,20 +895,6 @@ fn poll_debug_events(s: &mut Cursive) {
             }
         });
     }
-
-    // Open the debug panel if not already open when we hit a breakpoint
-    let debug_panel_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
-        state.borrow().debug_panel_open
-    }).unwrap_or(false);
-
-    if !debug_panel_open {
-        // Auto-open debug panel when debugging starts
-        s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
-            state.borrow_mut().debug_panel_open = true;
-        });
-        rebuild_workspace(s);
-        s.focus_name("debug_panel").ok();
-    }
 }
 
 /// Rebuild the workspace layout based on current windows
@@ -911,20 +911,25 @@ fn rebuild_workspace(s: &mut Cursive) {
         view.get_content()
     }).unwrap_or_default();
 
-    // Preserve REPL panel state before clearing (histories and eval handles)
+    // Preserve REPL panel state before clearing (histories, eval handles, and debug sessions)
     let mut repl_histories: std::collections::HashMap<usize, (Vec<crate::repl_panel::ReplEntry>, Vec<Vec<String>>)> = std::collections::HashMap::new();
     let mut repl_eval_handles: std::collections::HashMap<usize, (nostos_vm::ThreadedEvalHandle, Vec<String>)> = std::collections::HashMap::new();
+    let mut repl_debug_sessions: std::collections::HashMap<usize, (nostos_vm::DebugSession, Vec<String>)> = std::collections::HashMap::new();
     for &repl_id in &repl_ids {
         let panel_id = format!("repl_panel_{}", repl_id);
-        if let Some((history, cmd_history, eval_state)) = s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
+        if let Some((history, cmd_history, eval_state, debug_state)) = s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
             let h = panel.get_history();
             let ch = panel.get_command_history();
             let es = panel.take_eval_state();
-            (h, ch, es)
+            let ds = panel.take_debug_state();
+            (h, ch, es, ds)
         }) {
             repl_histories.insert(repl_id, (history, cmd_history));
             if let Some((handle, input)) = eval_state {
                 repl_eval_handles.insert(repl_id, (handle, input));
+            }
+            if let Some((session, input)) = debug_state {
+                repl_debug_sessions.insert(repl_id, (session, input));
             }
         }
     }
@@ -985,7 +990,8 @@ fn rebuild_workspace(s: &mut Cursive) {
 
     for &repl_id in &repl_ids {
         let eval_state = repl_eval_handles.remove(&repl_id);
-        let repl_view = create_repl_panel_view(&engine, repl_id, repl_histories.remove(&repl_id), eval_state);
+        let debug_state = repl_debug_sessions.remove(&repl_id);
+        let repl_view = create_repl_panel_view(&engine, repl_id, repl_histories.remove(&repl_id), eval_state, debug_state);
         windows.push(Box::new(repl_view));
     }
 
@@ -1056,6 +1062,7 @@ fn create_repl_panel_view(
     repl_id: usize,
     histories: Option<(Vec<crate::repl_panel::ReplEntry>, Vec<Vec<String>>)>,
     eval_state: Option<(nostos_vm::ThreadedEvalHandle, Vec<String>)>,
+    debug_state: Option<(nostos_vm::DebugSession, Vec<String>)>,
 ) -> impl View {
     let mut panel = ReplPanel::new(engine.clone(), repl_id);
     if let Some((history, command_history)) = histories {
@@ -1064,6 +1071,9 @@ fn create_repl_panel_view(
     }
     if let Some((handle, input)) = eval_state {
         panel.restore_eval_state(handle, input);
+    }
+    if let Some((session, input)) = debug_state {
+        panel.restore_debug_state(session, input);
     }
     let panel_id = format!("repl_panel_{}", repl_id);
     let panel_id_copy = panel_id.clone();

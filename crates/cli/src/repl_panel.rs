@@ -1363,6 +1363,27 @@ impl ReplPanel {
         self.current.output = Some(ReplOutput::Definition("Evaluating...".to_string()));
     }
 
+    /// Take the debug state for preservation across rebuilds.
+    /// Returns None if no debug session is in progress.
+    pub fn take_debug_state(&mut self) -> Option<(nostos_vm::DebugSession, Vec<String>)> {
+        if self.debug_session.is_some() {
+            self.eval_in_progress = false;
+            let session = self.debug_session.take();
+            let input = self.current.input.clone();
+            session.map(|s| (s, input))
+        } else {
+            None
+        }
+    }
+
+    /// Restore debug state after a rebuild.
+    pub fn restore_debug_state(&mut self, session: nostos_vm::DebugSession, input: Vec<String>) {
+        self.debug_session = Some(session);
+        self.eval_in_progress = true;
+        self.current.input = input;
+        self.current.output = Some(ReplOutput::Definition("Debugging...".to_string()));
+    }
+
     /// Load history entry by index (or restore stashed if None)
     fn load_history(&mut self, index: Option<usize>) {
         self.history_index = index;
