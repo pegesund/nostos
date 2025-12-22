@@ -291,6 +291,9 @@ pub struct AsyncProcess {
 
     /// Debug event sender (to debugger)
     pub debug_event_sender: Option<crate::shared_types::DebugEventSender>,
+
+    /// Skip the next breakpoint check (used after Continue to avoid re-hitting same breakpoint)
+    pub skip_next_breakpoint_check: bool,
 }
 
 /// Helper trait to convert register/constant indices (u8, u16, etc.) to usize.
@@ -355,6 +358,7 @@ impl AsyncProcess {
             debug_step_frame_depth: 0,
             debug_command_receiver: None,
             debug_event_sender: None,
+            skip_next_breakpoint_check: false,
         }
     }
 
@@ -391,6 +395,7 @@ impl AsyncProcess {
             debug_step_frame_depth: 0,
             debug_command_receiver: None,
             debug_event_sender: None,
+            skip_next_breakpoint_check: false,
         }
     }
 
@@ -477,6 +482,12 @@ impl AsyncProcess {
 
         // Skip if not debugging
         if self.debug_event_sender.is_none() {
+            return false;
+        }
+
+        // Skip breakpoint check once after Continue (to avoid re-hitting same breakpoint)
+        if self.skip_next_breakpoint_check {
+            self.skip_next_breakpoint_check = false;
             return false;
         }
 
@@ -592,6 +603,8 @@ impl AsyncProcess {
                 Ok(cmd) => match cmd {
                     DebugCommand::Continue => {
                         self.step_mode = StepMode::Run;
+                        // Skip next breakpoint check to avoid re-hitting the same breakpoint
+                        self.skip_next_breakpoint_check = true;
                     }
                     DebugCommand::StepInstruction => {
                         self.step_mode = StepMode::StepInstruction;

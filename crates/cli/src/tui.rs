@@ -20,7 +20,7 @@ use std::io::Write;
 use crate::repl_panel::ReplPanel;
 use crate::inspector_panel::InspectorPanel;
 use crate::nostos_panel::NostosPanel;
-use crate::debug_panel::DebugPanel;
+use crate::debug_panel::{DebugPanel, DebugPanelCommand};
 
 /// Debug logging to /tmp/nostos_tui_debug.log
 fn debug_log(msg: &str) {
@@ -661,42 +661,20 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         toggle_debug_panel(s);
     });
 
-    // Debug commands - these send commands to the active debug session
-    // F5 or 'c' - Continue
+    // Debug commands - F-keys only (letter keys handled via REPL :c/:n/:s/:o commands)
+    // F5 - Continue
     siv.set_on_pre_event(Event::Key(Key::F5), |s| {
         send_debug_command(s, nostos_vm::shared_types::DebugCommand::Continue);
     });
-    siv.set_on_pre_event(Event::Char('c'), |s| {
-        if has_active_debug_session(s) {
-            send_debug_command(s, nostos_vm::shared_types::DebugCommand::Continue);
-        }
-    });
 
-    // F10 or 'n' - Step Over
+    // F10 - Step Over
     siv.set_on_pre_event(Event::Key(Key::F10), |s| {
         send_debug_command(s, nostos_vm::shared_types::DebugCommand::StepOver);
     });
-    siv.set_on_pre_event(Event::Char('n'), |s| {
-        if has_active_debug_session(s) {
-            send_debug_command(s, nostos_vm::shared_types::DebugCommand::StepOver);
-        }
-    });
 
-    // F11 or 's' - Step In
+    // F11 - Step In
     siv.set_on_pre_event(Event::Key(Key::F11), |s| {
         send_debug_command(s, nostos_vm::shared_types::DebugCommand::StepLine);
-    });
-    siv.set_on_pre_event(Event::Char('s'), |s| {
-        if has_active_debug_session(s) {
-            send_debug_command(s, nostos_vm::shared_types::DebugCommand::StepLine);
-        }
-    });
-
-    // 'o' - Step Out
-    siv.set_on_pre_event(Event::Char('o'), |s| {
-        if has_active_debug_session(s) {
-            send_debug_command(s, nostos_vm::shared_types::DebugCommand::StepOut);
-        }
     });
 
     // Dynamic global keybindings - panels register via Panel.registerHotkey() from Nostos code
@@ -749,6 +727,7 @@ pub fn run_tui(args: &[String]) -> ExitCode {
     siv.set_on_pre_event(Event::Refresh, move |s| {
         poll_repl_evals(s);
         poll_debug_events(s);
+        poll_debug_panel_commands(s);
     });
 
     siv.run();
@@ -805,22 +784,24 @@ fn poll_inspect_entries(s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>) {
     // (they were already drained from the queue)
 }
 
-/// Check if any REPL panel has an active debug session.
-fn has_active_debug_session(s: &mut Cursive) -> bool {
-    let repl_ids: Vec<usize> = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
-        state.borrow().open_repls.clone()
-    }).unwrap_or_default();
+/// Poll for debug panel commands (set via user_data from debug panel key events).
+fn poll_debug_panel_commands(s: &mut Cursive) {
+    // Check if debug panel sent a command via user_data
+    let cmd: Option<DebugPanelCommand> = s.take_user_data();
 
-    for repl_id in repl_ids {
-        let panel_id = format!("repl_panel_{}", repl_id);
-        let has_session = s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
-            panel.has_debug_session()
-        }).unwrap_or(false);
-        if has_session {
-            return true;
-        }
+    if let Some(cmd) = cmd {
+        let debug_cmd = match cmd {
+            DebugPanelCommand::Continue => nostos_vm::shared_types::DebugCommand::Continue,
+            DebugPanelCommand::StepOver => nostos_vm::shared_types::DebugCommand::StepOver,
+            DebugPanelCommand::StepIn => nostos_vm::shared_types::DebugCommand::StepLine,
+            DebugPanelCommand::StepOut => nostos_vm::shared_types::DebugCommand::StepOut,
+            DebugPanelCommand::Stop => {
+                // For now, just continue to let it finish
+                nostos_vm::shared_types::DebugCommand::Continue
+            }
+        };
+        send_debug_command(s, debug_cmd);
     }
-    false
 }
 
 /// Send a debug command to the active debug session (if any).
@@ -1451,7 +1432,7 @@ fn toggle_debug_panel(s: &mut Cursive) {
     if debug_panel_open {
         rebuild_workspace(s);
         s.focus_name("debug_panel").ok();
-        log_to_repl(s, "Debug panel opened (Ctrl+D to close, :debug <func> to add breakpoint)");
+        log_to_repl(s, "Debug panel opened - use c/n/s/o keys when focused (Ctrl+D to close)");
     } else {
         rebuild_workspace(s);
         s.focus_name("repl_log").ok();

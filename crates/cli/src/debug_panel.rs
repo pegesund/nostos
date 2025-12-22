@@ -5,9 +5,18 @@ use cursive::theme::{Color, ColorStyle};
 use cursive::view::{View, CannotFocus};
 use cursive::direction::Direction;
 use cursive::{Printer, Vec2};
-use nostos_vm::shared_types::{DebugEvent, StackFrame, Breakpoint};
-use nostos_vm::DebugSession;
+use nostos_vm::shared_types::StackFrame;
 use std::collections::HashSet;
+
+/// Commands from debug panel to TUI (set via user_data)
+#[derive(Clone, Debug, PartialEq)]
+pub enum DebugPanelCommand {
+    Continue,
+    StepOver,
+    StepIn,
+    StepOut,
+    Stop,
+}
 
 /// Debug panel state
 #[derive(Clone, Debug, PartialEq)]
@@ -362,15 +371,31 @@ impl View for DebugPanel {
                 self.scroll_locals_down();
                 EventResult::Consumed(None)
             }
-            // Debug commands are handled by the TUI layer
-            // since they need access to the debug session
-            Event::Key(Key::F5) | Event::Char('c') | Event::Char('C') |
-            Event::Key(Key::F10) | Event::Char('n') | Event::Char('N') |
-            Event::Key(Key::F11) | Event::Char('s') | Event::Char('S') |
-            Event::Char('o') | Event::Char('O') |
+            // Debug commands - emit callback to send to TUI
+            Event::Key(Key::F5) | Event::Char('c') | Event::Char('C') => {
+                EventResult::with_cb(|s| {
+                    s.set_user_data(DebugPanelCommand::Continue);
+                })
+            }
+            Event::Key(Key::F10) | Event::Char('n') | Event::Char('N') => {
+                EventResult::with_cb(|s| {
+                    s.set_user_data(DebugPanelCommand::StepOver);
+                })
+            }
+            Event::Key(Key::F11) | Event::Char('s') | Event::Char('S') => {
+                EventResult::with_cb(|s| {
+                    s.set_user_data(DebugPanelCommand::StepIn);
+                })
+            }
+            Event::Char('o') | Event::Char('O') => {
+                EventResult::with_cb(|s| {
+                    s.set_user_data(DebugPanelCommand::StepOut);
+                })
+            }
             Event::Char('q') | Event::Char('Q') => {
-                // These will be handled at the TUI level
-                EventResult::Ignored
+                EventResult::with_cb(|s| {
+                    s.set_user_data(DebugPanelCommand::Stop);
+                })
             }
             _ => EventResult::Ignored,
         }
