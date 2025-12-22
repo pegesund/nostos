@@ -3,8 +3,7 @@
 
 main() = {
     # Spawn a cat process that echoes stdin to stdout
-    (status, handle) = Exec.start("cat", [])
-    assert(status == "ok")
+    handle = Exec.start("cat", [])
 
     # Write some lines to stdin
     Exec.write(handle, "line 1\n")
@@ -12,13 +11,9 @@ main() = {
     Exec.write(handle, "line 3\n")
 
     # Read lines back from stdout
-    (s1, line1) = Exec.readline(handle)
-    (s2, line2) = Exec.readline(handle)
-    (s3, line3) = Exec.readline(handle)
-
-    assert(s1 == "ok")
-    assert(s2 == "ok")
-    assert(s3 == "ok")
+    line1 = Exec.readline(handle)
+    line2 = Exec.readline(handle)
+    line3 = Exec.readline(handle)
 
     # Verify the output
     assert(line1 == "line 1\n")
@@ -28,6 +23,5 @@ main() = {
     # Kill the process (cat would wait forever otherwise)
     Exec.kill(handle)
 
-    0
     0
 }

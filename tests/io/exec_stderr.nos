@@ -4,10 +4,7 @@
 main() = {
     # Run a command that outputs to stderr
     # Using sh -c to redirect echo to stderr
-    (status, result) = Exec.run("sh", ["-c", "echo error message >&2"])
-
-    # Check status is ok
-    assert(status == "ok")
+    result = Exec.run("sh", ["-c", "echo error message >&2"])
 
     # Check exit code is 0
     assert(result.exitCode == 0)
@@ -18,6 +15,5 @@ main() = {
     # stderr should have the message
     assert(result.stderr == "error message\n")
 
-    0
     0
 }

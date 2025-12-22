@@ -3,21 +3,17 @@
 
 main() = {
     # Spawn a process that outputs to stderr then exits
-    (status, handle) = Exec.start("sh", ["-c", "echo stderr line >&2"])
-    assert(status == "ok")
+    handle = Exec.start("sh", ["-c", "echo stderr line >&2"])
 
     # Read stderr
-    (rs, line) = Exec.readStderr(handle)
-    assert(rs == "ok")
+    line = Exec.readStderr(handle)
 
     # Verify the output
     assert(line == "stderr line\n")
 
     # Wait for process to complete
-    (ws, exitCode) = Exec.wait(handle)
-    assert(ws == "ok")
+    exitCode = Exec.wait(handle)
     assert(exitCode == 0)
 
-    0
     0
 }
