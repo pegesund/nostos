@@ -176,6 +176,70 @@ main() = {
 }
 </code></pre>
                 </div>
+
+                <!-- Operator Overloading -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Operator Overloading</h2>
+                <p class="text-slate-400 mb-4">
+                    Operators in Nostos can be overloaded for custom types by implementing the appropriate trait.
+                    When you use an operator on a custom type that implements the relevant trait, the compiler
+                    automatically dispatches to your trait method.
+                </p>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-6 border border-slate-700">
+                    <h4 class="text-sm font-semibold text-slate-300 mb-2">Operator to Trait Mapping</h4>
+                    <ul class="text-slate-400 text-sm space-y-1">
+                        <li><code class="text-blue-400">+</code>, <code class="text-blue-400">-</code>, <code class="text-blue-400">*</code>, <code class="text-blue-400">/</code> → <code class="text-emerald-400">Num</code> trait (<code>add</code>, <code>sub</code>, <code>mul</code>, <code>div</code>)</li>
+                        <li><code class="text-blue-400">&lt;</code>, <code class="text-blue-400">&gt;</code>, <code class="text-blue-400">&lt;=</code>, <code class="text-blue-400">&gt;=</code> → <code class="text-emerald-400">Ord</code> trait (<code>lt</code>, <code>gt</code>, <code>lte</code>, <code>gte</code>)</li>
+                        <li><code class="text-blue-400">==</code>, <code class="text-blue-400">!=</code> → <code class="text-emerald-400">Eq</code> trait (<code>eq</code>, <code>neq</code>)</li>
+                    </ul>
+                </div>
+
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# Define a 2D vector type
+type Vec2 = { x: Int, y: Int }
+
+# Define the Num trait for arithmetic operations
+trait Num
+    add(self, other: Self) -> Self
+    sub(self, other: Self) -> Self
+    mul(self, other: Self) -> Self
+    div(self, other: Self) -> Self
+end
+
+# Implement Num for Vec2 to enable operator overloading
+Vec2: Num
+    add(self, other: Vec2) -> Vec2 = Vec2(self.x + other.x, self.y + other.y)
+    sub(self, other: Vec2) -> Vec2 = Vec2(self.x - other.x, self.y - other.y)
+    mul(self, other: Vec2) -> Vec2 = Vec2(self.x * other.x, self.y * other.y)
+    div(self, other: Vec2) -> Vec2 = Vec2(self.x / other.x, self.y / other.y)
+end
+
+main() = {
+    v1 = Vec2(1, 2)
+    v2 = Vec2(3, 4)
+
+    # Now you can use operators directly!
+    v3 = v1 + v2          # Calls Vec2.Num.add
+    println(v3.x)         # Prints 4
+    println(v3.y)         # Prints 6
+
+    # Chained operations work too
+    v4 = v1 + v2 + v1     # (1+3+1, 2+4+2) = (5, 8)
+
+    # Primitive types still use built-in operators
+    a = 10 + 5            # Uses primitive Int addition
+}
+</code></pre>
+                </div>
+
+                <div class="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-8">
+                    <p class="text-blue-300 text-sm">
+                        <strong>Note:</strong> Operator overloading is resolved at compile time. The compiler checks
+                        if the left operand's type implements the relevant trait and generates a direct call to
+                        the trait method, ensuring zero runtime overhead.
+                    </p>
+                </div>
             </div>
 
             <!-- Navigation Buttons -->
