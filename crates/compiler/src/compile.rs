@@ -865,6 +865,56 @@ impl Compiler {
                 },
             },
         );
+
+        // HttpRequest: returned by Server.accept
+        self.types.insert(
+            "HttpRequest".to_string(),
+            TypeInfo {
+                name: "HttpRequest".to_string(),
+                kind: TypeInfoKind::Record {
+                    fields: vec![
+                        ("id".to_string(), "Int".to_string()),
+                        ("method".to_string(), "String".to_string()),
+                        ("path".to_string(), "String".to_string()),
+                        ("headers".to_string(), "List".to_string()),
+                        ("body".to_string(), "String".to_string()),
+                    ],
+                    mutable: false,
+                },
+            },
+        );
+
+        // ProcessInfo: returned by Process.info
+        self.types.insert(
+            "ProcessInfo".to_string(),
+            TypeInfo {
+                name: "ProcessInfo".to_string(),
+                kind: TypeInfoKind::Record {
+                    fields: vec![
+                        ("status".to_string(), "String".to_string()),
+                        ("mailbox".to_string(), "Int".to_string()),
+                        ("uptime".to_string(), "Int".to_string()),
+                    ],
+                    mutable: false,
+                },
+            },
+        );
+
+        // ExecResult: returned by Exec.run
+        self.types.insert(
+            "ExecResult".to_string(),
+            TypeInfo {
+                name: "ExecResult".to_string(),
+                kind: TypeInfoKind::Record {
+                    fields: vec![
+                        ("exitCode".to_string(), "Int".to_string()),
+                        ("stdout".to_string(), "String".to_string()),
+                        ("stderr".to_string(), "String".to_string()),
+                    ],
+                    mutable: false,
+                },
+            },
+        );
     }
 
     /// Compile all pending functions.

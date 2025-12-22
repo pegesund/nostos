@@ -9901,6 +9901,37 @@ main() = {
         // This should compile without errors since HttpResponse has a status field
         assert!(result.is_ok(), "response.status should be valid since Http.get returns HttpResponse");
     }
+
+    #[test]
+    fn test_builtin_types_have_fields() {
+        // All builtin types should have their fields registered for autocomplete
+        use nostos_compiler::Compiler;
+
+        let compiler = Compiler::new_empty();
+
+        // HttpRequest (from Server.accept)
+        let fields = compiler.get_type_fields("HttpRequest");
+        println!("HttpRequest fields: {:?}", fields);
+        assert!(fields.contains(&"id".to_string()), "HttpRequest should have 'id' field");
+        assert!(fields.contains(&"method".to_string()), "HttpRequest should have 'method' field");
+        assert!(fields.contains(&"path".to_string()), "HttpRequest should have 'path' field");
+        assert!(fields.contains(&"headers".to_string()), "HttpRequest should have 'headers' field");
+        assert!(fields.contains(&"body".to_string()), "HttpRequest should have 'body' field");
+
+        // ProcessInfo (from Process.info)
+        let fields = compiler.get_type_fields("ProcessInfo");
+        println!("ProcessInfo fields: {:?}", fields);
+        assert!(fields.contains(&"status".to_string()), "ProcessInfo should have 'status' field");
+        assert!(fields.contains(&"mailbox".to_string()), "ProcessInfo should have 'mailbox' field");
+        assert!(fields.contains(&"uptime".to_string()), "ProcessInfo should have 'uptime' field");
+
+        // ExecResult (from Exec.run)
+        let fields = compiler.get_type_fields("ExecResult");
+        println!("ExecResult fields: {:?}", fields);
+        assert!(fields.contains(&"exitCode".to_string()), "ExecResult should have 'exitCode' field");
+        assert!(fields.contains(&"stdout".to_string()), "ExecResult should have 'stdout' field");
+        assert!(fields.contains(&"stderr".to_string()), "ExecResult should have 'stderr' field");
+    }
 }
 
 #[cfg(test)]
