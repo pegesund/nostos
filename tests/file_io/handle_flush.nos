@@ -4,14 +4,10 @@
 main() = {
   path = "/tmp/nostos_test_handle_flush.txt"
 
-  (status1, handle) = File.open(path, "w")
-  if status1 != "ok" then false
-  else {
-    (status2, _) = File.write(handle, "Flushed")
-    (status3, _) = File.flush(handle)
-    (status4, _) = File.close(handle)
-    (_, _) = File.remove(path)
-
-    status2 == "ok" && status3 == "ok" && status4 == "ok"
-  }
+  handle = File.open(path, "w")
+  File.write(handle, "Flushed")
+  File.flush(handle)
+  File.close(handle)
+  File.remove(path)
+  true
 }

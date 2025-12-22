@@ -4,14 +4,12 @@
 main() = {
   path = "/tmp/nostos_test_append_multi.txt"
 
-  (_, _) = File.writeAll(path, "A")
-  (_, _) = File.append(path, "B")
-  (_, _) = File.append(path, "C")
-  (_, _) = File.append(path, "D")
+  File.writeAll(path, "A")
+  File.append(path, "B")
+  File.append(path, "C")
+  File.append(path, "D")
 
-  (status, data) = File.readAll(path)
-  (_, _) = File.remove(path)
-
-  if status != "ok" then false
-  else data == "ABCD"
+  data = File.readAll(path)
+  File.remove(path)
+  data == "ABCD"
 }

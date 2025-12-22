@@ -1,12 +1,12 @@
 # HTTP Server
-# 
+#
 # Multi-worker HTTP server with routing:
 # - /       : Hello message
 # - /health : Health check
 # - /echo   : Echo request body
 # - /work   : CPU-bound work (fib(25))
 # - /shutdown: Gracefully shuts down the server
-# 
+#
 # Spawns 8 worker processes for parallel request handling.
 
 # Simulate CPU work - compute fib(n)
@@ -43,11 +43,8 @@ handleRequest(server, req, main_pid) = {
 }
 
 acceptLoop(server, main_pid) = {
-  (status, req) = Server.accept(server)
-  
-  if status == "error" then {
-    # Exit if Server.accept returns error (e.g., server closed)
-  } else {
+  result = try {
+    req = Server.accept(server)
     (signal, _) = handleRequest(server, req, main_pid)
 
     if signal == "shutdown_signal" then {
@@ -55,7 +52,12 @@ acceptLoop(server, main_pid) = {
     } else {
       acceptLoop(server, main_pid) # Continue accepting requests
     }
-  }
+    ()
+  } catch e ->
+    # Exit if Server.accept returns error (e.g., server closed)
+    ()
+  end
+  result
 }
 
 # Spawn N worker processes all accepting from same server
@@ -68,15 +70,17 @@ spawnWorkers(server, main_pid, n) = {
 # Send shutdown request to terminate the server
 sendShutdown() = {
   sleep(100)  # Give server time to start
-  (status, response) = Http.get("http://localhost:8080/shutdown")
-  ()
+  try {
+    response = Http.get("http://localhost:8080/shutdown")
+    ()
+  } catch e -> () end
 }
 
 main() = {
   main_pid = self()
-  (status, server) = Server.bind(8080)
 
-  if status == "ok" then {
+  result = try {
+    server = Server.bind(8080)
     # Spawn 8 workers for parallel request handling
     spawnWorkers(server, main_pid, 8)
 
@@ -90,7 +94,8 @@ main() = {
         println("Server shutdown complete.")
       }
     end
-  } else {
-    println("Error: Failed to bind server on port 8080.")
-  }
+  } catch e ->
+    println("Error: Failed to bind server on port 8080: " ++ e)
+  end
+  result
 }

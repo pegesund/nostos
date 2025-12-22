@@ -1,8 +1,11 @@
-# Reading a nonexistent file should return error status
+# Reading a nonexistent file should throw an exception
 # expect: true
 
 main() = {
   path = "/tmp/nostos_nonexistent_file_12345.txt"
-  (status, _) = File.readAll(path)
-  status == "error"
+  result = try {
+    File.readAll(path)
+    false
+  } catch e -> true end
+  result
 }

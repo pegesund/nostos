@@ -4,22 +4,14 @@
 main() = {
   path = "/tmp/nostos_test_handle_seek.txt"
 
-  (_, _) = File.writeAll(path, "0123456789")
+  File.writeAll(path, "0123456789")
 
-  (status1, handle) = File.open(path, "r")
-  if status1 != "ok" then false
-  else {
-    # Seek to position 5
-    (status2, _) = File.seek(handle, 5, "start")
-    if status2 != "ok" then false
-    else {
-      # Read from position 5
-      (status3, data) = File.read(handle, 5)
-      (_, _) = File.close(handle)
-      (_, _) = File.remove(path)
-
-      if status3 != "ok" then false
-      else data == "56789"
-    }
-  }
+  handle = File.open(path, "r")
+  # Seek to position 5
+  File.seek(handle, 5, "start")
+  # Read from position 5
+  data = File.read(handle, 5)
+  File.close(handle)
+  File.remove(path)
+  data == "56789"
 }
