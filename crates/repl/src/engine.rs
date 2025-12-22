@@ -5166,18 +5166,14 @@ mod tests {
         assert!(sig.is_some(), "Server.bind should have a builtin signature");
         let sig_str = sig.unwrap();
         assert!(sig_str.contains("->"), "Signature should have arrow: {}", sig_str);
+        // Server.bind now returns Int (server handle), throws on error
+        assert_eq!(sig_str, "Int -> Int", "Server.bind signature: {}", sig_str);
 
         // Test the return type extraction
         let return_type = ReplEngine::get_builtin_return_type("Server.bind(8888)");
         assert!(return_type.is_some(), "Should extract return type from Server.bind");
         let ret = return_type.unwrap();
-        assert!(ret.starts_with('('), "Return type should be tuple: {}", ret);
-
-        // Test tuple element extraction
-        let elements = ReplEngine::extract_tuple_element_types(&ret);
-        assert_eq!(elements.len(), 2, "Should have 2 tuple elements: {:?}", elements);
-        assert_eq!(elements[0], "String", "First element should be String");
-        assert_eq!(elements[1], "Int", "Second element should be Int");
+        assert_eq!(ret, "Int", "Return type should be Int: {}", ret);
     }
 
     #[test]
@@ -9434,7 +9430,7 @@ main() = {
 
     #[test]
     fn test_exact_user_full_module() {
-        // EXACT full module from user with status.contains(1,2) error
+        // Full module with exception-based I/O and type error checking
         let engine = ReplEngine::new(ReplConfig::default());
         let code = r#"# HTTP Server Example
 
@@ -9452,17 +9448,22 @@ handleRoute(method, path, body) = {
 }
 
 serverLoop(server) = {
-  (status, req) = Server.accept(server)
-  (statusCode, responseBody) = handleRoute(req.method, req.path, req.body)
-  headers = [("Content-Type", "text/plain")]
-  Server.respond(req.id, statusCode, headers, responseBody)
-  serverLoop(server)
+  result = try {
+    req = Server.accept(server)
+    (statusCode, responseBody) = handleRoute(req.method, req.path, req.body)
+    headers = [("Content-Type", "text/plain")]
+    Server.respond(req.id, statusCode, headers, responseBody)
+    serverLoop(server)
+  } catch e -> () end
+  result
 }
 
 clientRequest(parent, path) = {
   url = "http://localhost:8888" ++ path
-  (status, response) = Http.get(url)
-  parent <- ("response", path, response.status)
+  try {
+    response = Http.get(url)
+    parent <- ("response", path, response.status)
+  } catch e -> () end
 }
 
 collectResponses(count, expected) = {
@@ -9484,16 +9485,20 @@ collectResponses(count, expected) = {
 
 main() = {
   println("=== HTTP Server Example ===")
-  (status, server) = Server.bind(8888)
-  spawn { serverLoop(server) }
-  sleep(50)
-  me = self()
-  spawn { clientRequest(me, "/") }
-  completed = collectResponses(0, 5)
+  try {
+    server = Server.bind(8888)
+    spawn { serverLoop(server) }
+    sleep(50)
+    me = self()
+    spawn { clientRequest(me, "/") }
+    completed = collectResponses(0, 5)
 
-  status.contains(1, 2)
+    # This is the error: String.contains takes 1 arg, not 2
+    status = "ok"
+    status.contains(1, 2)
 
-  Server.close(server)
+    Server.close(server)
+  } catch e -> () end
 }"#;
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
@@ -9570,22 +9575,25 @@ collectResponses(a, b) = a + b
 
 main() = {
   println("test")
-  (status, server) = Server.bind(8888)
-  spawn { serverLoop(server) }
-  sleep(50)
-  me = self()
-  spawn { clientRequest(me, "/") }
-  completed = collectResponses(0, 5)
-  x = Yes
-  status.contains(1)
-  y = Yess
-  Server.close(server)
+  try {
+    server = Server.bind(8888)
+    spawn { serverLoop(server) }
+    sleep(50)
+    me = self()
+    spawn { clientRequest(me, "/") }
+    completed = collectResponses(0, 5)
+    x = Yes
+    status = "ok"
+    status.contains("s")
+    y = Yess
+    Server.close(server)
+  } catch e -> () end
 }
 "#;
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
-        // Should catch either Yess (unknown constructor) or contains wrong arity
-        assert!(result.is_err(), "Expected error for Yess or wrong arity");
+        // Should catch Yess (unknown constructor)
+        assert!(result.is_err(), "Expected error for Yess");
     }
 
     #[test]
@@ -9612,7 +9620,7 @@ main() = {
 
     #[test]
     fn test_exact_user_code_yess() {
-        // Exact FULL module from user with Yess typo
+        // Full module with Yess typo - should catch unknown constructor
         let mut engine = ReplEngine::new(ReplConfig::default());
         engine.load_stdlib().expect("Failed to load stdlib");
 
@@ -9635,18 +9643,23 @@ handleRoute(method, path, body) = {
 
 # Server loop - accepts requests and dispatches to handler
 serverLoop(server) = {
-  (status, req) = Server.accept(server)
-  (statusCode, responseBody) = handleRoute(req.method, req.path, req.body)
-  headers = [("Content-Type", "text/plain")]
-  Server.respond(req.id, statusCode, headers, responseBody)
-  serverLoop(server)
+  result = try {
+    req = Server.accept(server)
+    (statusCode, responseBody) = handleRoute(req.method, req.path, req.body)
+    headers = [("Content-Type", "text/plain")]
+    Server.respond(req.id, statusCode, headers, responseBody)
+    serverLoop(server)
+  } catch e -> () end
+  result
 }
 
 # Client that makes a request to the server
 clientRequest(parent, path) = {
   url = "http://localhost:8888" ++ path
-  (status, response) = Http.get(url)
-  parent <- ("response", path, response.status)
+  try {
+    response = Http.get(url)
+    parent <- ("response", path, response.status)
+  } catch e -> () end
 }
 
 # Collect responses from client workers
@@ -9672,53 +9685,53 @@ main() = {
   println("=== HTTP Server Example ===")
   println("")
   println("Server API:")
-  println("  Server.bind(port) -> (status, handle)")
-  println("  Server.accept(handle) -> (status, request)")
+  println("  Server.bind(port) -> Int (throws on error)")
+  println("  Server.accept(handle) -> HttpRequest (throws on error)")
   println("  Server.respond(reqId, status, headers, body)")
   println("  Server.close(handle)")
   println("")
 
-  # Step 1: Bind to port
-  (status, server) = Server.bind(8888)
-  println("Server started on http://localhost:8888")
-  println("")
+  try {
+    # Step 1: Bind to port
+    server = Server.bind(8888)
+    println("Server started on http://localhost:8888")
+    println("")
 
-  # Step 2: Spawn server loop in background process
-  spawn { serverLoop(server) }
+    # Step 2: Spawn server loop in background process
+    spawn { serverLoop(server) }
 
-  # Give server time to start accepting
-  sleep(50)
+    # Give server time to start accepting
+    sleep(50)
 
-  # Step 3: Make concurrent client requests from same VM
-  println("Making client requests...")
-  me = self()
+    # Step 3: Make concurrent client requests from same VM
+    println("Making client requests...")
+    me = self()
 
-  spawn { clientRequest(me, "/") }
-  spawn { clientRequest(me, "/hello") }
-  spawn { clientRequest(me, "/echo") }
-  spawn { clientRequest(me, "/json") }
-  spawn { clientRequest(me, "/notfound") }
+    spawn { clientRequest(me, "/") }
+    spawn { clientRequest(me, "/hello") }
+    spawn { clientRequest(me, "/echo") }
+    spawn { clientRequest(me, "/json") }
+    spawn { clientRequest(me, "/notfound") }
 
-  # Collect all responses
-  completed = collectResponses(0, 5)
+    # Collect all responses
+    completed = collectResponses(0, 5)
 
-  println("")
-  print("Completed ")
-  print(completed)
-  println(" requests")
+    println("")
+    print("Completed ")
+    print(completed)
+    println(" requests")
 
-  x = Yes
+    x = Yes
+    y = Yess
 
-  status.contains(1)
-  y = Yess
+    if completed == 5 then
+      println("SUCCESS! Server and clients work in same VM!")
+    else
+      println("Some requests failed")
 
-  if completed == 5 then
-    println("SUCCESS! Server and clients work in same VM!")
-  else
-    println("Some requests failed")
-
-  # Clean up
-  Server.close(server)
+    # Clean up
+    Server.close(server)
+  } catch e -> () end
 }
 "#;
         let result = engine.check_module_compiles("", code);
@@ -9815,24 +9828,24 @@ main() = {
     }
 
     #[test]
-    fn test_status_from_server_bind_contains_int() {
-        // User's exact scenario: status comes from Server.bind tuple
-        let mut engine = ReplEngine::new(ReplConfig::default());
-        engine.load_stdlib().expect("Failed to load stdlib");
+    fn test_server_bind_returns_int() {
+        // Server.bind now returns Int (server handle), throws on error
+        use nostos_compiler::Compiler;
 
-        let code = r#"
-main() = {
-  (status, server) = Server.bind(8888)
-  status.contains(123)
-}
-"#;
-        let result = engine.check_module_compiles("", code);
-        println!("Result: {:?}", result);
-        // status should be inferred as String from Server.bind's (String, Int) return
-        // and contains(Int) should fail type check
-        if result.is_err() {
-            println!("Error: {}", result.as_ref().unwrap_err());
-        }
+        // Verify the signature is correct
+        let sig = Compiler::get_builtin_signature("Server.bind");
+        assert!(sig.is_some(), "Server.bind should have a signature");
+        assert_eq!(sig.unwrap(), "Int -> Int", "Server.bind should return Int");
+
+        // Verify Http.get returns HttpResponse, not tuple
+        let http_sig = Compiler::get_builtin_signature("Http.get");
+        assert!(http_sig.is_some(), "Http.get should have a signature");
+        assert_eq!(http_sig.unwrap(), "String -> HttpResponse", "Http.get should return HttpResponse");
+
+        // Verify File.readAll returns String, not tuple
+        let file_sig = Compiler::get_builtin_signature("File.readAll");
+        assert!(file_sig.is_some(), "File.readAll should have a signature");
+        assert_eq!(file_sig.unwrap(), "String -> String", "File.readAll should return String");
     }
 
     #[test]
