@@ -1249,6 +1249,48 @@ mod debugger_tests {
     }
 
     #[test]
+    fn test_debug_symbols_populated() {
+        let code = r#"
+            main() = {
+                x = 42
+                y = "hello"
+                x
+            }
+        "#;
+
+        // Parse
+        let (module_opt, errors) = parse(code);
+        assert!(errors.is_empty(), "Parse error: {:?}", errors);
+        let module = module_opt.expect("Parse returned no module");
+
+        // Compile with stdlib
+        let stdlib_path = find_stdlib_path();
+        let compiler = compile_module_with_stdlib(&module, code, &stdlib_path)
+            .expect("Compile failed");
+
+        // Check debug symbols in main function
+        for (name, func) in compiler.get_all_functions().iter() {
+            println!("Function: {} has {} debug symbols", name, func.debug_symbols.len());
+            for sym in &func.debug_symbols {
+                println!("  - {} at register {}", sym.name, sym.register);
+            }
+        }
+
+        // Find main function and verify it has debug symbols
+        let main_func = compiler.get_all_functions().iter()
+            .find(|(name, _)| name.starts_with("main"))
+            .map(|(_, f)| f);
+
+        assert!(main_func.is_some(), "main function not found");
+        let main_func = main_func.unwrap();
+
+        println!("main/ debug_symbols: {:?}", main_func.debug_symbols);
+        // Should have x and y as locals
+        assert!(!main_func.debug_symbols.is_empty(),
+            "Expected debug symbols for x and y, got none");
+    }
+
+    #[test]
     fn test_debugger_print_locals() {
         let code = r#"
             main() = {

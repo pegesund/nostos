@@ -687,6 +687,9 @@ pub struct Compiler {
     current_fn_mvar_locks: Vec<(String, u16, bool)>,
     /// Whether current function has blocking operations (receive, etc.)
     current_fn_has_blocking: bool,
+    /// Debug symbols accumulated during function compilation
+    /// (not affected by scope restoration in compile_block)
+    current_fn_debug_symbols: Vec<LocalVarSymbol>,
 }
 
 /// Information about a module-level mutable variable (mvar).
@@ -842,6 +845,7 @@ impl Compiler {
             current_fn_calls: HashSet::new(),
             current_fn_mvar_locks: Vec::new(),
             current_fn_has_blocking: false,
+            current_fn_debug_symbols: Vec::new(),
         };
 
         // Register builtin types for autocomplete
@@ -1295,6 +1299,7 @@ impl Compiler {
             current_fn_calls: HashSet::new(),
             current_fn_mvar_locks: Vec::new(),
             current_fn_has_blocking: false,
+            current_fn_debug_symbols: Vec::new(),
         }
     }
 
@@ -2924,6 +2929,8 @@ impl Compiler {
         // Clear locals before analysis - this ensures we don't have stale entries from previous functions
         // that could interfere with mvar detection
         self.locals.clear();
+        // Clear debug symbols for this function
+        self.current_fn_debug_symbols.clear();
 
         // Pre-analyze function body to determine if function-level mvar locking is needed.
         // If a function reads an mvar and later writes to it (even via a local variable),
@@ -3080,7 +3087,12 @@ impl Compiler {
                             _ => false,
                         }
                     }).unwrap_or(false);
-                    self.locals.insert(n, LocalInfo { reg: i as Reg, is_float, mutable: false });
+                    self.locals.insert(n.clone(), LocalInfo { reg: i as Reg, is_float, mutable: false });
+                    // Record parameter as debug symbol
+                    self.current_fn_debug_symbols.push(LocalVarSymbol {
+                        name: n,
+                        register: i as Reg,
+                    });
                 }
             }
 
@@ -3113,15 +3125,8 @@ impl Compiler {
 
         self.chunk.register_count = self.next_reg as usize;
 
-        // Collect debug symbols from local variables
-        let debug_symbols: Vec<LocalVarSymbol> = self
-            .locals
-            .iter()
-            .map(|(name, info)| LocalVarSymbol {
-                name: name.clone(),
-                register: info.reg,
-            })
-            .collect();
+        // Use accumulated debug symbols (not affected by block scope restoration)
+        let debug_symbols = std::mem::take(&mut self.current_fn_debug_symbols);
 
         // Extract source code for this function from the source
         let source_code = self.current_source.as_ref().and_then(|src| {
@@ -7911,6 +7916,11 @@ impl Compiler {
                     // New binding - determine if float from explicit type or value expression
                     let is_float = self.is_float_type(&value_type) || self.is_float_expr(&binding.value);
                     self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: binding.mutable });
+                    // Record debug symbol for this local variable
+                    self.current_fn_debug_symbols.push(LocalVarSymbol {
+                        name: ident.node.clone(),
+                        register: value_reg,
+                    });
                     // Record the type (explicit takes precedence over inferred, and pre-set types take precedence over both)
                     // Check if there's already a type set (e.g., from REPL variable type annotations)
                     let existing_type = self.local_types.get(&ident.node).cloned();
@@ -7936,7 +7946,12 @@ impl Compiler {
             // For complex patterns, we need to deconstruct
             let (_, bindings) = self.compile_pattern_test(&binding.pattern, value_reg)?;
             for (name, reg, is_float) in bindings {
-                self.locals.insert(name, LocalInfo { reg, is_float, mutable: false });
+                self.locals.insert(name.clone(), LocalInfo { reg, is_float, mutable: false });
+                // Record debug symbol for pattern binding
+                self.current_fn_debug_symbols.push(LocalVarSymbol {
+                    name,
+                    register: reg,
+                });
             }
         }
 
@@ -8419,15 +8434,8 @@ impl Compiler {
 
         let lambda_chunk = std::mem::take(&mut self.chunk);
 
-        // Collect debug symbols before restoring state
-        let debug_symbols: Vec<LocalVarSymbol> = self
-            .locals
-            .iter()
-            .map(|(name, info)| LocalVarSymbol {
-                name: name.clone(),
-                register: info.reg,
-            })
-            .collect();
+        // Use accumulated debug symbols (not affected by block scope restoration)
+        let debug_symbols = std::mem::take(&mut self.current_fn_debug_symbols);
 
         // Step 5: Restore state
         self.chunk = saved_chunk;
