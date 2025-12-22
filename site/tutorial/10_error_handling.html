@@ -198,7 +198,7 @@ main() = {
 
                 <!-- Try/Catch -->
                 <h2 class="text-2xl font-semibold text-white mb-4"><code>try/catch</code> (Boundary Error Handling)</h2>
-                <p class="text-slate-400 mb-4">While <code>Result</code> is for recoverable errors, <code>try/catch</code> provides a mechanism to catch and handle panics at specific boundaries, often when interacting with external systems or legacy code. It's not for general control flow but for encapsulating risky operations.</p>
+                <p class="text-slate-400 mb-4">While <code>Result</code> is for recoverable errors in pure code, <code>try/catch</code> provides a mechanism to catch and handle exceptions. It's primarily used for I/O operations and when interacting with external systems.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">
 risky_operation(should_panic) =
@@ -209,19 +209,76 @@ end
 main() = {
     result1 = try
         risky_operation(false)
-    catch
-        err -> "Caught error: " ++ show(err)
+    catch err ->
+        "Caught error: " ++ show(err)
     end
     println(result1) # "Operation successful"
 
     result2 = try
         risky_operation(true)
-    catch
-        err -> "Caught error: " ++ show(err)
+    catch err ->
+        "Caught error: " ++ show(err)
     end
     println(result2) # "Caught error: Something went really wrong!"
 }
 </code></pre>
+                </div>
+
+                <!-- I/O Error Handling -->
+                <h2 class="text-2xl font-semibold text-white mb-4">I/O Error Handling</h2>
+                <p class="text-slate-400 mb-4">All I/O operations in Nostos (file, network, HTTP) throw exceptions on error. This keeps the happy path clean while ensuring errors are handled explicitly with <code>try/catch</code>.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# File I/O with exception handling
+read_config(path) = {
+    try {
+        content = File.readAll(path)
+        println("Config loaded: " ++ content)
+        Some(content)
+    } catch e -> {
+        println("Failed to read config: " ++ e)
+        None
+    } end
+}
+
+# HTTP requests with error handling
+fetch_data(url) = {
+    try {
+        response = Http.get(url)
+        if response.status == 200 then
+            Some(response.body)
+        else
+            None
+    } catch e -> {
+        println("Network error: " ++ e)
+        None
+    } end
+}
+
+# Combining multiple I/O operations
+process_file(input_path, output_path) = {
+    try {
+        data = File.readAll(input_path)
+        processed = String.toUpper(data)
+        File.writeAll(output_path, processed)
+        println("Processing complete!")
+        true
+    } catch e -> {
+        println("Error: " ++ e)
+        false
+    } end
+}
+
+main() = {
+    read_config("/etc/myapp/config.txt")
+    fetch_data("https://api.example.com/data")
+    process_file("/tmp/input.txt", "/tmp/output.txt")
+}
+</code></pre>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <p class="text-slate-400 text-sm"><strong>Design Note:</strong> I/O operations throw exceptions because they interact with the external world where failures are common (network timeouts, missing files, permission errors). Using exceptions keeps your code clean while ensuring you explicitly handle failure cases at appropriate boundaries.</p>
                 </div>
             </div>
 

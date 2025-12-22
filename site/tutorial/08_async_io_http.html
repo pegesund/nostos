@@ -93,13 +93,13 @@
 <pre><code class="language-nostos">
 fetch_ip() = {
     # Perform a GET request to get public IP
-    (status, resp) = Http.get("https://httpbin.org/ip")
-    
-    if status == "ok" then {
+    # I/O operations throw exceptions on error - use try/catch to handle
+    try {
+        resp = Http.get("https://httpbin.org/ip")
         println("Your IP: " ++ resp.body)
-    } else {
-        println("Error fetching IP: " ++ resp.body)
-    }
+    } catch e ->
+        println("Error fetching IP: " ++ e)
+    end
 }
 
 main() = {
@@ -117,21 +117,27 @@ main() = {
 timed_request_worker(parent, id) = {
     println("Worker " ++ show(id) ++ " starting request...")
     # This HTTP call yields the process, allowing others to run
-    (status, data) = Http.get("https://httpbin.org/delay/1")
-    println("Worker " ++ show(id) ++ " done: status " ++ show(data.status))
-    parent <- ("done", id)
+    # Exceptions are caught and reported
+    try {
+        data = Http.get("https://httpbin.org/delay/1")
+        println("Worker " ++ show(id) ++ " done: status " ++ show(data.status))
+        parent <- ("done", id)
+    } catch e -> {
+        println("Worker " ++ show(id) ++ " error: " ++ e)
+        parent <- ("done", id)
+    } end
 }
 
 main() = {
     me = self()
     println("Spawning 5 HTTP requests with 1-second server-side delay each.")
     println("Total time will be ~1-2 seconds, not 5 seconds, due to parallelism.")
-    
+
     # Spawn 5 workers; all requests are initiated almost simultaneously
     for i = 1 to 5 {
         spawn { timed_request_worker(me, i) }
     }
-    
+
     # Collect results from all workers
     for i = 1 to 5 {
         receive ("done", id) -> println("Request from worker " ++ show(id) ++ " completed.")
@@ -161,30 +167,31 @@ handle_request(req) = {
 # Worker process continuously accepts and handles requests
 server_worker(server_socket) = {
     # Server.accept yields if no connection is available, allowing other processes to run
-    (status, request) = Server.accept(server_socket)
-    if status == "ok" then {
+    # Throws exception when server is closed
+    result = try {
+        request = Server.accept(server_socket)
         handle_request(request)
-    } else {
-        println("Error accepting connection: " ++ show(status))
-    }
-    server_worker(server_socket) # Loop to accept next request
+        server_worker(server_socket)  # Loop to accept next request
+    } catch e ->
+        ()  # Exit when server is closed or on error
+    end
+    result
 }
 
 main() = {
-    # Bind to port 8080
-    (status, server) = Server.bind(8080)
-
-    if status == "ok" then {
+    # Bind to port 8080 - throws on error
+    try {
+        server = Server.bind(8080)
         println("HTTP Server listening on port 8080. Spawning workers...")
         # Spawn multiple worker processes to handle incoming connections
         for i = 1 to 4 {
             spawn { server_worker(server) }
         }
         # Keep the main process alive (e.g., waiting for a shutdown signal)
-        receive _ -> () 
-    } else {
-        println("Failed to bind server: " ++ show(status))
-    }
+        receive _ -> ()
+    } catch e ->
+        println("Failed to bind server: " ++ e)
+    end
 }
 </code></pre>
                 </div>

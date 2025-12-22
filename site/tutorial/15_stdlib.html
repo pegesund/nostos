@@ -423,51 +423,71 @@
 
                 <!-- File Module -->
                 <h2 class="text-2xl font-semibold text-white mb-4">File Module</h2>
-                <p class="text-slate-400 mb-4">File system operations for reading and writing files.</p>
+                <p class="text-slate-400 mb-4">File system operations for reading and writing files. All operations throw exceptions on error - use <code>try/catch</code> for error handling.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">main() = {
-    # Write to file
-    File.write("/tmp/test.txt", "Hello, World!")
+    # Write to file (throws on error)
+    File.writeAll("/tmp/test.txt", "Hello, World!")
 
-    # Read entire file
-    content = File.read("/tmp/test.txt")
+    # Read entire file (throws if file doesn't exist)
+    content = File.readAll("/tmp/test.txt")
     println(content)  # "Hello, World!"
 
-    # Append to file
-    File.append("/tmp/test.txt", "\nMore content")
-
-    # Check if file exists
+    # Check if file exists (returns Bool, doesn't throw)
     println(File.exists("/tmp/test.txt"))  # true
 
-    # Delete file
-    File.delete("/tmp/test.txt")
+    # Get file size in bytes
+    println(File.size("/tmp/test.txt"))  # 13
 
-    # Read lines as list
-    lines = File.readLines("/etc/hosts")
+    # Delete file
+    File.remove("/tmp/test.txt")
+
+    # Error handling with try/catch
+    try {
+        data = File.readAll("/nonexistent.txt")
+        println(data)
+    } catch e ->
+        println("File error: " ++ e)
+    end
+
+    # File handles for streaming access
+    handle = File.open("/tmp/data.txt", "w")  # modes: "r", "w", "a", "rw"
+    File.write(handle, "Line 1\n")
+    File.write(handle, "Line 2\n")
+    File.close(handle)
 }</code></pre>
                 </div>
 
                 <!-- Dir Module -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Dir Module</h2>
-                <p class="text-slate-400 mb-4">Directory operations.</p>
+                <p class="text-slate-400 mb-4">Directory operations. Like file operations, these throw exceptions on error.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">main() = {
-    # Create directory
+    # Create directory (throws if parent doesn't exist)
     Dir.create("/tmp/mydir")
 
-    # List directory contents
+    # Create nested directories (creates all parents)
+    Dir.createAll("/tmp/nested/path/here")
+
+    # List directory contents (returns [String])
     files = Dir.list("/tmp")
     println(files)  # List of filenames
 
-    # Check if directory exists
+    # Check if directory exists (returns Bool)
     println(Dir.exists("/tmp"))  # true
 
-    # Remove directory
+    # Remove empty directory
     Dir.remove("/tmp/mydir")
 
-    # Current working directory
-    cwd = Dir.current()
-    println("CWD: " ++ cwd)
+    # Remove directory and all contents recursively
+    Dir.removeAll("/tmp/nested")
+
+    # Error handling
+    try {
+        Dir.create("/root/forbidden")
+    } catch e ->
+        println("Permission denied: " ++ e)
+    end
 }</code></pre>
                 </div>
 
