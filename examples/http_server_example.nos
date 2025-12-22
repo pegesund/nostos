@@ -17,7 +17,7 @@ handleRoute(method, path, body) = {
   else if path == "/echo" then
     (200, body)
   else if path == "/json" then
-    (200, "{\"status\": \"ok\", \"message\": \"Hello from Nostos\"}")
+    (200, '{"status": "ok", "message": "Hello from Nostos"}')
   else
     (404, "Not Found: " ++ path)
 }

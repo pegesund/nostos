@@ -113,7 +113,7 @@ main() = {
     println("\n5. Parsing External JSON Format:")
 
     # JSON that might come from an external API
-    externalJson = "{\"id\": 100, \"name\": \"External User\", \"email\": \"external@api.com\", \"active\": false}"
+    externalJson = '{"id": 100, "name": "External User", "email": "external@api.com", "active": false}'
 
     externalUser = fromJson[User](jsonParse(externalJson))
     println("   Parsed external user: " ++ externalUser.name)

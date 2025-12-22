@@ -215,17 +215,15 @@ pub enum Token {
 
     // String literal (single-quoted) - allows embedding double quotes without escaping
     // e.g., '{"name": "John"}' for JSON
-    #[regex(r"'([^'\\]|\\.)*'", |lex| {
+    // Requires 2+ characters to avoid conflict with Char literals
+    #[regex(r"'([^'\\]|\\.){2,}'", |lex| {
         let s = lex.slice();
         Some(parse_string_escapes_single(&s[1..s.len()-1]))
     })]
     SingleQuoteString(String),
 
-    // Character literal (deprecated - use single-char strings instead)
-    // Keeping for backward compatibility with existing code
-    // Note: SingleQuoteString takes priority for multi-char, but single char 'x' still matches Char
-    // To use single-char string, use double quotes: "x"
-    #[regex(r"'([^'\\]|\\.)'", priority = 2, callback = |lex| {
+    // Character literal - single character in single quotes: 'x', '\n'
+    #[regex(r"'([^'\\]|\\.)'", |lex| {
         let s = lex.slice();
         parse_char(&s[1..s.len()-1])
     })]

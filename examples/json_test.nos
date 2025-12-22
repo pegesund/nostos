@@ -10,7 +10,7 @@ main() = {
     j2 = jsonParse("123")
     assert_eq(j2, Number(123.0))
 
-    j3 = jsonParse("\"hello\"")
+    j3 = jsonParse('"hello"')
     assert_eq(j3, String("hello"))
 
     # Float values
@@ -22,12 +22,12 @@ main() = {
     assert_eq(j4, Array([Number(1.0), Number(2.0), Number(3.0)]))
 
     # Object
-    j5 = jsonParse("{\"key\": \"value\", \"num\": 42}")
+    j5 = jsonParse('{"key": "value", "num": 42}')
     # Note: Object stores list of tuples. Order is preserved from parsing.
     assert_eq(j5, Object([("key", String("value")), ("num", Number(42.0))]))
 
     # Nested
-    j6 = jsonParse("{\"list\": [1, {\"inner\": null}], \"bool\": true}")
+    j6 = jsonParse('{"list": [1, {"inner": null}], "bool": true}')
     expected_j6 = Object([
         ("list", Array([
             Number(1.0),

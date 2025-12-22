@@ -36,7 +36,7 @@ main() = {
     # Example 1: Simple Record
     # -----------------------------------------
     println("1. Simple Record:")
-    personJson = jsonParse("{\"name\": \"Alice\", \"age\": 30}")
+    personJson = jsonParse('{"name": "Alice", "age": 30}')
     person = fromJson[Person](personJson)
     println("   Name: " ++ person.name)
     println("   Age: " ++ show(person.age))
@@ -45,7 +45,7 @@ main() = {
     # Example 2: Nested Record
     # -----------------------------------------
     println("\n2. Nested Record:")
-    employeeJson = jsonParse("{\"name\": \"Bob\", \"title\": \"Engineer\", \"salary\": 75000.50, \"address\": {\"street\": \"123 Main St\", \"city\": \"Oslo\", \"zip\": 1234}}")
+    employeeJson = jsonParse('{"name": "Bob", "title": "Engineer", "salary": 75000.50, "address": {"street": "123 Main St", "city": "Oslo", "zip": 1234}}')
     employee = fromJson[Employee](employeeJson)
     println("   Employee: " ++ employee.name ++ " (" ++ employee.title ++ ")")
     println("   Salary: $" ++ show(employee.salary))
@@ -57,11 +57,11 @@ main() = {
     # -----------------------------------------
     println("\n3. Unit Variants:")
 
-    activeJson = jsonParse("{\"Active\": null}")
+    activeJson = jsonParse('{"Active": null}')
     status1 = fromJson[Status](activeJson)
     println("   Status 1: " ++ show(status1))
 
-    pendingJson = jsonParse("{\"Pending\": null}")
+    pendingJson = jsonParse('{"Pending": null}')
     status2 = fromJson[Status](pendingJson)
     println("   Status 2: " ++ show(status2))
 
@@ -71,11 +71,11 @@ main() = {
     # -----------------------------------------
     println("\n4. Single-field Variants:")
 
-    successJson = jsonParse("{\"Success\": \"Operation completed\"}")
+    successJson = jsonParse('{"Success": "Operation completed"}')
     result1 = fromJson[ApiResult](successJson)
     println("   Result 1: " ++ show(result1))
 
-    circleJson = jsonParse("{\"Circle\": 5.0}")
+    circleJson = jsonParse('{"Circle": 5.0}')
     shape1 = fromJson[Shape](circleJson)
     println("   Shape 1: " ++ show(shape1))
 
@@ -85,15 +85,15 @@ main() = {
     # -----------------------------------------
     println("\n5. Multi-field Variants:")
 
-    errorJson = jsonParse("{\"Error\": [404, \"Not found\"]}")
+    errorJson = jsonParse('{"Error": [404, "Not found"]}')
     result2 = fromJson[ApiResult](errorJson)
     println("   Result 2: " ++ show(result2))
 
-    rectJson = jsonParse("{\"Rectangle\": [10.0, 20.0]}")
+    rectJson = jsonParse('{"Rectangle": [10.0, 20.0]}')
     shape2 = fromJson[Shape](rectJson)
     println("   Shape 2: " ++ show(shape2))
 
-    pointJson = jsonParse("{\"Point\": null}")
+    pointJson = jsonParse('{"Point": null}')
     shape3 = fromJson[Shape](pointJson)
     println("   Shape 3: " ++ show(shape3))
 
@@ -101,7 +101,7 @@ main() = {
     # Example 6: Lists
     # -----------------------------------------
     println("\n6. Lists:")
-    teamJson = jsonParse("{\"members\": [{\"name\": \"Alice\", \"age\": 30}, {\"name\": \"Bob\", \"age\": 25}, {\"name\": \"Charlie\", \"age\": 35}]}")
+    teamJson = jsonParse('{"members": [{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}, {"name": "Charlie", "age": 35}]}')
     team = fromJson[Team](teamJson)
     println("   Team size: " ++ show(length(team.members)))
     team.members.map(m => println("   - " ++ m.name))
@@ -111,7 +111,7 @@ main() = {
     # Tuples are represented as JSON arrays
     # -----------------------------------------
     println("\n7. Tuples:")
-    coordJson = jsonParse("{\"point\": [10, 20], \"label\": \"Origin\"}")
+    coordJson = jsonParse('{"point": [10, 20], "label": "Origin"}')
     coord = fromJson[Coordinate](coordJson)
     (x, y) = coord.point
     println("   Point: (" ++ show(x) ++ ", " ++ show(y) ++ ") - " ++ coord.label)
@@ -121,7 +121,7 @@ main() = {
     # -----------------------------------------
     println("\n8. Error Handling:")
 
-    badJson = jsonParse("{\"name\": \"Alice\"}")  # Missing 'age' field
+    badJson = jsonParse('{"name": "Alice"}')  # Missing 'age' field
     result = try {
         p = fromJson[Person](badJson)
         "Got person: " ++ p.name
