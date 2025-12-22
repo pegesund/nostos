@@ -188,6 +188,8 @@ pub struct ReplEngine {
     dynamic_var_types: Arc<std::sync::RwLock<HashMap<String, String>>>,
     /// Variable bindings (name -> thunk_name) - shared with eval callback for injection
     dynamic_var_bindings: Arc<std::sync::RwLock<HashMap<String, String>>>,
+    /// Debugger breakpoints: function names to break on
+    debug_breakpoints: HashSet<String>,
 }
 
 impl ReplEngine {
@@ -599,6 +601,7 @@ impl ReplEngine {
             synced_dynamic_mvars: HashSet::new(),
             dynamic_var_types: dynamic_var_types_for_self,
             dynamic_var_bindings: dynamic_var_bindings_for_self,
+            debug_breakpoints: HashSet::new(),
         }
     }
 
@@ -2016,6 +2019,31 @@ impl ReplEngine {
         let mut types: Vec<_> = self.compiler.get_type_names().into_iter().map(String::from).collect();
         types.sort();
         types
+    }
+
+    /// Get all debug breakpoints
+    pub fn get_breakpoints(&self) -> Vec<String> {
+        self.debug_breakpoints.iter().cloned().collect()
+    }
+
+    /// Check if any breakpoints are set
+    pub fn has_breakpoints(&self) -> bool {
+        !self.debug_breakpoints.is_empty()
+    }
+
+    /// Add a debug breakpoint
+    pub fn add_breakpoint(&mut self, function: String) {
+        self.debug_breakpoints.insert(function);
+    }
+
+    /// Remove a debug breakpoint
+    pub fn remove_breakpoint(&mut self, function: &str) -> bool {
+        self.debug_breakpoints.remove(function)
+    }
+
+    /// Clear all breakpoints
+    pub fn clear_breakpoints(&mut self) {
+        self.debug_breakpoints.clear();
     }
 
     /// Get all variable names currently bound in the REPL
@@ -4480,6 +4508,29 @@ impl ReplEngine {
                     self.profile_eval(args)
                 }
             }
+            ":debug" | ":dbg" => {
+                if args.is_empty() {
+                    if self.debug_breakpoints.is_empty() {
+                        Ok("No breakpoints set. Usage: :debug <function_name>".to_string())
+                    } else {
+                        let bps: Vec<_> = self.debug_breakpoints.iter().cloned().collect();
+                        Ok(format!("Breakpoints: {}", bps.join(", ")))
+                    }
+                } else {
+                    self.debug_breakpoints.insert(args.to_string());
+                    Ok(format!("Breakpoint set on: {}", args))
+                }
+            }
+            ":undebug" | ":udbg" => {
+                if args.is_empty() {
+                    self.debug_breakpoints.clear();
+                    Ok("All breakpoints cleared".to_string())
+                } else if self.debug_breakpoints.remove(args) {
+                    Ok(format!("Breakpoint removed from: {}", args))
+                } else {
+                    Err(format!("No breakpoint on: {}", args))
+                }
+            }
             _ => Err(format!("Unknown command: {}. Type :help for available commands.", cmd)),
         }
     }
@@ -4782,6 +4833,82 @@ impl ReplEngine {
         let handle = self.vm.run_threaded(&fn_name);
 
         Ok(handle)
+    }
+
+    /// Start async evaluation with debugging enabled
+    /// Returns a DebugSession that can be used to control execution
+    pub fn start_debug_async(&mut self, input: &str) -> Result<nostos_vm::DebugSession, String> {
+        let input = input.trim();
+
+        // Handle REPL commands synchronously
+        if input.starts_with(':') {
+            return Err("Use eval() for commands".to_string());
+        }
+
+        // First, check if this is a definition
+        let (module_opt, _) = parse(input);
+        let has_definitions = module_opt.as_ref().map(|m| Self::has_definitions(m)).unwrap_or(false);
+        if has_definitions {
+            return Err("Use eval() for definitions".to_string());
+        }
+
+        // Also check for variable bindings
+        if Self::is_var_binding(input).is_some() {
+            return Err("Use eval() for definitions".to_string());
+        }
+
+        // Also check for tuple bindings
+        if Self::is_tuple_binding(input).is_some() {
+            return Err("Use eval() for definitions".to_string());
+        }
+
+        // Parse and compile the expression
+        self.eval_counter += 1;
+        let eval_name = format!("__repl_eval_{}__", self.eval_counter);
+
+        let bindings_preamble = if self.var_bindings.is_empty() {
+            String::new()
+        } else {
+            let bindings: Vec<String> = self.var_bindings
+                .iter()
+                .map(|(name, binding)| format!("{} = {}()", name, binding.thunk_name))
+                .collect();
+            bindings.join("\n    ") + "\n    "
+        };
+
+        let wrapper = if bindings_preamble.is_empty() {
+            format!("{}() = {}", eval_name, input)
+        } else {
+            format!("{}() = {{\n    {}{}\n}}", eval_name, bindings_preamble, input)
+        };
+
+        let (wrapper_module_opt, errors) = parse(&wrapper);
+
+        if !errors.is_empty() {
+            return Err(format!("Parse error: {:?}", errors));
+        }
+
+        let wrapper_module = wrapper_module_opt.ok_or("Failed to parse expression")?;
+
+        self.compiler.add_module(&wrapper_module, vec![], Arc::new(wrapper.clone()), "<repl>".to_string())
+            .map_err(|e| format!("Error: {}", e))?;
+
+        if let Err((e, _, _)) = self.compiler.compile_all() {
+            return Err(format!("Compilation error: {}", e));
+        }
+
+        self.sync_vm();
+
+        // Start debug session
+        let fn_name = format!("{}/", eval_name);
+        self.vm.run_debug(&fn_name)
+    }
+
+    /// Get the breakpoints as Breakpoint structs for the VM
+    pub fn get_vm_breakpoints(&self) -> Vec<nostos_vm::shared_types::Breakpoint> {
+        self.debug_breakpoints.iter().map(|name| {
+            nostos_vm::shared_types::Breakpoint::function(name.clone())
+        }).collect()
     }
 
     /// Profile an expression and return formatted results
@@ -9980,5 +10107,113 @@ mod repl_state_tests {
         // This should still work
         let result3 = engine.eval("\"world\"");
         assert!(result3.is_ok(), "String literal should work after error, got: {:?}", result3);
+    }
+}
+
+#[cfg(test)]
+mod debug_session_tests {
+    use super::*;
+    use nostos_vm::shared_types::{DebugCommand, DebugEvent};
+
+    #[test]
+    fn test_debug_session_basic() {
+        // Test that debug session can be created and basic stepping works
+        let mut engine = ReplEngine::new(ReplConfig { enable_jit: false, num_threads: 1 });
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Define a simple function to debug
+        let _ = engine.eval("test_add(a: Int, b: Int) -> Int = a + b");
+
+        // Add a breakpoint on test_add
+        engine.add_breakpoint("test_add".to_string());
+        assert!(engine.has_breakpoints());
+
+        // Start debug session
+        let session = engine.start_debug_async("test_add(1, 2)");
+        assert!(session.is_ok(), "Debug session should start");
+        let session = session.unwrap();
+
+        // Send breakpoints
+        for bp in engine.get_vm_breakpoints() {
+            let _ = session.send(DebugCommand::AddBreakpoint(bp));
+        }
+
+        // Continue from initial pause (at wrapper entry)
+        let _ = session.send(DebugCommand::Continue);
+
+        // Process events until we hit the test_add breakpoint or exit
+        let start = std::time::Instant::now();
+        let mut hit_breakpoint = false;
+        let mut locals_received = Vec::new();
+
+        while start.elapsed() < std::time::Duration::from_secs(5) {
+            if let Some(event) = session.try_recv_event() {
+                println!("Debug event: {:?}", event);
+                match &event {
+                    DebugEvent::Paused { function, .. } if function.starts_with("test_add") => {
+                        println!("Hit test_add breakpoint!");
+                        hit_breakpoint = true;
+
+                        // Get locals
+                        let _ = session.send(DebugCommand::PrintLocals);
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+
+                        // Collect locals event
+                        while let Some(ev) = session.try_recv_event() {
+                            if let DebugEvent::Locals { variables } = ev {
+                                locals_received = variables;
+                                break;
+                            }
+                        }
+
+                        // Continue to finish
+                        let _ = session.send(DebugCommand::Continue);
+                    }
+                    DebugEvent::Paused { .. } => {
+                        // Other pause (e.g., wrapper function) - continue
+                        let _ = session.send(DebugCommand::Continue);
+                    }
+                    DebugEvent::Exited { .. } => {
+                        println!("Execution finished");
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        // Verify we hit the breakpoint and got locals
+        assert!(hit_breakpoint, "Should have hit test_add breakpoint");
+        assert!(!locals_received.is_empty(), "Should have received locals");
+
+        // Verify locals contain the expected parameters
+        let local_names: Vec<_> = locals_received.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert!(local_names.contains(&"a"), "Locals should contain 'a'");
+        assert!(local_names.contains(&"b"), "Locals should contain 'b'");
+
+        println!("Locals: {:?}", locals_received);
+
+        // Wait for result (with timeout)
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let result = session.try_result();
+        println!("Result: {:?}", result);
+    }
+
+    #[test]
+    fn test_debug_command_parsing() {
+        // Test :debug command
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Add breakpoint via command
+        let result = engine.eval(":debug test_fn");
+        assert!(result.is_ok());
+        assert!(engine.get_breakpoints().contains(&"test_fn".to_string()));
+
+        // Remove breakpoint
+        let result = engine.eval(":undebug test_fn");
+        assert!(result.is_ok());
+        assert!(!engine.get_breakpoints().contains(&"test_fn".to_string()));
     }
 }

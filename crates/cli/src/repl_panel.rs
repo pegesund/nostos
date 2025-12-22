@@ -209,6 +209,8 @@ pub struct ReplPanel {
     eval_in_progress: bool,
     /// Handle for async evaluation (owned by this panel, includes independent interrupt)
     eval_handle: Option<ThreadedEvalHandle>,
+    /// Handle for debug session (when debugging)
+    debug_session: Option<nostos_vm::DebugSession>,
 }
 
 impl ReplPanel {
@@ -237,6 +239,7 @@ impl ReplPanel {
             command_history: Self::load_history_from_disk(),
             eval_in_progress: false,
             eval_handle: None,
+            debug_session: None,
         }
     }
 
@@ -295,24 +298,54 @@ impl ReplPanel {
             return EvalResult::Continue;
         }
 
-        // Try async evaluation for expressions
-        let async_result = self.engine.borrow_mut().start_eval_async(&input_text);
-        match async_result {
-            Ok(handle) => {
-                // Async eval started - store handle and mark as in progress
-                self.eval_handle = Some(handle);
-                self.eval_in_progress = true;
-                self.current.output = Some(ReplOutput::Definition("Evaluating...".to_string()));
+        // Check if we should use debug mode
+        let has_breakpoints = self.engine.borrow().has_breakpoints();
+
+        if has_breakpoints {
+            // Use debug mode when breakpoints are set
+            let debug_result = self.engine.borrow_mut().start_debug_async(&input_text);
+            match debug_result {
+                Ok(session) => {
+                    // Set breakpoints on the debug session
+                    for bp in self.engine.borrow().get_vm_breakpoints() {
+                        let _ = session.send(nostos_vm::shared_types::DebugCommand::AddBreakpoint(bp));
+                    }
+                    // Continue execution to run until first breakpoint
+                    let _ = session.send(nostos_vm::shared_types::DebugCommand::Continue);
+
+                    self.debug_session = Some(session);
+                    self.eval_in_progress = true;
+                    self.current.output = Some(ReplOutput::Definition("Debugging...".to_string()));
+                }
+                Err(e) if e == "Use eval() for commands" || e == "Use eval() for definitions" => {
+                    let result = self.engine.borrow_mut().eval(&input_text);
+                    self.finish_eval_with_result(result);
+                }
+                Err(e) => {
+                    self.current.output = Some(ReplOutput::Error(e));
+                    self.finalize_entry();
+                }
             }
-            Err(e) if e == "Use eval() for commands" || e == "Use eval() for definitions" => {
-                // Definitions (functions, types, variables) use sync eval
-                let result = self.engine.borrow_mut().eval(&input_text);
-                self.finish_eval_with_result(result);
-            }
-            Err(e) => {
-                // Compile-time error - show it immediately
-                self.current.output = Some(ReplOutput::Error(e));
-                self.finalize_entry();
+        } else {
+            // Normal async evaluation for expressions
+            let async_result = self.engine.borrow_mut().start_eval_async(&input_text);
+            match async_result {
+                Ok(handle) => {
+                    // Async eval started - store handle and mark as in progress
+                    self.eval_handle = Some(handle);
+                    self.eval_in_progress = true;
+                    self.current.output = Some(ReplOutput::Definition("Evaluating...".to_string()));
+                }
+                Err(e) if e == "Use eval() for commands" || e == "Use eval() for definitions" => {
+                    // Definitions (functions, types, variables) use sync eval
+                    let result = self.engine.borrow_mut().eval(&input_text);
+                    self.finish_eval_with_result(result);
+                }
+                Err(e) => {
+                    // Compile-time error - show it immediately
+                    self.current.output = Some(ReplOutput::Error(e));
+                    self.finalize_entry();
+                }
             }
         }
 
@@ -385,6 +418,37 @@ impl ReplPanel {
             return false;
         }
 
+        // Check debug session first
+        if let Some(session) = &self.debug_session {
+            match session.try_result() {
+                Some(Ok(result)) => {
+                    let output = if result.is_unit() {
+                        String::new()
+                    } else {
+                        result.display()
+                    };
+                    self.debug_session = None;
+                    self.finish_eval_with_result(Ok(output));
+                    return true;
+                }
+                Some(Err(e)) => {
+                    let err_msg = if e.contains("Interrupted") {
+                        "Interrupted".to_string()
+                    } else {
+                        format!("Runtime error: {}", e)
+                    };
+                    self.debug_session = None;
+                    self.finish_eval_with_result(Err(err_msg));
+                    return true;
+                }
+                None => {
+                    // Still running or paused - don't finish yet
+                    return false;
+                }
+            }
+        }
+
+        // Check regular async handle
         let handle = match &self.eval_handle {
             Some(h) => h,
             None => return false,
@@ -415,6 +479,25 @@ impl ReplPanel {
                 true
             }
         }
+    }
+
+    /// Poll for debug events. Returns a debug event if one was received.
+    pub fn poll_debug_event(&mut self) -> Option<nostos_vm::shared_types::DebugEvent> {
+        if let Some(session) = &self.debug_session {
+            session.try_recv_event()
+        } else {
+            None
+        }
+    }
+
+    /// Check if we have an active debug session
+    pub fn has_debug_session(&self) -> bool {
+        self.debug_session.is_some()
+    }
+
+    /// Get a reference to the debug session if one exists
+    pub fn get_debug_session(&self) -> Option<&nostos_vm::DebugSession> {
+        self.debug_session.as_ref()
     }
 
     /// Cancel the current async evaluation

@@ -8,6 +8,7 @@ mod repl_panel;
 mod autocomplete;
 mod inspector_panel;
 mod nostos_panel;
+mod debug_panel;
 
 use nostos_compiler::compile::{compile_module, Compiler, MvarInitValue};
 use nostos_jit::{JitCompiler, JitConfig};

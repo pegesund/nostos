@@ -464,6 +464,13 @@ impl AsyncProcess {
         self.frames.last().and_then(|f| f.function.source_file.clone())
     }
 
+    /// Get the first line number of the current function.
+    fn debug_function_first_line(&self) -> usize {
+        self.frames.last()
+            .and_then(|f| f.function.code.lines.first().copied())
+            .unwrap_or(0)
+    }
+
     /// Check if we should pause execution (breakpoint or step mode).
     fn debug_should_pause(&mut self) -> bool {
         use crate::shared_types::StepMode;
@@ -480,15 +487,39 @@ impl AsyncProcess {
 
         match self.step_mode {
             StepMode::Run => {
-                // Only pause on breakpoints
+                // Check function breakpoints
+                let fn_name = self.debug_current_function();
+                if fn_name != "<unknown>" {
+                    // Check for exact match
+                    let fn_bp = crate::shared_types::Breakpoint::Function(fn_name.clone());
+                    if self.breakpoints.contains(&fn_bp) {
+                        // Only break on function entry (first line of function)
+                        if current_line == self.debug_function_first_line() {
+                            self.step_mode = StepMode::Paused;
+                            return true;
+                        }
+                    }
+                    // Also check without arity suffix (e.g., "foo" matches "foo/2")
+                    if let Some(base_name) = fn_name.split('/').next() {
+                        let base_bp = crate::shared_types::Breakpoint::Function(base_name.to_string());
+                        if self.breakpoints.contains(&base_bp) {
+                            if current_line == self.debug_function_first_line() {
+                                self.step_mode = StepMode::Paused;
+                                return true;
+                            }
+                        }
+                    }
+                }
+
+                // Check line breakpoints
                 let file = self.debug_current_file();
-                let bp = crate::shared_types::Breakpoint { file, line: current_line };
+                let bp = crate::shared_types::Breakpoint::Line { file, line: current_line };
                 if self.breakpoints.contains(&bp) {
                     self.step_mode = StepMode::Paused;
                     return true;
                 }
                 // Also check file-agnostic breakpoint
-                let bp_any = crate::shared_types::Breakpoint { file: None, line: current_line };
+                let bp_any = crate::shared_types::Breakpoint::Line { file: None, line: current_line };
                 if self.breakpoints.contains(&bp_any) {
                     self.step_mode = StepMode::Paused;
                     return true;
@@ -9641,14 +9672,21 @@ impl DebugSession {
     /// Set a breakpoint at a line.
     pub fn set_breakpoint(&self, line: usize) -> Result<(), String> {
         self.send(crate::shared_types::DebugCommand::AddBreakpoint(
-            crate::shared_types::Breakpoint { file: None, line }
+            crate::shared_types::Breakpoint::Line { file: None, line }
         ))
     }
 
     /// Set a breakpoint at a file:line.
     pub fn set_breakpoint_file(&self, file: &str, line: usize) -> Result<(), String> {
         self.send(crate::shared_types::DebugCommand::AddBreakpoint(
-            crate::shared_types::Breakpoint { file: Some(file.to_string()), line }
+            crate::shared_types::Breakpoint::Line { file: Some(file.to_string()), line }
+        ))
+    }
+
+    /// Set a breakpoint on a function (break when function is entered).
+    pub fn set_breakpoint_function(&self, function_name: &str) -> Result<(), String> {
+        self.send(crate::shared_types::DebugCommand::AddBreakpoint(
+            crate::shared_types::Breakpoint::Function(function_name.to_string())
         ))
     }
 
@@ -9697,8 +9735,11 @@ mod debug_tests {
         use crate::shared_types::{DebugCommand, DebugEvent, Breakpoint, StepMode, StackFrame};
 
         // Test that debug types can be constructed
-        let bp = Breakpoint { file: Some("test.nos".to_string()), line: 10 };
-        assert_eq!(bp.line, 10);
+        let bp = Breakpoint::Line { file: Some("test.nos".to_string()), line: 10 };
+        assert!(matches!(bp, Breakpoint::Line { line: 10, .. }));
+
+        let fn_bp = Breakpoint::Function("main".to_string());
+        assert!(matches!(fn_bp, Breakpoint::Function(_)));
 
         let mode = StepMode::Paused;
         assert_eq!(mode, StepMode::Paused);

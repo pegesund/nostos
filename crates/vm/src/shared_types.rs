@@ -60,22 +60,29 @@ pub type PanelCommandReceiver = crossbeam::channel::Receiver<PanelCommand>;
 // Debugger types for stepping, breakpoints, and variable inspection
 // ============================================================================
 
-/// A breakpoint location (function name + line number)
+/// A breakpoint location - either a function or a line
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Breakpoint {
-    /// Source file name (optional, for disambiguation)
-    pub file: Option<String>,
-    /// Line number (1-indexed)
-    pub line: usize,
+pub enum Breakpoint {
+    /// Break when entering a function (by name)
+    Function(String),
+    /// Break at a specific line (optional file for disambiguation)
+    Line { file: Option<String>, line: usize },
 }
 
 impl Breakpoint {
+    /// Create a line breakpoint
     pub fn new(line: usize) -> Self {
-        Self { file: None, line }
+        Self::Line { file: None, line }
     }
 
+    /// Create a line breakpoint with file
     pub fn with_file(file: String, line: usize) -> Self {
-        Self { file: Some(file), line }
+        Self::Line { file: Some(file), line }
+    }
+
+    /// Create a function breakpoint
+    pub fn function(name: String) -> Self {
+        Self::Function(name)
     }
 }
 

@@ -20,6 +20,7 @@ use std::io::Write;
 use crate::repl_panel::ReplPanel;
 use crate::inspector_panel::InspectorPanel;
 use crate::nostos_panel::NostosPanel;
+use crate::debug_panel::DebugPanel;
 
 /// Debug logging to /tmp/nostos_tui_debug.log
 fn debug_log(msg: &str) {
@@ -505,6 +506,7 @@ struct TuiState {
     inspector_open: bool,
     console_open: bool,
     nostos_panel_open: bool,
+    debug_panel_open: bool,
     /// Currently open panel info (if nostos_panel_open is true) - old API
     current_panel: Option<PanelInfo>,
     /// Currently open panel ID (if nostos_panel_open is true) - new API
@@ -564,6 +566,7 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         inspector_open: false,
         console_open: true,
         nostos_panel_open: false,
+        debug_panel_open: false,
         current_panel: None,
         current_panel_id: None,
     })));
@@ -653,6 +656,27 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         show_help_dialog(s);
     });
 
+    // Global Ctrl+D to toggle debug panel
+    siv.set_on_pre_event(Event::CtrlChar('d'), |s| {
+        toggle_debug_panel(s);
+    });
+
+    // Debug commands - these send commands to the active debug session
+    // F5 or 'c' - Continue
+    siv.set_on_pre_event(Event::Key(Key::F5), |s| {
+        send_debug_command(s, nostos_vm::shared_types::DebugCommand::Continue);
+    });
+
+    // F10 or 'n' - Step Over
+    siv.set_on_pre_event(Event::Key(Key::F10), |s| {
+        send_debug_command(s, nostos_vm::shared_types::DebugCommand::StepOver);
+    });
+
+    // F11 or 's' - Step In
+    siv.set_on_pre_event(Event::Key(Key::F11), |s| {
+        send_debug_command(s, nostos_vm::shared_types::DebugCommand::StepLine);
+    });
+
     // Dynamic global keybindings - panels register via Panel.registerHotkey() from Nostos code
     // When Alt+<letter> is pressed, check if any hotkey callback is registered
     // Skip letters that have dedicated handlers (i=inspector, c=console)
@@ -699,9 +723,10 @@ pub fn run_tui(args: &[String]) -> ExitCode {
     siv.set_autorefresh(true);
     siv.set_fps(30);
 
-    // Handle refresh events to poll for async eval results
+    // Handle refresh events to poll for async eval results and debug events
     siv.set_on_pre_event(Event::Refresh, move |s| {
         poll_repl_evals(s);
+        poll_debug_events(s);
     });
 
     siv.run();
@@ -758,13 +783,104 @@ fn poll_inspect_entries(s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>) {
     // (they were already drained from the queue)
 }
 
+/// Send a debug command to the active debug session (if any).
+fn send_debug_command(s: &mut Cursive, command: nostos_vm::shared_types::DebugCommand) {
+    let repl_ids: Vec<usize> = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().open_repls.clone()
+    }).unwrap_or_default();
+
+    // Find the first REPL panel with an active debug session and send the command
+    for repl_id in repl_ids {
+        let panel_id = format!("repl_panel_{}", repl_id);
+        let sent = s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
+            if let Some(session) = panel.get_debug_session() {
+                let _ = session.send(command.clone());
+                // Also request stack and locals after the command
+                let _ = session.send(nostos_vm::shared_types::DebugCommand::PrintStack);
+                let _ = session.send(nostos_vm::shared_types::DebugCommand::PrintLocals);
+                true
+            } else {
+                false
+            }
+        }).unwrap_or(false);
+
+        if sent {
+            return;
+        }
+    }
+}
+
+/// Poll for debug events from REPL panels and update the debug panel.
+fn poll_debug_events(s: &mut Cursive) {
+    use crate::debug_panel::{DebugPanel, DebugState};
+    use nostos_vm::shared_types::DebugEvent;
+
+    let repl_ids: Vec<usize> = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().open_repls.clone()
+    }).unwrap_or_default();
+
+    let mut events: Vec<DebugEvent> = Vec::new();
+
+    // Collect debug events from all REPL panels
+    for repl_id in repl_ids {
+        let panel_id = format!("repl_panel_{}", repl_id);
+        s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
+            while let Some(event) = panel.poll_debug_event() {
+                events.push(event);
+            }
+        });
+    }
+
+    if events.is_empty() {
+        return;
+    }
+
+    // Update debug panel with events
+    for event in events {
+        s.call_on_name("debug_panel", |panel: &mut DebugPanel| {
+            match event {
+                DebugEvent::Paused { function, file, line, .. } => {
+                    panel.on_paused(function, file, line);
+                }
+                DebugEvent::BreakpointHit { function, file, line, .. } => {
+                    panel.on_paused(function, file, line);
+                }
+                DebugEvent::Exited { value, .. } => {
+                    panel.on_finished(value);
+                }
+                DebugEvent::Stack { frames } => {
+                    panel.set_stack(frames);
+                }
+                DebugEvent::Locals { variables } => {
+                    panel.set_locals(variables);
+                }
+                _ => {}
+            }
+        });
+    }
+
+    // Open the debug panel if not already open when we hit a breakpoint
+    let debug_panel_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().debug_panel_open
+    }).unwrap_or(false);
+
+    if !debug_panel_open {
+        // Auto-open debug panel when debugging starts
+        s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+            state.borrow_mut().debug_panel_open = true;
+        });
+        rebuild_workspace(s);
+        s.focus_name("debug_panel").ok();
+    }
+}
+
 /// Rebuild the workspace layout based on current windows
 /// Uses LinearLayout for equal window distribution
 /// Navigation: Ctrl+Left/Right to move between windows
 fn rebuild_workspace(s: &mut Cursive) {
-    let (editor_names, repl_ids, engine, inspector_open, console_open, nostos_panel_open, current_panel, current_panel_id) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+    let (editor_names, repl_ids, engine, inspector_open, console_open, nostos_panel_open, debug_panel_open, current_panel, current_panel_id) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let state = state.borrow();
-        (state.open_editors.clone(), state.open_repls.clone(), state.engine.clone(), state.inspector_open, state.console_open, state.nostos_panel_open, state.current_panel.clone(), state.current_panel_id)
+        (state.open_editors.clone(), state.open_repls.clone(), state.engine.clone(), state.inspector_open, state.console_open, state.nostos_panel_open, state.debug_panel_open, state.current_panel.clone(), state.current_panel_id)
     }).unwrap();
 
     // Get console content BEFORE clearing workspace
@@ -831,6 +947,11 @@ fn rebuild_workspace(s: &mut Cursive) {
     if inspector_open {
         let inspector_view = create_inspector_view(&engine);
         windows.push(Box::new(inspector_view));
+    }
+
+    if debug_panel_open {
+        let debug_view = create_debug_view(&engine);
+        windows.push(Box::new(debug_view));
     }
 
     for name in &editor_names {
@@ -1277,6 +1398,44 @@ fn toggle_inspector(s: &mut Cursive) {
         s.focus_name("repl_log").ok();
         log_to_repl(s, "Inspector panel closed");
     }
+}
+
+/// Toggle the debug panel
+fn toggle_debug_panel(s: &mut Cursive) {
+    let debug_panel_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let mut state = state.borrow_mut();
+        state.debug_panel_open = !state.debug_panel_open;
+        state.debug_panel_open
+    }).unwrap();
+
+    if debug_panel_open {
+        rebuild_workspace(s);
+        s.focus_name("debug_panel").ok();
+        log_to_repl(s, "Debug panel opened (Ctrl+D to close, :debug <func> to add breakpoint)");
+    } else {
+        rebuild_workspace(s);
+        s.focus_name("repl_log").ok();
+        log_to_repl(s, "Debug panel closed");
+    }
+}
+
+/// Create the debug panel view
+fn create_debug_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
+    use crate::debug_panel::DebugPanel;
+
+    let mut panel = DebugPanel::new();
+
+    // Sync breakpoints from engine
+    for bp in engine.borrow().get_breakpoints() {
+        panel.add_breakpoint(bp);
+    }
+
+    let panel_with_events = OnEventView::new(panel.with_name("debug_panel"))
+        .on_event(Event::CtrlChar('d'), |s| {
+            toggle_debug_panel(s);
+        });
+
+    ActiveWindow::new(panel_with_events, "Debug")
 }
 
 /// Show help dialog with all keybindings
