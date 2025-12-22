@@ -598,8 +598,10 @@ pub struct Compiler {
     function_indices: HashMap<String, u16>,
     /// Ordered list of function names (index -> name)
     function_list: Vec<String>,
-    /// Type definitions
+    /// Type definitions (user-defined types)
     types: HashMap<String, TypeInfo>,
+    /// Builtin types for field autocomplete only (not shown in top-level completion)
+    builtin_types: HashMap<String, TypeInfo>,
     /// Known constructors (for type checking)
     known_constructors: HashSet<String>,
     /// Current scope depth
@@ -803,6 +805,7 @@ impl Compiler {
             function_indices: HashMap::new(),
             function_list: Vec::new(),
             types: HashMap::new(),
+            builtin_types: HashMap::new(),
             known_constructors: HashSet::new(),
             scope_depth: 0,
             module_path: Vec::new(),
@@ -848,10 +851,11 @@ impl Compiler {
     }
 
     /// Register builtin types that are returned by native functions.
-    /// This enables autocomplete for fields on these types.
+    /// These are stored separately and only used for field autocomplete,
+    /// not shown in top-level type completion.
     fn register_builtin_types(&mut self) {
         // HttpResponse: returned by Http.get and Http.request
-        self.types.insert(
+        self.builtin_types.insert(
             "HttpResponse".to_string(),
             TypeInfo {
                 name: "HttpResponse".to_string(),
@@ -867,7 +871,7 @@ impl Compiler {
         );
 
         // HttpRequest: returned by Server.accept
-        self.types.insert(
+        self.builtin_types.insert(
             "HttpRequest".to_string(),
             TypeInfo {
                 name: "HttpRequest".to_string(),
@@ -885,7 +889,7 @@ impl Compiler {
         );
 
         // ProcessInfo: returned by Process.info
-        self.types.insert(
+        self.builtin_types.insert(
             "ProcessInfo".to_string(),
             TypeInfo {
                 name: "ProcessInfo".to_string(),
@@ -901,7 +905,7 @@ impl Compiler {
         );
 
         // ExecResult: returned by Exec.run
-        self.types.insert(
+        self.builtin_types.insert(
             "ExecResult".to_string(),
             TypeInfo {
                 name: "ExecResult".to_string(),
@@ -1254,6 +1258,7 @@ impl Compiler {
             function_indices: HashMap::new(),
             function_list: Vec::new(),
             types: HashMap::new(),
+            builtin_types: HashMap::new(),
             known_constructors: HashSet::new(),
             scope_depth: 0,
             module_path: Vec::new(),
@@ -9024,7 +9029,8 @@ impl Compiler {
         name.split('/').next().unwrap_or(name)
     }
 
-    /// Get all type names in the compiler.
+    /// Get all user-defined type names in the compiler.
+    /// Does not include builtin types (those are only for field autocomplete).
     pub fn get_type_names(&self) -> Vec<&str> {
         self.types.keys().map(|s| s.as_str()).collect()
     }
@@ -9189,9 +9195,17 @@ impl Compiler {
     }
 
     /// Get field names for a record type.
+    /// Checks both user-defined types and builtin types.
     /// Returns empty vec for non-record types or unknown types.
     pub fn get_type_fields(&self, type_name: &str) -> Vec<String> {
+        // Check user-defined types first
         if let Some(type_info) = self.types.get(type_name) {
+            if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
+                return fields.iter().map(|(name, _)| name.clone()).collect();
+            }
+        }
+        // Then check builtin types
+        if let Some(type_info) = self.builtin_types.get(type_name) {
             if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
                 return fields.iter().map(|(name, _)| name.clone()).collect();
             }
