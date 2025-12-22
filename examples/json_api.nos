@@ -36,10 +36,10 @@ main() = {
         ipInfo = fromJson[IpInfo](json)
         println("   Your IP: " ++ ipInfo.origin)
         "ok"
-    } catch e ->
+    } catch e -> {
         println("   Failed to fetch IP: " ++ e)
         "error"
-    end
+    } end
 
     # -----------------------------------------
     # Example 2: Working with HTTP Headers
@@ -51,10 +51,10 @@ main() = {
         # Show first 100 chars of headers response
         println("   Headers received: " ++ String.substring(resp2.body, 0, 100) ++ "...")
         "ok"
-    } catch e ->
+    } catch e -> {
         println("   Failed to fetch headers: " ++ e)
         "error"
-    end
+    } end
 
     # -----------------------------------------
     # Example 3: POST with JSON Body
@@ -70,10 +70,10 @@ main() = {
         println("   POST successful!")
         println("   Response (truncated): " ++ String.substring(resp3.body, 0, 150) ++ "...")
         "ok"
-    } catch e ->
+    } catch e -> {
         println("   POST failed: " ++ e)
         "error"
-    end
+    } end
 
     # -----------------------------------------
     # Example 4: Error Handling Pattern
