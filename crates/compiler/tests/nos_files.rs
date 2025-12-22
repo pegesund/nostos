@@ -654,6 +654,9 @@ mod traits {
 
     #[test]
     fn multiple_impls() { run_category_test("multiple_impls"); }
+
+    #[test]
+    fn operator_overloading() { run_category_test("operator_overloading"); }
 }
 
 mod comparison {

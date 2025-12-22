@@ -1,0 +1,55 @@
+# expect: passed
+# Test operator overloading via trait implementations
+
+# Define a 2D vector type (record syntax)
+type Vec2 = { x: Int, y: Int }
+
+# Define Num trait with arithmetic operators
+trait Num
+    add(self, other: Self) -> Self
+    sub(self, other: Self) -> Self
+    mul(self, other: Self) -> Self
+    div(self, other: Self) -> Self
+end
+
+# Implement Num trait for Vec2
+Vec2: Num
+    add(self, other: Vec2) -> Vec2 = Vec2(self.x + other.x, self.y + other.y)
+    sub(self, other: Vec2) -> Vec2 = Vec2(self.x - other.x, self.y - other.y)
+    mul(self, other: Vec2) -> Vec2 = Vec2(self.x * other.x, self.y * other.y)
+    div(self, other: Vec2) -> Vec2 = Vec2(self.x / other.x, self.y / other.y)
+end
+
+main() = {
+    v1 = Vec2(1, 2)
+    v2 = Vec2(3, 4)
+
+    # Test addition with operator overloading
+    v3 = v1 + v2
+    assert(v3.x == 4)
+    assert(v3.y == 6)
+
+    # Test subtraction
+    v4 = v2 - v1
+    assert(v4.x == 2)
+    assert(v4.y == 2)
+
+    # Test multiplication
+    v5 = v1 * v2
+    assert(v5.x == 3)
+    assert(v5.y == 8)
+
+    # Test chained operations
+    v6 = v1 + v2 + v1
+    assert(v6.x == 5)
+    assert(v6.y == 8)
+
+    # Primitive operations should still work
+    a = 10 + 5
+    assert(a == 15)
+
+    b = 3.0 + 2.0
+    assert(b == 5.0)
+
+    "passed"
+}

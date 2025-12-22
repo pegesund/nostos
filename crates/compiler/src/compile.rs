@@ -2528,6 +2528,41 @@ impl Compiler {
         false
     }
 
+    /// Map a binary operator to its trait and method name.
+    /// Returns (trait_name, method_name) for operators that can be overloaded.
+    fn operator_to_trait_method(op: &BinOp) -> Option<(&'static str, &'static str)> {
+        match op {
+            // Arithmetic operators -> Num trait
+            BinOp::Add => Some(("Num", "add")),
+            BinOp::Sub => Some(("Num", "sub")),
+            BinOp::Mul => Some(("Num", "mul")),
+            BinOp::Div => Some(("Num", "div")),
+            // Comparison operators -> Ord trait
+            BinOp::Lt => Some(("Ord", "lt")),
+            BinOp::Gt => Some(("Ord", "gt")),
+            BinOp::LtEq => Some(("Ord", "lte")),
+            BinOp::GtEq => Some(("Ord", "gte")),
+            // Equality operators -> Eq trait
+            BinOp::Eq => Some(("Eq", "eq")),
+            BinOp::NotEq => Some(("Eq", "neq")),
+            // These operators are not overloadable via traits
+            BinOp::Mod | BinOp::Pow | BinOp::And | BinOp::Or |
+            BinOp::Concat | BinOp::Cons | BinOp::Pipe => None,
+        }
+    }
+
+    /// Check if a type is a primitive type (not a custom user-defined type).
+    fn is_primitive_type(type_name: &str) -> bool {
+        matches!(type_name,
+            "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
+            "UInt8" | "UInt16" | "UInt32" | "UInt64" |
+            "Float" | "Float32" | "Float64" |
+            "Bool" | "Char" | "String" | "()" |
+            "BigInt" | "Decimal" |
+            "List" | "Map" | "Set" | "Option" | "Result"
+        )
+    }
+
     /// Check if a type implements a specific trait.
     fn type_implements_trait(&self, _type_name: &str, trait_name: &str) -> bool {
         // Hash, Show, Eq, and Copy are now built-in for ALL types
@@ -5173,6 +5208,42 @@ impl Compiler {
                 return self.compile_call(right, &[], &[left.clone()], false);
             }
             _ => {}
+        }
+
+        // Check for operator overloading on custom types
+        // If the left operand has a known custom type that implements the relevant trait,
+        // dispatch to the trait method instead of using primitive VM instructions
+        if let Some((trait_name, method_name)) = Self::operator_to_trait_method(op) {
+            if let Some(left_type) = self.expr_type_name(left) {
+                // Only dispatch to trait methods for non-primitive custom types
+                if !Self::is_primitive_type(&left_type) && self.types.contains_key(&left_type) {
+                    // Check if the type implements the trait
+                    if self.type_implements_trait(&left_type, trait_name) {
+                        // Look up the trait method implementation
+                        let qualified_method = format!("{}.{}.{}", left_type, trait_name, method_name);
+
+                        // Find the actual function with signature
+                        let method_arg_types = vec![Some(left_type.clone()), self.expr_type_name(right)];
+                        if let Some(resolved_method) = self.resolve_function_call(&qualified_method, &method_arg_types) {
+                            if self.functions.contains_key(&resolved_method) {
+                                // Compile as a function call to the trait method
+                                let left_reg = self.compile_expr_tail(left, false)?;
+                                let right_reg = self.compile_expr_tail(right, false)?;
+                                let dst = self.alloc_reg();
+
+                                let func_idx = *self.function_indices.get(&resolved_method)
+                                    .expect("Function should have been assigned an index");
+
+                                // Track function call for deadlock detection
+                                self.current_fn_calls.insert(resolved_method.clone());
+
+                                self.chunk.emit(Instruction::CallDirect(dst, func_idx, vec![left_reg, right_reg].into()), line);
+                                return Ok(dst);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Check numeric types for coercion
