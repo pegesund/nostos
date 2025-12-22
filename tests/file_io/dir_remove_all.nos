@@ -8,12 +8,6 @@ main() = {
   File.writeAll(dir ++ "/file.txt", "test")
   File.writeAll(dir ++ "/sub1/file.txt", "test")
 
-  (status, _) = Dir.removeAll(dir)
-
-  if status != "ok" then false
-  else {
-    (status2, exists) = Dir.exists(dir)
-    if status2 != "ok" then false
-    else exists == false
-  }
+  Dir.removeAll(dir)
+  Dir.exists(dir) == false
 }

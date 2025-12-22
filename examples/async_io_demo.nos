@@ -1,17 +1,22 @@
 # Async IO Demo
-# 
+#
 # Demonstrates parallel async HTTP requests:
 # - 5 workers make concurrent HTTP requests
 # - Each request has 1s server-side delay
 # - With parallelism: ~1-2s total, without: ~5s total
-# 
+#
 # Shows non-blocking IO in the Nostos runtime.
 
 httpWorker(parent, id) = {
   println("Worker " ++ show(id) ++ " starting request...")
-  (status, data) = Http.get("https://httpbin.org/delay/1")
-  println("Worker " ++ show(id) ++ " done: status " ++ show(data.status))
-  parent <- ("done", id)
+  try {
+    data = Http.get("https://httpbin.org/delay/1")
+    println("Worker " ++ show(id) ++ " done: status " ++ show(data.status))
+    parent <- ("done", id)
+  } catch e ->
+    println("Worker " ++ show(id) ++ " error: " ++ e)
+    parent <- ("done", id)
+  end
 }
 
 waitForAll(remaining) = {
@@ -29,17 +34,17 @@ main() = {
   println("Spawning 5 HTTP requests (1s delay each).")
   println("If parallel: ~1-2s total. If sequential: ~5s total.")
   println("")
-  
+
   me = self()
-  
+
   spawn { httpWorker(me, 1) }
   spawn { httpWorker(me, 2) }
   spawn { httpWorker(me, 3) }
   spawn { httpWorker(me, 4) }
   spawn { httpWorker(me, 5) }
-  
+
   waitForAll(5)
-  
+
   println("")
   println("All requests completed!")
 }

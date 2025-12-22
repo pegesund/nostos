@@ -1,32 +1,32 @@
 # HTTP Error Handling
 #
-# Demonstrates IO error handling patterns:
-# - All IO returns ("ok", value) or ("error", message) tuples
-# - DNS errors: invalid domain names
-# - HTTP errors: 404, 500 are successful connections (not IO errors)
+# Demonstrates IO error handling patterns with exceptions:
+# - All IO throws exceptions on error (caught with try/catch)
+# - DNS errors: invalid domain names throw exceptions
+# - HTTP errors: 404, 500 are successful connections (no exception)
 # - Retry pattern: exponential backoff on failures
-# - File IO: same tuple pattern for file operations
+# - File IO: same exception pattern for file operations
 #
 # Run with: nostos examples/http_error_handling.nos
 
-# Pattern 1: Basic error checking
+# Pattern 1: Basic error checking with try/catch
 basicErrorHandling() = {
   println("Pattern 1: Basic error checking")
   println("  Testing valid URL...")
 
-  (status, response) = Http.get("https://httpbin.org/get")
-
-  # Valid URL should return "ok" status (connection succeeded)
-  # The HTTP status code can vary (200, 503, etc.) - that's the external service's response
-  assert_eq("ok", status)
-
-  if status == "ok" then {
+  result = try {
+    response = Http.get("https://httpbin.org/get")
     print("    Connection successful! HTTP status: ")
     println(response.status)
-  } else {
+    true
+  } catch e ->
     print("    Connection error: ")
-    println(response)
-  }
+    println(e)
+    false
+  end
+
+  # Valid URL should succeed
+  assert_eq(true, result)
   println("")
 }
 
@@ -35,18 +35,19 @@ dnsErrorHandling() = {
   println("Pattern 2: DNS error (invalid domain)")
   println("  Testing invalid domain...")
 
-  (status, response) = Http.get("https://this-domain-does-not-exist-xyz123.com/test")
-
-  # Invalid domain should return "error" status (DNS failure)
-  assert_eq("error", status)
-
-  if status == "ok" then {
+  gotError = try {
+    response = Http.get("https://this-domain-does-not-exist-xyz123.com/test")
     print("    Unexpected success: ")
     println(response.status)
-  } else {
+    false
+  } catch e ->
     print("    Expected error: ")
-    println(response)
-  }
+    println(e)
+    true
+  end
+
+  # Invalid domain should throw an exception
+  assert_eq(true, gotError)
   println("")
 }
 
@@ -55,30 +56,31 @@ httpStatusHandling() = {
   println("Pattern 3: HTTP status codes (valid connection)")
   println("  Testing httpbin.org endpoint...")
 
-  (status, response) = Http.get("https://httpbin.org/status/404")
-
-  # Connection is successful - HTTP status codes are the server's response, not IO errors
-  assert_eq("ok", status)
-
-  if status == "ok" then {
+  result = try {
+    response = Http.get("https://httpbin.org/status/404")
     print("    Got HTTP status: ")
     println(response.status)
     println("    Note: Any HTTP status (200, 404, 503) means the connection worked")
-  } else {
+    response.status
+  } catch e ->
     print("    Connection error: ")
-    println(response)
-  }
+    println(e)
+    0
+  end
+
+  # Connection should succeed (404 is HTTP status, not a connection error)
+  assert_eq(404, result)
   println("")
 }
 
 # Pattern 4: Worker process with error handling
 httpWorker(parent, id, url) = {
-  (status, response) = Http.get(url)
-  if status == "ok" then {
+  try {
+    response = Http.get(url)
     parent <- ("success", id, response.status)
-  } else {
-    parent <- ("failure", id, response)
-  }
+  } catch e ->
+    parent <- ("failure", id, e)
+  end
 }
 
 workerErrorHandling() = {
@@ -121,17 +123,18 @@ retryRequest(url, retriesLeft) = {
   if retriesLeft <= 0 then {
     ("error", "max retries exceeded")
   } else {
-    (status, response) = Http.get(url)
-    if status == "ok" then {
+    result = try {
+      response = Http.get(url)
       ("ok", response)
-    } else {
+    } catch e ->
       print("    Retry ")
       print(4 - retriesLeft)
       print(" failed: ")
-      println(response)
+      println(e)
       sleep(500)
       retryRequest(url, retriesLeft - 1)
-    }
+    end
+    result
   }
 }
 
@@ -156,52 +159,44 @@ fileErrorHandling() = {
   println("Pattern 6: File IO error handling")
 
   println("  Reading non-existent file...")
-  (status, content) = File.readAll("/tmp/this-file-does-not-exist-xyz.txt")
-
-  # Reading non-existent file should return error
-  assert_eq("error", status)
-
-  if status == "ok" then {
-    print("    Content: ")
+  gotError = try {
+    content = File.readAll("/tmp/this-file-does-not-exist-xyz.txt")
+    print("    Unexpected content: ")
     println(content)
-  } else {
+    false
+  } catch e ->
     print("    Expected error: ")
-    println(content)
-  }
+    println(e)
+    true
+  end
+
+  # Reading non-existent file should throw
+  assert_eq(true, gotError)
 
   println("  Writing to valid path...")
-  (wstatus, wresult) = File.writeAll("/tmp/nostos_test_write.txt", "Hello from Nostos!")
-
-  # Writing to /tmp should succeed
-  assert_eq("ok", wstatus)
-
-  if wstatus == "ok" then {
+  writeResult = try {
+    File.writeAll("/tmp/nostos_test_write.txt", "Hello from Nostos!")
     println("    Write successful!")
 
-    (rstatus, rcontent) = File.readAll("/tmp/nostos_test_write.txt")
+    content = File.readAll("/tmp/nostos_test_write.txt")
+    assert_eq("Hello from Nostos!", content)
+    print("    Read back: ")
+    println(content)
+    true
+  } catch e ->
+    print("    Error: ")
+    println(e)
+    false
+  end
 
-    # Reading the file we just wrote should succeed
-    assert_eq("ok", rstatus)
-    assert_eq("Hello from Nostos!", rcontent)
-
-    if rstatus == "ok" then {
-      print("    Read back: ")
-      println(rcontent)
-    } else {
-      print("    Read error: ")
-      println(rcontent)
-    }
-  } else {
-    print("    Write error: ")
-    println(wresult)
-  }
+  assert_eq(true, writeResult)
   println("")
 }
 
 main() = {
   println("=== HTTP Error Handling Examples ===")
   println("")
-  println("IO operations return: (\"ok\", value) or (\"error\", message)")
+  println("IO operations throw exceptions on error - use try/catch to handle")
   println("")
 
   basicErrorHandling()

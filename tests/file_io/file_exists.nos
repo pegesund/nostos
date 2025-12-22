@@ -4,20 +4,16 @@
 main() = {
   path = "/tmp/nostos_test_file_exists.txt"
 
-  # Make sure it doesn't exist
-  (_, _) = File.remove(path)
+  # Make sure it doesn't exist (ignore error)
+  try { File.remove(path) } catch _ -> () end
 
-  (status1, exists1) = File.exists(path)
-  if status1 != "ok" then false
-  else if exists1 then false
+  exists1 = File.exists(path)
+  if exists1 then false
   else {
     # Create it
-    (_, _) = File.writeAll(path, "test")
-
-    (status2, exists2) = File.exists(path)
-    (_, _) = File.remove(path)
-
-    if status2 != "ok" then false
-    else exists2
+    File.writeAll(path, "test")
+    exists2 = File.exists(path)
+    File.remove(path)
+    exists2
   }
 }

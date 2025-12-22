@@ -1,11 +1,11 @@
 # File IO
-# 
+#
 # Demonstrates comprehensive file and directory operations:
 # - High-level: File.writeAll, File.readAll, File.size, File.exists
 # - Handles: File.open, File.read, File.write, File.seek, File.close
 # - Directory: Dir.create, Dir.createAll, Dir.list, Dir.removeAll
 # - Operations: File.copy, File.rename, File.remove
-# 
+#
 # Shows both simple one-shot and streaming file access patterns.
 
 # High-level file operations
@@ -14,23 +14,20 @@ demoHighLevel() = {
 
     path = "/tmp/nostos_example.txt"
     testContent = "Hello, Nostos!\nThis is a test file."
-    (status, r) = File.writeAll(path, testContent)
-    assert_eq("ok", status)
+    File.writeAll(path, testContent)
 
-    (status2, content) = File.readAll(path)
-    assert_eq("ok", status2)
+    content = File.readAll(path)
     assert_eq(testContent, content)
 
-    (s, size) = File.size(path)
-    assert_eq("ok", s)
+    size = File.size(path)
     assert_eq(35, size)  # "Hello, Nostos!\nThis is a test file." = 35 bytes (14 + 1 newline + 20)
 
-    (s2, exists) = File.exists(path)
+    exists = File.exists(path)
     assert_eq(true, exists)
 
     File.remove(path)
 
-    (s3, exists2) = File.exists(path)
+    exists2 = File.exists(path)
     assert_eq(false, exists2)
 
     println("High-level tests passed")
@@ -53,7 +50,7 @@ demoDirectories() = {
     File.writeAll(dirPath ++ "/file1.txt", "Content 1")
     File.writeAll(dirPath ++ "/file2.txt", "Content 2")
 
-    (s, files) = Dir.list(dirPath)
+    files = Dir.list(dirPath)
     print("Directory contents: ")
     println(files)
 
@@ -71,19 +68,19 @@ demoHandles() = {
     path = "/tmp/nostos_handle.txt"
 
     # Write mode ("w") - creates or overwrites
-    (s, handle) = File.open(path, "w")
+    handle = File.open(path, "w")
     File.write(handle, "Initial content")
     File.flush(handle)
     File.close(handle)
     println("Wrote with mode 'w'")
 
     # Append mode ("a") - adds to end
-    (s, ah) = File.open(path, "a")
+    ah = File.open(path, "a")
     File.write(ah, " + appended")
     File.close(ah)
     println("Appended with mode 'a'")
 
-    (s, c1) = File.readAll(path)
+    c1 = File.readAll(path)
     println("After append: " ++ c1)
 
     # Read mode ("r") with readLine
@@ -91,20 +88,20 @@ demoHandles() = {
 Line 2
 Line 3")
 
-    (s, rh) = File.open(path, "r")
-    (s, line1) = File.readLine(rh)
+    rh = File.open(path, "r")
+    line1 = File.readLine(rh)
     print("First line: ")
     print(line1)
     File.close(rh)
 
     # Read/write mode ("rw") with seek
-    (s, rwh) = File.open(path, "rw")
+    rwh = File.open(path, "rw")
     File.seek(rwh, 0, "end")
     File.write(rwh, "
 Line 4")
     File.close(rwh)
 
-    (s, c2) = File.readAll(path)
+    c2 = File.readAll(path)
     println("After rw append:")
     println(c2)
 
@@ -125,17 +122,17 @@ demoCopyRename() = {
     File.copy(src, copy)
 
     # Verify copy has same content
-    (s1, copiedContent) = File.readAll(copy)
+    copiedContent = File.readAll(copy)
     assert_eq("Original content", copiedContent)
 
     File.rename(copy, dest)
 
     # Verify rename worked
-    (s2, renamedContent) = File.readAll(dest)
+    renamedContent = File.readAll(dest)
     assert_eq("Original content", renamedContent)
 
     # Verify old copy is gone
-    (s3, copyExists) = File.exists(copy)
+    copyExists = File.exists(copy)
     assert_eq(false, copyExists)
 
     File.remove(src)

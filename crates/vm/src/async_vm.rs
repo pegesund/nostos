@@ -3193,8 +3193,9 @@ impl AsyncProcess {
                     }
                     // Await the result (async!)
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3242,8 +3243,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3268,8 +3270,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3294,8 +3297,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3333,8 +3337,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3359,8 +3364,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3385,8 +3391,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3416,8 +3423,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3458,8 +3466,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3500,8 +3509,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3549,8 +3559,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3587,8 +3598,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3621,8 +3633,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3647,8 +3660,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3673,8 +3687,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3699,8 +3714,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3751,8 +3767,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3782,8 +3799,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3812,8 +3830,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3842,8 +3861,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3872,8 +3892,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3902,8 +3923,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3933,8 +3955,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3963,8 +3986,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -3993,8 +4017,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -4035,8 +4060,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -4077,8 +4103,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -4107,8 +4134,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -4132,8 +4160,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -4173,8 +4202,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -4214,8 +4244,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -4247,8 +4278,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -4288,8 +4320,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -4321,8 +4354,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -4406,8 +4440,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -4429,8 +4464,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -4451,8 +4487,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -4522,8 +4559,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -4544,8 +4582,9 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    let gc_value = self.io_result_to_gc_value(result);
-                    set_reg!(dst, gc_value);
+                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        set_reg!(dst, gc_value);
+                    }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -5324,19 +5363,19 @@ impl AsyncProcess {
         } // end of 'instruction_loop
     }
 
-    /// Convert an IO result to a GcValue.
-    /// Results are wrapped in ("ok", value) or ("error", message) tuples.
-    fn io_result_to_gc_value(&mut self, result: Result<IoResponseValue, crate::io_runtime::IoError>) -> GcValue {
+    /// Handle an IO result - on success returns the value, on error throws an exception.
+    /// Returns Ok(Some(value)) on success, Ok(None) if exception was caught (IP jumped),
+    /// or Err if exception was uncaught.
+    fn handle_io_result(&mut self, result: Result<IoResponseValue, crate::io_runtime::IoError>, error_kind: &str) -> Result<Option<GcValue>, RuntimeError> {
         match result {
             Ok(response) => {
                 let value = self.io_response_to_gc_value(response);
-                let ok_str = GcValue::String(self.heap.alloc_string("ok".to_string()));
-                GcValue::Tuple(self.heap.alloc_tuple(vec![ok_str, value]))
+                Ok(Some(value))
             }
             Err(e) => {
-                let err_str = GcValue::String(self.heap.alloc_string("error".to_string()));
-                let msg = GcValue::String(self.heap.alloc_string(e.to_string()));
-                GcValue::Tuple(self.heap.alloc_tuple(vec![err_str, msg]))
+                // Throw catchable exception - if caught, handler will jump and we return None
+                self.throw_exception(error_kind, e.to_string())?;
+                Ok(None)
             }
         }
     }

@@ -4,20 +4,16 @@
 main() = {
   path = "/tmp/nostos_test_dir_exists"
 
-  # Make sure it doesn't exist
-  (_, _) = Dir.remove(path)
+  # Make sure it doesn't exist (ignore error)
+  try { Dir.remove(path) } catch _ -> () end
 
-  (status1, exists1) = Dir.exists(path)
-  if status1 != "ok" then false
-  else if exists1 then false
+  exists1 = Dir.exists(path)
+  if exists1 then false
   else {
     # Create it
-    (_, _) = Dir.create(path)
-
-    (status2, exists2) = Dir.exists(path)
-    (_, _) = Dir.remove(path)
-
-    if status2 != "ok" then false
-    else exists2
+    Dir.create(path)
+    exists2 = Dir.exists(path)
+    Dir.remove(path)
+    exists2
   }
 }

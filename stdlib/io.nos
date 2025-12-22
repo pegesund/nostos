@@ -1,0 +1,16 @@
+# I/O Handle Types
+#
+# These types provide type safety for I/O operations.
+# Each handle type wraps an Int but they are not interchangeable.
+
+# File handle for open file operations
+pub type FileHandle = FileHandle(Int)
+
+# Server handle for HTTP server
+pub type ServerHandle = ServerHandle(Int)
+
+# Request ID for HTTP server responses
+pub type RequestId = RequestId(Int)
+
+# Process handle for spawned external processes
+pub type ProcessHandle = ProcessHandle(Int)

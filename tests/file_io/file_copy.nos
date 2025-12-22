@@ -6,16 +6,10 @@ main() = {
   dst = "/tmp/nostos_test_copy_dst.txt"
   content = "Copy me!"
 
-  (_, _) = File.writeAll(src, content)
-  (status, _) = File.copy(src, dst)
-
-  if status != "ok" then false
-  else {
-    (status2, data) = File.readAll(dst)
-    (_, _) = File.remove(src)
-    (_, _) = File.remove(dst)
-
-    if status2 != "ok" then false
-    else data == content
-  }
+  File.writeAll(src, content)
+  File.copy(src, dst)
+  data = File.readAll(dst)
+  File.remove(src)
+  File.remove(dst)
+  data == content
 }
