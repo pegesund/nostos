@@ -295,7 +295,7 @@ fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
         });
 
         let string = filter_map(|span, tok| match tok {
-            Token::String(s) => Ok(Pattern::String(s, to_span(span))),
+            Token::String(s) | Token::SingleQuoteString(s) => Ok(Pattern::String(s, to_span(span))),
             _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
         });
 
@@ -382,7 +382,7 @@ fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
         let map_key = choice((
             filter_map(|span, tok| match tok {
                 Token::Int(n) => Ok(Expr::Int(n, to_span(span))),
-                Token::String(s) => Ok(Expr::String(StringLit::Plain(s), to_span(span))),
+                Token::String(s) | Token::SingleQuoteString(s) => Ok(Expr::String(StringLit::Plain(s), to_span(span))),
                 Token::True => Ok(Expr::Bool(true, to_span(span))),
                 Token::False => Ok(Expr::Bool(false, to_span(span))),
                 Token::Char(c) => Ok(Expr::Char(c, to_span(span))),
@@ -518,7 +518,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         });
 
         let string = filter_map(|span, tok| match tok {
-            Token::String(s) => Ok(Expr::String(parse_string_lit(&s), to_span(span))),
+            Token::String(s) | Token::SingleQuoteString(s) => Ok(Expr::String(parse_string_lit(&s), to_span(span))),
             _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
         });
 
@@ -1608,7 +1608,7 @@ fn import_stmt() -> impl Parser<Token, ImportStmt, Error = Simple<Token>> + Clon
 fn test_def() -> impl Parser<Token, TestDef, Error = Simple<Token>> + Clone {
     just(Token::Test)
         .ignore_then(filter_map(|span, tok| match tok {
-            Token::String(s) => Ok(s),
+            Token::String(s) | Token::SingleQuoteString(s) => Ok(s),
             _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
         }))
         .then_ignore(just(Token::Eq))
@@ -1642,7 +1642,7 @@ fn extern_decl() -> impl Parser<Token, ExternDecl, Error = Simple<Token>> + Clon
         .then(type_expr())
         .then_ignore(just(Token::From))
         .then(filter_map(|span, tok| match tok {
-            Token::String(s) => Ok(s),
+            Token::String(s) | Token::SingleQuoteString(s) => Ok(s),
             _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
         }))
         .map(|(((name, params), return_type), from)| ExternKind::Function {

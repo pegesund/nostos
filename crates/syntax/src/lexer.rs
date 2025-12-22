@@ -206,15 +206,26 @@ pub enum Token {
     #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9]+)?", |lex| lex.slice().replace('_', ""))]
     Float(String),
 
-    // String literal
+    // String literal (double-quoted)
     #[regex(r#""([^"\\]|\\.)*""#, |lex| {
         let s = lex.slice();
         Some(parse_string_escapes(&s[1..s.len()-1]))
     })]
     String(String),
 
-    // Character literal
-    #[regex(r"'([^'\\]|\\.)'", |lex| {
+    // String literal (single-quoted) - allows embedding double quotes without escaping
+    // e.g., '{"name": "John"}' for JSON
+    #[regex(r"'([^'\\]|\\.)*'", |lex| {
+        let s = lex.slice();
+        Some(parse_string_escapes_single(&s[1..s.len()-1]))
+    })]
+    SingleQuoteString(String),
+
+    // Character literal (deprecated - use single-char strings instead)
+    // Keeping for backward compatibility with existing code
+    // Note: SingleQuoteString takes priority for multi-char, but single char 'x' still matches Char
+    // To use single-char string, use double quotes: "x"
+    #[regex(r"'([^'\\]|\\.)'", priority = 2, callback = |lex| {
         let s = lex.slice();
         parse_char(&s[1..s.len()-1])
     })]
@@ -352,8 +363,41 @@ fn parse_char(s: &str) -> Option<char> {
     }
 }
 
-/// Parse string with escape sequences.
+/// Parse string with escape sequences (for double-quoted strings).
 fn parse_string_escapes(s: &str) -> String {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(&next) = chars.peek() {
+                let escaped = match next {
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    '\\' => '\\',
+                    '\'' => '\'',
+                    '"' => '"',
+                    '0' => '\0',
+                    _ => {
+                        result.push(c);
+                        continue;
+                    }
+                };
+                chars.next();
+                result.push(escaped);
+            } else {
+                result.push(c);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+/// Parse string with escape sequences (for single-quoted strings).
+/// Same as parse_string_escapes but uses \' to escape single quotes.
+fn parse_string_escapes_single(s: &str) -> String {
     let mut result = String::new();
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
@@ -440,6 +484,7 @@ impl fmt::Display for Token {
             Token::Decimal(s) => write!(f, "{}d", s),
             Token::Float(s) => write!(f, "{}", s),
             Token::String(s) => write!(f, "\"{}\"", s),
+            Token::SingleQuoteString(s) => write!(f, "'{}'", s),
             Token::Char(c) => write!(f, "'{}'", c),
             Token::UpperIdent(s) => write!(f, "{}", s),
             Token::LowerIdent(s) => write!(f, "{}", s),

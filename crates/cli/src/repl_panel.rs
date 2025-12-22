@@ -665,7 +665,7 @@ impl ReplPanel {
                 Token::BigInt(_) | Token::Float(_) | Token::Float32(_) | Token::Decimal(_) =>
                     Color::Rgb(255, 255, 0),
 
-                Token::String(_) | Token::Char(_) => Color::Rgb(0, 255, 0),
+                Token::String(_) | Token::SingleQuoteString(_) | Token::Char(_) => Color::Rgb(0, 255, 0),
 
                 Token::Plus | Token::Minus | Token::Star | Token::Slash | Token::Percent | Token::StarStar |
                 Token::EqEq | Token::NotEq | Token::Lt | Token::Gt | Token::LtEq | Token::GtEq |
