@@ -4,9 +4,9 @@
 main() = {
   dir = "/tmp/nostos_test_dir_remove_all"
 
-  (_, _) = Dir.createAll(dir ++ "/sub1/sub2")
-  (_, _) = File.writeAll(dir ++ "/file.txt", "test")
-  (_, _) = File.writeAll(dir ++ "/sub1/file.txt", "test")
+  Dir.createAll(dir ++ "/sub1/sub2")
+  File.writeAll(dir ++ "/file.txt", "test")
+  File.writeAll(dir ++ "/sub1/file.txt", "test")
 
   (status, _) = Dir.removeAll(dir)
 

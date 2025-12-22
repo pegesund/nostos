@@ -4,7 +4,7 @@
 main() = {
   path = "/tmp/nostos_test_dir_remove"
 
-  (_, _) = Dir.create(path)
+  Dir.create(path)
   (status, _) = Dir.remove(path)
 
   if status != "ok" then false

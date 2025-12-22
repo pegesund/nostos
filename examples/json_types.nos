@@ -81,15 +81,15 @@ main() = {
 
     # -----------------------------------------
     # Example 5: Multi-field Variants
-    # Multiple fields use _0, _1, etc.
+    # Multiple fields use JSON arrays [val0, val1, ...]
     # -----------------------------------------
     println("\n5. Multi-field Variants:")
 
-    errorJson = jsonParse("{\"Error\": {\"_0\": 404, \"_1\": \"Not found\"}}")
+    errorJson = jsonParse("{\"Error\": [404, \"Not found\"]}")
     result2 = fromJson[ApiResult](errorJson)
     println("   Result 2: " ++ show(result2))
 
-    rectJson = jsonParse("{\"Rectangle\": {\"_0\": 10.0, \"_1\": 20.0}}")
+    rectJson = jsonParse("{\"Rectangle\": [10.0, 20.0]}")
     shape2 = fromJson[Shape](rectJson)
     println("   Shape 2: " ++ show(shape2))
 

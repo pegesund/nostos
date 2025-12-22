@@ -16,11 +16,11 @@ simpleTimeout() = {
   result = receive
     msg -> ("received", msg)
   after 500 ->
-    "timeout!"
+    ("timeout", "")
   end
 
   # Should timeout since no message is sent
-  assert_eq("timeout!", result)
+  assert_eq(("timeout", ""), result)
   println("  Timeout works correctly")
   println("")
 }
@@ -131,16 +131,16 @@ sleepVsTimeout() = {
   result = receive
     msg1 -> ("got", msg1)
   after 100 ->
-    "timeout"
+    ("timeout", "")
   end
 
-  assert_eq("timeout", result)
+  assert_eq(("timeout", ""), result)
 
   # Now wait longer - should get message
   result2 = receive
     msg2 -> ("got", msg2)
   after 1000 ->
-    "timeout"
+    ("timeout", "")
   end
 
   assert_eq(("got", "done"), result2)

@@ -4,7 +4,7 @@
 main() = {
   path = "/tmp/nostos_test_remove.txt"
 
-  (_, _) = File.writeAll(path, "Delete me")
+  File.writeAll(path, "Delete me")
   (status, _) = File.remove(path)
 
   if status != "ok" then false

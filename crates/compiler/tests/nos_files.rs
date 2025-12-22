@@ -373,6 +373,7 @@ fn find_nos_files(dir: &Path) -> Vec<std::path::PathBuf> {
 }
 
 #[test]
+#[ignore] // This test hangs - use individual category tests instead (see CLAUDE.md)
 fn test_all_nos_files() {
     // Find the tests directory relative to the workspace root
     let manifest_dir = env!("CARGO_MANIFEST_DIR");

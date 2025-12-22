@@ -549,6 +549,33 @@ impl SendableValue {
     /// Convert to Value (the non-GC version).
     pub fn to_value(&self) -> crate::value::Value {
         use crate::value::Value;
+
+        /// Helper to convert SendableMapKey to MapKey
+        fn sendable_key_to_map_key(key: &SendableMapKey) -> crate::value::MapKey {
+            use crate::value::MapKey;
+            match key {
+                SendableMapKey::Unit => MapKey::Unit,
+                SendableMapKey::Bool(b) => MapKey::Bool(*b),
+                SendableMapKey::Char(c) => MapKey::Char(*c),
+                SendableMapKey::Int64(i) => MapKey::Int64(*i),
+                SendableMapKey::String(s) => MapKey::String(Arc::new(s.clone())),
+                SendableMapKey::Record { type_name, field_names, fields } => {
+                    MapKey::Record {
+                        type_name: type_name.clone(),
+                        field_names: field_names.clone(),
+                        fields: fields.iter().map(sendable_key_to_map_key).collect(),
+                    }
+                }
+                SendableMapKey::Variant { type_name, constructor, fields } => {
+                    MapKey::Variant {
+                        type_name: type_name.clone(),
+                        constructor: constructor.clone(),
+                        fields: fields.iter().map(sendable_key_to_map_key).collect(),
+                    }
+                }
+            }
+        }
+
         match self {
             SendableValue::Unit => Value::Unit,
             SendableValue::Bool(b) => Value::Bool(*b),
@@ -585,8 +612,20 @@ impl SendableValue {
                 fields: var.fields.iter().map(|v| v.to_value()).collect(),
                 named_fields: None,
             })),
-            SendableValue::Map(_) => Value::Unit, // Complex conversion not supported
-            SendableValue::Set(_) => Value::Unit, // Complex conversion not supported
+            SendableValue::Map(entries) => {
+                let map: std::collections::HashMap<crate::value::MapKey, Value> = entries
+                    .iter()
+                    .map(|(k, v)| (sendable_key_to_map_key(k), v.to_value()))
+                    .collect();
+                Value::Map(Arc::new(map))
+            }
+            SendableValue::Set(items) => {
+                let set: std::collections::HashSet<crate::value::MapKey> = items
+                    .iter()
+                    .map(sendable_key_to_map_key)
+                    .collect();
+                Value::Set(Arc::new(set))
+            }
             SendableValue::Error(msg) => Value::String(Arc::new(format!("Error: {}", msg))),
         }
     }
