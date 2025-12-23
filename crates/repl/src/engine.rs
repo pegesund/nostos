@@ -195,6 +195,8 @@ pub struct ReplEngine {
 impl ReplEngine {
     /// Create a new REPL instance
     pub fn new(config: ReplConfig) -> Self {
+        // Log at the very start to verify logging works
+        Self::output_log("[ReplEngine::new] STARTING");
         let mut compiler = Compiler::new_empty();
         compiler.set_repl_mode(true); // REPL can access private functions
         let vm_config = AsyncConfig {
@@ -206,6 +208,18 @@ impl ReplEngine {
         vm.register_default_natives();
         let inspect_receiver = Some(vm.setup_inspect());
         let output_receiver = Some(vm.setup_output());
+        // Log the receiver pointer for debugging
+        if let Some(ref r) = output_receiver {
+            let receiver_ptr = r as *const _ as usize;
+            Self::output_log(&format!("[ReplEngine::new] receiver_ptr={:#x}", receiver_ptr));
+            // Send a test message through the VM's sender
+            vm.test_output_channel("__TEST_MESSAGE__");
+            // Try to receive it
+            match r.try_recv() {
+                Ok(msg) => Self::output_log(&format!("[ReplEngine::new] Channel test PASSED: received '{}'", msg)),
+                Err(e) => Self::output_log(&format!("[ReplEngine::new] Channel test FAILED: {:?}", e)),
+            }
+        }
         let panel_receiver = Some(vm.setup_panel());
         vm.setup_eval();
 
@@ -4408,6 +4422,19 @@ impl ReplEngine {
             }
         }
         entries
+    }
+
+    /// Debug logging disabled. Uncomment to enable file logging.
+    #[allow(unused)]
+    fn output_log(_msg: &str) {
+        // if let Ok(mut f) = std::fs::OpenOptions::new()
+        //     .create(true)
+        //     .append(true)
+        //     .open("/tmp/nostos_output_channel.log")
+        // {
+        //     use std::io::Write;
+        //     let _ = writeln!(f, "{}", _msg);
+        // }
     }
 
     /// Drain all available output (println) from any VM process (non-blocking).

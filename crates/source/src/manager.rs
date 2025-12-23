@@ -846,21 +846,22 @@ impl SourceManager {
     /// For new definitions, extracts module from qualified name
     pub fn update_group_source(&mut self, primary_name: &str, source: &str) -> Result<Vec<String>, String> {
         use nostos_syntax::parse;
-        use std::io::Write;
+        // use std::io::Write; // Only needed when debug logging is enabled
 
-        // Debug to file
-        let mut debug_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/source_manager_debug.log")
-            .ok();
+        // Debug logging disabled. Uncomment to enable.
+        // let mut debug_file = std::fs::OpenOptions::new()
+        //     .create(true)
+        //     .append(true)
+        //     .open("/tmp/source_manager_debug.log")
+        //     .ok();
 
         macro_rules! debug_log {
             ($($arg:tt)*) => {
-                if let Some(ref mut f) = debug_file {
-                    let _ = writeln!(f, $($arg)*);
-                }
-                eprintln!($($arg)*);
+                // Disabled. Uncomment below for debugging:
+                // if let Some(ref mut f) = debug_file {
+                //     let _ = writeln!(f, $($arg)*);
+                // }
+                // eprintln!($($arg)*);
             };
         }
 

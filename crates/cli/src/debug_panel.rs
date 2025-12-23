@@ -8,6 +8,19 @@ use cursive::{Printer, Vec2};
 use nostos_vm::shared_types::StackFrame;
 use std::collections::HashSet;
 
+/// Debug logging disabled. Uncomment to enable file logging.
+#[allow(unused)]
+fn debug_log(_msg: &str) {
+    // use std::io::Write;
+    // if let Ok(mut f) = std::fs::OpenOptions::new()
+    //     .create(true)
+    //     .append(true)
+    //     .open("/tmp/nostos_debug_panel.log")
+    // {
+    //     let _ = writeln!(f, "{}", _msg);
+    // }
+}
+
 /// Commands from debug panel to TUI (set via user_data)
 #[derive(Clone, Debug, PartialEq)]
 pub enum DebugPanelCommand {
@@ -97,6 +110,7 @@ impl DebugPanel {
 
     /// Update state when paused
     pub fn on_paused(&mut self, function: String, file: Option<String>, line: usize) {
+        debug_log(&format!("on_paused: function={}, file={:?}, line={}", function, file, line));
         self.state = DebugState::Paused { function, file, line };
     }
 
@@ -125,6 +139,21 @@ impl DebugPanel {
     /// Take pending command (if any) - used by TUI to poll for commands
     pub fn take_pending_command(&mut self) -> Option<DebugPanelCommand> {
         self.pending_command.take()
+    }
+
+    /// Take debug panel state for preservation across rebuilds
+    pub fn take_state(&mut self) -> (DebugState, Vec<StackFrame>, Vec<(String, String, String)>) {
+        let state = std::mem::replace(&mut self.state, DebugState::Idle);
+        let stack = std::mem::take(&mut self.stack);
+        let locals = std::mem::take(&mut self.locals);
+        (state, stack, locals)
+    }
+
+    /// Restore debug panel state after rebuild
+    pub fn restore_state(&mut self, state: DebugState, stack: Vec<StackFrame>, locals: Vec<(String, String, String)>) {
+        self.state = state;
+        self.stack = stack;
+        self.locals = locals;
     }
 
     /// Select previous stack frame
@@ -356,6 +385,7 @@ impl View for DebugPanel {
     }
 
     fn on_event(&mut self, event: Event) -> EventResult {
+        debug_log(&format!("on_event: {:?}, state: {:?}", event, self.state));
         match event {
             // Let Tab propagate for window cycling
             Event::Key(Key::Tab) | Event::Shift(Key::Tab) => {
@@ -381,22 +411,27 @@ impl View for DebugPanel {
             }
             // Debug commands - set pending command for TUI to poll
             Event::Key(Key::F5) | Event::Char('c') | Event::Char('C') => {
+                debug_log("Setting pending_command = Continue");
                 self.pending_command = Some(DebugPanelCommand::Continue);
                 EventResult::Consumed(None)
             }
             Event::Key(Key::F10) | Event::Char('n') | Event::Char('N') => {
+                debug_log("Setting pending_command = StepOver");
                 self.pending_command = Some(DebugPanelCommand::StepOver);
                 EventResult::Consumed(None)
             }
             Event::Key(Key::F11) | Event::Char('s') | Event::Char('S') => {
+                debug_log("Setting pending_command = StepIn");
                 self.pending_command = Some(DebugPanelCommand::StepIn);
                 EventResult::Consumed(None)
             }
             Event::Char('o') | Event::Char('O') => {
+                debug_log("Setting pending_command = StepOut");
                 self.pending_command = Some(DebugPanelCommand::StepOut);
                 EventResult::Consumed(None)
             }
             Event::Char('q') | Event::Char('Q') => {
+                debug_log("Setting pending_command = Stop");
                 self.pending_command = Some(DebugPanelCommand::Stop);
                 EventResult::Consumed(None)
             }

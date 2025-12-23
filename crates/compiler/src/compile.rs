@@ -5602,58 +5602,58 @@ impl Compiler {
                 match qualified_name.as_str() {
                     // === Type-agnostic builtins (no runtime dispatch needed) ===
                     "println" if arg_regs.len() == 1 => {
-                        self.chunk.emit(Instruction::Println(arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::Println(arg_regs[0]), line);
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::LoadUnit(dst), 0);
+                        self.chunk.emit(Instruction::LoadUnit(dst), line);
                         return Ok(dst);
                     }
                     "print" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::Print(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::Print(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "inspect" if arg_regs.len() == 2 => {
                         // inspect(value, name) - call native function
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("inspect".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
                         return Ok(dst);
                     }
                     // === Panel (TUI) functions ===
                     "Panel.create" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.create".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
                         return Ok(dst);
                     }
                     "Panel.setContent" if arg_regs.len() == 2 => {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.setContent".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
                         return Ok(dst);
                     }
                     "Panel.show" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.show".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
                         return Ok(dst);
                     }
                     "Panel.hide" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.hide".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
                         return Ok(dst);
                     }
                     "Panel.onKey" if arg_regs.len() == 2 => {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.onKey".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
                         return Ok(dst);
                     }
                     "Panel.registerHotkey" if arg_regs.len() == 2 => {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.registerHotkey".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
                         return Ok(dst);
                     }
                     // === Eval ===
@@ -5661,68 +5661,68 @@ impl Compiler {
                     "eval" if arg_regs.len() == 1 && !self.has_user_function("eval", 1) => {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("eval".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
                         return Ok(dst);
                     }
                     "head" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::ListHead(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::ListHead(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "tail" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::ListTail(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::ListTail(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "isEmpty" | "empty" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::ListIsEmpty(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::ListIsEmpty(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     // listSum is the canonical name, sum is only used if no user function exists
                     "listSum" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::ListSum(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::ListSum(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "sum" if arg_regs.len() == 1 && !self.has_user_function("sum", 1) => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::ListSum(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::ListSum(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "product" if arg_regs.len() == 1 && !self.has_user_function("product", 1) => {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("product".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_regs[0]].into()), 0);
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_regs[0]].into()), line);
                         return Ok(dst);
                     }
                     "rangeList" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::RangeList(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::RangeList(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "range" if arg_regs.len() == 2 && !self.has_user_function("range", 2) => {
                         // range(start, end) - create list [start..end)
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("range".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_regs[0], arg_regs[1]].into()), 0);
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_regs[0], arg_regs[1]].into()), line);
                         return Ok(dst);
                     }
                     "length" | "len" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::Length(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::Length(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "panic" if arg_regs.len() == 1 => {
-                        self.chunk.emit(Instruction::Panic(arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::Panic(arg_regs[0]), line);
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::LoadUnit(dst), 0);
+                        self.chunk.emit(Instruction::LoadUnit(dst), line);
                         return Ok(dst);
                     }
                     "assert" if arg_regs.len() == 1 => {
-                        self.chunk.emit(Instruction::Assert(arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::Assert(arg_regs[0]), line);
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::LoadUnit(dst), 0);
+                        self.chunk.emit(Instruction::LoadUnit(dst), line);
                         return Ok(dst);
                     }
                     "sleep" if arg_regs.len() == 1 => {
@@ -5740,22 +5740,22 @@ impl Compiler {
                     }
                     "typeOf" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::TypeOf(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::TypeOf(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "tagOf" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::TagOf(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::TagOf(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "reflect" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::Reflect(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::Reflect(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "typeInfo" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::TypeInfo(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::TypeInfo(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "jsonToType" if arg_regs.len() == 1 && !type_args.is_empty() => {
@@ -5764,10 +5764,10 @@ impl Compiler {
                         // Load the type name as a string constant
                         let type_reg = self.alloc_reg();
                         let const_idx = self.chunk.add_constant(Value::String(Arc::new(type_name)));
-                        self.chunk.emit(Instruction::LoadConst(type_reg, const_idx as u16), 0);
+                        self.chunk.emit(Instruction::LoadConst(type_reg, const_idx as u16), line);
                         // Emit Construct instruction
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::Construct(dst, type_reg, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::Construct(dst, type_reg, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "fromJson" if arg_regs.len() == 1 && !type_args.is_empty() => {
@@ -5776,9 +5776,9 @@ impl Compiler {
                         let type_name = self.type_expr_to_string(&type_args[0]);
                         let type_reg = self.alloc_reg();
                         let const_idx = self.chunk.add_constant(Value::String(Arc::new(type_name)));
-                        self.chunk.emit(Instruction::LoadConst(type_reg, const_idx as u16), 0);
+                        self.chunk.emit(Instruction::LoadConst(type_reg, const_idx as u16), line);
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::Construct(dst, type_reg, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::Construct(dst, type_reg, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "makeRecord" if arg_regs.len() == 1 && !type_args.is_empty() => {
@@ -5786,10 +5786,10 @@ impl Compiler {
                         let type_name = self.type_expr_to_string(&type_args[0]);
                         let type_reg = self.alloc_reg();
                         let const_idx = self.chunk.add_constant(Value::String(Arc::new(type_name)));
-                        self.chunk.emit(Instruction::LoadConst(type_reg, const_idx as u16), 0);
+                        self.chunk.emit(Instruction::LoadConst(type_reg, const_idx as u16), line);
                         // Emit MakeRecordDyn instruction: dst, type_reg, fields_reg
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::MakeRecordDyn(dst, type_reg, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::MakeRecordDyn(dst, type_reg, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "makeVariant" if arg_regs.len() == 2 && !type_args.is_empty() => {
@@ -5797,29 +5797,29 @@ impl Compiler {
                         let type_name = self.type_expr_to_string(&type_args[0]);
                         let type_reg = self.alloc_reg();
                         let const_idx = self.chunk.add_constant(Value::String(Arc::new(type_name)));
-                        self.chunk.emit(Instruction::LoadConst(type_reg, const_idx as u16), 0);
+                        self.chunk.emit(Instruction::LoadConst(type_reg, const_idx as u16), line);
                         // Emit MakeVariantDyn instruction: dst, type_reg, ctor_reg, fields_reg
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::MakeVariantDyn(dst, type_reg, arg_regs[0], arg_regs[1]), 0);
+                        self.chunk.emit(Instruction::MakeVariantDyn(dst, type_reg, arg_regs[0], arg_regs[1]), line);
                         return Ok(dst);
                     }
                     // String-based variants for use in pure Nostos code
                     "makeRecordByName" if arg_regs.len() == 2 => {
                         // makeRecordByName(type_name, fields_map)
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::MakeRecordDyn(dst, arg_regs[0], arg_regs[1]), 0);
+                        self.chunk.emit(Instruction::MakeRecordDyn(dst, arg_regs[0], arg_regs[1]), line);
                         return Ok(dst);
                     }
                     "makeVariantByName" if arg_regs.len() == 3 => {
                         // makeVariantByName(type_name, ctor_name, fields_map)
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::MakeVariantDyn(dst, arg_regs[0], arg_regs[1], arg_regs[2]), 0);
+                        self.chunk.emit(Instruction::MakeVariantDyn(dst, arg_regs[0], arg_regs[1], arg_regs[2]), line);
                         return Ok(dst);
                     }
                     "jsonToTypeByName" if arg_regs.len() == 2 => {
                         // jsonToTypeByName(type_name, json)
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::Construct(dst, arg_regs[0], arg_regs[1]), 0);
+                        self.chunk.emit(Instruction::Construct(dst, arg_regs[0], arg_regs[1]), line);
                         return Ok(dst);
                     }
                     // === Math builtins (type-aware - use typed instruction if we can infer type) ===
@@ -5829,67 +5829,67 @@ impl Compiler {
                         let arg_type = self.infer_expr_type(&args[0]);
                         match arg_type {
                             Some(InferredType::Int) => {
-                                self.chunk.emit(Instruction::AbsInt(dst, arg_regs[0]), 0);
+                                self.chunk.emit(Instruction::AbsInt(dst, arg_regs[0]), line);
                             }
                             Some(InferredType::Float) => {
-                                self.chunk.emit(Instruction::AbsFloat(dst, arg_regs[0]), 0);
+                                self.chunk.emit(Instruction::AbsFloat(dst, arg_regs[0]), line);
                             }
                             None => {
                                 // Fallback: emit AbsInt (type checker should have validated)
                                 // In practice, abs is usually called on Int
-                                self.chunk.emit(Instruction::AbsInt(dst, arg_regs[0]), 0);
+                                self.chunk.emit(Instruction::AbsInt(dst, arg_regs[0]), line);
                             }
                         }
                         return Ok(dst);
                     }
                     "sqrt" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::SqrtFloat(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::SqrtFloat(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "sin" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::SinFloat(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::SinFloat(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "cos" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::CosFloat(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::CosFloat(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "tan" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::TanFloat(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::TanFloat(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "floor" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::FloorFloat(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::FloorFloat(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "ceil" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::CeilFloat(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::CeilFloat(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "round" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::RoundFloat(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::RoundFloat(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "log" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::LogFloat(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::LogFloat(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "log10" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::Log10Float(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::Log10Float(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "pow" if arg_regs.len() == 2 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::PowFloat(dst, arg_regs[0], arg_regs[1]), 0);
+                        self.chunk.emit(Instruction::PowFloat(dst, arg_regs[0], arg_regs[1]), line);
                         return Ok(dst);
                     }
                     "min" if arg_regs.len() == 2 => {
@@ -5898,14 +5898,14 @@ impl Compiler {
                         let arg_type = self.infer_expr_type(&args[0]);
                         match arg_type {
                             Some(InferredType::Int) => {
-                                self.chunk.emit(Instruction::MinInt(dst, arg_regs[0], arg_regs[1]), 0);
+                                self.chunk.emit(Instruction::MinInt(dst, arg_regs[0], arg_regs[1]), line);
                             }
                             Some(InferredType::Float) => {
-                                self.chunk.emit(Instruction::MinFloat(dst, arg_regs[0], arg_regs[1]), 0);
+                                self.chunk.emit(Instruction::MinFloat(dst, arg_regs[0], arg_regs[1]), line);
                             }
                             None => {
                                 // Fallback: emit MinInt (most common case)
-                                self.chunk.emit(Instruction::MinInt(dst, arg_regs[0], arg_regs[1]), 0);
+                                self.chunk.emit(Instruction::MinInt(dst, arg_regs[0], arg_regs[1]), line);
                             }
                         }
                         return Ok(dst);
@@ -5916,89 +5916,89 @@ impl Compiler {
                         let arg_type = self.infer_expr_type(&args[0]);
                         match arg_type {
                             Some(InferredType::Int) => {
-                                self.chunk.emit(Instruction::MaxInt(dst, arg_regs[0], arg_regs[1]), 0);
+                                self.chunk.emit(Instruction::MaxInt(dst, arg_regs[0], arg_regs[1]), line);
                             }
                             Some(InferredType::Float) => {
-                                self.chunk.emit(Instruction::MaxFloat(dst, arg_regs[0], arg_regs[1]), 0);
+                                self.chunk.emit(Instruction::MaxFloat(dst, arg_regs[0], arg_regs[1]), line);
                             }
                             None => {
                                 // Fallback: emit MaxInt (most common case)
-                                self.chunk.emit(Instruction::MaxInt(dst, arg_regs[0], arg_regs[1]), 0);
+                                self.chunk.emit(Instruction::MaxInt(dst, arg_regs[0], arg_regs[1]), line);
                             }
                         }
                         return Ok(dst);
                     }
                     "toFloat" | "toFloat64" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::IntToFloat(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::IntToFloat(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "toInt" | "toInt64" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::FloatToInt(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::FloatToInt(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "toInt8" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::ToInt8(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::ToInt8(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "toInt16" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::ToInt16(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::ToInt16(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "toInt32" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::ToInt32(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::ToInt32(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "toUInt8" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::ToUInt8(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::ToUInt8(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "toUInt16" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::ToUInt16(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::ToUInt16(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "toUInt32" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::ToUInt32(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::ToUInt32(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "toUInt64" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::ToUInt64(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::ToUInt64(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "toFloat32" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::ToFloat32(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::ToFloat32(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "toBigInt" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::ToBigInt(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::ToBigInt(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     // === Typed Array builtins ===
                     "newInt64Array" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::MakeInt64Array(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::MakeInt64Array(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "newFloat64Array" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::MakeFloat64Array(dst, arg_regs[0]), 0);
+                        self.chunk.emit(Instruction::MakeFloat64Array(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     // === Option unwrapping ===
                     "unwrapOr" if arg_regs.len() == 2 => {
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new("unwrapOr".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
                         return Ok(dst);
                     }
                     // === Trait-based builtins (show, copy, hash) ===
@@ -6068,7 +6068,7 @@ impl Compiler {
                         // Fall back to native call
                         let dst = self.alloc_reg();
                         let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
                         return Ok(dst);
                     }
                     _ => {} // Fall through to normal function lookup
