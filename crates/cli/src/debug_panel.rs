@@ -160,6 +160,8 @@ impl DebugPanel {
         self.selected_frame = 0;
         self.frame_locals.clear();
         self.locals_scroll = 0;
+        // Update source from frame 0
+        self.update_source_from_selected_frame();
         // Request locals for the current frame
         self.pending_locals_request = Some(0);
     }
@@ -222,11 +224,21 @@ impl DebugPanel {
         self.frame_locals = frame_locals;
     }
 
+    /// Update source display from currently selected frame
+    fn update_source_from_selected_frame(&mut self) {
+        if let Some(frame) = self.stack.get(self.selected_frame) {
+            self.source_code = frame.source.clone();
+            self.source_start_line = frame.source_start_line;
+            self.source_scroll = 0;
+        }
+    }
+
     /// Select previous stack frame (move up the call stack)
     fn select_prev_frame(&mut self) {
         if self.selected_frame > 0 {
             self.selected_frame -= 1;
             self.locals_scroll = 0;
+            self.update_source_from_selected_frame();
             // Request locals if not cached
             if !self.frame_locals.contains_key(&self.selected_frame) {
                 self.pending_locals_request = Some(self.selected_frame);
@@ -239,6 +251,7 @@ impl DebugPanel {
         if self.selected_frame < self.stack.len().saturating_sub(1) {
             self.selected_frame += 1;
             self.locals_scroll = 0;
+            self.update_source_from_selected_frame();
             // Request locals if not cached
             if !self.frame_locals.contains_key(&self.selected_frame) {
                 self.pending_locals_request = Some(self.selected_frame);
@@ -347,10 +360,14 @@ impl View for DebugPanel {
 
         // === Paused state - show source, call stack and locals ===
 
-        // Get current line from state
-        let current_line = match &self.state {
-            DebugState::Paused { line, .. } => *line,
-            _ => 0,
+        // Get current line from selected frame (or fallback to state for frame 0)
+        let current_line = if let Some(frame) = self.stack.get(self.selected_frame) {
+            frame.line
+        } else {
+            match &self.state {
+                DebugState::Paused { line, .. } => *line,
+                _ => 0,
+            }
         };
 
         // Source code section (takes priority, shown at top)
@@ -438,8 +455,11 @@ impl View for DebugPanel {
                     String::new()
                 };
 
+                // Strip arity suffix (e.g., "module.func/_" -> "module.func")
+                let func_name = frame.function.split('/').next().unwrap_or(&frame.function);
+
                 printer.with_color(style, |p| {
-                    let text = format!("{}{}(){}", prefix, frame.function, line_info);
+                    let text = format!("{}{}{}", prefix, func_name, line_info);
                     let display = if text.len() > width - 2 {
                         format!("{}...", &text[..width.saturating_sub(5)])
                     } else {

@@ -610,10 +610,10 @@ impl AsyncProcess {
                     });
                     Self::debug_log(&format!("  breakpoint_match={}", matches_breakpoint));
                     if matches_breakpoint {
-                        // Only break on function entry (first line of function)
-                        let first_line = self.debug_function_first_line();
-                        Self::debug_log(&format!("  checking first_line: current={} first={}", current_line, first_line));
-                        if current_line == first_line {
+                        // Only break on function entry (IP=0, first instruction)
+                        let ip = self.frames.last().map(|f| f.ip).unwrap_or(0);
+                        Self::debug_log(&format!("  checking function entry: ip={}", ip));
+                        if ip == 0 {
                             Self::debug_log("  -> BREAKPOINT HIT");
                             self.step_mode = StepMode::Paused;
                             return true;
@@ -737,6 +737,7 @@ impl AsyncProcess {
             match receiver.recv() {
                 Ok(cmd) => match cmd {
                     DebugCommand::Continue => {
+                        Self::debug_log(&format!("[Continue cmd] breakpoints={:?}", self.breakpoints));
                         self.step_mode = StepMode::Run;
                         // Skip next breakpoint check to avoid re-hitting the same breakpoint
                         self.skip_next_breakpoint_check = true;
@@ -759,6 +760,7 @@ impl AsyncProcess {
                         self.step_mode = StepMode::StepOut;
                     }
                     DebugCommand::AddBreakpoint(bp) => {
+                        Self::debug_log(&format!("[AddBreakpoint cmd] bp={:?}", bp));
                         self.breakpoints.insert(bp);
                     }
                     DebugCommand::RemoveBreakpoint(bp) => {
@@ -871,11 +873,14 @@ impl AsyncProcess {
                     DebugCommand::PrintStack => {
                         let frames: Vec<StackFrame> = self.frames.iter().rev().map(|f| {
                             let line = f.function.code.lines.get(f.ip.saturating_sub(1)).copied().unwrap_or(0);
+                            let source_start_line = f.function.code.lines.iter().find(|&&l| l > 0).copied().unwrap_or(1);
                             StackFrame {
                                 function: f.function.name.clone(),
                                 file: f.function.source_file.clone(),
                                 line,
                                 locals: f.function.debug_symbols.iter().map(|s| s.name.clone()).collect(),
+                                source: f.function.source_code.as_ref().map(|s| s.to_string()),
+                                source_start_line,
                             }
                         }).collect();
                         self.debug_send_event(DebugEvent::Stack { frames });
@@ -1149,8 +1154,12 @@ impl AsyncProcess {
         }
 
         // Check for debugger breakpoints/stepping
+        if self.debug_event_sender.is_some() {
+            Self::debug_log(&format!("[step] checking debug, step_mode={:?}", self.step_mode));
+        }
         if self.debug_should_pause() {
             self.debug_handle_commands();
+            Self::debug_log(&format!("[step] after debug_handle_commands, step_mode={:?}", self.step_mode));
         }
 
         // Cache frame index once - avoid repeated len() calls
@@ -1681,10 +1690,13 @@ impl AsyncProcess {
 
             // === Function calls ===
             CallDirect(dst, func_idx, ref args) => {
+                // Skip JIT when debugging - must use interpreted execution for breakpoints
+                let use_jit = self.debug_event_sender.is_none();
+
                 // Check for JIT-compiled version first based on arity
                 let func_idx_u16 = *func_idx;
                 let profiling = self.is_profiling();
-                match args.len() {
+                if use_jit { match args.len() {
                     0 => {
                         let jit_fn_opt = self.shared.jit_int_functions_0.read().unwrap().get(&func_idx_u16).copied();
                         if let Some(jit_fn) = jit_fn_opt {
@@ -1864,7 +1876,7 @@ impl AsyncProcess {
                         }
                     }
                     _ => {}
-                }
+                } } // close if use_jit and match
 
                 // Fall back to interpreter
                 let function = {
@@ -2184,10 +2196,13 @@ impl AsyncProcess {
 
             // === Tail call (replaces current frame) ===
             TailCallDirect(func_idx, ref args) => {
+                // Skip JIT when debugging - must use interpreted execution for breakpoints
+                let use_jit = self.debug_event_sender.is_none();
+
                 // Check for JIT-compiled version first
                 let func_idx_u16 = *func_idx;
                 let profiling = self.is_profiling();
-                match args.len() {
+                if use_jit { match args.len() {
                     0 => {
                         let jit_fn_opt = self.shared.jit_int_functions_0.read().unwrap().get(&func_idx_u16).copied();
                         if let Some(jit_fn) = jit_fn_opt {
@@ -2402,7 +2417,7 @@ impl AsyncProcess {
                         }
                     }
                     _ => {}
-                }
+                } } // close if use_jit and match
 
                 // Fall back to interpreter
                 let function = {

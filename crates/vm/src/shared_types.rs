@@ -198,6 +198,10 @@ pub struct StackFrame {
     pub line: usize,
     /// Local variable names (for summary)
     pub locals: Vec<String>,
+    /// Source code of the function
+    pub source: Option<String>,
+    /// Starting line number of the source in the file
+    pub source_start_line: usize,
 }
 
 /// Type alias for debug command sender
