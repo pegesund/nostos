@@ -1606,12 +1606,15 @@ fn toggle_debug_panel(s: &mut Cursive) {
 
 /// Close the debug panel (for Ctrl+W)
 fn close_debug_panel(s: &mut Cursive) {
+    // Send Continue command to let execution finish and return value
+    send_debug_command(s, nostos_vm::shared_types::DebugCommand::Continue);
+
     s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         state.borrow_mut().debug_panel_open = false;
     });
     rebuild_workspace(s);
     s.focus_name("repl_log").ok();
-    log_to_repl(s, "Debug panel closed");
+    log_to_repl(s, "Debug panel closed - execution continuing");
 }
 
 /// Create the debug panel view
