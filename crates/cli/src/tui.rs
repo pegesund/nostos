@@ -853,6 +853,16 @@ fn poll_debug_panel_commands(s: &mut Cursive) {
         send_debug_command(s, debug_cmd);
     }
 
+    // Check if debug panel needs the call stack
+    let stack_request = s.call_on_name("debug_panel", |panel: &mut DebugPanel| {
+        panel.take_pending_stack_request()
+    }).unwrap_or(false);
+
+    if stack_request {
+        debug_log("poll_debug_panel_commands: requesting stack");
+        send_stack_command(s);
+    }
+
     // Check if debug panel needs locals for a specific frame
     let frame_request = s.call_on_name("debug_panel", |panel: &mut DebugPanel| {
         panel.take_pending_locals_request()
@@ -861,6 +871,29 @@ fn poll_debug_panel_commands(s: &mut Cursive) {
     if let Some(frame_index) = frame_request {
         debug_log(&format!("poll_debug_panel_commands: requesting locals for frame {}", frame_index));
         send_locals_for_frame_command(s, frame_index);
+    }
+}
+
+/// Send a request for the call stack.
+fn send_stack_command(s: &mut Cursive) {
+    let repl_ids: Vec<usize> = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().open_repls.clone()
+    }).unwrap_or_default();
+
+    for repl_id in repl_ids {
+        let panel_id = format!("repl_panel_{}", repl_id);
+        let sent = s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
+            if let Some(session) = panel.get_debug_session() {
+                let _ = session.send(nostos_vm::shared_types::DebugCommand::PrintStack);
+                true
+            } else {
+                false
+            }
+        }).unwrap_or(false);
+
+        if sent {
+            return;
+        }
     }
 }
 

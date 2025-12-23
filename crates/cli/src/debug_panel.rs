@@ -70,6 +70,8 @@ pub struct DebugPanel {
     pub pending_command: Option<DebugPanelCommand>,
     /// Frame index for which we need to request locals (polled by TUI)
     pending_locals_request: Option<usize>,
+    /// Whether we need to request the stack (polled by TUI)
+    pending_stack_request: bool,
     /// Source code of the current function
     source_code: Option<String>,
     /// Starting line number of the source in the file
@@ -90,6 +92,7 @@ impl DebugPanel {
             visible_rows: 10,
             pending_command: None,
             pending_locals_request: None,
+            pending_stack_request: false,
             source_code: None,
             source_start_line: 1,
             source_scroll: 0,
@@ -119,6 +122,7 @@ impl DebugPanel {
         self.selected_frame = 0;
         self.locals_scroll = 0;
         self.pending_locals_request = None;
+        self.pending_stack_request = false;
         self.source_code = None;
         self.source_start_line = 1;
         self.source_scroll = 0;
@@ -135,7 +139,8 @@ impl DebugPanel {
         self.frame_locals.clear();
         self.selected_frame = 0;
         self.locals_scroll = 0;
-        // Request locals for frame 0
+        // Request stack and locals for frame 0
+        self.pending_stack_request = true;
         self.pending_locals_request = Some(0);
     }
 
@@ -181,6 +186,13 @@ impl DebugPanel {
     /// Get pending locals request (polled by TUI)
     pub fn take_pending_locals_request(&mut self) -> Option<usize> {
         self.pending_locals_request.take()
+    }
+
+    /// Get pending stack request (polled by TUI)
+    pub fn take_pending_stack_request(&mut self) -> bool {
+        let result = self.pending_stack_request;
+        self.pending_stack_request = false;
+        result
     }
 
     /// Get locals for the currently selected frame
