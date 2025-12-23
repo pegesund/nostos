@@ -6,7 +6,7 @@ use cursive::view::{View, CannotFocus};
 use cursive::direction::Direction;
 use cursive::{Printer, Vec2};
 use nostos_vm::shared_types::StackFrame;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Debug logging disabled. Uncomment to enable file logging.
 #[allow(unused)]
@@ -56,8 +56,8 @@ pub struct DebugPanel {
     pub state: DebugState,
     /// Call stack frames
     pub stack: Vec<StackFrame>,
-    /// Local variables: (name, value, type)
-    pub locals: Vec<(String, String, String)>,
+    /// Local variables per frame: frame_index -> (name, value, type)
+    frame_locals: HashMap<usize, Vec<(String, String, String)>>,
     /// Selected stack frame index
     selected_frame: usize,
     /// Breakpoints set by user
@@ -68,6 +68,12 @@ pub struct DebugPanel {
     visible_rows: usize,
     /// Pending command from key press (polled by TUI)
     pub pending_command: Option<DebugPanelCommand>,
+    /// Frame index for which we need to request locals (polled by TUI)
+    pending_locals_request: Option<usize>,
+    /// Source code of the current function
+    source_code: Option<String>,
+    /// Scroll offset for source view
+    source_scroll: usize,
 }
 
 impl DebugPanel {
@@ -75,12 +81,15 @@ impl DebugPanel {
         Self {
             state: DebugState::Idle,
             stack: Vec::new(),
-            locals: Vec::new(),
+            frame_locals: HashMap::new(),
             selected_frame: 0,
             breakpoints: HashSet::new(),
             locals_scroll: 0,
             visible_rows: 10,
             pending_command: None,
+            pending_locals_request: None,
+            source_code: None,
+            source_scroll: 0,
         }
     }
 
@@ -103,15 +112,24 @@ impl DebugPanel {
     pub fn clear(&mut self) {
         self.state = DebugState::Idle;
         self.stack.clear();
-        self.locals.clear();
+        self.frame_locals.clear();
         self.selected_frame = 0;
         self.locals_scroll = 0;
+        self.pending_locals_request = None;
+        self.source_code = None;
+        self.source_scroll = 0;
     }
 
     /// Update state when paused
-    pub fn on_paused(&mut self, function: String, file: Option<String>, line: usize) {
-        debug_log(&format!("on_paused: function={}, file={:?}, line={}", function, file, line));
+    pub fn on_paused(&mut self, function: String, file: Option<String>, line: usize, source: Option<String>) {
+        debug_log(&format!("on_paused: function={}, file={:?}, line={}, source={:?}", function, file, line, source));
         self.state = DebugState::Paused { function, file, line };
+        self.source_code = source;
+        self.source_scroll = 0;
+        // Auto-request locals for frame 0 if not cached
+        if !self.frame_locals.contains_key(&0) {
+            self.pending_locals_request = Some(0);
+        }
     }
 
     /// Update state when running
@@ -128,12 +146,41 @@ impl DebugPanel {
     pub fn set_stack(&mut self, frames: Vec<StackFrame>) {
         self.stack = frames;
         self.selected_frame = 0;
+        self.frame_locals.clear();
+        self.locals_scroll = 0;
+        // Request locals for the current frame
+        self.pending_locals_request = Some(0);
     }
 
-    /// Update locals
+    /// Update locals for the current frame (legacy, uses frame 0)
     pub fn set_locals(&mut self, locals: Vec<(String, String, String)>) {
-        self.locals = locals;
+        self.frame_locals.insert(0, locals);
         self.locals_scroll = 0;
+    }
+
+    /// Update locals for a specific frame
+    pub fn set_locals_for_frame(&mut self, frame_index: usize, locals: Vec<(String, String, String)>) {
+        self.frame_locals.insert(frame_index, locals);
+        // Clear the pending request if it was for this frame
+        if self.pending_locals_request == Some(frame_index) {
+            self.pending_locals_request = None;
+        }
+        // Reset scroll if this is the currently selected frame
+        if self.selected_frame == frame_index {
+            self.locals_scroll = 0;
+        }
+    }
+
+    /// Get pending locals request (polled by TUI)
+    pub fn take_pending_locals_request(&mut self) -> Option<usize> {
+        self.pending_locals_request.take()
+    }
+
+    /// Get locals for the currently selected frame
+    fn current_locals(&self) -> &[(String, String, String)] {
+        self.frame_locals.get(&self.selected_frame)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Take pending command (if any) - used by TUI to poll for commands
@@ -142,31 +189,41 @@ impl DebugPanel {
     }
 
     /// Take debug panel state for preservation across rebuilds
-    pub fn take_state(&mut self) -> (DebugState, Vec<StackFrame>, Vec<(String, String, String)>) {
+    pub fn take_state(&mut self) -> (DebugState, Vec<StackFrame>, HashMap<usize, Vec<(String, String, String)>>) {
         let state = std::mem::replace(&mut self.state, DebugState::Idle);
         let stack = std::mem::take(&mut self.stack);
-        let locals = std::mem::take(&mut self.locals);
-        (state, stack, locals)
+        let frame_locals = std::mem::take(&mut self.frame_locals);
+        (state, stack, frame_locals)
     }
 
     /// Restore debug panel state after rebuild
-    pub fn restore_state(&mut self, state: DebugState, stack: Vec<StackFrame>, locals: Vec<(String, String, String)>) {
+    pub fn restore_state(&mut self, state: DebugState, stack: Vec<StackFrame>, frame_locals: HashMap<usize, Vec<(String, String, String)>>) {
         self.state = state;
         self.stack = stack;
-        self.locals = locals;
+        self.frame_locals = frame_locals;
     }
 
-    /// Select previous stack frame
+    /// Select previous stack frame (move up the call stack)
     fn select_prev_frame(&mut self) {
         if self.selected_frame > 0 {
             self.selected_frame -= 1;
+            self.locals_scroll = 0;
+            // Request locals if not cached
+            if !self.frame_locals.contains_key(&self.selected_frame) {
+                self.pending_locals_request = Some(self.selected_frame);
+            }
         }
     }
 
-    /// Select next stack frame
+    /// Select next stack frame (move down the call stack)
     fn select_next_frame(&mut self) {
         if self.selected_frame < self.stack.len().saturating_sub(1) {
             self.selected_frame += 1;
+            self.locals_scroll = 0;
+            // Request locals if not cached
+            if !self.frame_locals.contains_key(&self.selected_frame) {
+                self.pending_locals_request = Some(self.selected_frame);
+            }
         }
     }
 
@@ -179,7 +236,8 @@ impl DebugPanel {
 
     /// Scroll locals down
     fn scroll_locals_down(&mut self) {
-        if self.locals_scroll < self.locals.len().saturating_sub(self.visible_rows) {
+        let locals_len = self.current_locals().len();
+        if self.locals_scroll < locals_len.saturating_sub(self.visible_rows) {
             self.locals_scroll += 1;
         }
     }
@@ -268,7 +326,69 @@ impl View for DebugPanel {
             return;
         }
 
-        // === Paused state - show call stack and locals ===
+        // === Paused state - show source, call stack and locals ===
+
+        // Get current line from state
+        let current_line = match &self.state {
+            DebugState::Paused { line, .. } => *line,
+            _ => 0,
+        };
+
+        // Source code section (takes priority, shown at top)
+        if let Some(ref source) = self.source_code {
+            let source_lines: Vec<&str> = source.lines().collect();
+            let source_height = 8.min(source_lines.len()); // Show up to 8 lines
+
+            printer.with_color(color_title, |p| {
+                p.print((1, y), "Source:");
+            });
+            y += 1;
+
+            // Calculate scroll to keep current line visible
+            let scroll = if current_line > 4 {
+                (current_line - 4).min(source_lines.len().saturating_sub(source_height))
+            } else {
+                0
+            };
+
+            let color_arrow = ColorStyle::new(Color::Rgb(100, 255, 100), Color::TerminalDefault);
+            let color_line_num = ColorStyle::new(Color::Rgb(100, 100, 100), Color::TerminalDefault);
+            let color_current_line = ColorStyle::new(Color::Rgb(255, 255, 200), Color::TerminalDefault);
+
+            for (i, line_content) in source_lines.iter().skip(scroll).take(source_height).enumerate() {
+                let line_num = scroll + i + 1; // 1-based line numbers
+                let is_current = line_num == current_line;
+
+                // Arrow for current line
+                if is_current {
+                    printer.with_color(color_arrow, |p| {
+                        p.print((1, y), "▶");
+                    });
+                } else {
+                    printer.print((1, y), " ");
+                }
+
+                // Line number
+                printer.with_color(color_line_num, |p| {
+                    p.print((3, y), &format!("{:3} ", line_num));
+                });
+
+                // Source line (truncated if needed)
+                let max_line_len = width.saturating_sub(9);
+                let display_line = if line_content.len() > max_line_len {
+                    format!("{}…", &line_content[..max_line_len.saturating_sub(1)])
+                } else {
+                    line_content.to_string()
+                };
+
+                let line_style = if is_current { color_current_line } else { color_value };
+                printer.with_color(line_style, |p| {
+                    p.print((8, y), &display_line);
+                });
+                y += 1;
+            }
+            y += 1;
+        }
 
         // Call Stack section
         printer.with_color(color_title, |p| {
@@ -315,20 +435,31 @@ impl View for DebugPanel {
 
         y += 1;
 
-        // Locals section
+        // Locals section (for selected frame)
+        let locals = self.current_locals();
+        let locals_title = if self.selected_frame == 0 {
+            "Locals:".to_string()
+        } else {
+            format!("Locals (frame {}):", self.selected_frame)
+        };
         printer.with_color(color_title, |p| {
-            p.print((1, y), "Locals:");
+            p.print((1, y), &locals_title);
         });
         y += 1;
 
-        if self.locals.is_empty() {
+        if locals.is_empty() {
+            let msg = if self.pending_locals_request.is_some() {
+                "(loading...)"
+            } else {
+                "(no locals)"
+            };
             printer.with_color(color_dim, |p| {
-                p.print((3, y), "(no locals)");
+                p.print((3, y), msg);
             });
             y += 1;
         } else {
-            let locals_height = (height - y - 3).min(self.locals.len());
-            for (name, value, _type_name) in self.locals.iter()
+            let locals_height = (height - y - 3).min(locals.len());
+            for (name, value, _type_name) in locals.iter()
                 .skip(self.locals_scroll)
                 .take(locals_height)
             {

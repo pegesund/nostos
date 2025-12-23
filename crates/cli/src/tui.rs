@@ -852,6 +852,39 @@ fn poll_debug_panel_commands(s: &mut Cursive) {
         };
         send_debug_command(s, debug_cmd);
     }
+
+    // Check if debug panel needs locals for a specific frame
+    let frame_request = s.call_on_name("debug_panel", |panel: &mut DebugPanel| {
+        panel.take_pending_locals_request()
+    }).flatten();
+
+    if let Some(frame_index) = frame_request {
+        debug_log(&format!("poll_debug_panel_commands: requesting locals for frame {}", frame_index));
+        send_locals_for_frame_command(s, frame_index);
+    }
+}
+
+/// Send a request for locals for a specific frame.
+fn send_locals_for_frame_command(s: &mut Cursive, frame_index: usize) {
+    let repl_ids: Vec<usize> = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().open_repls.clone()
+    }).unwrap_or_default();
+
+    for repl_id in repl_ids {
+        let panel_id = format!("repl_panel_{}", repl_id);
+        let sent = s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
+            if let Some(session) = panel.get_debug_session() {
+                let _ = session.send(nostos_vm::shared_types::DebugCommand::PrintLocalsForFrame(frame_index));
+                true
+            } else {
+                false
+            }
+        }).unwrap_or(false);
+
+        if sent {
+            return;
+        }
+    }
 }
 
 /// Send a debug command to the active debug session (if any).
@@ -931,13 +964,14 @@ fn poll_debug_events(s: &mut Cursive) {
     for event in events {
         s.call_on_name("debug_panel", |panel: &mut DebugPanel| {
             match event {
-                DebugEvent::Paused { function, file, line, .. } => {
-                    debug_log(&format!("poll_debug_events: Paused in {} at line {}", function, line));
-                    panel.on_paused(function, file, line);
+                DebugEvent::Paused { function, file, line, source, .. } => {
+                    debug_log(&format!("poll_debug_events: Paused in {} at line {}, source={:?}", function, line, source));
+                    panel.on_paused(function, file, line, source);
                 }
                 DebugEvent::BreakpointHit { function, file, line, .. } => {
                     debug_log(&format!("poll_debug_events: BreakpointHit in {} at line {}", function, line));
-                    panel.on_paused(function, file, line);
+                    // BreakpointHit doesn't have source, pass None
+                    panel.on_paused(function, file, line, None);
                 }
                 DebugEvent::Exited { value, .. } => {
                     debug_log(&format!("poll_debug_events: Exited with {:?}", value));
@@ -950,6 +984,10 @@ fn poll_debug_events(s: &mut Cursive) {
                 DebugEvent::Locals { variables } => {
                     debug_log(&format!("poll_debug_events: Locals with {} variables", variables.len()));
                     panel.set_locals(variables);
+                }
+                DebugEvent::LocalsForFrame { frame_index, variables } => {
+                    debug_log(&format!("poll_debug_events: LocalsForFrame {} with {} variables", frame_index, variables.len()));
+                    panel.set_locals_for_frame(frame_index, variables);
                 }
                 _ => {}
             }
@@ -995,7 +1033,7 @@ fn rebuild_workspace(s: &mut Cursive) {
     }
 
     // Preserve debug panel state before clearing
-    let debug_panel_state: Option<(crate::debug_panel::DebugState, Vec<nostos_vm::shared_types::StackFrame>, Vec<(String, String, String)>)> =
+    let debug_panel_state: Option<(crate::debug_panel::DebugState, Vec<nostos_vm::shared_types::StackFrame>, std::collections::HashMap<usize, Vec<(String, String, String)>>)> =
         if debug_panel_open {
             s.call_on_name("debug_panel", |panel: &mut DebugPanel| {
                 panel.take_state()
@@ -1130,9 +1168,9 @@ fn rebuild_workspace(s: &mut Cursive) {
     s.add_fullscreen_layer(layout);
 
     // Restore debug panel state after layer is added
-    if let Some((state, stack, locals)) = saved_debug_state {
+    if let Some((state, stack, frame_locals)) = saved_debug_state {
         s.call_on_name("debug_panel", |panel: &mut DebugPanel| {
-            panel.restore_state(state, stack, locals);
+            panel.restore_state(state, stack, frame_locals);
         });
     }
 }

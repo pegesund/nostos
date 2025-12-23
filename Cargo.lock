@@ -1880,20 +1880,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nostos-tui"
-version = "0.1.0"
-dependencies = [
- "crossbeam-channel",
- "crossterm 0.27.0",
- "cursive",
- "nostos-compiler",
- "nostos-repl",
- "nostos-syntax",
- "nostos-vm",
- "once_cell",
-]
-
-[[package]]
 name = "nostos-types"
 version = "0.1.0"
 dependencies = [

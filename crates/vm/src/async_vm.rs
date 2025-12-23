@@ -484,6 +484,13 @@ impl AsyncProcess {
             .unwrap_or(1)
     }
 
+    /// Get the source code of the current function (if available).
+    fn debug_current_source(&self) -> Option<String> {
+        self.frames.last()
+            .and_then(|f| f.function.source_code.as_ref())
+            .map(|s| s.to_string())
+    }
+
     #[allow(unused)]
     fn debug_log(_msg: &str) {
         // Debug logging disabled. Uncomment to enable file logging:
@@ -647,7 +654,8 @@ impl AsyncProcess {
         };
         let function = self.debug_current_function();
         let file = self.debug_current_file();
-        self.debug_send_event(DebugEvent::Paused { pid: self.pid.0, file: file.clone(), line, function: function.clone() });
+        let source = self.debug_current_source();
+        self.debug_send_event(DebugEvent::Paused { pid: self.pid.0, file: file.clone(), line, function: function.clone(), source });
 
         // Process commands until we get a continue/step command
         while self.step_mode == StepMode::Paused {
@@ -720,6 +728,27 @@ impl AsyncProcess {
                                 })
                                 .collect();
                             self.debug_send_event(DebugEvent::Locals { variables });
+                        }
+                    }
+                    DebugCommand::PrintLocalsForFrame(frame_index) => {
+                        // frames are stored bottom-to-top, but UI shows top-to-bottom
+                        // frame_index 0 = current (last), 1 = caller, etc.
+                        let frame_count = self.frames.len();
+                        if frame_index < frame_count {
+                            let actual_index = frame_count - 1 - frame_index;
+                            let frame = &self.frames[actual_index];
+                            let variables: Vec<(String, String, String)> = frame.function.debug_symbols.iter()
+                                .filter_map(|sym| {
+                                    frame.registers.get(sym.register as usize).map(|v| {
+                                        (sym.name.clone(), format!("{:?}", v), "unknown".to_string())
+                                    })
+                                })
+                                .collect();
+                            self.debug_send_event(DebugEvent::LocalsForFrame { frame_index, variables });
+                        } else {
+                            self.debug_send_event(DebugEvent::Error {
+                                message: format!("Frame index {} out of range (stack has {} frames)", frame_index, frame_count),
+                            });
                         }
                     }
                     DebugCommand::PrintStack => {

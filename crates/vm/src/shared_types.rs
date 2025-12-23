@@ -126,6 +126,8 @@ pub enum DebugCommand {
     PrintVariable(String),
     /// Print all local variables
     PrintLocals,
+    /// Print local variables for a specific stack frame (0 = current/bottom)
+    PrintLocalsForFrame(usize),
     /// Print the call stack
     PrintStack,
 }
@@ -146,6 +148,8 @@ pub enum DebugEvent {
         file: Option<String>,
         line: usize,
         function: String,
+        /// Source code of the current function (if available)
+        source: Option<String>,
     },
     /// Process exited
     Exited {
@@ -158,8 +162,13 @@ pub enum DebugEvent {
         value: String,
         type_name: String,
     },
-    /// List of local variables
+    /// List of local variables (for current frame)
     Locals {
+        variables: Vec<(String, String, String)>, // (name, value, type)
+    },
+    /// Local variables for a specific stack frame
+    LocalsForFrame {
+        frame_index: usize,
         variables: Vec<(String, String, String)>, // (name, value, type)
     },
     /// Call stack

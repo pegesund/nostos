@@ -10243,4 +10243,73 @@ mod debug_session_tests {
         assert!(result.is_ok());
         assert!(!engine.get_breakpoints().contains(&"test_fn".to_string()));
     }
+
+    #[test]
+    fn test_source_code_set_for_repl_functions() {
+        // Test that source_code is set for functions defined in the REPL
+        let mut engine = ReplEngine::new(ReplConfig { enable_jit: false, num_threads: 1 });
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Define a multi-line function
+        let _ = engine.eval("fib(n) = {\n    if n <= 1 then n\n    else fib(n - 1) + fib(n - 2)\n}");
+
+        // Get the compiled function and check source_code
+        let funcs = engine.compiler.get_all_functions();
+        let fib_fn = funcs.iter().find(|(name, _)| name.starts_with("fib/"));
+        assert!(fib_fn.is_some(), "fib function should exist");
+
+        let (name, func) = fib_fn.unwrap();
+        println!("Function: {}", name);
+        println!("source_code: {:?}", func.source_code);
+
+        assert!(func.source_code.is_some(), "source_code should be set for REPL function");
+        let source = func.source_code.as_ref().unwrap();
+        assert!(source.contains("fib(n)"), "source should contain function definition");
+        println!("Source code successfully extracted: {}", source);
+    }
+
+    #[test]
+    fn test_debug_session_source_in_paused_event() {
+        // Test that source is included in Paused event
+        let mut engine = ReplEngine::new(ReplConfig { enable_jit: false, num_threads: 1 });
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Define a function
+        let _ = engine.eval("test_fn(x: Int) -> Int = x * 2");
+
+        // Add breakpoint
+        engine.add_breakpoint("test_fn".to_string());
+
+        // Start debug session
+        let session = engine.start_debug_async("test_fn(5)").expect("Debug session should start");
+
+        // Send breakpoints
+        for bp in engine.get_vm_breakpoints() {
+            let _ = session.send(DebugCommand::AddBreakpoint(bp));
+        }
+
+        // Continue from initial pause
+        let _ = session.send(DebugCommand::Continue);
+
+        // Wait for breakpoint hit and check source in event
+        let start = std::time::Instant::now();
+        let mut source_received = None;
+
+        while start.elapsed() < std::time::Duration::from_secs(5) {
+            if let Some(event) = session.try_recv_event() {
+                println!("Event: {:?}", event);
+                if let DebugEvent::Paused { function, source, .. } = event {
+                    if function.starts_with("test_fn") {
+                        source_received = source;
+                        let _ = session.send(DebugCommand::Continue);
+                        break;
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        println!("Source received: {:?}", source_received);
+        assert!(source_received.is_some(), "Paused event should contain source code");
+    }
 }
