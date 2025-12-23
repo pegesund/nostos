@@ -1571,6 +1571,16 @@ fn toggle_debug_panel(s: &mut Cursive) {
     }
 }
 
+/// Close the debug panel (for Ctrl+W)
+fn close_debug_panel(s: &mut Cursive) {
+    s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow_mut().debug_panel_open = false;
+    });
+    rebuild_workspace(s);
+    s.focus_name("repl_log").ok();
+    log_to_repl(s, "Debug panel closed");
+}
+
 /// Create the debug panel view
 fn create_debug_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
     use crate::debug_panel::DebugPanel;
@@ -1585,6 +1595,12 @@ fn create_debug_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
     let panel_with_events = OnEventView::new(panel.with_name("debug_panel"))
         .on_event(Event::CtrlChar('d'), |s| {
             toggle_debug_panel(s);
+        })
+        .on_event(Event::CtrlChar('w'), |s| {
+            close_debug_panel(s);
+        })
+        .on_event(Key::Esc, |s| {
+            close_debug_panel(s);
         });
 
     ActiveWindow::new(panel_with_events, "Debug")
@@ -3557,6 +3573,11 @@ fn cycle_window(s: &mut Cursive) {
             windows.push("nostos_mvar_panel".to_string());
         }
 
+        // Debug panel
+        if state.debug_panel_open {
+            windows.push("debug_panel".to_string());
+        }
+
         if windows.is_empty() {
             return "repl_log".to_string();
         }
@@ -3596,6 +3617,11 @@ fn cycle_window_backward(s: &mut Cursive) {
         // Nostos panel
         if state.nostos_panel_open {
             windows.push("nostos_mvar_panel".to_string());
+        }
+
+        // Debug panel
+        if state.debug_panel_open {
+            windows.push("debug_panel".to_string());
         }
 
         if windows.is_empty() {
