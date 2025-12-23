@@ -459,17 +459,21 @@ impl View for DebugPanel {
             y += 1;
         } else {
             let locals_height = (height - y - 3).min(locals.len());
-            for (name, value, _type_name) in locals.iter()
+            let color_mvar = ColorStyle::new(Color::Rgb(255, 180, 100), Color::TerminalDefault);
+            for (name, value, type_name) in locals.iter()
                 .skip(self.locals_scroll)
                 .take(locals_height)
             {
+                let is_mvar = type_name == "mvar";
                 let name_display = if name.len() > 15 {
                     format!("{}...", &name[..12])
                 } else {
                     name.clone()
                 };
 
-                printer.with_color(color_label, |p| {
+                // Use orange color for mvars
+                let name_color = if is_mvar { color_mvar } else { color_label };
+                printer.with_color(name_color, |p| {
                     p.print((3, y), &format!("{} = ", name_display));
                 });
 

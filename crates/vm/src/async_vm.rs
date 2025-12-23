@@ -737,13 +737,39 @@ impl AsyncProcess {
                         if frame_index < frame_count {
                             let actual_index = frame_count - 1 - frame_index;
                             let frame = &self.frames[actual_index];
-                            let variables: Vec<(String, String, String)> = frame.function.debug_symbols.iter()
+                            let mut variables: Vec<(String, String, String)> = frame.function.debug_symbols.iter()
                                 .filter_map(|sym| {
                                     frame.registers.get(sym.register as usize).map(|v| {
-                                        (sym.name.clone(), format!("{:?}", v), "unknown".to_string())
+                                        (sym.name.clone(), format!("{:?}", v), "local".to_string())
                                     })
                                 })
                                 .collect();
+
+                            // Also include module-level mvars (only for frame 0 to avoid clutter)
+                            if frame_index == 0 {
+                                for (name, mvar) in self.shared.mvars.iter() {
+                                    if let Ok(guard) = mvar.try_read() {
+                                        variables.push((
+                                            format!("mvar {}", name),
+                                            format!("{:?}", *guard),
+                                            "mvar".to_string()
+                                        ));
+                                    }
+                                }
+                                // Also include dynamic mvars from REPL
+                                if let Ok(dynamic) = self.shared.dynamic_mvars.read() {
+                                    for (name, mvar) in dynamic.iter() {
+                                        if let Ok(guard) = mvar.read() {
+                                            variables.push((
+                                                format!("mvar {}", name),
+                                                format!("{:?}", *guard),
+                                                "mvar".to_string()
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+
                             self.debug_send_event(DebugEvent::LocalsForFrame { frame_index, variables });
                         } else {
                             self.debug_send_event(DebugEvent::Error {
