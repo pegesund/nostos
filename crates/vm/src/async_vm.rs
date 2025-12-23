@@ -498,17 +498,63 @@ impl AsyncProcess {
             .unwrap_or(1)
     }
 
+    /// Check if the current instruction is a Return instruction.
+    fn debug_is_return_instruction(&self) -> bool {
+        if let Some(frame) = self.frames.last() {
+            if let Some(instr) = frame.function.code.code.get(frame.ip) {
+                matches!(instr, crate::value::Instruction::Return(_))
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
     #[allow(unused)]
-    fn debug_log(_msg: &str) {
-        // Debug logging disabled. Uncomment to enable file logging:
-        // if let Ok(mut f) = std::fs::OpenOptions::new()
-        //     .create(true)
-        //     .append(true)
-        //     .open("/tmp/nostos_vm_debug.log")
-        // {
-        //     use std::io::Write;
-        //     let _ = writeln!(f, "{}", _msg);
-        // }
+    fn debug_log(msg: &str) {
+        // Debug logging enabled for troubleshooting
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/nostos_vm_debug.log")
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "{}", msg);
+        }
+    }
+
+    /// Check if a function name matches a breakpoint pattern.
+    /// Handles: exact match, without arity suffix, normalized separators (: vs .)
+    fn function_name_matches(fn_name: &str, bp_pattern: &str) -> bool {
+        // Normalize separators: convert : to . for comparison
+        let normalized_bp = bp_pattern.replace(':', ".");
+        let normalized_fn = fn_name.replace(':', ".");
+
+        // Also strip arity suffix from function name (e.g., "foo/2" -> "foo")
+        let fn_base = normalized_fn.split('/').next().unwrap_or(&normalized_fn);
+
+        // Check various match patterns:
+        // 1. Exact match (normalized)
+        if normalized_fn == normalized_bp {
+            return true;
+        }
+        // 2. Function base matches pattern (for "foo/2" matching "foo")
+        if fn_base == normalized_bp {
+            return true;
+        }
+        // 3. Pattern is just the function name without module (e.g., "simple" matches "module.simple")
+        if let Some(simple_name) = fn_base.rsplit('.').next() {
+            if simple_name == normalized_bp {
+                return true;
+            }
+        }
+        // 4. Pattern ends with the function name (for partial module matching)
+        if fn_base.ends_with(&format!(".{}", normalized_bp)) {
+            return true;
+        }
+
+        false
     }
 
     /// Check if we should pause execution (breakpoint or step mode).
@@ -553,33 +599,24 @@ impl AsyncProcess {
                 let fn_name = self.debug_current_function();
                 Self::debug_log(&format!("  Run mode: checking breakpoints for fn={}", fn_name));
                 if fn_name != "<unknown>" {
-                    // Check for exact match
-                    let fn_bp = crate::shared_types::Breakpoint::Function(fn_name.clone());
-                    let exact_match = self.breakpoints.contains(&fn_bp);
-                    Self::debug_log(&format!("  exact_match({:?})={}", fn_bp, exact_match));
-                    if exact_match {
+                    // Check if any breakpoint matches this function
+                    // Handles: exact match, without arity suffix, with normalized separators (: vs .)
+                    let matches_breakpoint = self.breakpoints.iter().any(|bp| {
+                        if let crate::shared_types::Breakpoint::Function(bp_name) = bp {
+                            Self::function_name_matches(&fn_name, bp_name)
+                        } else {
+                            false
+                        }
+                    });
+                    Self::debug_log(&format!("  breakpoint_match={}", matches_breakpoint));
+                    if matches_breakpoint {
                         // Only break on function entry (first line of function)
                         let first_line = self.debug_function_first_line();
                         Self::debug_log(&format!("  checking first_line: current={} first={}", current_line, first_line));
                         if current_line == first_line {
-                            Self::debug_log("  -> BREAKPOINT HIT (exact)");
+                            Self::debug_log("  -> BREAKPOINT HIT");
                             self.step_mode = StepMode::Paused;
                             return true;
-                        }
-                    }
-                    // Also check without arity suffix (e.g., "foo" matches "foo/2")
-                    if let Some(base_name) = fn_name.split('/').next() {
-                        let base_bp = crate::shared_types::Breakpoint::Function(base_name.to_string());
-                        let base_match = self.breakpoints.contains(&base_bp);
-                        Self::debug_log(&format!("  base_match({:?})={}", base_bp, base_match));
-                        if base_match {
-                            let first_line = self.debug_function_first_line();
-                            Self::debug_log(&format!("  checking first_line: current={} first={}", current_line, first_line));
-                            if current_line == first_line {
-                                Self::debug_log("  -> BREAKPOINT HIT (base name)");
-                                self.step_mode = StepMode::Paused;
-                                return true;
-                            }
                         }
                     }
                 }
@@ -610,7 +647,15 @@ impl AsyncProcess {
             }
             StepMode::StepLine => {
                 // Pause when line changes (skip line 0 which means "no line info")
+                // Also pause before Return to show return value
+                Self::debug_log(&format!("  StepLine: current_line={}, last_line={}", current_line, self.debug_last_line));
+                if self.debug_is_return_instruction() {
+                    Self::debug_log("  -> Return instruction, pausing");
+                    self.step_mode = StepMode::Paused;
+                    return true;
+                }
                 if current_line > 0 && current_line != self.debug_last_line {
+                    Self::debug_log(&format!("  -> line changed, pausing"));
                     self.debug_last_line = current_line;
                     self.step_mode = StepMode::Paused;
                     return true;
@@ -619,7 +664,22 @@ impl AsyncProcess {
             }
             StepMode::StepOver => {
                 // Pause when line changes at same or lower call depth (skip line 0)
-                if current_line > 0 && self.frames.len() <= self.debug_step_frame_depth && current_line != self.debug_last_line {
+                // Also pause before Return to show return value
+                Self::debug_log(&format!("  StepOver: current_line={}, last_line={}, frames={}, step_depth={}",
+                    current_line, self.debug_last_line, self.frames.len(), self.debug_step_frame_depth));
+                if self.debug_is_return_instruction() && self.frames.len() <= self.debug_step_frame_depth {
+                    Self::debug_log("  -> Return instruction, pausing");
+                    self.step_mode = StepMode::Paused;
+                    return true;
+                }
+                if current_line == 0 {
+                    Self::debug_log("  -> skip: line=0");
+                } else if self.frames.len() > self.debug_step_frame_depth {
+                    Self::debug_log(&format!("  -> skip: frame depth {} > {}", self.frames.len(), self.debug_step_frame_depth));
+                } else if current_line == self.debug_last_line {
+                    Self::debug_log(&format!("  -> skip: same line {}", current_line));
+                } else {
+                    Self::debug_log("  -> line changed, pausing");
                     self.debug_last_line = current_line;
                     self.step_mode = StepMode::Paused;
                     return true;
@@ -663,6 +723,13 @@ impl AsyncProcess {
         let file = self.debug_current_file();
         let source = self.debug_current_source();
         let source_start_line = self.debug_source_start_line();
+
+        // Dump bytecode line info for debugging
+        if let Some(frame) = self.frames.last() {
+            let lines: Vec<usize> = frame.function.code.lines.clone();
+            Self::debug_log(&format!("[Paused] fn={}, ip={}, bytecode_lines={:?}", function, frame.ip, lines));
+        }
+
         self.debug_send_event(DebugEvent::Paused { pid: self.pid.0, file: file.clone(), line, function: function.clone(), source, source_start_line });
 
         // Process commands until we get a continue/step command
@@ -682,6 +749,7 @@ impl AsyncProcess {
                         self.step_mode = StepMode::StepLine;
                     }
                     DebugCommand::StepOver => {
+                        Self::debug_log(&format!("[StepOver cmd] setting debug_last_line={}, step_depth={}", line, self.frames.len()));
                         self.debug_last_line = line;
                         self.debug_step_frame_depth = self.frames.len();
                         self.step_mode = StepMode::StepOver;
@@ -752,6 +820,21 @@ impl AsyncProcess {
                                     })
                                 })
                                 .collect();
+
+                            // If at a Return instruction, show the return value
+                            if frame_index == 0 {
+                                if let Some(instr) = frame.function.code.code.get(frame.ip) {
+                                    if let crate::value::Instruction::Return(src) = instr {
+                                        if let Some(val) = frame.registers.get(*src as usize) {
+                                            variables.push((
+                                                "(return value)".to_string(),
+                                                format!("{:?}", val),
+                                                "return".to_string()
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
 
                             // Also include module-level mvars (only for frame 0 to avoid clutter)
                             if frame_index == 0 {

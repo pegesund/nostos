@@ -3025,6 +3025,7 @@ impl Compiler {
                 }
 
                 // All patterns matched and guard passed - compile body
+                let body_line = self.span_line(clause.body.span());
                 let result_reg = match self.compile_expr_tail(&clause.body, true) {
                     Ok(reg) => reg,
                     Err(CompileError::UnresolvedTraitMethod { .. }) => {
@@ -3047,7 +3048,7 @@ impl Compiler {
                 for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
                     self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
                 }
-                self.chunk.emit(Instruction::Return(result_reg), 0);
+                self.chunk.emit(Instruction::Return(result_reg), body_line);
 
                 // Record where we need to patch for "matched" jumps
                 if clause_idx < def.clauses.len() - 1 {
@@ -3097,6 +3098,7 @@ impl Compiler {
             }
 
             // Compile function body (in tail position)
+            let body_line = self.span_line(clause.body.span());
             let result_reg = match self.compile_expr_tail(&clause.body, true) {
                 Ok(reg) => reg,
                 Err(CompileError::UnresolvedTraitMethod { .. }) => {
@@ -3120,7 +3122,7 @@ impl Compiler {
             for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
                 self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
             }
-            self.chunk.emit(Instruction::Return(result_reg), 0);
+            self.chunk.emit(Instruction::Return(result_reg), body_line);
         }
 
         self.chunk.register_count = self.next_reg as usize;
@@ -3338,8 +3340,15 @@ impl Compiler {
             // Variables
             Expr::Var(ident) => {
                 let name = &ident.node;
-                if let Some(info) = self.locals.get(name) {
-                    Ok(info.reg)
+                if let Some(info) = self.locals.get(name).copied() {
+                    // If in tail position, emit a Move to preserve line info for debugger
+                    if is_tail {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::Move(dst, info.reg), line);
+                        Ok(dst)
+                    } else {
+                        Ok(info.reg)
+                    }
                 } else if let Some(&capture_idx) = self.capture_indices.get(name) {
                     // It's a captured variable - load from closure environment
                     let dst = self.alloc_reg();
@@ -7897,7 +7906,7 @@ impl Compiler {
                 } else {
                     // Both are immutable: treat as pattern match (assert equality)
                     // Emit AssertEq to check that the new value matches the existing one
-                    self.chunk.emit(Instruction::AssertEq(existing_info.reg, value_reg), binding.span.start);
+                    self.chunk.emit(Instruction::AssertEq(existing_info.reg, value_reg), self.span_line(binding.span));
                 }
             } else {
                 // Check if this is an mvar (module-level mutable variable) assignment
@@ -8427,8 +8436,9 @@ impl Compiler {
         }
 
         // Compile body (in tail position)
+        let body_line = self.span_line(body.span());
         let result_reg = self.compile_expr_tail(body, true)?;
-        self.chunk.emit(Instruction::Return(result_reg), 0);
+        self.chunk.emit(Instruction::Return(result_reg), body_line);
 
         self.chunk.register_count = self.next_reg as usize;
 
