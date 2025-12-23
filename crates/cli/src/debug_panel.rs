@@ -8,17 +8,17 @@ use cursive::{Printer, Vec2};
 use nostos_vm::shared_types::StackFrame;
 use std::collections::{HashMap, HashSet};
 
-/// Debug logging - enable for troubleshooting
+/// Debug logging disabled. Uncomment to enable.
 #[allow(unused)]
-fn debug_log(msg: &str) {
-    use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/nostos_debug_panel.log")
-    {
-        let _ = writeln!(f, "{}", msg);
-    }
+fn debug_log(_msg: &str) {
+    // use std::io::Write;
+    // if let Ok(mut f) = std::fs::OpenOptions::new()
+    //     .create(true)
+    //     .append(true)
+    //     .open("/tmp/nostos_debug_panel.log")
+    // {
+    //     let _ = writeln!(f, "{}", _msg);
+    // }
 }
 
 /// Commands from debug panel to TUI (set via user_data)
