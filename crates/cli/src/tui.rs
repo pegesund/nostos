@@ -728,6 +728,8 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         poll_repl_evals(s);
         poll_debug_events(s);
         poll_debug_panel_commands(s);
+        // Poll for println output and show in REPL panels during debugging
+        poll_debug_output(s);
     });
 
     siv.run();
@@ -741,10 +743,54 @@ fn log_to_repl(s: &mut Cursive, text: &str) {
 }
 
 /// Poll for output (println) from any VM process and log to console.
+#[allow(dead_code)]
 fn poll_output(s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>) {
     let output = engine.borrow().drain_output();
     for line in output {
         log_to_repl(s, &line);
+    }
+}
+
+/// Poll for println output during debugging and show in REPL panel.
+/// Only drains output if there's an active debug session to avoid stealing
+/// output from regular evals that will drain it in finish_eval_with_result.
+fn poll_debug_output(s: &mut Cursive) {
+    // Only drain output during debugging - regular evals drain in finish_eval_with_result
+    let debug_panel_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().debug_panel_open
+    }).unwrap_or(false);
+
+    if !debug_panel_open {
+        return;
+    }
+
+    // Get engine to drain output
+    let engine = match s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().engine.clone()
+    }) {
+        Some(e) => e,
+        None => return,
+    };
+
+    let output = engine.borrow().drain_output();
+    if output.is_empty() {
+        return;
+    }
+
+    debug_log(&format!("poll_debug_output: got {} lines", output.len()));
+
+    // Send to all open REPLs (same pattern as poll_repl_evals which works)
+    let repl_ids: Vec<usize> = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().open_repls.clone()
+    }).unwrap_or_default();
+
+    for repl_id in repl_ids {
+        let panel_id = format!("repl_panel_{}", repl_id);
+        let output_clone = output.clone();
+        s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
+            debug_log(&format!("poll_debug_output: appending to repl {}", repl_id));
+            panel.append_debug_output(&output_clone);
+        });
     }
 }
 
@@ -792,6 +838,7 @@ fn poll_debug_panel_commands(s: &mut Cursive) {
     }).flatten();
 
     if let Some(cmd) = cmd {
+        debug_log(&format!("poll_debug_panel_commands: got command {:?}", cmd));
         let debug_cmd = match cmd {
             DebugPanelCommand::Continue => nostos_vm::shared_types::DebugCommand::Continue,
             DebugPanelCommand::StepOver => nostos_vm::shared_types::DebugCommand::StepOver,
@@ -808,6 +855,7 @@ fn poll_debug_panel_commands(s: &mut Cursive) {
 
 /// Send a debug command to the active debug session (if any).
 fn send_debug_command(s: &mut Cursive, command: nostos_vm::shared_types::DebugCommand) {
+    debug_log(&format!("send_debug_command: {:?}", command));
     let repl_ids: Vec<usize> = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         state.borrow().open_repls.clone()
     }).unwrap_or_default();
@@ -817,12 +865,14 @@ fn send_debug_command(s: &mut Cursive, command: nostos_vm::shared_types::DebugCo
         let panel_id = format!("repl_panel_{}", repl_id);
         let sent = s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
             if let Some(session) = panel.get_debug_session() {
+                debug_log(&format!("send_debug_command: found session, sending {:?}", command));
                 let _ = session.send(command.clone());
                 // Also request stack and locals after the command
                 let _ = session.send(nostos_vm::shared_types::DebugCommand::PrintStack);
                 let _ = session.send(nostos_vm::shared_types::DebugCommand::PrintLocals);
                 true
             } else {
+                debug_log(&format!("send_debug_command: no session for repl {}", repl_id));
                 false
             }
         }).unwrap_or(false);
@@ -831,6 +881,7 @@ fn send_debug_command(s: &mut Cursive, command: nostos_vm::shared_types::DebugCo
             return;
         }
     }
+    debug_log("send_debug_command: no active debug session found");
 }
 
 /// Poll for debug events from REPL panels and update the debug panel.
@@ -873,22 +924,30 @@ fn poll_debug_events(s: &mut Cursive) {
     }
 
     // NOW update debug panel with events (panel exists now)
+    for event in &events {
+        debug_log(&format!("poll_debug_events: processing {:?}", event));
+    }
     for event in events {
         s.call_on_name("debug_panel", |panel: &mut DebugPanel| {
             match event {
                 DebugEvent::Paused { function, file, line, .. } => {
+                    debug_log(&format!("poll_debug_events: Paused in {} at line {}", function, line));
                     panel.on_paused(function, file, line);
                 }
                 DebugEvent::BreakpointHit { function, file, line, .. } => {
+                    debug_log(&format!("poll_debug_events: BreakpointHit in {} at line {}", function, line));
                     panel.on_paused(function, file, line);
                 }
                 DebugEvent::Exited { value, .. } => {
+                    debug_log(&format!("poll_debug_events: Exited with {:?}", value));
                     panel.on_finished(value);
                 }
                 DebugEvent::Stack { frames } => {
+                    debug_log(&format!("poll_debug_events: Stack with {} frames", frames.len()));
                     panel.set_stack(frames);
                 }
                 DebugEvent::Locals { variables } => {
+                    debug_log(&format!("poll_debug_events: Locals with {} variables", variables.len()));
                     panel.set_locals(variables);
                 }
                 _ => {}
@@ -933,6 +992,16 @@ fn rebuild_workspace(s: &mut Cursive) {
             }
         }
     }
+
+    // Preserve debug panel state before clearing
+    let debug_panel_state: Option<(crate::debug_panel::DebugState, Vec<nostos_vm::shared_types::StackFrame>, Vec<(String, String, String)>)> =
+        if debug_panel_open {
+            s.call_on_name("debug_panel", |panel: &mut DebugPanel| {
+                panel.take_state()
+            })
+        } else {
+            None
+        };
 
     // Remove old layer and create fresh one
     s.pop_layer();
@@ -981,6 +1050,10 @@ fn rebuild_workspace(s: &mut Cursive) {
         let debug_view = create_debug_view(&engine);
         windows.push(Box::new(debug_view));
     }
+
+    // Restore debug panel state after window is added but before layout is finalized
+    // (We need to do this after adding to windows because call_on_name requires the view to be in the tree)
+    let saved_debug_state = debug_panel_state;
 
     for name in &editor_names {
         let read_only = engine.borrow().is_eval_function(name);
@@ -1054,6 +1127,13 @@ fn rebuild_workspace(s: &mut Cursive) {
     }
 
     s.add_fullscreen_layer(layout);
+
+    // Restore debug panel state after layer is added
+    if let Some((state, stack, locals)) = saved_debug_state {
+        s.call_on_name("debug_panel", |panel: &mut DebugPanel| {
+            panel.restore_state(state, stack, locals);
+        });
+    }
 }
 
 /// Create a REPL panel view
