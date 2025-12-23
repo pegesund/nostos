@@ -491,6 +491,13 @@ impl AsyncProcess {
             .map(|s| s.to_string())
     }
 
+    /// Get the starting line number of the current function (first non-zero line in the function).
+    fn debug_source_start_line(&self) -> usize {
+        self.frames.last()
+            .and_then(|f| f.function.code.lines.iter().find(|&&line| line > 0).copied())
+            .unwrap_or(1)
+    }
+
     #[allow(unused)]
     fn debug_log(_msg: &str) {
         // Debug logging disabled. Uncomment to enable file logging:
@@ -655,7 +662,8 @@ impl AsyncProcess {
         let function = self.debug_current_function();
         let file = self.debug_current_file();
         let source = self.debug_current_source();
-        self.debug_send_event(DebugEvent::Paused { pid: self.pid.0, file: file.clone(), line, function: function.clone(), source });
+        let source_start_line = self.debug_source_start_line();
+        self.debug_send_event(DebugEvent::Paused { pid: self.pid.0, file: file.clone(), line, function: function.clone(), source, source_start_line });
 
         // Process commands until we get a continue/step command
         while self.step_mode == StepMode::Paused {

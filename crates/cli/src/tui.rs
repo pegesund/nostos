@@ -22,20 +22,20 @@ use crate::inspector_panel::InspectorPanel;
 use crate::nostos_panel::NostosPanel;
 use crate::debug_panel::{DebugPanel, DebugPanelCommand};
 
-/// Debug logging disabled. Uncomment to enable file logging.
+/// Debug logging - enable for troubleshooting
 #[allow(unused)]
-fn debug_log(_msg: &str) {
-    // if let Ok(mut f) = std::fs::OpenOptions::new()
-    //     .create(true)
-    //     .append(true)
-    //     .open("/tmp/nostos_tui_debug.log")
-    // {
-    //     let timestamp = std::time::SystemTime::now()
-    //         .duration_since(std::time::UNIX_EPOCH)
-    //         .map(|d| d.as_secs())
-    //         .unwrap_or(0);
-    //     let _ = writeln!(f, "[{}] {}", timestamp, _msg);
-    // }
+fn debug_log(msg: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/nostos_tui_debug.log")
+    {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(f, "[{}] {}", timestamp, msg);
+    }
 }
 
 /// Apply syntax highlighting to source code, returning a StyledString
@@ -964,14 +964,14 @@ fn poll_debug_events(s: &mut Cursive) {
     for event in events {
         s.call_on_name("debug_panel", |panel: &mut DebugPanel| {
             match event {
-                DebugEvent::Paused { function, file, line, source, .. } => {
-                    debug_log(&format!("poll_debug_events: Paused in {} at line {}, source={:?}", function, line, source));
-                    panel.on_paused(function, file, line, source);
+                DebugEvent::Paused { function, file, line, source, source_start_line, .. } => {
+                    debug_log(&format!("poll_debug_events: Paused in {} at line {}, source={:?}, source_start_line={}", function, line, source, source_start_line));
+                    panel.on_paused(function, file, line, source, source_start_line);
                 }
                 DebugEvent::BreakpointHit { function, file, line, .. } => {
                     debug_log(&format!("poll_debug_events: BreakpointHit in {} at line {}", function, line));
-                    // BreakpointHit doesn't have source, pass None
-                    panel.on_paused(function, file, line, None);
+                    // BreakpointHit doesn't have source, pass None and default start line
+                    panel.on_paused(function, file, line, None, 1);
                 }
                 DebugEvent::Exited { value, .. } => {
                     debug_log(&format!("poll_debug_events: Exited with {:?}", value));

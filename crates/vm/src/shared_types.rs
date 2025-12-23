@@ -150,6 +150,8 @@ pub enum DebugEvent {
         function: String,
         /// Source code of the current function (if available)
         source: Option<String>,
+        /// Starting line number of the function in the file (for arrow positioning)
+        source_start_line: usize,
     },
     /// Process exited
     Exited {

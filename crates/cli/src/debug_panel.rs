@@ -8,17 +8,17 @@ use cursive::{Printer, Vec2};
 use nostos_vm::shared_types::StackFrame;
 use std::collections::{HashMap, HashSet};
 
-/// Debug logging disabled. Uncomment to enable file logging.
+/// Debug logging - enable for troubleshooting
 #[allow(unused)]
-fn debug_log(_msg: &str) {
-    // use std::io::Write;
-    // if let Ok(mut f) = std::fs::OpenOptions::new()
-    //     .create(true)
-    //     .append(true)
-    //     .open("/tmp/nostos_debug_panel.log")
-    // {
-    //     let _ = writeln!(f, "{}", _msg);
-    // }
+fn debug_log(msg: &str) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/nostos_debug_panel.log")
+    {
+        let _ = writeln!(f, "{}", msg);
+    }
 }
 
 /// Commands from debug panel to TUI (set via user_data)
@@ -72,6 +72,8 @@ pub struct DebugPanel {
     pending_locals_request: Option<usize>,
     /// Source code of the current function
     source_code: Option<String>,
+    /// Starting line number of the source in the file
+    source_start_line: usize,
     /// Scroll offset for source view
     source_scroll: usize,
 }
@@ -89,6 +91,7 @@ impl DebugPanel {
             pending_command: None,
             pending_locals_request: None,
             source_code: None,
+            source_start_line: 1,
             source_scroll: 0,
         }
     }
@@ -117,14 +120,16 @@ impl DebugPanel {
         self.locals_scroll = 0;
         self.pending_locals_request = None;
         self.source_code = None;
+        self.source_start_line = 1;
         self.source_scroll = 0;
     }
 
     /// Update state when paused
-    pub fn on_paused(&mut self, function: String, file: Option<String>, line: usize, source: Option<String>) {
-        debug_log(&format!("on_paused: function={}, file={:?}, line={}, source={:?}", function, file, line, source));
+    pub fn on_paused(&mut self, function: String, file: Option<String>, line: usize, source: Option<String>, source_start_line: usize) {
+        debug_log(&format!("on_paused: function={}, file={:?}, line={}, source={:?}, source_start_line={}", function, file, line, source, source_start_line));
         self.state = DebugState::Paused { function, file, line };
         self.source_code = source;
+        self.source_start_line = source_start_line;
         self.source_scroll = 0;
         // Clear cached locals (values may have changed after stepping)
         self.frame_locals.clear();
@@ -337,6 +342,7 @@ impl View for DebugPanel {
         };
 
         // Source code section (takes priority, shown at top)
+        debug_log(&format!("draw: source_code={:?}, current_line={}", self.source_code.as_ref().map(|s| s.len()), current_line));
         if let Some(ref source) = self.source_code {
             let source_lines: Vec<&str> = source.lines().collect();
             let source_height = 8.min(source_lines.len()); // Show up to 8 lines
@@ -346,9 +352,12 @@ impl View for DebugPanel {
             });
             y += 1;
 
-            // Calculate scroll to keep current line visible
-            let scroll = if current_line > 4 {
-                (current_line - 4).min(source_lines.len().saturating_sub(source_height))
+            // Convert current_line (file line) to relative line within source
+            let relative_line = current_line.saturating_sub(self.source_start_line);
+
+            // Calculate scroll to keep current line visible (using relative line)
+            let scroll = if relative_line > 4 {
+                (relative_line - 4).min(source_lines.len().saturating_sub(source_height))
             } else {
                 0
             };
@@ -358,7 +367,8 @@ impl View for DebugPanel {
             let color_current_line = ColorStyle::new(Color::Rgb(255, 255, 200), Color::TerminalDefault);
 
             for (i, line_content) in source_lines.iter().skip(scroll).take(source_height).enumerate() {
-                let line_num = scroll + i + 1; // 1-based line numbers
+                // Line number in the file = source_start_line + offset within source
+                let line_num = self.source_start_line + scroll + i;
                 let is_current = line_num == current_line;
 
                 // Arrow for current line
