@@ -1,0 +1,8 @@
+# Test: Map over list
+myMap(_, []) = []
+myMap(f, [x | xs]) = f(x) :: myMap(f, xs)
+
+sum([]) = 0
+sum([x | xs]) = x + sum(xs)
+
+main() = sum(myMap(x => x * 2, [1, 2, 3, 4]))

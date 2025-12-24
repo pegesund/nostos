@@ -1,0 +1,11 @@
+# Test: Sum of matrix elements (transpose alternative)
+sumRow([]) = 0
+sumRow([x | xs]) = x + sumRow(xs)
+
+sumMatrix([]) = 0
+sumMatrix([row | rows]) = sumRow(row) + sumMatrix(rows)
+
+main() = {
+    matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+    sumMatrix(matrix)
+}

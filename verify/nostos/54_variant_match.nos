@@ -1,0 +1,13 @@
+# Test: Variant with match expression
+type Result = Ok(Int) | Err(String)
+
+processResult(r) = match r
+    Ok(n) -> n * 2
+    Err(_) -> -1
+end
+
+main() = {
+    a = processResult(Ok(21))
+    b = processResult(Err("failed"))
+    a + b
+}

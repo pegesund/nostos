@@ -1,0 +1,10 @@
+# Test: Fixed point iteration
+iterateUntil(f, p, x) =
+    if p(x) then x
+    else iterateUntil(f, p, f(x))
+
+main() = {
+    # Find fixed point of x/2 starting from 100, stopping when x < 5
+    result = iterateUntil(x => x / 2, x => x < 5, 100)
+    result
+}

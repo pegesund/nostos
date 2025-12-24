@@ -1,0 +1,10 @@
+# Test: Nested iteration (via recursion)
+innerSum(_, []) = 0
+innerSum(i, [j | js]) = i * j + innerSum(i, js)
+
+outerSum([], _) = 0
+outerSum([i | is], js) = innerSum(i, js) + outerSum(is, js)
+
+main() = {
+    outerSum([1, 2, 3], [10, 20, 30])
+}

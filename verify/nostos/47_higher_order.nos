@@ -1,0 +1,12 @@
+# Test: Higher order functions (pipe/compose)
+pipe(x, f) = f(x)
+applyTwice(f, x) = f(f(x))
+applyN(0, _, x) = x
+applyN(n, f, x) = applyN(n - 1, f, f(x))
+
+main() = {
+    a = pipe(5, x => x * 2)
+    b = applyTwice(x => x + 3, 10)
+    c = applyN(4, x => x * 2, 1)
+    a + b * 10 + c * 100
+}

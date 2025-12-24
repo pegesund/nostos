@@ -1,0 +1,5 @@
+# Test: Count permutations (factorial)
+permCount(0) = 1
+permCount(n) = n * permCount(n - 1)
+
+main() = permCount(5) + permCount(3) * 1000

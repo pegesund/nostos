@@ -1,0 +1,7 @@
+# Test: Nested tuples
+getDeep(((a, _), _)) = a
+
+main() = {
+    nested = ((5, 10), (15, 20))
+    getDeep(nested)
+}

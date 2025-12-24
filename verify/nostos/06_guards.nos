@@ -1,0 +1,7 @@
+# Test: Guards in function clauses
+classify(n) when n > 100 = 3
+classify(n) when n > 10 = 2
+classify(n) when n > 0 = 1
+classify(_) = 0
+
+main() = classify(150) + classify(50) + classify(5) + classify(-1)

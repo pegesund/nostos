@@ -1,0 +1,7 @@
+# Test: Tribonacci sequence
+trib(0) = 0
+trib(1) = 0
+trib(2) = 1
+trib(n) = trib(n - 1) + trib(n - 2) + trib(n - 3)
+
+main() = trib(10) + trib(8) * 10

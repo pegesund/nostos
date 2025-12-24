@@ -1,0 +1,10 @@
+# Test: Check if number is palindrome
+reverseNum(n, acc) = if n == 0 then acc else reverseNum(n / 10, acc * 10 + n % 10)
+
+isPalindrome(n) = n == reverseNum(n, 0)
+
+b2i(b) = if b then 1 else 0
+
+main() = {
+    b2i(isPalindrome(12321)) + b2i(!isPalindrome(12345)) * 10 + b2i(isPalindrome(1001)) * 100
+}

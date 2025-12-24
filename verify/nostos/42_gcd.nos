@@ -1,0 +1,7 @@
+# Test: Greatest common divisor (Euclidean algorithm)
+gcd(a, 0) = a
+gcd(a, b) = gcd(b, a % b)
+
+main() = {
+    gcd(48, 18) + gcd(100, 35) * 100
+}

@@ -1,0 +1,12 @@
+# Test: Generate range using recursive list building
+makeRange(start, stop) =
+    if start > stop then []
+    else {
+        rest = makeRange(start + 1, stop)
+        [start] ++ rest
+    }
+
+sumList([]) = 0
+sumList([x | xs]) = x + sumList(xs)
+
+main() = sumList(makeRange(1, 10))

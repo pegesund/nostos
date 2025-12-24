@@ -1,0 +1,13 @@
+# Test: Mutual recursion (even/odd check)
+isEven(0) = true
+isEven(n) = isOdd(n - 1)
+
+isOdd(0) = false
+isOdd(n) = isEven(n - 1)
+
+main() = {
+    a = if isEven(10) then 1 else 0
+    b = if isOdd(7) then 10 else 0
+    c = if isEven(5) then 100 else 0
+    a + b + c
+}

@@ -1,0 +1,5 @@
+# Test: Recursive list length
+len([]) = 0
+len([_ | xs]) = 1 + len(xs)
+
+main() = len([10, 20, 30, 40])

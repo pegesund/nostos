@@ -1,0 +1,15 @@
+# Test: Rotate list left
+rotateLeft(0, xs) = xs
+rotateLeft(_, []) = []
+rotateLeft(n, [x | xs]) = rotateLeft(n - 1, xs ++ [x])
+
+sumList([]) = 0
+sumList([x | xs]) = x + sumList(xs)
+
+first([x | _]) = x
+
+main() = {
+    lst = [1, 2, 3, 4, 5]
+    rotated = rotateLeft(2, lst)
+    first(rotated) * 10 + sumList(rotated)
+}

@@ -1,0 +1,9 @@
+# Test: Boolean operations
+main() = {
+    a = true
+    b = false
+    c = a && b
+    d = a || b
+    e = !b
+    if c then 1 else if d && e then 2 else 3
+}

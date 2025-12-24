@@ -1,0 +1,17 @@
+# Test: State threading (monad-like pattern)
+# Returns (result, newState)
+runState(computation, initialState) = computation(initialState)
+
+getState(s) = (s, s)
+putState(newS) = _ => ((), newS)
+modifyState(f) = s => ((), f(s))
+
+# Increment counter and return old value
+tick(s) = (s, s + 1)
+
+main() = {
+    (v1, s1) = tick(0)
+    (v2, s2) = tick(s1)
+    (v3, s3) = tick(s2)
+    v1 + v2 * 10 + v3 * 100 + s3 * 1000
+}

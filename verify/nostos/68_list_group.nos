@@ -1,0 +1,18 @@
+# Test: Group consecutive equal elements
+group([]) = []
+group([x]) = [[x]]
+group([x, y | rest]) =
+    if x == y then {
+        [[g | gs] | rest2] = group([y] ++ rest)
+        [[x, g] ++ gs] ++ rest2
+    } else {
+        [[x]] ++ group([y] ++ rest)
+    }
+
+listLen([]) = 0
+listLen([_ | xs]) = 1 + listLen(xs)
+
+main() = {
+    groups = group([1, 1, 2, 2, 2, 3, 1, 1])
+    listLen(groups)
+}

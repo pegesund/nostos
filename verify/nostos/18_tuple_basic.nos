@@ -1,0 +1,10 @@
+# Test: Tuple creation and destructuring
+swap((a, b)) = (b, a)
+first((a, _)) = a
+second((_, b)) = b
+
+main() = {
+    t = (10, 20)
+    swapped = swap(t)
+    first(swapped) + second(swapped)
+}

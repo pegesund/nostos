@@ -1,0 +1,7 @@
+# Test: String concatenation
+main() = {
+    a = "hello"
+    b = " "
+    c = "world"
+    a ++ b ++ c
+}

@@ -1,0 +1,15 @@
+# Test: Binary tree depth
+type Tree = Leaf(Int) | Node(Tree, Tree)
+
+maxVal(a, b) = if a > b then a else b
+
+treeDepth(Leaf(_)) = 1
+treeDepth(Node(left, right)) = 1 + maxVal(treeDepth(left), treeDepth(right))
+
+main() = {
+    tree = Node(
+        Leaf(1),
+        Node(Leaf(2), Node(Leaf(3), Leaf(4)))
+    )
+    treeDepth(tree)
+}

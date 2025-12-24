@@ -1,0 +1,12 @@
+# Test: Zipping two lists
+zip([], _) = []
+zip(_, []) = []
+zip([a | as], [b | bs]) = [(a, b)] ++ zip(as, bs)
+
+sumPairs([]) = 0
+sumPairs([(a, b) | rest]) = a + b + sumPairs(rest)
+
+main() = {
+    pairs = zip([1, 2, 3], [10, 20, 30])
+    sumPairs(pairs)
+}

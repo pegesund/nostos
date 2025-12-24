@@ -1,0 +1,9 @@
+# Test: Basic lambda expressions
+apply(f, x) = f(x)
+twice(f, x) = f(f(x))
+
+main() = {
+    a = apply(x => x * 3, 5)
+    b = twice(x => x + 1, 10)
+    a + b
+}

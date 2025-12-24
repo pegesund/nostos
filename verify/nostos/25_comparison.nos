@@ -1,0 +1,12 @@
+# Test: Comparison operators
+checkBool(b) = if b then 1 else 0
+
+main() = {
+    a = 5 > 3
+    b = 5 < 3
+    c = 5 == 5
+    d = 5 != 3
+    e = 5 >= 5
+    f = 3 <= 5
+    checkBool(a) + checkBool(!b) + checkBool(c) + checkBool(d) + checkBool(e) + checkBool(f)
+}

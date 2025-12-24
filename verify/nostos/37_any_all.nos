@@ -1,0 +1,18 @@
+# Test: Any and all predicates
+anyMatch(_, []) = false
+anyMatch(p, [x | xs]) = if p(x) then true else anyMatch(p, xs)
+
+allMatch(_, []) = true
+allMatch(p, [x | xs]) = if p(x) then allMatch(p, xs) else false
+
+b2i(b) = if b then 1 else 0
+
+main() = {
+    nums = [2, 4, 6, 8, 10]
+    hasOdd = anyMatch(x => x % 2 != 0, nums)
+    allEven = allMatch(x => x % 2 == 0, nums)
+    hasNeg = anyMatch(x => x < 0, nums)
+    allPos = allMatch(x => x > 0, nums)
+
+    b2i(!hasOdd) + b2i(allEven) * 10 + b2i(!hasNeg) * 100 + b2i(allPos) * 1000
+}

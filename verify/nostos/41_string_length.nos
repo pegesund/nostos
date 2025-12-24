@@ -1,0 +1,6 @@
+# Test: String operations
+main() = {
+    s = "hello world"
+    len = String.length(s)
+    len
+}

@@ -1,0 +1,5 @@
+# Test: If-else expressions
+max(a, b) = if a > b then a else b
+min(a, b) = if a < b then a else b
+
+main() = max(10, 20) + min(10, 20)

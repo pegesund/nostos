@@ -1,0 +1,9 @@
+# Test: Catalan numbers
+catalan(0) = 1
+catalan(n) = catalanHelper(n, 0)
+
+catalanHelper(n, i) =
+    if i >= n then 0
+    else catalan(i) * catalan(n - 1 - i) + catalanHelper(n, i + 1)
+
+main() = catalan(5) + catalan(4) * 100

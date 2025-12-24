@@ -1,0 +1,12 @@
+# Test: Flatmap (bind/concatMap)
+flatMap(_, []) = []
+flatMap(f, [x | xs]) = f(x) ++ flatMap(f, xs)
+
+sumList([]) = 0
+sumList([x | xs]) = x + sumList(xs)
+
+main() = {
+    lst = [1, 2, 3]
+    expanded = flatMap(x => [x, x * 10], lst)
+    sumList(expanded)
+}

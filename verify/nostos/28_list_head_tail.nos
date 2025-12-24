@@ -1,0 +1,8 @@
+# Test: List head and tail pattern matching
+sumFirstTwo([a, b | _]) = a + b
+sumFirstTwo([a]) = a
+sumFirstTwo([]) = 0
+
+main() = {
+    sumFirstTwo([10, 20, 30, 40]) + sumFirstTwo([5]) + sumFirstTwo([])
+}

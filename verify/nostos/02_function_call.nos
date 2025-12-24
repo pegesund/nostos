@@ -1,0 +1,5 @@
+# Test: Simple function definition and call
+double(x) = x * 2
+triple(x) = x * 3
+
+main() = double(5) + triple(3)

@@ -1,0 +1,7 @@
+# Test: Map insert and update
+main() = {
+    m = %{"x": 10}
+    m2 = Map.insert(m, "y", 20)
+    m3 = Map.insert(m2, "x", 15)
+    Map.get(m3, "x") + Map.get(m3, "y")
+}

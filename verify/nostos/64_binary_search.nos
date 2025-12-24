@@ -1,0 +1,24 @@
+# Test: Binary search (on list converted to indices)
+listGet([], _) = -1
+listGet([x | _], 0) = x
+listGet([_ | xs], n) = listGet(xs, n - 1)
+
+listLen([]) = 0
+listLen([_ | xs]) = 1 + listLen(xs)
+
+bsearch(lst, target, lo, hi) =
+    if lo > hi then -1
+    else {
+        mid = (lo + hi) / 2
+        val = listGet(lst, mid)
+        if val == target then mid
+        else if val < target then bsearch(lst, target, mid + 1, hi)
+        else bsearch(lst, target, lo, mid - 1)
+    }
+
+main() = {
+    lst = [1, 3, 5, 7, 9, 11, 13, 15]
+    len = listLen(lst)
+    found = bsearch(lst, 7, 0, len - 1)
+    found
+}

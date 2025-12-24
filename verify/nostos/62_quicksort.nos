@@ -1,0 +1,17 @@
+# Test: Quicksort algorithm
+qsort([]) = []
+qsort([pivot | rest]) = {
+    lesser = filter(x => x < pivot, rest)
+    greater = filter(x => x >= pivot, rest)
+    qsort(lesser) ++ [pivot] ++ qsort(greater)
+}
+
+filter(_, []) = []
+filter(p, [x | xs]) = if p(x) then [x] ++ filter(p, xs) else filter(p, xs)
+
+first([x | _]) = x
+
+main() = {
+    sorted = qsort([3, 1, 4, 1, 5, 9, 2, 6])
+    first(sorted)
+}

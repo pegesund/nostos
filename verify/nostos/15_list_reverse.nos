@@ -1,0 +1,10 @@
+# Test: Reverse list
+rev(lst) = revHelper(lst, [])
+revHelper([], acc) = acc
+revHelper([x | xs], acc) = revHelper(xs, x :: acc)
+
+sum([]) = 0
+sum([x | xs]) = x + sum(xs)
+
+# Sum of reversed should equal sum of original
+main() = sum(rev([1, 2, 3, 4, 5]))

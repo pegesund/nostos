@@ -1,0 +1,15 @@
+# Test: Partition list by predicate
+partition(_, []) = ([], [])
+partition(p, [x | xs]) = {
+    (yes, no) = partition(p, xs)
+    if p(x) then ([x] ++ yes, no) else (yes, [x] ++ no)
+}
+
+sumList([]) = 0
+sumList([x | xs]) = x + sumList(xs)
+
+main() = {
+    nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    (evens, odds) = partition(x => x % 2 == 0, nums)
+    sumList(evens) * 100 + sumList(odds)
+}

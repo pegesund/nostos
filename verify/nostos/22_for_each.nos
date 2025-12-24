@@ -1,0 +1,7 @@
+# Test: Iterating over list (recursive)
+iter([], acc) = acc
+iter([x | xs], acc) = iter(xs, acc + x)
+
+main() = {
+    iter([1, 2, 3, 4, 5], 0)
+}

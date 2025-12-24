@@ -1,0 +1,7 @@
+# Test: Power function with recursion
+myPow(_, 0) = 1
+myPow(base, exp) = base * myPow(base, exp - 1)
+
+main() = {
+    myPow(2, 10) + myPow(3, 4)
+}

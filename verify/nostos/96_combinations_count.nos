@@ -1,0 +1,7 @@
+# Test: Count combinations C(n,k)
+comb(_, 0) = 1
+comb(n, k) when k == n = 1
+comb(n, k) when k > n = 0
+comb(n, k) = comb(n - 1, k - 1) + comb(n - 1, k)
+
+main() = comb(10, 3) + comb(6, 2) * 1000

@@ -1,0 +1,11 @@
+# Test: Find first matching element
+find(_, []) = -1
+find(p, [x | xs]) = if p(x) then x else find(p, xs)
+
+main() = {
+    nums = [3, 7, 12, 15, 20, 25]
+    firstOver10 = find(x => x > 10, nums)
+    firstOver100 = find(x => x > 100, nums)
+    firstEven = find(x => x % 2 == 0, nums)
+    firstOver10 * 100 + firstEven * 10 + (if firstOver100 == -1 then 1 else 0)
+}

@@ -1,0 +1,10 @@
+# Test: Find index of element
+indexOf(_, [], _) = -1
+indexOf(x, [y | ys], idx) = if x == y then idx else indexOf(x, ys, idx + 1)
+
+findIndex(x, lst) = indexOf(x, lst, 0)
+
+main() = {
+    lst = [10, 20, 30, 40, 50]
+    findIndex(30, lst) + findIndex(99, lst) * 10 + findIndex(10, lst) * 100
+}

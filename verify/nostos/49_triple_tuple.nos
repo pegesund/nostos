@@ -1,0 +1,14 @@
+# Test: Triple tuples
+fst3((a, _, _)) = a
+snd3((_, b, _)) = b
+thd3((_, _, c)) = c
+
+rotateLeft((a, b, c)) = (b, c, a)
+rotateRight((a, b, c)) = (c, a, b)
+
+main() = {
+    t = (1, 2, 3)
+    left = rotateLeft(t)
+    right = rotateRight(t)
+    fst3(left) * 100 + snd3(right) * 10 + thd3(t)
+}

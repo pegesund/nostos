@@ -1,0 +1,5 @@
+# Test: Integer digit sum
+countDigits(0) = 0
+countDigits(n) = 1 + countDigits(n / 10)
+
+main() = countDigits(12345) + countDigits(100) * 10

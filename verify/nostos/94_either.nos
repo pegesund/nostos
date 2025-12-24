@@ -1,0 +1,16 @@
+# Test: Either type (Left/Right)
+type Either = Left(String) | Right(Int)
+
+mapRight(_, Left(s)) = Left(s)
+mapRight(f, Right(x)) = Right(f(x))
+
+getRight(Right(x)) = x
+getRight(Left(_)) = -1
+
+main() = {
+    a = Right(10)
+    b = Left("error")
+    r1 = mapRight(x => x * 2, a)
+    r2 = mapRight(x => x * 2, b)
+    getRight(r1) + getRight(r2) * 10
+}

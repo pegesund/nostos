@@ -1,0 +1,14 @@
+# Test: Remove consecutive duplicates
+unique([]) = []
+unique([x]) = [x]
+unique([x, y | rest]) =
+    if x == y then unique([y] ++ rest)
+    else [x] ++ unique([y] ++ rest)
+
+sumList([]) = 0
+sumList([x | xs]) = x + sumList(xs)
+
+main() = {
+    lst = unique([1, 1, 2, 2, 2, 3, 3, 4])
+    sumList(lst)
+}

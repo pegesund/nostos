@@ -1,0 +1,10 @@
+# Test: Find maximum in list
+maxList([x]) = x
+maxList([x | xs]) = {
+    restMax = maxList(xs)
+    if x > restMax then x else restMax
+}
+
+main() = {
+    maxList([3, 1, 4, 1, 5, 9, 2, 6, 5, 3])
+}

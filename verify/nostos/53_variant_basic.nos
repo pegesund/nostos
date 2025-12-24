@@ -1,0 +1,11 @@
+# Test: Basic variant type
+type Option = Some(Int) | None
+
+getOrDefault(Some(x), _) = x
+getOrDefault(None, d) = d
+
+main() = {
+    a = Some(42)
+    b = None
+    getOrDefault(a, 0) + getOrDefault(b, 10)
+}

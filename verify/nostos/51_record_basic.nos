@@ -1,0 +1,9 @@
+# Test: Basic record type
+type Point = { x: Int, y: Int }
+
+distance(p) = p.x * p.x + p.y * p.y
+
+main() = {
+    p = Point(3, 4)
+    distance(p)
+}

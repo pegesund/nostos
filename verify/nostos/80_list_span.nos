@@ -1,0 +1,12 @@
+# Test: Take while predicate holds
+takeWhile(_, []) = []
+takeWhile(p, [x | xs]) = if p(x) then [x] ++ takeWhile(p, xs) else []
+
+sumList([]) = 0
+sumList([x | xs]) = x + sumList(xs)
+
+main() = {
+    lst = [1, 2, 3, 7, 8, 2, 1]
+    before = takeWhile(x => x < 5, lst)
+    sumList(before)
+}

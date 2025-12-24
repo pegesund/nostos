@@ -1,0 +1,7 @@
+# Test: Block expressions with bindings
+main() = {
+    x = 10
+    y = x * 2
+    z = y + 5
+    z * 2
+}

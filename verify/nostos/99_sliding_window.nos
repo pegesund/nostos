@@ -1,0 +1,13 @@
+# Test: Sliding window of size 2
+windows([]) = []
+windows([_]) = []
+windows([a, b | rest]) = [(a, b)] ++ windows([b] ++ rest)
+
+sumPairs([]) = 0
+sumPairs([(a, b) | rest]) = a + b + sumPairs(rest)
+
+main() = {
+    lst = [1, 2, 3, 4, 5]
+    wins = windows(lst)
+    sumPairs(wins)
+}

@@ -1,0 +1,11 @@
+# Test: Modular exponentiation
+modPow(_, 0, _) = 1
+modPow(base, exp, m) =
+    if exp % 2 == 0 then {
+        half = modPow(base, exp / 2, m)
+        (half * half) % m
+    } else {
+        (base * modPow(base, exp - 1, m)) % m
+    }
+
+main() = modPow(3, 10, 1000)

@@ -1,0 +1,12 @@
+# Test: Intersperse element between list items
+intersperse(_, []) = []
+intersperse(_, [x]) = [x]
+intersperse(sep, [x | xs]) = [x, sep] ++ intersperse(sep, xs)
+
+sumList([]) = 0
+sumList([x | xs]) = x + sumList(xs)
+
+main() = {
+    lst = intersperse(0, [1, 2, 3, 4])
+    sumList(lst)
+}

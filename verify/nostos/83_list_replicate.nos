@@ -1,0 +1,11 @@
+# Test: Replicate element n times
+replicate(0, _) = []
+replicate(n, x) = [x] ++ replicate(n - 1, x)
+
+sumList([]) = 0
+sumList([x | xs]) = x + sumList(xs)
+
+main() = {
+    lst = replicate(5, 7)
+    sumList(lst)
+}

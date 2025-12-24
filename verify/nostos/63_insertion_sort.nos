@@ -1,0 +1,14 @@
+# Test: Insertion sort
+insert(x, []) = [x]
+insert(x, [y | ys]) = if x <= y then [x, y] ++ ys else [y] ++ insert(x, ys)
+
+isort([]) = []
+isort([x | xs]) = insert(x, isort(xs))
+
+sumList([]) = 0
+sumList([x | xs]) = x + sumList(xs)
+
+main() = {
+    sorted = isort([5, 2, 8, 1, 9])
+    sumList(sorted)
+}

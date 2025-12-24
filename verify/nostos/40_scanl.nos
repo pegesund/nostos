@@ -1,0 +1,12 @@
+# Test: Scanl (running accumulator)
+scanl(_, acc, []) = [acc]
+scanl(f, acc, [x | xs]) = [acc] ++ scanl(f, f(acc, x), xs)
+
+sumList([]) = 0
+sumList([x | xs]) = x + sumList(xs)
+
+main() = {
+    nums = [1, 2, 3, 4, 5]
+    running = scanl((a, b) => a + b, 0, nums)
+    sumList(running)
+}

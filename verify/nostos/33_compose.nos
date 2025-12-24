@@ -1,0 +1,13 @@
+# Test: Function composition
+compose(f, g) = x => f(g(x))
+
+double(x) = x * 2
+addOne(x) = x + 1
+square(x) = x * x
+
+main() = {
+    f = compose(double, addOne)
+    g = compose(addOne, double)
+    h = compose(square, addOne)
+    f(5) * 1000 + g(5) * 100 + h(5)
+}

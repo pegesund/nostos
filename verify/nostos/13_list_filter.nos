@@ -1,0 +1,8 @@
+# Test: Filter list
+myFilter(_, []) = []
+myFilter(p, [x | xs]) = if p(x) then x :: myFilter(p, xs) else myFilter(p, xs)
+
+sum([]) = 0
+sum([x | xs]) = x + sum(xs)
+
+main() = sum(myFilter(x => x > 2, [1, 2, 3, 4, 5]))

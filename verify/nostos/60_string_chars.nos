@@ -1,0 +1,9 @@
+# Test: String to chars
+listLen([]) = 0
+listLen([_ | xs]) = 1 + listLen(xs)
+
+main() = {
+    s = "abcdef"
+    chars = String.chars(s)
+    listLen(chars)
+}

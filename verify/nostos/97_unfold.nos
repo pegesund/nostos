@@ -1,0 +1,17 @@
+# Test: Unfold to generate list
+# unfold returns [] when predicate returns true (stop), otherwise generates element and continues
+unfold(stop, gen, seed) =
+    if stop(seed) then []
+    else {
+        (val, nextSeed) = gen(seed)
+        [val] ++ unfold(stop, gen, nextSeed)
+    }
+
+sumList([]) = 0
+sumList([x | xs]) = x + sumList(xs)
+
+main() = {
+    # Generate [1, 2, 3, 4, 5]
+    lst = unfold(s => s > 5, s => (s, s + 1), 1)
+    sumList(lst)
+}

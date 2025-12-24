@@ -1,0 +1,16 @@
+# Test: Nested if expressions
+classify(n) =
+    if n < 0 then "negative"
+    else if n == 0 then "zero"
+    else if n < 10 then "small"
+    else if n < 100 then "medium"
+    else "large"
+
+main() = {
+    a = classify(-5)
+    b = classify(0)
+    c = classify(5)
+    d = classify(50)
+    e = classify(500)
+    if a == "negative" && b == "zero" && c == "small" && d == "medium" && e == "large" then 1 else 0
+}

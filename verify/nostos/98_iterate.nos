@@ -1,0 +1,12 @@
+# Test: Iterate function n times and collect
+iterateN(0, _, _) = []
+iterateN(n, f, x) = [x] ++ iterateN(n - 1, f, f(x))
+
+sumList([]) = 0
+sumList([x | xs]) = x + sumList(xs)
+
+main() = {
+    # [1, 2, 4, 8, 16] - powers of 2
+    powers = iterateN(5, x => x * 2, 1)
+    sumList(powers)
+}

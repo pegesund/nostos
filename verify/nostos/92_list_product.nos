@@ -1,0 +1,16 @@
+# Test: Cartesian product of two lists
+product([], _) = []
+product([x | xs], ys) = pairWith(x, ys) ++ product(xs, ys)
+
+pairWith(_, []) = []
+pairWith(x, [y | ys]) = [(x, y)] ++ pairWith(x, ys)
+
+listLen([]) = 0
+listLen([_ | xs]) = 1 + listLen(xs)
+
+main() = {
+    a = [1, 2, 3]
+    b = [10, 20]
+    pairs = product(a, b)
+    listLen(pairs)
+}

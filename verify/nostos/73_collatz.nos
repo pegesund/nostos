@@ -1,0 +1,7 @@
+# Test: Collatz sequence length
+collatzLen(1) = 1
+collatzLen(n) =
+    if n % 2 == 0 then 1 + collatzLen(n / 2)
+    else 1 + collatzLen(3 * n + 1)
+
+main() = collatzLen(27)

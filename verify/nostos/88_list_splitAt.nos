@@ -1,0 +1,18 @@
+# Test: Split list at index using take/drop
+take(0, _) = []
+take(_, []) = []
+take(n, [x | xs]) = [x] ++ take(n - 1, xs)
+
+drop(0, xs) = xs
+drop(_, []) = []
+drop(n, [_ | xs]) = drop(n - 1, xs)
+
+sumList([]) = 0
+sumList([x | xs]) = x + sumList(xs)
+
+main() = {
+    lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    first = take(4, lst)
+    second = drop(4, lst)
+    sumList(first) * 100 + sumList(second)
+}

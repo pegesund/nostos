@@ -1,0 +1,6 @@
+# Test: String substring
+main() = {
+    s = "hello world"
+    sub = String.substring(s, 0, 5)
+    if sub == "hello" then 1 else 0
+}

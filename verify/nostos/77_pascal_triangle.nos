@@ -1,0 +1,6 @@
+# Test: Pascal's triangle value
+binomial(n, 0) = 1
+binomial(n, k) when k == n = 1
+binomial(n, k) = binomial(n - 1, k - 1) + binomial(n - 1, k)
+
+main() = binomial(5, 2) + binomial(10, 5) * 10

@@ -1,0 +1,13 @@
+# Test: Record field access and computation
+type Counter = { value: Int, step: Int }
+
+increment(c) = Counter(c.value + c.step, c.step)
+
+runN(0, c) = c
+runN(n, c) = runN(n - 1, increment(c))
+
+main() = {
+    c = Counter(0, 5)
+    result = runN(10, c)
+    result.value
+}

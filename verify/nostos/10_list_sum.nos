@@ -1,0 +1,5 @@
+# Test: Recursive list sum
+sum([]) = 0
+sum([x | xs]) = x + sum(xs)
+
+main() = sum([1, 2, 3, 4, 5])

@@ -1,0 +1,7 @@
+# Test: String upper/lower case
+main() = {
+    s = "hello"
+    upper = String.toUpper(s)
+    lower = String.toLower("WORLD")
+    if upper == "HELLO" && lower == "world" then 1 else 0
+}

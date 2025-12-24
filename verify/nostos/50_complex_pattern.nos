@@ -1,0 +1,31 @@
+# Test: Complex pattern matching with guards
+classify([]) = "empty"
+classify([_]) = "single"
+classify([a, b]) when a == b = "pair-same"
+classify([a, b]) when a < b = "pair-ascending"
+classify([a, b]) = "pair-descending"
+classify([a, b, c]) when a < b && b < c = "triple-ascending"
+classify([a, b, c]) when a > b && b > c = "triple-descending"
+classify(_) = "other"
+
+b2i(b) = if b then 1 else 0
+
+main() = {
+    t1 = classify([])
+    t2 = classify([5])
+    t3 = classify([3, 3])
+    t4 = classify([1, 2])
+    t5 = classify([5, 3])
+    t6 = classify([1, 2, 3])
+    t7 = classify([3, 2, 1])
+    t8 = classify([1, 2, 3, 4])
+
+    b2i(t1 == "empty") +
+    b2i(t2 == "single") * 10 +
+    b2i(t3 == "pair-same") * 100 +
+    b2i(t4 == "pair-ascending") * 1000 +
+    b2i(t5 == "pair-descending") * 10000 +
+    b2i(t6 == "triple-ascending") * 100000 +
+    b2i(t7 == "triple-descending") * 1000000 +
+    b2i(t8 == "other") * 10000000
+}

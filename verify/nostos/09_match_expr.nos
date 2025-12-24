@@ -1,0 +1,10 @@
+# Test: Match expression
+grade(score) = match score
+    100 -> 5
+    _ when score >= 80 -> 4
+    _ when score >= 60 -> 3
+    _ when score >= 40 -> 2
+    _ -> 1
+end
+
+main() = grade(100) + grade(85) + grade(65) + grade(45) + grade(20)

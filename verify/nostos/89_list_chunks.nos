@@ -1,0 +1,20 @@
+# Test: Split list into chunks
+take(0, _) = []
+take(_, []) = []
+take(n, [x | xs]) = [x] ++ take(n - 1, xs)
+
+drop(0, xs) = xs
+drop(_, []) = []
+drop(n, [_ | xs]) = drop(n - 1, xs)
+
+chunks(_, []) = []
+chunks(n, xs) = [take(n, xs)] ++ chunks(n, drop(n, xs))
+
+listLen([]) = 0
+listLen([_ | xs]) = 1 + listLen(xs)
+
+main() = {
+    lst = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    chunked = chunks(3, lst)
+    listLen(chunked)
+}

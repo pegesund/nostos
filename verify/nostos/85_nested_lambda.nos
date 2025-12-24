@@ -1,0 +1,6 @@
+# Test: Nested lambda expressions
+main() = {
+    f = x => y => z => x + y * z
+    g = f(1)(2)
+    g(3) + g(4)
+}

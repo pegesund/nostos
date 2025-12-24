@@ -1,0 +1,8 @@
+# Test: Closures capture variables
+makeAdder(n) = x => x + n
+
+main() = {
+    add5 = makeAdder(5)
+    add10 = makeAdder(10)
+    add5(3) + add10(7)
+}

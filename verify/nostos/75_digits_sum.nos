@@ -1,0 +1,5 @@
+# Test: Sum of digits
+digitsSum(0) = 0
+digitsSum(n) = n % 10 + digitsSum(n / 10)
+
+main() = digitsSum(12345) + digitsSum(9999)

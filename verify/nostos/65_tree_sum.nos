@@ -1,0 +1,13 @@
+# Test: Binary tree sum
+type Tree = Leaf(Int) | Node(Tree, Tree)
+
+treeSum(Leaf(n)) = n
+treeSum(Node(left, right)) = treeSum(left) + treeSum(right)
+
+main() = {
+    tree = Node(
+        Node(Leaf(1), Leaf(2)),
+        Node(Leaf(3), Node(Leaf(4), Leaf(5)))
+    )
+    treeSum(tree)
+}

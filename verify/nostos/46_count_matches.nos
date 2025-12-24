@@ -1,0 +1,10 @@
+# Test: Count elements matching predicate
+countIf(_, []) = 0
+countIf(p, [x | xs]) = (if p(x) then 1 else 0) + countIf(p, xs)
+
+main() = {
+    nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    evens = countIf(x => x % 2 == 0, nums)
+    greaterThan5 = countIf(x => x > 5, nums)
+    evens * 100 + greaterThan5
+}

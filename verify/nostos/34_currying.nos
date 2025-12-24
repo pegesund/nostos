@@ -1,0 +1,9 @@
+# Test: Currying
+add(a) = b => a + b
+mul(a) = b => a * b
+
+main() = {
+    add5 = add(5)
+    mul3 = mul(3)
+    add5(10) + mul3(7)
+}

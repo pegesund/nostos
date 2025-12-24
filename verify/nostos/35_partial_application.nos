@@ -1,0 +1,13 @@
+# Test: Partial application with map
+mapWith(f, []) = []
+mapWith(f, [x | xs]) = [f(x)] ++ mapWith(f, xs)
+
+sumList([]) = 0
+sumList([x | xs]) = x + sumList(xs)
+
+main() = {
+    numbers = [1, 2, 3, 4, 5]
+    multiplier = 10
+    scaled = mapWith(x => x * multiplier, numbers)
+    sumList(scaled)
+}

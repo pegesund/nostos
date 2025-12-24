@@ -1,0 +1,14 @@
+# Test: Nested records
+type Point = { x: Int, y: Int }
+type Rectangle = { topLeft: Point, bottomRight: Point }
+
+area(r) = {
+    width = r.bottomRight.x - r.topLeft.x
+    height = r.bottomRight.y - r.topLeft.y
+    width * height
+}
+
+main() = {
+    rect = Rectangle(Point(0, 0), Point(5, 4))
+    area(rect)
+}

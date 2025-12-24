@@ -1,0 +1,13 @@
+# Test: Check if prime
+isPrimeHelper(n, d) =
+    if d * d > n then true
+    else if n % d == 0 then false
+    else isPrimeHelper(n, d + 1)
+
+isPrime(n) = if n < 2 then false else isPrimeHelper(n, 2)
+
+b2i(b) = if b then 1 else 0
+
+main() = {
+    b2i(isPrime(2)) + b2i(isPrime(17)) * 10 + b2i(!isPrime(15)) * 100 + b2i(isPrime(97)) * 1000
+}

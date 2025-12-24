@@ -1,0 +1,2 @@
+# Test: Basic arithmetic with precedence
+main() = (2 + 3) * 4 - 10 / 2
