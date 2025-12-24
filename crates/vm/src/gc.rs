@@ -158,78 +158,102 @@ pub struct GcString {
 }
 
 /// A GC-managed list (immutable, persistent).
-/// Uses imbl::Vector (RRB tree) for O(log n) cons/head/tail operations.
-/// This is much faster than Arc<Vec> which required O(n) copies for cons.
-#[derive(Clone, Debug, PartialEq)]
+/// Uses imbl::Vector (RRB tree) for O(log n) cons operations.
+/// Tail operations use offset tracking for O(1) performance.
+#[derive(Clone, Debug)]
 pub struct GcList {
     pub data: ImblVector<GcValue>,
+    /// Offset into data - allows O(1) tail by just incrementing offset
+    pub offset: usize,
+}
+
+impl PartialEq for GcList {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare logical contents, accounting for offset
+        if self.len() != other.len() {
+            return false;
+        }
+        self.iter().zip(other.iter()).all(|(a, b)| a == b)
+    }
 }
 
 impl GcList {
     /// Create a new empty list
     #[inline]
     pub fn new() -> Self {
-        GcList { data: ImblVector::new() }
+        GcList { data: ImblVector::new(), offset: 0 }
     }
 
     /// Create from a Vec (consumes the Vec)
     #[inline]
     pub fn from_vec(v: Vec<GcValue>) -> Self {
-        GcList { data: v.into_iter().collect() }
+        GcList { data: v.into_iter().collect(), offset: 0 }
     }
 
     /// Get items as a Vec (for compatibility - allocates)
     #[inline]
     pub fn items(&self) -> Vec<GcValue> {
-        self.data.iter().cloned().collect()
+        self.data.iter().skip(self.offset).cloned().collect()
     }
 
     /// Iterate over items without allocating
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = &GcValue> {
-        self.data.iter()
+        self.data.iter().skip(self.offset)
     }
 
     /// Check if empty
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        self.offset >= self.data.len()
     }
 
     /// Get length
     #[inline]
     pub fn len(&self) -> usize {
-        self.data.len()
+        self.data.len().saturating_sub(self.offset)
     }
 
     /// Get head element (O(log n))
     #[inline]
     pub fn head(&self) -> Option<&GcValue> {
-        self.data.front()
+        self.data.get(self.offset)
     }
 
-    /// Create a tail view (O(log n) - structural sharing!)
+    /// Create a tail view - O(1)! Just increment offset.
     #[inline]
     pub fn tail(&self) -> GcList {
-        if self.data.is_empty() {
+        if self.is_empty() {
             GcList::new()
         } else {
-            GcList { data: self.data.clone().split_off(1) }
+            GcList { data: self.data.clone(), offset: self.offset + 1 }
         }
     }
 
     /// Cons: prepend an element (O(log n) - structural sharing!)
+    /// If offset > 0, we need to materialize the slice first.
     #[inline]
     pub fn cons(&self, head: GcValue) -> GcList {
-        let mut new_data = self.data.clone();
-        new_data.push_front(head);
-        GcList { data: new_data }
+        if self.offset == 0 {
+            // Fast path: no offset, can prepend directly
+            let mut new_data = self.data.clone();
+            new_data.push_front(head);
+            GcList { data: new_data, offset: 0 }
+        } else {
+            // Need to materialize the slice and prepend
+            let mut new_data: ImblVector<GcValue> = self.data.iter()
+                .skip(self.offset)
+                .cloned()
+                .collect();
+            new_data.push_front(head);
+            GcList { data: new_data, offset: 0 }
+        }
     }
 
     /// Get element at index (O(log n))
     #[inline]
     pub fn get(&self, index: usize) -> Option<&GcValue> {
-        self.data.get(index)
+        self.data.get(self.offset + index)
     }
 }
 

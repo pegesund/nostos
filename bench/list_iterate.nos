@@ -1,0 +1,57 @@
+# List iteration benchmark - focuses on [x|xs] pattern matching
+# Does NOT use native listSum/listMax - tests pure pattern matching performance
+
+# Count elements using pattern matching
+countList([]) = 0
+countList([_ | xs]) = 1 + countList(xs)
+
+# Sum using pattern matching (not tail recursive)
+sumRec([]) = 0
+sumRec([x | xs]) = x + sumRec(xs)
+
+# Sum using tail recursion with pattern matching
+sumTail([], acc) = acc
+sumTail([x | xs], acc) = sumTail(xs, acc + x)
+
+# Find max using pattern matching
+maxRec([x]) = x
+maxRec([x | xs]) = {
+    m = maxRec(xs)
+    if x > m then x else m
+}
+
+# Reverse using pattern matching (builds new list)
+reverseAcc([], acc) = acc
+reverseAcc([x | xs], acc) = reverseAcc(xs, [x | acc])
+
+# Build test list
+buildList(0) = []
+buildList(n) = [n | buildList(n - 1)]
+
+main() = {
+    n = 50000
+    
+    # Build list once
+    list = buildList(n)
+    
+    # Test 1: Count (pure iteration)
+    c1 = countList(list)
+    c2 = countList(list)
+    c3 = countList(list)
+    
+    # Test 2: Sum tail recursive (pure iteration)
+    s1 = sumTail(list, 0)
+    s2 = sumTail(list, 0)
+    s3 = sumTail(list, 0)
+    
+    # Test 3: Sum non-tail recursive
+    r1 = sumRec(list)
+    r2 = sumRec(list)
+    r3 = sumRec(list)
+    
+    println(c1)
+    println(s1)
+    println(r1)
+    
+    c1 + s1 + r1
+}
