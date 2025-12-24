@@ -744,6 +744,20 @@ pub enum Instruction {
     StringDecons(Reg, Reg, Reg),
     /// Test if string is empty: dst = str == ""
     TestEmptyString(Reg, Reg),
+
+    // === Specialized Int64List operations (avoid GcValue boxing) ===
+    /// Test if Int64List is empty: dst = list == []
+    TestNilInt64(Reg, Reg),
+    /// Deconstruct Int64List: head_i64, tail_list = list
+    DeconsInt64(Reg, Reg, Reg),
+    /// Cons for Int64List: dst = [head | tail]
+    ConsInt64(Reg, Reg, Reg),
+    /// Create Int64List from range: dst = [n, n-1, ..., 1]
+    RangeInt64List(Reg, Reg),
+    /// Convert List to Int64List (if all elements are Int64)
+    ToInt64List(Reg, Reg),
+    /// Sum Int64List directly: dst = sum(list)
+    SumInt64List(Reg, Reg),
     /// Test if value is a Map: dst = is_map(val)
     IsMap(Reg, Reg),
     /// Test if value is a Set: dst = is_set(val)

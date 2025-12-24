@@ -272,6 +272,69 @@ pub struct GcFloat64Array {
     pub items: Vec<f64>,
 }
 
+/// A specialized immutable list of i64 for fast pattern matching.
+/// Uses Arc<Vec<i64>> with offset for O(1) tail operations.
+/// Avoids GcValue boxing overhead for integer lists.
+#[derive(Clone, Debug)]
+pub struct GcInt64List {
+    data: Arc<Vec<i64>>,
+    offset: usize,
+}
+
+impl GcInt64List {
+    #[inline]
+    pub fn new() -> Self {
+        GcInt64List { data: Arc::new(Vec::new()), offset: 0 }
+    }
+
+    #[inline]
+    pub fn from_vec(v: Vec<i64>) -> Self {
+        GcInt64List { data: Arc::new(v), offset: 0 }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.offset >= self.data.len()
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.data.len().saturating_sub(self.offset)
+    }
+
+    #[inline]
+    pub fn head(&self) -> Option<i64> {
+        self.data.get(self.offset).copied()
+    }
+
+    #[inline]
+    pub fn tail(&self) -> GcInt64List {
+        if self.is_empty() {
+            GcInt64List::new()
+        } else {
+            GcInt64List { data: Arc::clone(&self.data), offset: self.offset + 1 }
+        }
+    }
+
+    #[inline]
+    pub fn cons(&self, head: i64) -> GcInt64List {
+        let mut new_vec = Vec::with_capacity(self.len() + 1);
+        new_vec.push(head);
+        new_vec.extend_from_slice(&self.data[self.offset..]);
+        GcInt64List { data: Arc::new(new_vec), offset: 0 }
+    }
+
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = i64> + '_ {
+        self.data[self.offset..].iter().copied()
+    }
+
+    #[inline]
+    pub fn sum(&self) -> i64 {
+        self.data[self.offset..].iter().sum()
+    }
+}
+
 /// A GC-managed tuple.
 #[derive(Clone, Debug)]
 pub struct GcTuple {
@@ -617,6 +680,8 @@ pub enum GcValue {
     // Typed arrays for JIT optimization (contiguous memory, no tag checking)
     Int64Array(GcPtr<GcInt64Array>),
     Float64Array(GcPtr<GcFloat64Array>),
+    /// Specialized list of i64 - avoids GcValue boxing overhead
+    Int64List(GcInt64List),
     Tuple(GcPtr<GcTuple>),
     Map(GcPtr<GcMap>),
     /// A shared map from an MVar - Arc-wrapped for O(1) sharing across threads.
@@ -769,6 +834,7 @@ impl fmt::Debug for GcValue {
             GcValue::Ref(r) => write!(f, "Ref({})", r),
             GcValue::Type(t) => write!(f, "Type({})", t.name),
             GcValue::Pointer(p) => write!(f, "Pointer(0x{:x})", p),
+            GcValue::Int64List(list) => write!(f, "Int64List[{}]", list.len()),
         }
     }
 }
@@ -820,6 +886,8 @@ impl GcValue {
             GcValue::Variant(ptr) => vec![ptr.as_raw()],
             GcValue::BigInt(ptr) => vec![ptr.as_raw()],
             GcValue::Closure(ptr, _) => vec![ptr.as_raw()],
+            // Int64List contains raw i64s, no GC pointers
+            GcValue::Int64List(_) => vec![],
         }
     }
 
@@ -906,6 +974,7 @@ impl GcValue {
             GcValue::Ref(_) => "Ref",
             GcValue::Type(_) => "Type",
             GcValue::Pointer(_) => "Pointer",
+            GcValue::Int64List(_) => "Int64List",
         }
     }
 
@@ -1894,6 +1963,14 @@ impl Heap {
             GcValue::Ref(r) => format!("<ref {}>", r),
             GcValue::Type(t) => format!("<type {}>", t.name),
             GcValue::Pointer(p) => format!("<ptr 0x{:x}>", p),
+            GcValue::Int64List(list) => {
+                let items: Vec<String> = list.iter().take(10).map(|n| n.to_string()).collect();
+                if list.len() > 10 {
+                    format!("[{}... ({} more)]", items.join(", "), list.len() - 10)
+                } else {
+                    format!("[{}]", items.join(", "))
+                }
+            }
         }
     }
 
@@ -1983,7 +2060,8 @@ impl Heap {
             // Types that can't be shared
             GcValue::Decimal(_) | GcValue::BigInt(_) | GcValue::Array(_) |
             GcValue::Closure(_, _) | GcValue::Function(_) | GcValue::NativeFunction(_) |
-            GcValue::Ref(_) | GcValue::Type(_) | GcValue::Pointer(_) => {
+            GcValue::Ref(_) | GcValue::Type(_) | GcValue::Pointer(_) |
+            GcValue::Int64List(_) => {
                 return None;
             }
         })
@@ -2345,6 +2423,8 @@ impl Heap {
             GcValue::NativeFunction(n) => GcValue::NativeFunction(n.clone()),
             GcValue::Type(t) => GcValue::Type(t.clone()),
             GcValue::Pointer(p) => GcValue::Pointer(*p),
+            // Int64List - clone (Arc-based, so cheap)
+            GcValue::Int64List(list) => GcValue::Int64List(list.clone()),
         }
     }
 
@@ -2535,6 +2615,8 @@ impl Heap {
             GcValue::NativeFunction(n) => GcValue::NativeFunction(n.clone()),
             GcValue::Type(t) => GcValue::Type(t.clone()),
             GcValue::Pointer(p) => GcValue::Pointer(*p),
+            // Int64List - clone (Arc-based, so cheap)
+            GcValue::Int64List(list) => GcValue::Int64List(list.clone()),
         }
     }
 
@@ -2811,6 +2893,12 @@ impl Heap {
             // List
             GcValue::List(list) => {
                 let items: Vec<Value> = list.items().iter().map(|v| self.gc_to_value(v)).collect();
+                Value::List(Arc::new(items))
+            }
+
+            // Int64List - convert back to regular List
+            GcValue::Int64List(list) => {
+                let items: Vec<Value> = list.iter().map(Value::Int64).collect();
                 Value::List(Arc::new(items))
             }
 
