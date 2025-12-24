@@ -1,0 +1,79 @@
+# List operations benchmark
+
+# Sum a list using pattern matching (recursive)
+sumList([]) = 0
+sumList([x | xs]) = x + sumList(xs)
+
+# Sum with accumulator (tail recursive)
+sumAcc([], acc) = acc
+sumAcc([x | xs], acc) = sumAcc(xs, acc + x)
+
+# Map: double each element
+mapDouble([]) = []
+mapDouble([x | xs]) = [x * 2 | mapDouble(xs)]
+
+# Filter: keep even numbers
+filterEven([]) = []
+filterEven([x | xs]) = if x % 2 == 0 then [x | filterEven(xs)] else filterEven(xs)
+
+# Length using pattern matching
+listLen([]) = 0
+listLen([_ | xs]) = 1 + listLen(xs)
+
+# Length with accumulator (tail recursive)
+lenAcc([], acc) = acc
+lenAcc([_ | xs], acc) = lenAcc(xs, acc + 1)
+
+# Build a list from 1 to n
+buildList(0) = []
+buildList(n) = [n | buildList(n - 1)]
+
+# Check if all elements are positive
+allPositive([]) = true
+allPositive([x | xs]) = if x > 0 then allPositive(xs) else false
+
+# Nth element (0-indexed)
+nthElem([x | _], 0) = x
+nthElem([_ | xs], n) = nthElem(xs, n - 1)
+
+# Benchmark: sum of 1..n
+benchSum(n) = sumAcc(buildList(n), 0)
+
+# Benchmark: map over list of n elements
+benchMap(n) = {
+    list = buildList(n)
+    result = mapDouble(list)
+    lenAcc(result, 0)  # Return length to force evaluation
+}
+
+# Benchmark: filter list of n elements
+benchFilter(n) = {
+    list = buildList(n)
+    result = filterEven(list)
+    lenAcc(result, 0)  # Return length to force evaluation
+}
+
+main() = {
+    n = 10000
+
+    # Run sum benchmark multiple times
+    sum1 = benchSum(n)
+    sum2 = benchSum(n)
+    sum3 = benchSum(n)
+
+    # Run map benchmark
+    map1 = benchMap(n)
+    map2 = benchMap(n)
+    map3 = benchMap(n)
+
+    # Run filter benchmark
+    filter1 = benchFilter(n)
+    filter2 = benchFilter(n)
+    filter3 = benchFilter(n)
+
+    println(sum1)
+    println(map1)
+    println(filter1)
+
+    sum1 + map1 + filter1
+}

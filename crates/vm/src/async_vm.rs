@@ -2865,6 +2865,39 @@ impl AsyncProcess {
                 set_reg!(dst, GcValue::Int64(len));
             }
 
+            // === List operations ===
+            ListSum(dst, src) => {
+                let val = reg!(src);
+                if let GcValue::List(list) = val {
+                    let mut sum: i64 = 0;
+                    for item in list.iter() {
+                        if let GcValue::Int64(n) = item {
+                            sum += n;
+                        } else {
+                            return Err(RuntimeError::Panic(
+                                format!("listSum: expected Int64, got {:?}", item.type_name(&self.heap))
+                            ));
+                        }
+                    }
+                    set_reg!(dst, GcValue::Int64(sum));
+                } else {
+                    return Err(RuntimeError::Panic(
+                        format!("listSum: expected List, got {:?}", val.type_name(&self.heap))
+                    ));
+                }
+            }
+
+            RangeList(dst, n_reg) => {
+                let n = match reg!(n_reg) {
+                    GcValue::Int64(n) => n,
+                    _ => return Err(RuntimeError::Panic("rangeList: expected Int64".into())),
+                };
+                // Create list [n, n-1, ..., 2, 1] (same as buildList(n))
+                let items: Vec<GcValue> = (1..=n).rev().map(GcValue::Int64).collect();
+                let list = GcList::from_vec(items);
+                set_reg!(dst, GcValue::List(list));
+            }
+
             // === Typed arrays ===
             MakeInt64Array(dst, size_reg) => {
                 let size = match reg!(size_reg) {

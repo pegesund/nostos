@@ -1,0 +1,39 @@
+# Test native list operations
+
+main() = {
+    n = 100000
+
+    # Native rangeList + listSum (10 iterations)
+    list1 = rangeList(n)
+    s1 = listSum(list1)
+
+    list2 = rangeList(n)
+    s2 = listSum(list2)
+
+    list3 = rangeList(n)
+    s3 = listSum(list3)
+
+    list4 = rangeList(n)
+    s4 = listSum(list4)
+
+    list5 = rangeList(n)
+    s5 = listSum(list5)
+
+    list6 = rangeList(n)
+    s6 = listSum(list6)
+
+    list7 = rangeList(n)
+    s7 = listSum(list7)
+
+    list8 = rangeList(n)
+    s8 = listSum(list8)
+
+    list9 = rangeList(n)
+    s9 = listSum(list9)
+
+    list10 = rangeList(n)
+    s10 = listSum(list10)
+
+    println(s1)
+    s1
+}
