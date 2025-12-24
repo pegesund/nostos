@@ -5699,10 +5699,34 @@ impl Compiler {
                         self.chunk.emit(Instruction::ListSum(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
+                    "listProduct" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ListProduct(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
                     "product" if arg_regs.len() == 1 && !self.has_user_function("product", 1) => {
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("product".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_regs[0]].into()), line);
+                        self.chunk.emit(Instruction::ListProduct(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    "listMax" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ListMax(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    "maximum" if arg_regs.len() == 1 && !self.has_user_function("maximum", 1) => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ListMax(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    "listMin" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ListMin(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    "minimum" if arg_regs.len() == 1 && !self.has_user_function("minimum", 1) => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ListMin(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "rangeList" if arg_regs.len() == 1 => {

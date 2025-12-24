@@ -874,6 +874,12 @@ pub enum Instruction {
     ListIsEmpty(Reg, Reg),
     /// Sum list of integers: dst = listSum(list)
     ListSum(Reg, Reg),
+    /// Product of list of integers: dst = listProduct(list)
+    ListProduct(Reg, Reg),
+    /// Maximum of list of integers: dst = listMax(list)
+    ListMax(Reg, Reg),
+    /// Minimum of list of integers: dst = listMin(list)
+    ListMin(Reg, Reg),
     /// Create list [1..n]: dst = rangeList(n)
     RangeList(Reg, Reg),
 

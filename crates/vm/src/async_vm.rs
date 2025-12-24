@@ -2887,6 +2887,77 @@ impl AsyncProcess {
                 }
             }
 
+            ListProduct(dst, src) => {
+                let val = reg!(src);
+                if let GcValue::List(list) = val {
+                    let mut product: i64 = 1;
+                    for item in list.iter() {
+                        if let GcValue::Int64(n) = item {
+                            product *= n;
+                        } else {
+                            return Err(RuntimeError::Panic(
+                                format!("listProduct: expected Int64, got {:?}", item.type_name(&self.heap))
+                            ));
+                        }
+                    }
+                    set_reg!(dst, GcValue::Int64(product));
+                } else {
+                    return Err(RuntimeError::Panic(
+                        format!("listProduct: expected List, got {:?}", val.type_name(&self.heap))
+                    ));
+                }
+            }
+
+            ListMax(dst, src) => {
+                let val = reg!(src);
+                if let GcValue::List(list) = val {
+                    let mut max_val: Option<i64> = None;
+                    for item in list.iter() {
+                        if let GcValue::Int64(n) = item {
+                            max_val = Some(max_val.map_or(*n, |m| m.max(*n)));
+                        } else {
+                            return Err(RuntimeError::Panic(
+                                format!("listMax: expected Int64, got {:?}", item.type_name(&self.heap))
+                            ));
+                        }
+                    }
+                    if let Some(m) = max_val {
+                        set_reg!(dst, GcValue::Int64(m));
+                    } else {
+                        return Err(RuntimeError::Panic("listMax: empty list".into()));
+                    }
+                } else {
+                    return Err(RuntimeError::Panic(
+                        format!("listMax: expected List, got {:?}", val.type_name(&self.heap))
+                    ));
+                }
+            }
+
+            ListMin(dst, src) => {
+                let val = reg!(src);
+                if let GcValue::List(list) = val {
+                    let mut min_val: Option<i64> = None;
+                    for item in list.iter() {
+                        if let GcValue::Int64(n) = item {
+                            min_val = Some(min_val.map_or(*n, |m| m.min(*n)));
+                        } else {
+                            return Err(RuntimeError::Panic(
+                                format!("listMin: expected Int64, got {:?}", item.type_name(&self.heap))
+                            ));
+                        }
+                    }
+                    if let Some(m) = min_val {
+                        set_reg!(dst, GcValue::Int64(m));
+                    } else {
+                        return Err(RuntimeError::Panic("listMin: empty list".into()));
+                    }
+                } else {
+                    return Err(RuntimeError::Panic(
+                        format!("listMin: expected List, got {:?}", val.type_name(&self.heap))
+                    ));
+                }
+            }
+
             RangeList(dst, n_reg) => {
                 let n = match reg!(n_reg) {
                     GcValue::Int64(n) => n,
