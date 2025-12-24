@@ -498,6 +498,13 @@ impl SendableValue {
                     .collect();
                 SendableValue::Map(entries)
             }
+            GcValue::Int64List(int_list) => {
+                // Convert Int64List to a regular list of Int64 SendableValues
+                let items: Vec<SendableValue> = int_list.iter()
+                    .map(|n| SendableValue::Int64(n))
+                    .collect();
+                SendableValue::List(items)
+            }
             // For other values, use their display representation
             _ => SendableValue::String(heap.display_value(value)),
         }

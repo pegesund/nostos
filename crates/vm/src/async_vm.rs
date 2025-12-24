@@ -2955,6 +2955,13 @@ impl AsyncProcess {
                             return Err(RuntimeError::IndexOutOfBounds { index: 0, length: 0 });
                         }
                     }
+                    GcValue::Int64List(list) => {
+                        if let Some(head) = list.head() {
+                            GcValue::Int64(head)
+                        } else {
+                            return Err(RuntimeError::IndexOutOfBounds { index: 0, length: 0 });
+                        }
+                    }
                     _ => return Err(RuntimeError::TypeError {
                         expected: "List".to_string(),
                         found: format!("{:?}", list_val),
@@ -2969,6 +2976,13 @@ impl AsyncProcess {
                     GcValue::List(list) => {
                         if !list.is_empty() {
                             GcValue::List(list.tail())
+                        } else {
+                            return Err(RuntimeError::IndexOutOfBounds { index: 0, length: 0 });
+                        }
+                    }
+                    GcValue::Int64List(list) => {
+                        if !list.is_empty() {
+                            GcValue::Int64List(list.tail())
                         } else {
                             return Err(RuntimeError::IndexOutOfBounds { index: 0, length: 0 });
                         }
@@ -3141,6 +3155,11 @@ impl AsyncProcess {
                         list.items().get(idx_val).cloned()
                             .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?
                     }
+                    GcValue::Int64List(list) => {
+                        let val = list.iter().nth(idx_val)
+                            .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?;
+                        GcValue::Int64(val)
+                    }
                     GcValue::Tuple(ptr) => {
                         let tuple = self.heap.get_tuple(ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".into()))?;
@@ -3239,6 +3258,24 @@ impl AsyncProcess {
                     (GcValue::List(la), GcValue::List(lb)) => {
                         let mut items: Vec<GcValue> = la.items().to_vec();
                         items.extend(lb.items().iter().cloned());
+                        let new_list = self.heap.make_list(items);
+                        set_reg!(dst, GcValue::List(new_list));
+                    }
+                    // Int64List concat - keep as Int64List
+                    (GcValue::Int64List(la), GcValue::Int64List(lb)) => {
+                        let items: Vec<i64> = la.iter().chain(lb.iter()).collect();
+                        set_reg!(dst, GcValue::Int64List(GcInt64List::from_vec(items)));
+                    }
+                    // Mixed: Int64List + List or List + Int64List -> regular List
+                    (GcValue::Int64List(la), GcValue::List(lb)) => {
+                        let mut items: Vec<GcValue> = la.iter().map(GcValue::Int64).collect();
+                        items.extend(lb.items().iter().cloned());
+                        let new_list = self.heap.make_list(items);
+                        set_reg!(dst, GcValue::List(new_list));
+                    }
+                    (GcValue::List(la), GcValue::Int64List(lb)) => {
+                        let mut items: Vec<GcValue> = la.items().to_vec();
+                        items.extend(lb.iter().map(GcValue::Int64));
                         let new_list = self.heap.make_list(items);
                         set_reg!(dst, GcValue::List(new_list));
                     }

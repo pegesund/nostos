@@ -729,6 +729,13 @@ impl ThreadSafeValue {
                 let arr = heap.get_float64_array(*ptr)?;
                 ThreadSafeValue::Float64Array(arr.items.clone())
             }
+            // Int64List - convert to regular list of Int64
+            GcValue::Int64List(int_list) => {
+                let items: Vec<ThreadSafeValue> = int_list.iter()
+                    .map(|n| ThreadSafeValue::Int64(n))
+                    .collect();
+                ThreadSafeValue::List(items)
+            }
             // Other values cannot be sent safely
             _ => return None,
         })

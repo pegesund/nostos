@@ -328,7 +328,7 @@ impl GcInt64List {
     pub fn cons(&self, head: i64) -> GcInt64List {
         // If we have an offset, we need to create a new vector from the visible portion
         if self.offset > 0 {
-            let mut new_data: ImblVector<i64> = std::iter::once(head)
+            let new_data: ImblVector<i64> = std::iter::once(head)
                 .chain(self.data.iter().skip(self.offset).copied())
                 .collect();
             GcInt64List { data: new_data, offset: 0 }
@@ -1722,6 +1722,25 @@ impl Heap {
                     .iter()
                     .zip(b.items().iter())
                     .all(|(ia, ib)| self.gc_values_equal(ia, ib))
+            }
+
+            // Int64List - compare elements directly
+            (GcValue::Int64List(a), GcValue::Int64List(b)) => {
+                if a.len() != b.len() {
+                    return false;
+                }
+                a.iter().zip(b.iter()).all(|(ia, ib)| ia == ib)
+            }
+
+            // Cross-type: List vs Int64List (compare element by element)
+            (GcValue::List(list), GcValue::Int64List(int_list))
+            | (GcValue::Int64List(int_list), GcValue::List(list)) => {
+                if list.len() != int_list.len() {
+                    return false;
+                }
+                list.iter().zip(int_list.iter()).all(|(lv, iv)| {
+                    matches!(lv, GcValue::Int64(n) if *n == iv)
+                })
             }
 
             // Arrays - compare elements recursively
