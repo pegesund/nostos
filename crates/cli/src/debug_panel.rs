@@ -114,6 +114,11 @@ impl DebugPanel {
         !self.breakpoints.is_empty()
     }
 
+    /// Sync breakpoints from engine (replaces all breakpoints)
+    pub fn sync_breakpoints(&mut self, breakpoints: Vec<String>) {
+        self.breakpoints = breakpoints.into_iter().collect();
+    }
+
     /// Clear all debug state
     pub fn clear(&mut self) {
         self.state = DebugState::Idle;
@@ -536,6 +541,28 @@ impl View for DebugPanel {
                 });
                 y += 1;
             }
+        }
+
+        // Breakpoints section (compact, single line)
+        if !self.breakpoints.is_empty() {
+            y += 1;
+            let mut bps: Vec<_> = self.breakpoints.iter().collect();
+            bps.sort();
+            let bp_list = bps.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ");
+            let color_bp = ColorStyle::new(Color::Rgb(255, 100, 100), Color::TerminalDefault);
+            printer.with_color(color_title, |p| {
+                p.print((1, y), "Breakpoints: ");
+            });
+            let bp_x = 14;
+            let max_bp_len = width.saturating_sub(bp_x + 1);
+            let bp_display = if bp_list.len() > max_bp_len {
+                format!("{}...", &bp_list[..max_bp_len.saturating_sub(3)])
+            } else {
+                bp_list
+            };
+            printer.with_color(color_bp, |p| {
+                p.print((bp_x, y), &bp_display);
+            });
         }
 
         // Key bindings at bottom
