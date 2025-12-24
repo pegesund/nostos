@@ -7144,9 +7144,16 @@ impl Compiler {
         // Jump to else if false
         let else_jump = self.chunk.emit(Instruction::JumpIfFalse(cond_reg, 0), 0);
 
-        // Then branch - pass is_tail so tail calls work, but always move result to dst
+        // Then branch
         let then_reg = self.compile_expr_tail(then_branch, is_tail)?;
-        self.chunk.emit(Instruction::Move(dst, then_reg), 0);
+
+        // Optimization: in tail position with a simple value, emit Return directly
+        // Skip this optimization if the then_branch is a tail call (already emits TailCall*)
+        if is_tail && !self.is_tail_call_expr(then_branch) {
+            self.chunk.emit(Instruction::Return(then_reg), 0);
+        } else {
+            self.chunk.emit(Instruction::Move(dst, then_reg), 0);
+        }
         let end_jump = self.chunk.emit(Instruction::Jump(0), 0);
 
         // Else branch
@@ -7154,12 +7161,23 @@ impl Compiler {
         self.chunk.patch_jump(else_jump, else_target);
 
         let else_reg = self.compile_expr_tail(else_branch, is_tail)?;
-        self.chunk.emit(Instruction::Move(dst, else_reg), 0);
+
+        // Same optimization for else branch
+        if is_tail && !self.is_tail_call_expr(else_branch) {
+            self.chunk.emit(Instruction::Return(else_reg), 0);
+        } else {
+            self.chunk.emit(Instruction::Move(dst, else_reg), 0);
+        }
 
         let end_target = self.chunk.code.len();
         self.chunk.patch_jump(end_jump, end_target);
 
         Ok(dst)
+    }
+
+    /// Check if an expression is a tail call (Call that will emit TailCall* instructions)
+    fn is_tail_call_expr(&self, expr: &Expr) -> bool {
+        matches!(expr, Expr::Call(_, _, _, _))
     }
 
     /// Compile a match expression.

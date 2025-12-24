@@ -134,7 +134,7 @@ impl Default for JitConfig {
         Self {
             hot_threshold: JIT_THRESHOLD,
             enabled: true,
-            opt_level: 1,
+            opt_level: 2, // Maximum optimization for speed
         }
     }
 }
@@ -764,6 +764,12 @@ impl JitCompiler {
                     }
                     builder.switch_to_block(block);
                     block_terminated = false;
+                }
+
+                // Skip dead code (code after a terminator that's not a jump target)
+                if block_terminated {
+                    ip += 1;
+                    continue;
                 }
 
                 let instr = &func.code.code[ip];
@@ -2802,6 +2808,107 @@ mod tests {
 
         assert_eq!(result, 9227465);
         eprintln!("[JIT] fib(35) = {} in {:?}", result, elapsed);
+    }
+
+    #[test]
+    fn test_jit_fib_40() {
+        let config = JitConfig::default();
+        let mut jit = JitCompiler::new(config).unwrap();
+
+        let func = make_fib_function();
+        jit.compile_int_function(0, &func).expect("JIT compilation failed");
+
+        let native_fn = jit.get_int_function(0).expect("Function not compiled");
+
+        // Time fib(40)
+        let start = std::time::Instant::now();
+        let result = native_fn(40);
+        let elapsed = start.elapsed();
+
+        assert_eq!(result, 102334155);
+        eprintln!("[JIT] fib(40) = {} in {:?}", result, elapsed);
+    }
+
+    /// Create fib function matching what the compiler generates
+    fn make_fib_function_compiler_style() -> FunctionValue {
+        let mut chunk = Chunk::new();
+
+        // Constants (matching compiler output)
+        chunk.constants.push(Value::Int64(1)); // idx 0: constant 1
+        chunk.constants.push(Value::Int64(1)); // idx 1: constant 1 (for subtraction)
+        chunk.constants.push(Value::Int64(2)); // idx 2: constant 2
+
+        // Bytecode from compiled fib:
+        // 0: LoadConst(1, 0)   ; r1 = 1
+        // 1: LeInt(2, 0, 1)    ; r2 = n <= 1
+        // 2: JumpIfFalse(2, 3) ; if false, skip 3
+        // 3: Move(4, 0)        ; r4 = n
+        // 4: Move(3, 4)        ; r3 = r4
+        // 5: Jump(8)           ; jump to Return
+        // 6: LoadConst(5, 1)   ; r5 = 1
+        // 7: SubInt(6, 0, 5)   ; r6 = n - 1
+        // 8: CallSelf(7, [6])  ; r7 = fib(n-1)
+        // 9: LoadConst(8, 2)   ; r8 = 2
+        // 10: SubInt(9, 0, 8)  ; r9 = n - 2
+        // 11: CallSelf(10, [9]); r10 = fib(n-2)
+        // 12: AddInt(11, 7, 10); r11 = result
+        // 13: Move(3, 11)      ; r3 = r11
+        // 14: Return(3)
+
+        chunk.code.push(Instruction::LoadConst(1, 0));     // 0
+        chunk.code.push(Instruction::LeInt(2, 0, 1));      // 1
+        chunk.code.push(Instruction::JumpIfFalse(2, 3));   // 2
+        chunk.code.push(Instruction::Move(4, 0));          // 3
+        chunk.code.push(Instruction::Move(3, 4));          // 4
+        chunk.code.push(Instruction::Jump(8));             // 5
+        chunk.code.push(Instruction::LoadConst(5, 1));     // 6
+        chunk.code.push(Instruction::SubInt(6, 0, 5));     // 7
+        chunk.code.push(Instruction::CallSelf(7, Arc::new([6]))); // 8
+        chunk.code.push(Instruction::LoadConst(8, 2));     // 9
+        chunk.code.push(Instruction::SubInt(9, 0, 8));     // 10
+        chunk.code.push(Instruction::CallSelf(10, Arc::new([9]))); // 11
+        chunk.code.push(Instruction::AddInt(11, 7, 10));   // 12
+        chunk.code.push(Instruction::Move(3, 11));         // 13
+        chunk.code.push(Instruction::Return(3));           // 14
+
+        chunk.register_count = 12;
+
+        FunctionValue {
+            name: "fib_compiler".to_string(),
+            arity: 1,
+            param_names: vec!["n".to_string()],
+            code: Arc::new(chunk),
+            module: None,
+            source_span: None,
+            jit_code: None,
+            call_count: AtomicU32::new(0),
+            debug_symbols: vec![],
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
+        }
+    }
+
+    #[test]
+    fn test_jit_fib_40_compiler_style() {
+        let config = JitConfig::default();
+        let mut jit = JitCompiler::new(config).unwrap();
+
+        let func = make_fib_function_compiler_style();
+        jit.compile_int_function(0, &func).expect("JIT compilation failed");
+
+        let native_fn = jit.get_int_function(0).expect("Function not compiled");
+
+        // Time fib(40)
+        let start = std::time::Instant::now();
+        let result = native_fn(40);
+        let elapsed = start.elapsed();
+
+        assert_eq!(result, 102334155);
+        eprintln!("[JIT] fib_compiler(40) = {} in {:?}", result, elapsed);
     }
 
     /// Create a sumArray function: sumArray(arr, i, acc) =

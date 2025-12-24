@@ -387,7 +387,6 @@ fn run_with_async_vm(
     profiling_enabled: bool,
     enable_jit: bool,
 ) -> ExitCode {
-
     let config = AsyncConfig {
         profiling_enabled,
         ..AsyncConfig::default()
