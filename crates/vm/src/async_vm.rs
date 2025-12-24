@@ -2516,7 +2516,8 @@ impl AsyncProcess {
             }
 
             TestNil(dst, list_reg) => {
-                let list_val = reg!(list_reg);
+                // Use reg_ref to avoid cloning the list
+                let list_val = reg_ref!(list_reg);
                 let result = match list_val {
                     GcValue::List(list) => list.is_empty(),
                     _ => false,
@@ -2760,7 +2761,8 @@ impl AsyncProcess {
 
             Cons(dst, head, tail) => {
                 let head_val = reg!(head);
-                let tail_val = reg!(tail);
+                // Use reg_ref to avoid cloning the tail list
+                let tail_val = reg_ref!(tail);
                 if let GcValue::List(tail_list) = tail_val {
                     // O(log n) cons using persistent data structure
                     let new_list = tail_list.cons(head_val);
@@ -2771,10 +2773,13 @@ impl AsyncProcess {
             }
 
             Decons(head_dst, tail_dst, list_reg) => {
-                let list_val = reg!(list_reg);
+                // Use reg_ref to avoid cloning the entire list
+                let list_val = reg_ref!(list_reg);
                 if let GcValue::List(list) = list_val {
                     if !list.is_empty() {
+                        // Clone only the head element, not the whole list
                         let head = list.head().cloned().unwrap_or(GcValue::Unit);
+                        // tail() is O(1) - just Arc clone + offset increment
                         let tail = list.tail();
                         set_reg!(head_dst, head);
                         set_reg!(tail_dst, GcValue::List(tail));
@@ -2956,17 +2961,6 @@ impl AsyncProcess {
                         format!("listMin: expected List, got {:?}", val.type_name(&self.heap))
                     ));
                 }
-            }
-
-            RangeList(dst, n_reg) => {
-                let n = match reg!(n_reg) {
-                    GcValue::Int64(n) => n,
-                    _ => return Err(RuntimeError::Panic("rangeList: expected Int64".into())),
-                };
-                // Create list [n, n-1, ..., 2, 1] (same as buildList(n))
-                let items: Vec<GcValue> = (1..=n).rev().map(GcValue::Int64).collect();
-                let list = GcList::from_vec(items);
-                set_reg!(dst, GcValue::List(list));
             }
 
             // === Typed arrays ===
@@ -6272,7 +6266,7 @@ impl AsyncProcess {
                 Ok(GcValue::Variant(ptr))
             }
             GcValue::List(list) => {
-                let items: Vec<GcValue> = list.data.iter().cloned().collect();
+                let items: Vec<GcValue> = list.iter().cloned().collect();
                 let mut json_items = Vec::new();
                 for item in items {
                     let json_item = self.value_to_json(item)?;
@@ -6681,7 +6675,7 @@ impl AsyncProcess {
                 match &variant.fields[0] {
                     GcValue::List(list) => {
                         let mut pairs = Vec::new();
-                        for item in list.data.iter() {
+                        for item in list.iter() {
                             match item {
                                 GcValue::Tuple(tup_ptr) => {
                                     let tup = self.heap.get_tuple(tup_ptr.clone())
@@ -6803,7 +6797,7 @@ impl AsyncProcess {
                                     // Parse tuple element types
                                     let inner = &expected_type[1..expected_type.len()-1];
                                     let element_types: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
-                                    let list_items: Vec<GcValue> = list.data.iter().cloned().collect();
+                                    let list_items: Vec<GcValue> = list.iter().cloned().collect();
 
                                     let mut items = Vec::new();
                                     for (i, item) in list_items.iter().enumerate() {
@@ -6819,7 +6813,7 @@ impl AsyncProcess {
                                     } else {
                                         "a".to_string()
                                     };
-                                    let list_items: Vec<GcValue> = list.data.iter().cloned().collect();
+                                    let list_items: Vec<GcValue> = list.iter().cloned().collect();
                                     let mut items = Vec::new();
                                     for item in list_items {
                                         items.push(self.json_to_primitive(&item, &inner_type)?);

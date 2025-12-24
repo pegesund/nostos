@@ -169,7 +169,6 @@ pub struct GcList {
 
 impl PartialEq for GcList {
     fn eq(&self, other: &Self) -> bool {
-        // Compare logical contents, accounting for offset
         if self.len() != other.len() {
             return false;
         }
@@ -214,7 +213,7 @@ impl GcList {
         self.data.len().saturating_sub(self.offset)
     }
 
-    /// Get head element (O(log n))
+    /// Get head element - O(log n) for imbl
     #[inline]
     pub fn head(&self) -> Option<&GcValue> {
         self.data.get(self.offset)
@@ -230,17 +229,15 @@ impl GcList {
         }
     }
 
-    /// Cons: prepend an element (O(log n) - structural sharing!)
-    /// If offset > 0, we need to materialize the slice first.
+    /// Cons: prepend an element - O(log n) with structural sharing
     #[inline]
     pub fn cons(&self, head: GcValue) -> GcList {
         if self.offset == 0 {
-            // Fast path: no offset, can prepend directly
             let mut new_data = self.data.clone();
             new_data.push_front(head);
             GcList { data: new_data, offset: 0 }
         } else {
-            // Need to materialize the slice and prepend
+            // Materialize slice and prepend
             let mut new_data: ImblVector<GcValue> = self.data.iter()
                 .skip(self.offset)
                 .cloned()
@@ -250,7 +247,7 @@ impl GcList {
         }
     }
 
-    /// Get element at index (O(log n))
+    /// Get element at index - O(log n)
     #[inline]
     pub fn get(&self, index: usize) -> Option<&GcValue> {
         self.data.get(self.offset + index)
