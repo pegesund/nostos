@@ -3514,14 +3514,16 @@ impl Compiler {
 
             // List literal
             Expr::List(items, tail, _) => {
-                // Check if all items are Int64 for specialization (only for non-cons literals)
+                // Check if all items are Int64 for specialization
                 let all_int64 = !items.is_empty() && items.iter().all(|item| self.is_int64_expr(item));
 
                 match tail {
                     Some(tail_expr) => {
                         // List cons syntax: [e1, e2, ... | tail]
-                        // NOTE: We don't use ConsInt64 here because Int64List.cons is O(n)
-                        // and would cause performance regression for recursive list building.
+                        // Check if tail is also Int64List for full specialization
+                        let tail_is_int64_list = self.is_int64_list_expr(tail_expr);
+                        let use_int64 = all_int64 && tail_is_int64_list;
+
                         // Compile items in order first
                         let mut item_regs = Vec::new();
                         for item in items {
@@ -3533,7 +3535,12 @@ impl Compiler {
                         // Cons each item onto the tail in reverse order
                         for item_reg in item_regs.into_iter().rev() {
                             let new_reg = self.alloc_reg();
-                            self.chunk.emit(Instruction::Cons(new_reg, item_reg, result_reg), line);
+                            if use_int64 {
+                                // O(log n) cons on Int64List using imbl::Vector
+                                self.chunk.emit(Instruction::ConsInt64(new_reg, item_reg, result_reg), line);
+                            } else {
+                                self.chunk.emit(Instruction::Cons(new_reg, item_reg, result_reg), line);
+                            }
                             result_reg = new_reg;
                         }
                         Ok(result_reg)

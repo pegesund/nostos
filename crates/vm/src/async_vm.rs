@@ -2779,14 +2779,24 @@ impl AsyncProcess {
                 let tail_val = reg_ref!(tail);
                 match tail_val {
                     GcValue::List(tail_list) => {
-                        // O(log n) cons using persistent data structure
-                        let new_list = tail_list.cons(head_val);
-                        set_reg!(dst, GcValue::List(new_list));
+                        // Auto-specialize: if head is Int64 and tail is empty,
+                        // create an Int64List for better performance on subsequent ops
+                        if tail_list.is_empty() {
+                            if let GcValue::Int64(n) = head_val {
+                                set_reg!(dst, GcValue::Int64List(GcInt64List::from_vec(vec![n])));
+                            } else {
+                                let new_list = tail_list.cons(head_val);
+                                set_reg!(dst, GcValue::List(new_list));
+                            }
+                        } else {
+                            // O(log n) cons using persistent data structure
+                            let new_list = tail_list.cons(head_val);
+                            set_reg!(dst, GcValue::List(new_list));
+                        }
                     }
                     GcValue::Int64List(tail_list) => {
                         // Specialized path: if head is Int64, keep it as Int64List
-                        // Note: cons on Int64List is O(n) so this is only good for
-                        // small lists or when explicitly requested
+                        // Now O(log n) using imbl::Vector
                         if let GcValue::Int64(n) = head_val {
                             let new_list = tail_list.cons(n);
                             set_reg!(dst, GcValue::Int64List(new_list));

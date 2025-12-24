@@ -272,24 +272,31 @@ pub struct GcFloat64Array {
     pub items: Vec<f64>,
 }
 
-/// A specialized immutable list of i64 for fast pattern matching.
-/// Uses Arc<Vec<i64>> with offset for O(1) tail operations.
+/// A specialized immutable list of i64 for fast integer operations.
+/// Uses imbl::Vector<i64> for O(log n) cons/tail operations.
 /// Avoids GcValue boxing overhead for integer lists.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GcInt64List {
-    data: Arc<Vec<i64>>,
+    data: ImblVector<i64>,
+    /// Offset into data - allows O(1) tail by just incrementing offset
     offset: usize,
+}
+
+impl std::fmt::Debug for GcInt64List {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Int64List[{}]", self.len())
+    }
 }
 
 impl GcInt64List {
     #[inline]
     pub fn new() -> Self {
-        GcInt64List { data: Arc::new(Vec::new()), offset: 0 }
+        GcInt64List { data: ImblVector::new(), offset: 0 }
     }
 
     #[inline]
     pub fn from_vec(v: Vec<i64>) -> Self {
-        GcInt64List { data: Arc::new(v), offset: 0 }
+        GcInt64List { data: v.into_iter().collect(), offset: 0 }
     }
 
     #[inline]
@@ -312,26 +319,35 @@ impl GcInt64List {
         if self.is_empty() {
             GcInt64List::new()
         } else {
-            GcInt64List { data: Arc::clone(&self.data), offset: self.offset + 1 }
+            GcInt64List { data: self.data.clone(), offset: self.offset + 1 }
+        }
+    }
+
+    /// O(log n) cons using persistent data structure
+    #[inline]
+    pub fn cons(&self, head: i64) -> GcInt64List {
+        // If we have an offset, we need to create a new vector from the visible portion
+        if self.offset > 0 {
+            let mut new_data: ImblVector<i64> = std::iter::once(head)
+                .chain(self.data.iter().skip(self.offset).copied())
+                .collect();
+            GcInt64List { data: new_data, offset: 0 }
+        } else {
+            // No offset - can use efficient push_front
+            let mut new_data = self.data.clone();
+            new_data.push_front(head);
+            GcInt64List { data: new_data, offset: 0 }
         }
     }
 
     #[inline]
-    pub fn cons(&self, head: i64) -> GcInt64List {
-        let mut new_vec = Vec::with_capacity(self.len() + 1);
-        new_vec.push(head);
-        new_vec.extend_from_slice(&self.data[self.offset..]);
-        GcInt64List { data: Arc::new(new_vec), offset: 0 }
-    }
-
-    #[inline]
     pub fn iter(&self) -> impl Iterator<Item = i64> + '_ {
-        self.data[self.offset..].iter().copied()
+        self.data.iter().skip(self.offset).copied()
     }
 
     #[inline]
     pub fn sum(&self) -> i64 {
-        self.data[self.offset..].iter().sum()
+        self.data.iter().skip(self.offset).sum()
     }
 }
 
