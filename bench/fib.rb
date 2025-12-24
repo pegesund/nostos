@@ -9,5 +9,5 @@ def fib(n)
   end
 end
 
-result = fib(35)
+result = fib(40)
 puts result
