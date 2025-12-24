@@ -37,3 +37,8 @@ Thumbs.db
 
 # Log files
 *.log
+
+# Haskell build artifacts
+bench/list_iterate_hs
+bench/*.hi
+bench/*.o
