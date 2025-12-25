@@ -874,7 +874,8 @@ impl ReplEngine {
            input.starts_with("trait ") ||
            input.starts_with("module ") ||
            input.starts_with("pub ") ||
-           input.starts_with("extern ") {
+           input.starts_with("extern ") ||
+           input.starts_with("for ") {
             return None;
         }
 
@@ -5914,6 +5915,19 @@ mod tests {
         assert_eq!(ReplEngine::is_var_binding("module Foo = { }"), None);
         assert_eq!(ReplEngine::is_var_binding("pub foo(x) = x"), None);
         assert_eq!(ReplEngine::is_var_binding("extern fn something"), None);
+        // For loops should not be detected as variable bindings
+        assert_eq!(ReplEngine::is_var_binding("for i = 1 to 10 { println(i) }"), None);
+    }
+
+    #[test]
+    fn test_for_loop_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // For loops should work in the REPL
+        let result = engine.eval("{ var sum = 0; for i = 1 to 5 { sum = sum + i }; sum }");
+        assert!(result.is_ok(), "For loop should work: {:?}", result);
+        assert_eq!(result.unwrap().trim(), "10");
     }
 
     #[test]
