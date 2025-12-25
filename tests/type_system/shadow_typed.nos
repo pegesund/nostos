@@ -2,8 +2,8 @@
 # Typed shadowing
 
 main() = {
-    Int x = 100
-    var Int x = 150
+    x: Int = 100
+    var x: Int = 150
     x = 200
     x
 }

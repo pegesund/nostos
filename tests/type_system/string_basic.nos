@@ -2,6 +2,6 @@
 # Basic String type
 
 main() = {
-    String s = "hello"
+    s: String = "hello"
     s
 }

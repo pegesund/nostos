@@ -10,7 +10,7 @@ evaluate(expr) = match expr
 end
 
 main() = {
-    Expr e = Add(Mul(Num(3), Num(4)), Num(5))
-    Int result = evaluate(e)
+    e: Expr = Add(Mul(Num(3), Num(4)), Num(5))
+    result: Int = evaluate(e)
     result
 }

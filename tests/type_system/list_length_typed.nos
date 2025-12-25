@@ -8,6 +8,6 @@ end
 
 main() = {
     List[Int] nums = [1, 2, 3, 4, 5]
-    Int length = len(nums)
+    length: Int = len(nums)
     length
 }

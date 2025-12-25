@@ -4,6 +4,6 @@
 type Point = { x: Int, y: Int }
 
 main() = {
-    Point p = Point(10, 20)
+    p: Point = Point(10, 20)
     p
 }

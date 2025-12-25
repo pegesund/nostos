@@ -2,8 +2,8 @@
 # Bool logic with typed bindings
 
 main() = {
-    Bool a = true
-    Bool b = false
-    Bool result = a && !b
+    a: Bool = true
+    b: Bool = false
+    result: Bool = a && !b
     result
 }

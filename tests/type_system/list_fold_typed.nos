@@ -8,6 +8,6 @@ end
 
 main() = {
     List[Int] nums = [1, 2, 3, 4, 5]
-    Int sum = fold((a, b) => a + b, 0, nums)
+    sum: Int = fold((a, b) => a + b, 0, nums)
     sum
 }

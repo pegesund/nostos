@@ -2,8 +2,8 @@
 # Multiple typed bindings
 
 main() = {
-    Int a = 10
-    Int b = 20
-    Int c = 30
+    a: Int = 10
+    b: Int = 20
+    c: Int = 30
     a + b + c
 }

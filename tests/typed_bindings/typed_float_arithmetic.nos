@@ -2,8 +2,8 @@
 # Float typed binding with arithmetic
 
 main() = {
-    Float a = 2.5
-    Float b = 5.0
-    Float sum = a + b
+    a: Float = 2.5
+    b: Float = 5.0
+    sum: Float = a + b
     sum
 }

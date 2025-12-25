@@ -2,6 +2,6 @@
 # Basic Int type
 
 main() = {
-    Int x = 42
+    x: Int = 42
     x
 }

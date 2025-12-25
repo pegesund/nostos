@@ -2,8 +2,8 @@
 # Int comparison with typed result
 
 main() = {
-    Int a = 10
-    Int b = 20
-    Bool result = a < b
+    a: Int = 10
+    b: Int = 20
+    result: Bool = a < b
     result
 }

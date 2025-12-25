@@ -4,6 +4,6 @@
 apply(f, x) = f(x)
 
 main() = {
-    Int result = apply(n => n * 2, 5)
+    result: Int = apply(n => n * 2, 5)
     result
 }

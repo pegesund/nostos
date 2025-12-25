@@ -8,6 +8,6 @@ classify(n) = match n
 end
 
 main() = {
-    String result = classify(50)
+    result: String = classify(50)
     result
 }

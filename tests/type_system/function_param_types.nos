@@ -4,6 +4,6 @@
 add(x: Int, y: Int) -> Int = x + y
 
 main() = {
-    Int result = add(10, 20)
+    result: Int = add(10, 20)
     result
 }

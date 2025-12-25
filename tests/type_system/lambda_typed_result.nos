@@ -3,6 +3,6 @@
 
 main() = {
     f = x => x + 5
-    Int result = f(10)
+    result: Int = f(10)
     result
 }

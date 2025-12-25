@@ -8,6 +8,6 @@ end
 
 main() = {
     List[Int] nums = [1, 2, 3]
-    Int first = head(nums)
+    first: Int = head(nums)
     first
 }

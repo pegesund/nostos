@@ -2,7 +2,7 @@
 # Typed binding in loop
 
 main() = {
-    var Int sum = 0
+    var sum: Int = 0
     for i = 1 to 10 {
         sum = sum + i
     }

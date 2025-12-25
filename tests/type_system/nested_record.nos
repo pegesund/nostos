@@ -7,8 +7,8 @@ type Rectangle = { topLeft: Point, bottomRight: Point }
 width(rect) = rect.bottomRight.x - rect.topLeft.x
 
 main() = {
-    Point p1 = Point(0, 0)
-    Point p2 = Point(30, 20)
-    Rectangle rect = Rectangle(p1, p2)
+    p1: Point = Point(0, 0)
+    p2: Point = Point(30, 20)
+    rect: Rectangle = Rectangle(p1, p2)
     width(rect)
 }
