@@ -376,6 +376,7 @@ fn format_value_short(value: &GcValue) -> String {
         GcValue::Variant(_) => "<Variant>".to_string(),
         GcValue::Int64Array(_) => "<Int64Array>".to_string(),
         GcValue::Float64Array(_) => "<Float64Array>".to_string(),
+        GcValue::Float32Array(_) => "<Float32Array>".to_string(),
         GcValue::Pid(p) => format!("<Pid {}>", p),
         GcValue::Ref(r) => format!("<Ref {}>", r),
         GcValue::Map(_) => "<Map>".to_string(),
@@ -571,6 +572,8 @@ pub enum ThreadSafeValue {
     Int64Array(Vec<i64>),
     /// Float64 typed array (deep copy of data)
     Float64Array(Vec<f64>),
+    /// Float32 typed array (for vectors/pgvector)
+    Float32Array(Vec<f32>),
 }
 
 // ThreadSafeValue is explicitly Send + Sync:
@@ -836,6 +839,10 @@ impl ThreadSafeValue {
             ThreadSafeValue::Float64Array(items) => {
                 let ptr = heap.alloc_float64_array(items.clone());
                 GcValue::Float64Array(ptr)
+            }
+            ThreadSafeValue::Float32Array(items) => {
+                let ptr = heap.alloc_float32_array(items.clone());
+                GcValue::Float32Array(ptr)
             }
         }
     }

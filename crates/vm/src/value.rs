@@ -59,6 +59,7 @@ pub enum Value {
     // Typed arrays for JIT optimization (contiguous memory, no tag checking)
     Int64Array(Arc<std::sync::RwLock<Vec<i64>>>),
     Float64Array(Arc<std::sync::RwLock<Vec<f64>>>),
+    Float32Array(Arc<std::sync::RwLock<Vec<f32>>>),
     Tuple(Arc<Vec<Value>>),
     Map(Arc<HashMap<MapKey, Value>>),
     Set(Arc<std::collections::HashSet<MapKey>>),
@@ -1177,6 +1178,7 @@ impl Value {
             Value::Array(_) => "Array",
             Value::Int64Array(_) => "Int64Array",
             Value::Float64Array(_) => "Float64Array",
+            Value::Float32Array(_) => "Float32Array",
             Value::Tuple(_) => "Tuple",
             Value::Map(_) => "Map",
             Value::Set(_) => "Set",
@@ -1294,6 +1296,7 @@ impl fmt::Debug for Value {
             Value::Array(a) => write!(f, "Array[{}]", a.read().unwrap().len()),
             Value::Int64Array(a) => write!(f, "Int64Array[{}]", a.read().unwrap().len()),
             Value::Float64Array(a) => write!(f, "Float64Array[{}]", a.read().unwrap().len()),
+            Value::Float32Array(a) => write!(f, "Float32Array[{}]", a.read().unwrap().len()),
             Value::Type(t) => write!(f, "<type {}>", t.name),
             Value::Pointer(p) => write!(f, "<ptr 0x{:x}>", p),
         }
