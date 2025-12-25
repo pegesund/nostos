@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Typed Arrays - Nostos Tutorial</title>
+    <title>Async I/O & HTTP - Nostos Tutorial</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <style>
         .hljs-operator {
@@ -64,7 +64,7 @@
                     <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
                     <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
                     <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
-                    <li><a href="06_typed_arrays.html" class="block text-blue-400 font-medium">6. Typed Arrays</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
                     <li><a href="07_type_system.html" class="block text-slate-400 hover:text-white transition">7. Type System</a></li>
                     <li><a href="08_traits.html" class="block text-slate-400 hover:text-white transition">8. Traits</a></li>
                     <li><a href="09_builtin_traits.html" class="block text-slate-400 hover:text-white transition">9. Builtin Traits</a></li>
@@ -75,7 +75,7 @@
                     <li><a href="14_json.html" class="block text-slate-400 hover:text-white transition">14. JSON</a></li>
                     <li><a href="15_concurrency.html" class="block text-slate-400 hover:text-white transition">15. Concurrency</a></li>
                     <li><a href="16_async_runtime.html" class="block text-slate-400 hover:text-white transition">16. Async Runtime</a></li>
-                    <li><a href="17_async_io_http.html" class="block text-slate-400 hover:text-white transition">17. Async I/O & HTTP</a></li>
+                    <li><a href="17_async_io_http.html" class="block text-blue-400 font-medium">17. Async I/O & HTTP</a></li>
                     <li><a href="18_reflection.html" class="block text-slate-400 hover:text-white transition">18. Reflection & Eval</a></li>
                     <li><a href="19_debugging_profiling.html" class="block text-slate-400 hover:text-white transition">19. Debugging & Profiling</a></li>
                 </ul>
@@ -85,109 +85,132 @@
         <!-- Main Content -->
         <main class="flex-1 md:ml-64 p-8 max-w-4xl">
             <div class="mb-12">
-                <h1 class="text-4xl font-bold text-white mb-6">Typed Arrays</h1>
+                <h1 class="text-4xl font-bold text-white mb-6">Asynchronous I/O & HTTP</h1>
                 <p class="text-lg text-slate-400 leading-relaxed mb-8">
-                    For high-performance numerical computing, Nostos offers specialized typed arrays: <code>Int64Array</code>, <code>Float64Array</code>, and <code>Float32Array</code>. These provide contiguous memory storage for unboxed numeric values, enabling efficient operations, especially when combined with Nostos's JIT compiler.
+                    Nostos provides fully asynchronous I/O operations for network and file access. You write code as if it were synchronous and blocking, but the runtime transparently handles scheduling other processes while I/O is in progress, ensuring high concurrency and responsiveness.
                 </p>
 
-                <!-- Int64Array -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Int64Array</h2>
-                <p class="text-slate-400 mb-4"><code>Int64Array</code> stores 64-bit signed integers. It's ideal for tasks like image processing, simulations, or any computation involving large sets of integer data where memory layout and access speed are critical.</p>
+                <!-- HTTP Client -->
+                <h2 class="text-2xl font-semibold text-white mb-4">HTTP Client</h2>
+                <p class="text-slate-400 mb-4">The built-in <code>Http</code> module allows making various web requests. These are non-blocking, meaning your program won't freeze while waiting for a response.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">
-# Create an array of 5 64-bit integers, initialized to 0
-my_int_array = newInt64Array(5)
+fetch_ip() = {
+    # Perform a GET request to get public IP
+    # I/O operations throw exceptions on error - use try/catch to handle
+    try {
+        resp = Http.get("https://httpbin.org/ip")
+        println("Your IP: " ++ resp.body)
+    } catch e ->
+        println("Error fetching IP: " ++ e)
+    end
+}
 
 main() = {
-    println(my_int_array.length()) # Prints 5
+    fetch_ip()
+    println("Client operations are non-blocking!")
+}
+</code></pre>
+                </div>
 
-    # Access and mutate elements using 0-based indexing
-    my_int_array[0] = 10
-    my_int_array[1] = 20
-    my_int_array[2] = my_int_array[0] + my_int_array[1] # 30
+                <!-- Parallel HTTP Requests -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Parallel HTTP Requests</h2>
+                <p class="text-slate-400 mb-4">Leverage Nostos's lightweight processes to perform many HTTP requests concurrently. The runtime ensures efficient use of resources without complex async/await keywords.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+timed_request_worker(parent, id) = {
+    println("Worker " ++ show(id) ++ " starting request...")
+    # This HTTP call yields the process, allowing others to run
+    # Exceptions are caught and reported
+    try {
+        data = Http.get("https://httpbin.org/delay/1")
+        println("Worker " ++ show(id) ++ " done: status " ++ show(data.status))
+        parent <- ("done", id)
+    } catch e -> {
+        println("Worker " ++ show(id) ++ " error: " ++ e)
+        parent <- ("done", id)
+    } end
+}
 
-    println(my_int_array[2]) # Prints 30
+main() = {
+    me = self()
+    println("Spawning 5 HTTP requests with 1-second server-side delay each.")
+    println("Total time will be ~1-2 seconds, not 5 seconds, due to parallelism.")
 
-    # Iterate and sum elements
-    var total = 0
-    for i = 0 to my_int_array.length() {
-        total = total + my_int_array[i]
+    # Spawn 5 workers; all requests are initiated almost simultaneously
+    for i = 1 to 5 {
+        spawn { timed_request_worker(me, i) }
     }
-    println("Sum: " ++ total.show()) # Prints "Sum: 60" (10+20+30+0+0)
-}
-</code></pre>
-                </div>
 
-                <!-- Float64Array -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Float64Array</h2>
-                <p class="text-slate-400 mb-4"><code>Float64Array</code> stores 64-bit floating-point numbers. It's perfect for scientific computing, machine learning, and graphics, where precision and speed for real numbers are paramount.</p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">
-# Create an array of 3 64-bit floats, initialized to 0.0
-my_float_array = newFloat64Array(3)
-
-main() = {
-    my_float_array[0] = 3.14
-    my_float_array[1] = 2.71
-    my_float_array[2] = my_float_array[0] * my_float_array[1]
-
-    println(my_float_array[2]) # Prints ~8.5094
-
-    # Example: Scale all elements
-    scale_factor = 2.0
-    for i = 0 to my_float_array.length() {
-        my_float_array[i] = my_float_array[i] * scale_factor
+    # Collect results from all workers
+    for i = 1 to 5 {
+        receive ("done", id) -> println("Request from worker " ++ show(id) ++ " completed.")
     }
-    println(my_float_array[0]) # Prints 6.28
+    println("All parallel requests finished!")
 }
 </code></pre>
                 </div>
 
-                <!-- Float32Array -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Float32Array</h2>
-                <p class="text-slate-400 mb-4"><code>Float32Array</code> stores 32-bit floating-point numbers. It's the native format for pgvector and ideal for AI/ML embeddings where memory efficiency matters more than precision.</p>
+                <!-- HTTP Server -->
+                <h2 class="text-2xl font-semibold text-white mb-4">HTTP Server</h2>
+                <p class="text-slate-400 mb-4">Build scalable web services with Nostos's non-blocking HTTP server. Spawn multiple worker processes to handle incoming requests concurrently on the same port.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">
+# Simple request handler
+handle_request(req) = {
+    path = req.path
+    if path == "/" then {
+        Server.respond(req.id, 200, [("Content-Type", "text/plain")], "Hello from Nostos!")
+    } else if path == "/echo" then {
+        Server.respond(req.id, 200, [("Content-Type", "text/plain")], req.body)
+    } else {
+        Server.respond(req.id, 404, [("Content-Type", "text/plain")], "Not Found")
+    }
+}
+
+# Worker process continuously accepts and handles requests
+server_worker(server_socket) = {
+    # Server.accept yields if no connection is available, allowing other processes to run
+    # Throws exception when server is closed
+    result = try {
+        request = Server.accept(server_socket)
+        handle_request(request)
+        server_worker(server_socket)  # Loop to accept next request
+    } catch e ->
+        ()  # Exit when server is closed or on error
+    end
+    result
+}
+
 main() = {
-    # Create from a list of floats
-    embedding = Float32Array.fromList([0.1, 0.2, 0.3, 0.4])
-
-    # Get length and access elements
-    len = embedding.length()  # 4
-    first = embedding.get(0)  # 0.1
-
-    # Set returns a new array (functional style)
-    updated = embedding.set(0, 0.5)
-
-    # Convert back to list
-    asList = embedding.toList()  # [0.1, 0.2, 0.3, 0.4]
-
-    # Create with size and initial value
-    zeros = Float32Array.make(128, 0.0)  # 128-dim zero vector
-
-    println("Vector length: " ++ len.show())
+    # Bind to port 8080 - throws on error
+    try {
+        server = Server.bind(8080)
+        println("HTTP Server listening on port 8080. Spawning workers...")
+        # Spawn multiple worker processes to handle incoming connections
+        for i = 1 to 4 {
+            spawn { server_worker(server) }
+        }
+        # Keep the main process alive (e.g., waiting for a shutdown signal)
+        receive _ -> ()
+    } catch e ->
+        println("Failed to bind server: " ++ e)
+    end
 }
 </code></pre>
                 </div>
 
-                <!-- Comparison with Lists -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Typed Arrays vs. Lists</h2>
-                <p class="text-slate-400 mb-4">While lists are flexible and immutable, typed arrays offer significant performance advantages for numerical work due to their contiguous memory, fixed element size, and direct indexing.</p>
-                <ul class="list-disc list-inside text-slate-400 mb-8 space-y-2">
-                    <li>**Lists**: Immutable, linked-list structure, good for functional patterns and variable-sized elements.</li>
-                    <li>**Typed Arrays**: Mutable, contiguous memory, fixed element types (<code>Int64</code>, <code>Float64</code>, <code>Float32</code>), 0-indexed random access, excellent for performance-critical numerical computations.</li>
-                </ul>
 
             </div>
 
                         <!-- Navigation Buttons -->
             <div class="flex justify-between border-t border-slate-800 pt-8">
-                <a href="05_maps_sets.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                <a href="16_async_runtime.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
                     <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
-                    Previous: Maps & Sets
+                    Previous: Async Runtime
                 </a>
-                <a href="07_type_system.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
-                    Next: Type System
+                <a href="18_reflection.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    Next: Reflection & Eval
                     <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m0 0h18"></path></svg>
                 </a>
             </div>

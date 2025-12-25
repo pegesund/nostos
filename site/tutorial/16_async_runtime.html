@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Async Runtime - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75;
+        }
+        .hljs-function {
+            color: #e5c07b;
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/yourusername/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+
+        <!-- Sidebar -->
+        <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_type_system.html" class="block text-slate-400 hover:text-white transition">7. Type System</a></li>
+                    <li><a href="08_traits.html" class="block text-slate-400 hover:text-white transition">8. Traits</a></li>
+                    <li><a href="09_builtin_traits.html" class="block text-slate-400 hover:text-white transition">9. Builtin Traits</a></li>
+                    <li><a href="10_trait_bounds.html" class="block text-slate-400 hover:text-white transition">10. Trait Bounds</a></li>
+                    <li><a href="11_error_handling.html" class="block text-slate-400 hover:text-white transition">11. Error Handling</a></li>
+                    <li><a href="12_modules.html" class="block text-slate-400 hover:text-white transition">12. Modules & Imports</a></li>
+                    <li><a href="13_stdlib.html" class="block text-slate-400 hover:text-white transition">13. Standard Library</a></li>
+                    <li><a href="14_json.html" class="block text-slate-400 hover:text-white transition">14. JSON</a></li>
+                    <li><a href="15_concurrency.html" class="block text-slate-400 hover:text-white transition">15. Concurrency</a></li>
+                    <li><a href="16_async_runtime.html" class="block text-blue-400 font-medium">16. Async Runtime</a></li>
+                    <li><a href="17_async_io_http.html" class="block text-slate-400 hover:text-white transition">17. Async I/O & HTTP</a></li>
+                    <li><a href="18_reflection.html" class="block text-slate-400 hover:text-white transition">18. Reflection & Eval</a></li>
+                    <li><a href="19_debugging_profiling.html" class="block text-slate-400 hover:text-white transition">19. Debugging & Profiling</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Async Runtime</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Nostos is built on <strong>Tokio</strong>, the leading async runtime for Rust. This means <em>everything</em> is non-blocking - I/O, network calls, database queries, even mvar locks. Understanding this architecture helps you write efficient, scalable programs.
+                </p>
+
+                <!-- The Big Picture -->
+                <div class="bg-gradient-to-r from-blue-900/30 to-emerald-900/30 rounded-lg p-6 mb-8 border border-blue-800/50">
+                    <h3 class="text-lg font-semibold text-white mb-3">The Big Picture</h3>
+                    <p class="text-slate-400 mb-4">
+                        Traditional languages block threads when waiting for I/O. If you have 100 database queries in flight, you need 100 OS threads - expensive!
+                    </p>
+                    <p class="text-slate-400">
+                        Nostos uses <strong>async/await under the hood</strong>. When a process waits for I/O, it <em>yields</em> to the runtime, allowing other processes to run. A handful of OS threads can serve millions of concurrent operations.
+                    </p>
+                </div>
+
+                <!-- Everything is Non-Blocking -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Everything is Non-Blocking</h2>
+                <p class="text-slate-400 mb-4">
+                    These operations look synchronous but are actually async under the hood:
+                </p>
+
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># All these operations are non-blocking!
+main() = {
+    # File I/O - yields while waiting for disk
+    content = File.read("data.txt")
+
+    # HTTP request - yields while waiting for response
+    response = Http.get("https://api.example.com")
+
+    # Database query - yields while PostgreSQL processes
+    conn = Pg.connect("host=localhost user=postgres")
+    rows = Pg.query(conn, "SELECT * FROM users", [])
+
+    # Sleep - yields, doesn't block the thread
+    sleep(1000)
+
+    # Message receive - yields until message arrives
+    receive
+        msg -> println(msg)
+    end
+}</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-8">
+                    You don't write <code>await</code> keywords - the runtime handles it automatically. Your code reads like synchronous code but executes asynchronously.
+                </p>
+
+                <!-- MVars: Async Locks -->
+                <h2 class="text-2xl font-semibold text-white mb-4">MVars: Async Locks</h2>
+                <p class="text-slate-400 mb-4">
+                    Even mvar locks are non-blocking. When a process tries to access an mvar that's locked by another process, it <em>yields</em> instead of blocking the thread.
+                </p>
+
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">mvar counter: Int = 0
+
+increment() = {
+    # This lock is async!
+    # If another process holds the lock, we yield - not block
+    counter = counter + 1
+    counter
+}
+
+main() = {
+    me = self()
+
+    # Spawn 1000 workers all trying to increment
+    for i = 0 to 1000 {
+        spawn {
+            increment()
+            me <- "done"
+        }
+    }
+
+    # Wait for all - workers yield while waiting for lock
+    for i = 0 to 1000 {
+        receive "done" -> () end
+    }
+
+    println("Final: " ++ show(counter))  # Always 1000
+}</code></pre>
+                </div>
+
+                <div class="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 mb-8">
+                    <p class="text-amber-300 text-sm">
+                        <strong>Key insight:</strong> Because locks are async, you can have thousands of processes contending for the same mvar without blocking OS threads. The runtime schedules them efficiently.
+                    </p>
+                </div>
+
+                <!-- Implications for Your Code -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Implications for Your Code</h2>
+
+                <h3 class="text-xl font-semibold text-white mb-3">1. Spawn Freely</h3>
+                <p class="text-slate-400 mb-4">
+                    Since processes are cheap and I/O is non-blocking, don't hesitate to spawn:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Fetch 100 URLs in parallel - only uses a few OS threads!
+fetch_all(urls) = {
+    me = self()
+    urls.each(url => spawn {
+        result = Http.get(url)
+        me <- (url, result)
+    })
+
+    # Collect results
+    urls.map(_ => receive (url, result) -> (url, result) end)
+}</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">2. Don't Fear Blocking Operations</h3>
+                <p class="text-slate-400 mb-4">
+                    In Nostos, "blocking" operations don't actually block. The runtime handles the async plumbing:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># This looks like it blocks, but doesn't!
+process_order(order_id) = {
+    # Each step yields while waiting
+    order = Pg.query(conn, "SELECT * FROM orders WHERE id = $1", [order_id])
+    customer = Pg.query(conn, "SELECT * FROM customers WHERE id = $1", [order.customer_id])
+    inventory = Http.post("https://inventory.api/check", order.items)
+
+    # Other processes run while we wait for each step
+    finalize(order, customer, inventory)
+}</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">3. Long-Running Computation</h3>
+                <p class="text-slate-400 mb-4">
+                    CPU-intensive work <em>does</em> block a thread. For heavy computation, consider breaking it up or running in a separate process:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Long computation - runs on its own thread
+heavy_work() = {
+    # This blocks a thread but doesn't affect other processes
+    result = expensive_calculation(1000000)
+    result
+}
+
+main() = {
+    me = self()
+
+    # Spawn heavy work so it doesn't block main
+    spawn { me <- heavy_work() }
+
+    # Main can continue doing other things
+    println("Computing in background...")
+
+    receive result -> println("Got: " ++ show(result)) end
+}</code></pre>
+                </div>
+
+                <!-- The Runtime Architecture -->
+                <h2 class="text-2xl font-semibold text-white mb-4">The Runtime Architecture</h2>
+                <p class="text-slate-400 mb-4">
+                    Here's what happens under the hood:
+                </p>
+
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <div class="space-y-4">
+                        <div class="flex items-start">
+                            <span class="inline-block w-8 h-8 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-sm font-bold mr-4">1</span>
+                            <div>
+                                <p class="text-white font-medium">Tokio Multi-Threaded Runtime</p>
+                                <p class="text-slate-400 text-sm">A pool of OS threads (usually = CPU cores) handles all work</p>
+                            </div>
+                        </div>
+                        <div class="flex items-start">
+                            <span class="inline-block w-8 h-8 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-sm font-bold mr-4">2</span>
+                            <div>
+                                <p class="text-white font-medium">Green Thread Scheduler</p>
+                                <p class="text-slate-400 text-sm">Nostos processes (green threads) are multiplexed onto these threads</p>
+                            </div>
+                        </div>
+                        <div class="flex items-start">
+                            <span class="inline-block w-8 h-8 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-sm font-bold mr-4">3</span>
+                            <div>
+                                <p class="text-white font-medium">Work Stealing</p>
+                                <p class="text-slate-400 text-sm">Idle threads steal work from busy ones, keeping all cores utilized</p>
+                            </div>
+                        </div>
+                        <div class="flex items-start">
+                            <span class="inline-block w-8 h-8 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-sm font-bold mr-4">4</span>
+                            <div>
+                                <p class="text-white font-medium">Async I/O</p>
+                                <p class="text-slate-400 text-sm">All I/O uses epoll/kqueue/IOCP - never blocks threads</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Performance Benefits -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Performance Benefits</h2>
+
+                <div class="grid md:grid-cols-2 gap-4 mb-8">
+                    <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
+                        <h4 class="text-white font-semibold mb-2">Memory Efficiency</h4>
+                        <p class="text-slate-400 text-sm">
+                            100,000 processes use a fraction of the memory that 100,000 OS threads would require.
+                        </p>
+                    </div>
+                    <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
+                        <h4 class="text-white font-semibold mb-2">High Concurrency</h4>
+                        <p class="text-slate-400 text-sm">
+                            Handle millions of connections with a small thread pool.
+                        </p>
+                    </div>
+                    <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
+                        <h4 class="text-white font-semibold mb-2">Low Latency</h4>
+                        <p class="text-slate-400 text-sm">
+                            No thread context switching overhead - just lightweight coroutine switches.
+                        </p>
+                    </div>
+                    <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
+                        <h4 class="text-white font-semibold mb-2">CPU Utilization</h4>
+                        <p class="text-slate-400 text-sm">
+                            Work stealing keeps all cores busy without manual load balancing.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="bg-gradient-to-r from-emerald-900/20 to-blue-900/20 rounded-lg p-6 mb-8 border border-emerald-800/30">
+                    <h3 class="text-lg font-semibold text-white mb-3">Summary</h3>
+                    <p class="text-slate-400">
+                        Nostos gives you the simplicity of synchronous code with the performance of async. You don't need to think about <code>async/await</code>, futures, or callback hell. Just write straightforward code and let the runtime handle the complexity.
+                    </p>
+                </div>
+
+            </div>
+
+                        <!-- Navigation Buttons -->
+            <div class="flex justify-between border-t border-slate-800 pt-8">
+                <a href="15_concurrency.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
+                    Previous: Concurrency
+                </a>
+                <a href="17_async_io_http.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    Next: Async I/O & HTTP
+                    <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m0 0h18"></path></svg>
+                </a>
+            </div>
+        </main>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>
+</html>
