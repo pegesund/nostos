@@ -33,6 +33,9 @@ sha2 = { workspace = true }
 md-5 = { workspace = true }
 bcrypt = { workspace = true }
 tokio-postgres = { workspace = true }
+postgres-native-tls = { workspace = true }
+native-tls = { workspace = true }
+serde_json = { workspace = true }
 
 [[bench]]
 name = "vm_vs_runtime"

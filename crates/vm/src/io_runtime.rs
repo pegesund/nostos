@@ -18,6 +18,8 @@ use chrono::Timelike;
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::{Client as PgClient, NoTls, Statement};
+use postgres_native_tls::MakeTlsConnector;
+use native_tls::TlsConnector;
 
 use crate::process::{IoResponseValue, PgValue};
 
@@ -91,6 +93,10 @@ pub enum PgParam {
     String(String),
     /// Timestamp as milliseconds since Unix epoch (UTC)
     Timestamp(i64),
+    /// JSON/JSONB data as string
+    Json(String),
+    /// Vector data (for pgvector extension)
+    Vector(Vec<f32>),
 }
 
 /// Result type for IO operations
@@ -1132,15 +1138,55 @@ impl IoRuntime {
                     next_pg_handle += 1;
 
                     tokio::spawn(async move {
-                        match tokio_postgres::connect(&connection_string, NoTls).await {
-                            Ok((client, connection)) => {
-                                // Spawn a task to drive the connection
-                                tokio::spawn(async move {
-                                    if let Err(e) = connection.await {
-                                        eprintln!("PostgreSQL connection error: {}", e);
-                                    }
-                                });
+                        // Check if TLS is required
+                        let use_tls = connection_string.contains("sslmode=require") ||
+                                      connection_string.contains("sslmode=prefer") ||
+                                      connection_string.contains("sslmode=verify-ca") ||
+                                      connection_string.contains("sslmode=verify-full");
 
+                        let connect_result: Result<(PgClient, _), tokio_postgres::Error> = if use_tls {
+                            // Create TLS connector with permissive settings for self-signed certs
+                            let tls_connector = match TlsConnector::builder()
+                                .danger_accept_invalid_certs(true) // For self-signed certs
+                                .danger_accept_invalid_hostnames(true) // For localhost testing
+                                .build() {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::PgError(format!("TLS error: {}", e))));
+                                    return;
+                                }
+                            };
+                            let connector = MakeTlsConnector::new(tls_connector);
+
+                            // Connect with TLS
+                            match tokio_postgres::connect(&connection_string, connector).await {
+                                Ok((client, connection)) => {
+                                    tokio::spawn(async move {
+                                        if let Err(e) = connection.await {
+                                            eprintln!("PostgreSQL TLS connection error: {}", e);
+                                        }
+                                    });
+                                    Ok((client, ()))
+                                }
+                                Err(e) => Err(e),
+                            }
+                        } else {
+                            // Connect without TLS
+                            match tokio_postgres::connect(&connection_string, NoTls).await {
+                                Ok((client, connection)) => {
+                                    tokio::spawn(async move {
+                                        if let Err(e) = connection.await {
+                                            eprintln!("PostgreSQL connection error: {}", e);
+                                        }
+                                    });
+                                    Ok((client, ()))
+                                }
+                                Err(e) => Err(e),
+                            }
+                        };
+
+                        match connect_result {
+                            Ok((client, _)) => {
                                 let pg_conn = PgConnection {
                                     client,
                                     prepared: HashMap::new(),
@@ -1466,11 +1512,35 @@ impl IoRuntime {
                     Err(_) => PgValue::Null,
                 }
             }
-            _ => {
-                // For other types, try to get as string
-                match row.try_get::<_, String>(idx) {
-                    Ok(v) => PgValue::String(v),
+            Type::JSON | Type::JSONB => {
+                // JSON/JSONB - get as string representation
+                match row.try_get::<_, serde_json::Value>(idx) {
+                    Ok(v) => PgValue::Json(v.to_string()),
                     Err(_) => PgValue::Null,
+                }
+            }
+            _ => {
+                // Check for vector type by name (pgvector extension)
+                if col_type.name() == "vector" {
+                    // Vector type - parse from text representation
+                    match row.try_get::<_, String>(idx) {
+                        Ok(v) => {
+                            // Parse "[1.0, 2.0, 3.0]" format
+                            let trimmed = v.trim_start_matches('[').trim_end_matches(']');
+                            let floats: Vec<f32> = trimmed
+                                .split(',')
+                                .filter_map(|s| s.trim().parse::<f32>().ok())
+                                .collect();
+                            PgValue::Vector(floats)
+                        }
+                        Err(_) => PgValue::Null,
+                    }
+                } else {
+                    // For other types, try to get as string
+                    match row.try_get::<_, String>(idx) {
+                        Ok(v) => PgValue::String(v),
+                        Err(_) => PgValue::Null,
+                    }
                 }
             }
         }
@@ -1489,6 +1559,8 @@ impl IoRuntime {
                 PgParam::Float(_) => format!("{}::float8", placeholder),
                 PgParam::String(_) => format!("{}::text", placeholder),
                 PgParam::Timestamp(_) => format!("{}::timestamptz", placeholder),
+                PgParam::Json(_) => format!("{}::jsonb", placeholder),
+                PgParam::Vector(_) => format!("{}::vector", placeholder),
             };
             // Only replace if not already typed (check for ::)
             let check_pattern = format!("{}::", placeholder);
@@ -1632,8 +1704,20 @@ impl IoRuntime {
                     }
                 }
                 PgParam::String(s) => {
-                    // Strings can be used for any type - PostgreSQL will convert
-                    Box::new(s.clone()) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>
+                    // Check if expected type is JSON/JSONB
+                    match expected_type {
+                        Some(t) if *t == Type::JSON || *t == Type::JSONB => {
+                            // Parse string as JSON and send as serde_json::Value
+                            match serde_json::from_str::<serde_json::Value>(s) {
+                                Ok(v) => Box::new(v) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>,
+                                Err(_) => Box::new(s.clone()) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>,
+                            }
+                        }
+                        _ => {
+                            // Strings can be used for any type - PostgreSQL will convert
+                            Box::new(s.clone()) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>
+                        }
+                    }
                 }
                 PgParam::Timestamp(millis) => {
                     use chrono::{DateTime, NaiveTime};
@@ -1666,6 +1750,20 @@ impl IoRuntime {
                             Box::new(dt) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>
                         }
                     }
+                }
+                PgParam::Json(s) => {
+                    // Send JSON as serde_json::Value for proper JSONB handling
+                    match serde_json::from_str::<serde_json::Value>(s) {
+                        Ok(v) => Box::new(v) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>,
+                        // Fallback to string if parsing fails
+                        Err(_) => Box::new(s.clone()) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>,
+                    }
+                }
+                PgParam::Vector(v) => {
+                    // Send vector as text representation for pgvector
+                    // Format: "[1.0, 2.0, 3.0]"
+                    let text = format!("[{}]", v.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(","));
+                    Box::new(text) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>
                 }
             }
         }).collect()

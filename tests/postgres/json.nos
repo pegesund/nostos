@@ -1,0 +1,121 @@
+# expect: 0
+# PostgreSQL JSON/JSONB type tests
+# REQUIRES: PostgreSQL running at localhost with user/password: postgres/postgres
+
+# Test inserting and selecting JSON as a string
+test_json_string(conn) = {
+    # Create a test table with JSONB column
+    Pg.execute(conn, "DROP TABLE IF EXISTS test_json", [])
+    Pg.execute(conn, "CREATE TABLE test_json (id SERIAL PRIMARY KEY, data JSONB)", [])
+
+    # Insert JSON as a string
+    jsonStr = "{\"name\": \"Alice\", \"age\": 30}"
+    Pg.execute(conn, "INSERT INTO test_json (data) VALUES ($1::jsonb)", [jsonStr])
+
+    # Select and verify
+    rows = Pg.query(conn, "SELECT data FROM test_json", [])
+    result = head(head(rows))
+
+    # Result is returned as a JSON string
+    println("JSON string result: " ++ result)
+    assert(result != "")
+    ()
+}
+
+# Test inserting Json variant directly
+test_json_variant(conn) = {
+    Pg.execute(conn, "DELETE FROM test_json", [])
+
+    # Create a Json variant
+    json = Object([("city", String("Oslo")), ("population", Number(700000.0))])
+
+    # Insert the Json variant directly
+    Pg.execute(conn, "INSERT INTO test_json (data) VALUES ($1)", [json])
+
+    # Select and verify
+    rows = Pg.query(conn, "SELECT data FROM test_json", [])
+    result = head(head(rows))
+    println("JSON variant result: " ++ result)
+
+    # Parse the result back - jsonParse returns Json directly
+    parsed = jsonParse(result)
+    match parsed
+        Object(fields) -> {
+            println("Parsed successfully as Object")
+            ()
+        }
+        _ -> {
+            println("Unexpected parse result")
+            ()
+        }
+}
+
+# Test JSON operators in queries
+test_json_operators(conn) = {
+    Pg.execute(conn, "DELETE FROM test_json", [])
+
+    # Insert test data
+    Pg.execute(conn, "INSERT INTO test_json (data) VALUES ($1::jsonb)", ["{\"name\": \"Bob\", \"items\": [1, 2, 3]}"])
+
+    # Use -> operator to extract field
+    rows = Pg.query(conn, "SELECT data->>'name' FROM test_json", [])
+    name = head(head(rows))
+    assert_eq(name, "Bob")
+
+    # Use jsonb_array_length
+    rows2 = Pg.query(conn, "SELECT jsonb_array_length(data->'items') FROM test_json", [])
+    len = head(head(rows2))
+    assert_eq(len, 3)
+    ()
+}
+
+# Test nested JSON
+test_nested_json(conn) = {
+    Pg.execute(conn, "DELETE FROM test_json", [])
+
+    nested = Object([
+        ("user", Object([
+            ("name", String("Charlie")),
+            ("emails", Array([String("a@b.com"), String("c@d.com")]))
+        ])),
+        ("active", Bool(true))
+    ])
+
+    Pg.execute(conn, "INSERT INTO test_json (data) VALUES ($1)", [nested])
+
+    # Extract nested value
+    rows = Pg.query(conn, "SELECT data->'user'->>'name' FROM test_json", [])
+    name = head(head(rows))
+    assert_eq(name, "Charlie")
+    ()
+}
+
+# Test JSON null
+test_json_null(conn) = {
+    Pg.execute(conn, "DELETE FROM test_json", [])
+
+    Pg.execute(conn, "INSERT INTO test_json (data) VALUES ($1)", [Null])
+
+    rows = Pg.query(conn, "SELECT data FROM test_json", [])
+    result = head(head(rows))
+    println("JSON null result: " ++ result)
+    assert_eq(result, "null")
+    ()
+}
+
+main() = {
+    conn = Pg.connect("host=localhost user=postgres password=postgres")
+
+    test_json_string(conn)
+    test_json_variant(conn)
+    test_json_operators(conn)
+    test_nested_json(conn)
+    test_json_null(conn)
+
+    # Cleanup
+    Pg.execute(conn, "DROP TABLE IF EXISTS test_json", [])
+    Pg.close(conn)
+
+    println("All JSON tests passed!")
+    0
+}

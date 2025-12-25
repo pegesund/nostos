@@ -798,7 +798,7 @@ impl Compiler {
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
-            "Pg", "Uuid", "Crypto",
+            "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array",
         ].iter().map(|s| s.to_string()).collect();
 
         let mut this = Self {
@@ -1252,7 +1252,7 @@ impl Compiler {
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
-            "Pg", "Uuid", "Crypto",
+            "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -4776,6 +4776,100 @@ impl Compiler {
                             let handle_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ExecKill(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
+                        // === Float64Array builtins ===
+                        "Float64Array.fromList" if args.len() == 1 => {
+                            let list_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![list_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        "Float64Array.length" if args.len() == 1 => {
+                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        "Float64Array.get" if args.len() == 2 => {
+                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
+                            let idx_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg, idx_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        "Float64Array.set" if args.len() == 3 => {
+                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
+                            let idx_reg = self.compile_expr_tail(&args[1], false)?;
+                            let val_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg, idx_reg, val_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        "Float64Array.toList" if args.len() == 1 => {
+                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        "Float64Array.make" if args.len() == 2 => {
+                            let size_reg = self.compile_expr_tail(&args[0], false)?;
+                            let val_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![size_reg, val_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // === Int64Array builtins ===
+                        "Int64Array.fromList" if args.len() == 1 => {
+                            let list_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![list_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        "Int64Array.length" if args.len() == 1 => {
+                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        "Int64Array.get" if args.len() == 2 => {
+                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
+                            let idx_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg, idx_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        "Int64Array.set" if args.len() == 3 => {
+                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
+                            let idx_reg = self.compile_expr_tail(&args[1], false)?;
+                            let val_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg, idx_reg, val_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        "Int64Array.toList" if args.len() == 1 => {
+                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        "Int64Array.make" if args.len() == 2 => {
+                            let size_reg = self.compile_expr_tail(&args[0], false)?;
+                            let val_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![size_reg, val_reg].into()), line);
                             return Ok(dst);
                         }
                         _ => {} // Fall through to user-defined functions

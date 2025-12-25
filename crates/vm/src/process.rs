@@ -242,6 +242,10 @@ pub enum PgValue {
     /// Timestamp as milliseconds since Unix epoch (UTC)
     /// Used for TIMESTAMP, TIMESTAMPTZ, DATE, TIME
     Timestamp(i64),
+    /// JSON/JSONB data as string
+    Json(String),
+    /// Vector data (for pgvector extension)
+    Vector(Vec<f32>),
 }
 
 /// A call frame on the stack.
