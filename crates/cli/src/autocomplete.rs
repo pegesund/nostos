@@ -2202,6 +2202,53 @@ mod tests {
     }
 
     #[test]
+    fn test_complete_tuple_literal_methods() {
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        // (1, "hello", 3.14). should suggest Tuple methods
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "(1, \"hello\", 3.14)".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        assert!(items.iter().any(|i| i.text == "length" && i.kind == CompletionKind::Method),
+            "Tuple should have length method, got: {:?}", items);
+    }
+
+    #[test]
+    fn test_complete_tuple_literal_with_prefix() {
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        // (1, 2).le should suggest length
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "(1, 2)".to_string(),
+            prefix: "le".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        assert_eq!(items.len(), 1, "Should only match 'length', got: {:?}", items);
+        assert_eq!(items[0].text, "length");
+    }
+
+    #[test]
+    fn test_tuple_literal_detection() {
+        // Tuple must have comma to distinguish from parenthesized expression
+        assert_eq!(Autocomplete::detect_literal_type("(1, 2)"), Some("Tuple"));
+        assert_eq!(Autocomplete::detect_literal_type("(1, 2, 3)"), Some("Tuple"));
+        assert_eq!(Autocomplete::detect_literal_type("(\"a\", \"b\")"), Some("Tuple"));
+
+        // Single element in parens is NOT a tuple
+        assert_eq!(Autocomplete::detect_literal_type("(1)"), None);
+
+        // Other literals should still work
+        assert_eq!(Autocomplete::detect_literal_type("[1, 2]"), Some("List"));
+        assert_eq!(Autocomplete::detect_literal_type("\"hello\""), Some("String"));
+    }
+
+    #[test]
     fn test_complete_literal_with_prefix() {
         let source = MockSource::new();
         let ac = Autocomplete::new();
