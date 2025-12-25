@@ -1912,7 +1912,8 @@ impl ReplEngine {
     fn has_definitions(module: &nostos_syntax::Module) -> bool {
         for item in &module.items {
             match item {
-                Item::FnDef(_) | Item::TypeDef(_) | Item::MvarDef(_) => return true,
+                Item::FnDef(_) | Item::TypeDef(_) | Item::MvarDef(_) |
+                Item::TraitDef(_) | Item::TraitImpl(_) => return true,
                 _ => {}
             }
         }
@@ -6071,6 +6072,29 @@ mod tests {
         let result = engine.eval("{ receive\nx -> x\nafter 0 -> \"timeout\"\nend }");
         assert!(result.is_ok(), "Receive should work: {:?}", result);
         assert_eq!(result.unwrap().trim(), "\"timeout\"");
+    }
+
+    #[test]
+    fn test_trait_implementation_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Define type
+        let result = engine.eval("type Rectangle = { width: Int, height: Int }");
+        assert!(result.is_ok(), "Type def should work: {:?}", result);
+
+        // Define trait
+        let result = engine.eval("trait Area area(self) -> Int end");
+        assert!(result.is_ok(), "Trait def should work: {:?}", result);
+
+        // Implement trait (Type: Trait method(self) = ... end)
+        let result = engine.eval("Rectangle: Area area(self) = self.width * self.height end");
+        assert!(result.is_ok(), "Trait impl should work: {:?}", result);
+
+        // Use trait method
+        let result = engine.eval("Rectangle(4, 5).area()");
+        assert!(result.is_ok(), "Trait method should work: {:?}", result);
+        assert_eq!(result.unwrap().trim(), "20");
     }
 
     #[test]
