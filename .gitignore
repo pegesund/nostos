@@ -38,6 +38,10 @@ Thumbs.db
 # Log files
 *.log
 
+# Nostos TUI project files (auto-generated)
+.nostos/
+nostos.toml
+
 # Haskell build artifacts
 bench/list_iterate_hs
 bench/*.hi
