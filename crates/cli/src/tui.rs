@@ -21,6 +21,7 @@ use crate::repl_panel::ReplPanel;
 use crate::inspector_panel::InspectorPanel;
 use crate::nostos_panel::NostosPanel;
 use crate::debug_panel::{DebugPanel, DebugPanelCommand};
+use crate::git_panel::{GitHistoryPanel, GitPanelCommand, HistoryTarget};
 
 /// Debug logging disabled. Uncomment to enable.
 #[allow(unused)]
@@ -508,6 +509,8 @@ struct TuiState {
     console_open: bool,
     nostos_panel_open: bool,
     debug_panel_open: bool,
+    git_panel_open: bool,
+    git_panel_target: Option<crate::git_panel::HistoryTarget>,
     /// Currently open panel info (if nostos_panel_open is true) - old API
     current_panel: Option<PanelInfo>,
     /// Currently open panel ID (if nostos_panel_open is true) - new API
@@ -568,6 +571,8 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         console_open: true,
         nostos_panel_open: false,
         debug_panel_open: false,
+        git_panel_open: false,
+        git_panel_target: None,
         current_panel: None,
         current_panel_id: None,
     })));
@@ -733,6 +738,8 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         sync_debug_panel_breakpoints(s);
         // Poll for println output and show in REPL panels during debugging
         poll_debug_output(s);
+        // Poll git panel for commands and data fetching
+        poll_git_panel(s);
     });
 
     siv.run();
@@ -1050,9 +1057,9 @@ fn poll_debug_events(s: &mut Cursive) {
 /// Uses LinearLayout for equal window distribution
 /// Navigation: Ctrl+Left/Right to move between windows
 fn rebuild_workspace(s: &mut Cursive) {
-    let (editor_names, repl_ids, engine, inspector_open, console_open, nostos_panel_open, debug_panel_open, current_panel, current_panel_id) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+    let (editor_names, repl_ids, engine, inspector_open, console_open, nostos_panel_open, debug_panel_open, git_panel_open, git_panel_target, current_panel, current_panel_id) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let state = state.borrow();
-        (state.open_editors.clone(), state.open_repls.clone(), state.engine.clone(), state.inspector_open, state.console_open, state.nostos_panel_open, state.debug_panel_open, state.current_panel.clone(), state.current_panel_id)
+        (state.open_editors.clone(), state.open_repls.clone(), state.engine.clone(), state.inspector_open, state.console_open, state.nostos_panel_open, state.debug_panel_open, state.git_panel_open, state.git_panel_target.clone(), state.current_panel.clone(), state.current_panel_id)
     }).unwrap();
 
     // Get console content BEFORE clearing workspace
@@ -1171,7 +1178,18 @@ fn rebuild_workspace(s: &mut Cursive) {
         None
     };
 
-    if windows.is_empty() && nostos_view.is_none() {
+    // Git history panel (if open)
+    let git_view: Option<Box<dyn View>> = if git_panel_open {
+        if let Some(ref target) = git_panel_target {
+            Some(Box::new(create_git_view(&engine, target)))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if windows.is_empty() && nostos_view.is_none() && git_view.is_none() {
         // Empty workspace - show hint
         let layout = LinearLayout::vertical()
             .child(TextView::new("Workspace empty. Ctrl+B for Browser, Ctrl+R for REPL.")
@@ -1214,6 +1232,11 @@ fn rebuild_workspace(s: &mut Cursive) {
     // Add nostos panel as separate row if open
     if let Some(nostos) = nostos_view {
         layout.add_child(nostos);
+    }
+
+    // Add git history panel as separate row if open
+    if let Some(git) = git_view {
+        layout.add_child(git);
     }
 
     s.add_fullscreen_layer(layout);
@@ -1660,6 +1683,177 @@ fn create_debug_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
     ActiveWindow::new(panel_with_events, "Debug")
 }
 
+/// Open git history for a definition
+fn open_git_history_for_definition(s: &mut Cursive, name: &str) {
+    let target = HistoryTarget::Definition(name.to_string());
+
+    s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let mut state = state.borrow_mut();
+        state.git_panel_open = true;
+        state.git_panel_target = Some(target);
+    });
+
+    rebuild_workspace(s);
+    s.focus_name("git_panel").ok();
+    log_to_repl(s, &format!("Opened git history for '{}'", name));
+}
+
+/// Close the git panel
+fn close_git_panel(s: &mut Cursive) {
+    s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let mut state = state.borrow_mut();
+        state.git_panel_open = false;
+        state.git_panel_target = None;
+    });
+    rebuild_workspace(s);
+    s.focus_name("repl_log").ok();
+}
+
+/// Create the git history panel view
+fn create_git_view(engine: &Rc<RefCell<ReplEngine>>, target: &HistoryTarget) -> impl View {
+    let mut panel = GitHistoryPanel::new(target.clone());
+
+    // Load commits for the target
+    let engine_ref = engine.borrow();
+    if engine_ref.has_source_manager() {
+        match target {
+            HistoryTarget::Definition(name) => {
+                match engine_ref.get_definition_history(name) {
+                    Ok(commits) => panel.set_commits(commits),
+                    Err(e) => panel.set_error(e),
+                }
+            }
+            HistoryTarget::Module(name) => {
+                match engine_ref.get_module_history(name) {
+                    Ok(commits) => panel.set_commits(commits),
+                    Err(e) => panel.set_error(e),
+                }
+            }
+        }
+    } else {
+        panel.set_error("No project loaded (need directory mode)".to_string());
+    }
+
+    let panel_with_events = OnEventView::new(panel.with_name("git_panel"))
+        .on_event(Key::Esc, |s| {
+            close_git_panel(s);
+        })
+        .on_event(Event::CtrlChar('w'), |s| {
+            close_git_panel(s);
+        })
+        .on_event(Event::Char('q'), |s| {
+            close_git_panel(s);
+        });
+
+    ActiveWindow::new(panel_with_events, "Git History")
+}
+
+/// Poll git panel for commands and data requests
+fn poll_git_panel(s: &mut Cursive) {
+    // Check for pending command
+    let cmd = s.call_on_name("git_panel", |panel: &mut GitHistoryPanel| {
+        panel.take_pending_command()
+    });
+
+    if let Some(Some(cmd)) = cmd {
+        match cmd {
+            GitPanelCommand::Close => {
+                close_git_panel(s);
+                return;
+            }
+            GitPanelCommand::Restore { commit: _, content } => {
+                // Get the target definition name
+                let target_name = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                    state.borrow().git_panel_target.as_ref().map(|t| {
+                        match t {
+                            HistoryTarget::Definition(name) => name.clone(),
+                            HistoryTarget::Module(name) => name.clone(),
+                        }
+                    })
+                }).flatten();
+
+                if let Some(name) = target_name {
+                    // Restore the content
+                    let result = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                        state.borrow().engine.borrow_mut().save_definition(&name, &content)
+                    });
+
+                    match result {
+                        Some(Ok(_)) => {
+                            log_to_repl(s, &format!("Restored '{}' from git history", name));
+                            close_git_panel(s);
+                        }
+                        Some(Err(e)) => {
+                            log_to_repl(s, &format!("Failed to restore: {}", e));
+                        }
+                        None => {
+                            log_to_repl(s, "Failed to restore: no state");
+                        }
+                    }
+                }
+                return;
+            }
+        }
+    }
+
+    // Check if panel needs diff data
+    let needs_diff = s.call_on_name("git_panel", |panel: &mut GitHistoryPanel| {
+        panel.needs_diff().map(|s| s.to_string())
+    }).flatten();
+
+    if let Some(commit_hash) = needs_diff {
+        let (target, engine) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+            (state.borrow().git_panel_target.clone(), state.borrow().engine.clone())
+        }).unwrap();
+
+        if let Some(target) = target {
+            let diff = match &target {
+                HistoryTarget::Definition(name) => {
+                    engine.borrow().get_definition_diff(name, &commit_hash)
+                }
+                HistoryTarget::Module(_) => {
+                    // For module, we'd need a different approach
+                    Ok("(module diffs not yet supported)".to_string())
+                }
+            };
+
+            if let Ok(diff) = diff {
+                s.call_on_name("git_panel", |panel: &mut GitHistoryPanel| {
+                    panel.set_diff(&commit_hash, diff);
+                });
+            }
+        }
+    }
+
+    // Check if panel needs content data (for full view)
+    let needs_content = s.call_on_name("git_panel", |panel: &mut GitHistoryPanel| {
+        panel.needs_content().map(|s| s.to_string())
+    }).flatten();
+
+    if let Some(commit_hash) = needs_content {
+        let (target, engine) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+            (state.borrow().git_panel_target.clone(), state.borrow().engine.clone())
+        }).unwrap();
+
+        if let Some(target) = target {
+            let content = match &target {
+                HistoryTarget::Definition(name) => {
+                    engine.borrow().get_definition_at_commit(name, &commit_hash)
+                }
+                HistoryTarget::Module(_) => {
+                    Ok("(module content view not yet supported)".to_string())
+                }
+            };
+
+            if let Ok(content) = content {
+                s.call_on_name("git_panel", |panel: &mut GitHistoryPanel| {
+                    panel.set_content(&commit_hash, content);
+                });
+            }
+        }
+    }
+}
+
 /// Show help dialog with all keybindings
 fn show_help_dialog(s: &mut Cursive) {
     use cursive::theme::{Effect, Style, ColorStyle, BaseColor, Color};
@@ -1928,6 +2122,12 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
              let name = name_for_graph.clone();
              let engine = engine_for_graph.clone();
              show_call_graph_dialog(s, engine, name);
+        })
+        .on_event(Event::CtrlChar('i'), {
+            let name = name.to_string();
+            move |s| {
+                open_git_history_for_definition(s, &name);
+            }
         })
         .on_event(Event::CtrlChar('s'), move |s| {
             debug_log(&format!("Ctrl+S pressed for: {}", name_for_save));
