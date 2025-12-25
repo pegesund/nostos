@@ -1,18 +1,25 @@
-# List sum benchmark using native listSum
-# Tests list traversal performance
+# Test native listSum vs recursive sum
 
-# Build a list of n integers
-range(0) = []
-range(n) = [n | range(n - 1)]
+# Build a list
+buildList(0) = []
+buildList(n) = [n | buildList(n - 1)]
 
 main() = {
-    # Create list of 1000 integers and sum 100 times
-    lst = range(1000)
-    var total = 0
-    var i = 0
-    while i < 100 {
-        total = total + listSum(lst)
-        i = i + 1
-    }
-    total
+    n = 100000
+    list = buildList(n)
+
+    # Test native listSum - 10 iterations
+    native1 = listSum(list)
+    native2 = listSum(list)
+    native3 = listSum(list)
+    native4 = listSum(list)
+    native5 = listSum(list)
+    native6 = listSum(list)
+    native7 = listSum(list)
+    native8 = listSum(list)
+    native9 = listSum(list)
+    native10 = listSum(list)
+
+    println(native1)
+    native1
 }

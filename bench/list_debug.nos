@@ -1,0 +1,5 @@
+# Simple list sum to analyze bytecode
+sumAcc([], acc) = acc
+sumAcc([x | xs], acc) = sumAcc(xs, acc + x)
+
+main() = sumAcc([1, 2, 3, 4, 5], 0)

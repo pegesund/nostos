@@ -1,0 +1,41 @@
+# Micro-benchmarks for list operations
+
+# Pure recursion - sum with accumulator (no allocation)
+sumAcc([], acc) = acc
+sumAcc([_ | xs], acc) = sumAcc(xs, acc + 1)
+
+# Build a list (allocation heavy)
+buildList(0) = []
+buildList(n) = [n | buildList(n - 1)]
+
+# Just iterate without building (no cons)
+countLen([], acc) = acc
+countLen([_ | xs], acc) = countLen(xs, acc + 1)
+
+# Map - builds new list (allocation + iteration)
+mapDouble([]) = []
+mapDouble([x | xs]) = [x * 2 | mapDouble(xs)]
+
+main() = {
+    n = 20000
+
+    # Test 1: Build list
+    list = buildList(n)
+    len1 = countLen(list, 0)
+    println(len1)
+
+    # Test 2: Iterate multiple times (no allocation)
+    sum1 = sumAcc(list, 0)
+    sum2 = sumAcc(list, 0)
+    sum3 = sumAcc(list, 0)
+    sum4 = sumAcc(list, 0)
+    sum5 = sumAcc(list, 0)
+    println(sum1)
+
+    # Test 3: Map (allocation heavy)
+    mapped = mapDouble(list)
+    len2 = countLen(mapped, 0)
+    println(len2)
+
+    len1 + sum1 + len2
+}

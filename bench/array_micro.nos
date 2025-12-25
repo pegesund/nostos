@@ -1,0 +1,28 @@
+# Micro-benchmarks for Int64Array operations (JIT-able)
+
+# Sum array elements
+sumArray(arr, i, acc) = if i >= length(arr) then acc else sumArray(arr, i + 1, acc + arr[i])
+
+# Fill array with values
+fillArray(arr, i) = if i >= length(arr) then arr else {
+    arr[i] = i + 1
+    fillArray(arr, i + 1)
+}
+
+main() = {
+    n = 20000
+
+    # Create and fill array
+    arr = newInt64Array(n)
+    filled = fillArray(arr, 0)
+
+    # Sum multiple times
+    sum1 = sumArray(filled, 0, 0)
+    sum2 = sumArray(filled, 0, 0)
+    sum3 = sumArray(filled, 0, 0)
+    sum4 = sumArray(filled, 0, 0)
+    sum5 = sumArray(filled, 0, 0)
+
+    println(sum1)
+    sum1
+}

@@ -1,0 +1,14 @@
+# List-only benchmark
+buildList(0) = []
+buildList(n) = [n | buildList(n - 1)]
+
+sumList([], acc) = acc
+sumList([x | xs], acc) = sumList(xs, acc + x)
+
+main() = {
+    n = 50000
+    list = buildList(n)
+    result = sumList(list, 0)
+    println(result)
+    result
+}

@@ -1,0 +1,16 @@
+# Int64Array-only benchmark
+fillArray(arr, i) = if i >= length(arr) then arr else {
+    arr[i] = i + 1
+    fillArray(arr, i + 1)
+}
+
+sumArray(arr, i, acc) = if i >= length(arr) then acc else sumArray(arr, i + 1, acc + arr[i])
+
+main() = {
+    n = 50000
+    arr = newInt64Array(n)
+    filled = fillArray(arr, 0)
+    result = sumArray(filled, 0, 0)
+    println(result)
+    result
+}
