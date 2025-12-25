@@ -10,25 +10,25 @@ test_vector_basic(conn) = {
     Pg.execute(conn, "DROP TABLE IF EXISTS test_vectors", [])
     Pg.execute(conn, "CREATE TABLE test_vectors (id SERIAL PRIMARY KEY, embedding vector(3))", [])
 
-    # Insert a vector using Float64Array
-    vec = Float64Array.fromList([1.0, 2.0, 3.0])
+    # Insert a vector using Float32Array (pgvector uses 32-bit floats)
+    vec = Float32Array.fromList([1.0, 2.0, 3.0])
     Pg.execute(conn, "INSERT INTO test_vectors (embedding) VALUES ($1)", [vec])
 
     # Select and verify
     rows = Pg.query(conn, "SELECT embedding FROM test_vectors", [])
     result = head(head(rows))
 
-    # Result should be a Float64Array
+    # Result should be a Float32Array
     println("Vector result type: " ++ typeOf(result))
     println("Vector result: " ++ show(result))
 
     # Verify values
-    assert_eq(Float64Array.length(result), 3)
+    assert_eq(Float32Array.length(result), 3)
 }
 
 # Test inserting vector as list of floats
 test_vector_from_list(conn) = {
-    Pg.execute(conn, "DELETE FROM test_vectors", [])
+    Pg.execute(conn, "TRUNCATE test_vectors RESTART IDENTITY", [])
 
     # Insert using a list of floats
     vecList = [4.0, 5.0, 6.0]
@@ -37,12 +37,12 @@ test_vector_from_list(conn) = {
     rows = Pg.query(conn, "SELECT embedding FROM test_vectors", [])
     result = head(head(rows))
     println("Vector from list: " ++ show(result))
-    assert_eq(Float64Array.length(result), 3)
+    assert_eq(Float32Array.length(result), 3)
 }
 
 # Test vector similarity search
 test_vector_similarity(conn) = {
-    Pg.execute(conn, "DELETE FROM test_vectors", [])
+    Pg.execute(conn, "TRUNCATE test_vectors RESTART IDENTITY", [])
 
     # Insert some test vectors
     Pg.execute(conn, "INSERT INTO test_vectors (embedding) VALUES ('[1,0,0]'::vector)", [])
@@ -50,7 +50,7 @@ test_vector_similarity(conn) = {
     Pg.execute(conn, "INSERT INTO test_vectors (embedding) VALUES ('[0,0,1]'::vector)", [])
 
     # Find nearest to [1,0,0]
-    query = Float64Array.fromList([1.0, 0.0, 0.0])
+    query = Float32Array.fromList([1.0, 0.0, 0.0])
     rows = Pg.query(conn, "SELECT id, embedding <-> $1 as distance FROM test_vectors ORDER BY distance LIMIT 1", [query])
     row = head(rows)
     id = head(row)
@@ -62,12 +62,12 @@ test_vector_similarity(conn) = {
 
 # Test L2 distance operator
 test_vector_l2_distance(conn) = {
-    Pg.execute(conn, "DELETE FROM test_vectors", [])
+    Pg.execute(conn, "TRUNCATE test_vectors RESTART IDENTITY", [])
 
     Pg.execute(conn, "INSERT INTO test_vectors (embedding) VALUES ('[3,4,0]'::vector)", [])
 
     # L2 distance from origin
-    query = Float64Array.fromList([0.0, 0.0, 0.0])
+    query = Float32Array.fromList([0.0, 0.0, 0.0])
     rows = Pg.query(conn, "SELECT embedding <-> $1 as distance FROM test_vectors", [query])
     distance = head(head(rows))
 
