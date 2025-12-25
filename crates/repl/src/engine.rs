@@ -5931,6 +5931,149 @@ mod tests {
     }
 
     #[test]
+    fn test_while_loop_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        let result = engine.eval("{ var x = 0; while x < 5 { x = x + 1 }; x }");
+        assert!(result.is_ok(), "While loop should work: {:?}", result);
+        assert_eq!(result.unwrap().trim(), "5");
+    }
+
+    #[test]
+    fn test_match_expression_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Match uses newlines to separate cases, not |
+        let result = engine.eval("match 2\n1 -> \"one\"\n2 -> \"two\"\n_ -> \"other\"\nend");
+        assert!(result.is_ok(), "Match should work: {:?}", result);
+        assert_eq!(result.unwrap().trim(), "\"two\"");
+    }
+
+    #[test]
+    fn test_if_expression_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        let result = engine.eval("if 5 > 3 then \"yes\" else \"no\"");
+        assert!(result.is_ok(), "If expr should work: {:?}", result);
+        assert_eq!(result.unwrap().trim(), "\"yes\"");
+    }
+
+    #[test]
+    fn test_lambda_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Simple lambda
+        let result = engine.eval("(x => x * 2)(5)");
+        assert!(result.is_ok(), "Lambda should work: {:?}", result);
+        assert_eq!(result.unwrap().trim(), "10");
+
+        // Multi-param lambda
+        let result = engine.eval("((a, b) => a + b)(3, 4)");
+        assert!(result.is_ok(), "Multi-param lambda should work: {:?}", result);
+        assert_eq!(result.unwrap().trim(), "7");
+    }
+
+    #[test]
+    fn test_tuple_auto_untupling_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        // Tuple destructuring with map
+        let result = engine.eval("[(1,2),(3,4)].map((a,b) => a + b)");
+        assert!(result.is_ok(), "Tuple auto-untupling should work: {:?}", result);
+        assert_eq!(result.unwrap().trim(), "[3, 7]");
+    }
+
+    #[test]
+    fn test_pipe_operator_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        let result = engine.eval("[1, 2, 3] |> head");
+        assert!(result.is_ok(), "Pipe operator should work: {:?}", result);
+        assert_eq!(result.unwrap().trim(), "1");
+    }
+
+    #[test]
+    fn test_method_chaining_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        let result = engine.eval("[1, 2, 3, 4].map(x => x * 2).filter(x => x > 4)");
+        assert!(result.is_ok(), "Method chaining should work: {:?}", result);
+        assert_eq!(result.unwrap().trim(), "[6, 8]");
+    }
+
+    #[test]
+    fn test_each_function_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        // each returns unit - wrap in block to ensure result is captured
+        let result = engine.eval("{ r = [1, 2, 3].each(x => x); r }");
+        assert!(result.is_ok(), "each function should work: {:?}", result);
+        // each returns unit ()
+        let output = result.unwrap();
+        assert!(output.trim() == "()" || output.is_empty(), "each should return unit: '{}'", output);
+    }
+
+    #[test]
+    fn test_try_catch_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // throw is a function, not a keyword: throw("msg")
+        let result = engine.eval("try { throw(\"oops\") } catch e -> \"caught\" end");
+        assert!(result.is_ok(), "Try/catch should work: {:?}", result);
+        assert_eq!(result.unwrap().trim(), "\"caught\"");
+    }
+
+    #[test]
+    fn test_map_literal_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Map literals use %{} not #{} (#{} is for sets)
+        let result = engine.eval("%{\"a\": 1, \"b\": 2}");
+        assert!(result.is_ok(), "Map literal should work: {:?}", result);
+        let output = result.unwrap();
+        // Output might be truncated to %{...2 entries} or show full content
+        assert!(output.contains("%{") || output.contains("entries"), "Map output: {}", output);
+    }
+
+    #[test]
+    fn test_set_literal_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Set literals use #{}
+        let result = engine.eval("#{1, 2, 3}");
+        assert!(result.is_ok(), "Set literal should work: {:?}", result);
+        let output = result.unwrap();
+        // Output might be truncated to #{...3 items} or show full content
+        assert!(output.contains("#{") || output.contains("items"), "Set output: {}", output);
+    }
+
+    #[test]
+    fn test_receive_syntax_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Receive uses newlines like match
+        let result = engine.eval("{ receive\nx -> x\nafter 0 -> \"timeout\"\nend }");
+        assert!(result.is_ok(), "Receive should work: {:?}", result);
+        assert_eq!(result.unwrap().trim(), "\"timeout\"");
+    }
+
+    #[test]
     fn test_type_definition_in_eval() {
         let config = ReplConfig { enable_jit: false, num_threads: 1 };
         let mut engine = ReplEngine::new(config);
