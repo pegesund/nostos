@@ -18,7 +18,7 @@ test_basic_commit(conn) = {
 
     # Verify data persisted - count rows
     rows = Pg.query(conn, "SELECT COUNT(*) FROM tx_test", [])
-    assert_eq(head(head(rows)), 2)
+    assert_eq(head(rows).0, 2)
 
     # Cleanup
     Pg.execute(conn, "DROP TABLE tx_test", [])
@@ -43,7 +43,7 @@ test_basic_rollback(conn) = {
 
     # Verify only original data remains
     rows = Pg.query(conn, "SELECT COUNT(*) FROM tx_test2", [])
-    assert_eq(head(head(rows)), 1)
+    assert_eq(head(rows).0, 1)
 
     # Cleanup
     Pg.execute(conn, "DROP TABLE tx_test2", [])
@@ -62,14 +62,14 @@ test_transaction_isolation(conn) = {
 
     # Verify update visible within transaction
     r1 = Pg.query(conn, "SELECT counter FROM tx_test3", [])
-    assert_eq(head(head(r1)), 1)
+    assert_eq(head(r1).0, 1)
 
     # Commit
     Pg.commit(conn)
 
     # Verify persisted
     r2 = Pg.query(conn, "SELECT counter FROM tx_test3", [])
-    assert_eq(head(head(r2)), 1)
+    assert_eq(head(r2).0, 1)
 
     # Cleanup
     Pg.execute(conn, "DROP TABLE tx_test3", [])
@@ -122,7 +122,7 @@ test_nested_operations(conn) = {
 
     # Verify final state - just count
     rows = Pg.query(conn, "SELECT COUNT(*) FROM tx_test5", [])
-    assert_eq(head(head(rows)), 1)
+    assert_eq(head(rows).0, 1)
 
     # Cleanup
     Pg.execute(conn, "DROP TABLE tx_test5", [])
@@ -142,7 +142,7 @@ test_transaction_helper_commit(conn) = {
     assert_eq(result, "success")
 
     rows = Pg.query(conn, "SELECT COUNT(*) FROM tx_helper1", [])
-    assert_eq(head(head(rows)), 2)
+    assert_eq(head(rows).0, 2)
 
     Pg.execute(conn, "DROP TABLE tx_helper1", [])
 }
@@ -165,7 +165,7 @@ test_transaction_helper_user_exception(conn) = {
 
     # Should have rolled back
     rows = Pg.query(conn, "SELECT COUNT(*) FROM tx_helper2", [])
-    assert_eq(head(head(rows)), 0)
+    assert_eq(head(rows).0, 0)
 
     Pg.execute(conn, "DROP TABLE tx_helper2", [])
 }
@@ -190,7 +190,7 @@ test_transaction_helper_sql_error(conn) = {
 
     # Should have rolled back (only original row remains)
     rows = Pg.query(conn, "SELECT COUNT(*) FROM tx_helper3", [])
-    assert_eq(head(head(rows)), 1)
+    assert_eq(head(rows).0, 1)
 
     Pg.execute(conn, "DROP TABLE tx_helper3", [])
 }
@@ -202,7 +202,7 @@ test_transaction_helper_return_value(conn) = {
     result = Pg.transaction(conn, () => {
         Pg.execute(conn, "INSERT INTO tx_helper4 VALUES (1, 42)", [])
         rows = Pg.query(conn, "SELECT value FROM tx_helper4 WHERE id = 1", [])
-        head(head(rows))
+        head(rows).0
     })
     assert_eq(result, 42)
 

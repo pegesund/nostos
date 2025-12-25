@@ -947,6 +947,10 @@ impl Autocomplete {
                 ("maximum", "() -> a", "Get the maximum element"),
                 ("minimum", "() -> a", "Get the minimum element"),
             ]
+        } else if base_type == "Tuple" || base_type.starts_with('(') {
+            vec![
+                ("length", "() -> Int", "Get the number of elements in the tuple"),
+            ]
         } else {
             vec![]
         }
@@ -974,6 +978,11 @@ impl Autocomplete {
         // Set literal: #{...} or starts with #{
         if trimmed.starts_with("#{") {
             return Some("Set");
+        }
+
+        // Tuple literal: (x, y, ...) - must have comma to distinguish from parenthesized expr
+        if trimmed.starts_with('(') && trimmed.contains(',') {
+            return Some("Tuple");
         }
 
         None

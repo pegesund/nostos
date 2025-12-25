@@ -4,37 +4,37 @@
 
 test_small_integers(conn) = {
     r1 = Pg.query(conn, "SELECT $1", [42])
-    assert_eq(head(head(r1)), 42)
+    assert_eq(head(r1).0, 42)
 
     r2 = Pg.query(conn, "SELECT $1", [-12345])
-    assert_eq(head(head(r2)), -12345)
+    assert_eq(head(r2).0, -12345)
 }
 
 test_int32_range(conn) = {
     # Max Int32
     r1 = Pg.query(conn, "SELECT $1", [2147483647])
-    assert_eq(head(head(r1)), 2147483647)
+    assert_eq(head(r1).0, 2147483647)
 
     # Min Int32
     r2 = Pg.query(conn, "SELECT $1", [-2147483648])
-    assert_eq(head(head(r2)), -2147483648)
+    assert_eq(head(r2).0, -2147483648)
 }
 
 test_int64_range(conn) = {
     # Max Int64
     big = 9223372036854775807
     r1 = Pg.query(conn, "SELECT $1", [big])
-    assert_eq(head(head(r1)), big)
+    assert_eq(head(r1).0, big)
 
     # Near Min Int64
     neg_big = -9223372036854775807
     r2 = Pg.query(conn, "SELECT $1", [neg_big])
-    assert_eq(head(head(r2)), neg_big)
+    assert_eq(head(r2).0, neg_big)
 }
 
 test_zero(conn) = {
     r1 = Pg.query(conn, "SELECT $1", [0])
-    assert_eq(head(head(r1)), 0)
+    assert_eq(head(r1).0, 0)
 }
 
 test_arithmetic(conn) = {
@@ -42,11 +42,11 @@ test_arithmetic(conn) = {
     a = 1000000000000
     b = 2000000000000
     r1 = Pg.query(conn, "SELECT $1 + $2", [a, b])
-    assert_eq(head(head(r1)), 3000000000000)
+    assert_eq(head(r1).0, 3000000000000)
 
     # Multiplication
     r2 = Pg.query(conn, "SELECT $1 * $2", [123456, 789012])
-    assert_eq(head(head(r2)), 97408265472)
+    assert_eq(head(r2).0, 97408265472)
 }
 
 main() = {

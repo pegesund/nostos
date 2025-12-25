@@ -1,0 +1,76 @@
+# expect: 0
+# PostgreSQL tuple parameter tests
+# REQUIRES: PostgreSQL running at localhost with user/password: postgres/postgres
+
+# Test mixed types in tuple parameters
+test_mixed_tuple_params(conn) = {
+    Pg.execute(conn, "CREATE TEMP TABLE tuple_test (id INT, name TEXT, score FLOAT)", [])
+
+    # Insert using tuple with mixed types (Int, String, Float)
+    Pg.execute(conn, "INSERT INTO tuple_test VALUES ($1, $2, $3)", (1, "Alice", 95.5))
+    Pg.execute(conn, "INSERT INTO tuple_test VALUES ($1, $2, $3)", (2, "Bob", 87.3))
+
+    # Verify data count
+    rows = Pg.query(conn, "SELECT COUNT(*) FROM tuple_test", [])
+    count = head(rows).0
+    println("Inserted rows: " ++ show(count))
+    assert_eq(count, 2)
+
+    Pg.execute(conn, "DROP TABLE tuple_test", [])
+}
+
+# Test query with tuple parameters
+test_query_with_tuple(conn) = {
+    Pg.execute(conn, "CREATE TEMP TABLE tuple_query (id INT, category TEXT)", [])
+    Pg.execute(conn, "INSERT INTO tuple_query VALUES (1, 'A'), (2, 'B'), (3, 'A')", [])
+
+    # Query with tuple containing Int and String
+    rows = Pg.query(conn, "SELECT COUNT(*) FROM tuple_query WHERE id > $1 AND category = $2", (1, "A"))
+    count = head(rows).0
+    println("Matching rows: " ++ show(count))
+    assert_eq(count, 1)
+
+    Pg.execute(conn, "DROP TABLE tuple_query", [])
+}
+
+# Test tuple with different type combinations
+test_tuple_type_combos(conn) = {
+    Pg.execute(conn, "CREATE TEMP TABLE combo_test (val INT)", [])
+
+    # Int and String tuple
+    Pg.execute(conn, "INSERT INTO combo_test SELECT $1 WHERE $2 = 'yes'", (42, "yes"))
+
+    # Bool and Float tuple
+    Pg.execute(conn, "INSERT INTO combo_test SELECT 100 WHERE $1 = true AND $2 > 0.0", (true, 1.5))
+
+    rows = Pg.query(conn, "SELECT COUNT(*) FROM combo_test", [])
+    count = head(rows).0
+    println("Combo test rows: " ++ show(count))
+    assert_eq(count, 2)
+
+    Pg.execute(conn, "DROP TABLE combo_test", [])
+}
+
+# Test tuple length and indexing work
+test_tuple_operations(conn) = {
+    params = (1, "test", 3.14)
+    assert_eq(params.length(), 3)
+    assert_eq(params[0], 1)
+    assert_eq(params[1], "test")
+    assert_eq(params.0, 1)
+    assert_eq(params.1, "test")
+    println("Tuple operations work")
+}
+
+main() = {
+    conn = Pg.connect("host=localhost user=postgres password=postgres")
+
+    test_mixed_tuple_params(conn)
+    test_query_with_tuple(conn)
+    test_tuple_type_combos(conn)
+    test_tuple_operations(conn)
+
+    Pg.close(conn)
+    println("All tuple parameter tests passed!")
+    0
+}

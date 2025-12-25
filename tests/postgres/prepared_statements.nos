@@ -14,12 +14,12 @@ test_basic_prepare_query(conn) = {
     # Execute prepared query - only select id (homogeneous result)
     rows = Pg.queryPrepared(conn, "get_by_id", [1])
     assert_eq(length(rows), 1)
-    assert_eq(head(head(rows)), 1)
+    assert_eq(head(rows).0, 1)
 
     # Execute again with different params
     rows2 = Pg.queryPrepared(conn, "get_by_id", [2])
     assert_eq(length(rows2), 1)
-    assert_eq(head(head(rows2)), 2)
+    assert_eq(head(rows2).0, 2)
 
     # Deallocate
     Pg.deallocate(conn, "get_by_id")
@@ -42,7 +42,7 @@ test_basic_prepare_execute(conn) = {
 
     # Verify
     rows = Pg.query(conn, "SELECT COUNT(*) FROM prep_test2", [])
-    assert_eq(head(head(rows)), 3)
+    assert_eq(head(rows).0, 3)
 
     # Deallocate
     Pg.deallocate(conn, "insert_row")
@@ -67,7 +67,7 @@ test_prepare_in_transaction(conn) = {
 
     # Verify
     rows = Pg.queryPrepared(conn, "get_count", [])
-    assert_eq(head(head(rows)), 2)
+    assert_eq(head(rows).0, 2)
 
     # Deallocate
     Pg.deallocate(conn, "insert_id")
@@ -95,7 +95,7 @@ test_prepare_rollback(conn) = {
 
     # Verify only first row remains
     rows = Pg.query(conn, "SELECT COUNT(*) FROM prep_test4", [])
-    assert_eq(head(head(rows)), 1)
+    assert_eq(head(rows).0, 1)
 
     # Deallocate
     Pg.deallocate(conn, "insert_id")
@@ -111,10 +111,10 @@ test_multiple_prepared_statements_part1(conn) = {
 
     Pg.prepare(conn, "get_category_count", "SELECT COUNT(*) FROM prep_test5a WHERE category = $1")
     rows1 = Pg.queryPrepared(conn, "get_category_count", [1])
-    assert_eq(head(head(rows1)), 2)
+    assert_eq(head(rows1).0, 2)
 
     rows2 = Pg.queryPrepared(conn, "get_category_count", [2])
-    assert_eq(head(head(rows2)), 1)
+    assert_eq(head(rows2).0, 1)
 
     Pg.deallocate(conn, "get_category_count")
     Pg.execute(conn, "DROP TABLE prep_test5a", [])
@@ -129,7 +129,7 @@ test_multiple_prepared_statements_part2(conn) = {
     Pg.executePrepared(conn, "update_by_id", [1])
 
     rows = Pg.query(conn, "SELECT value FROM prep_test5b WHERE id = 1", [])
-    assert_eq(head(head(rows)), 101)
+    assert_eq(head(rows).0, 101)
 
     Pg.deallocate(conn, "update_by_id")
     Pg.execute(conn, "DROP TABLE prep_test5b", [])

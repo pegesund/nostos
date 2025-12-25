@@ -14,7 +14,7 @@ test_json_string(conn) = {
 
     # Select and verify
     rows = Pg.query(conn, "SELECT data FROM test_json", [])
-    result = head(head(rows))
+    result = head(rows).0
 
     # Result is returned as a JSON string
     println("JSON string result: " ++ result)
@@ -33,7 +33,7 @@ test_json_variant(conn) = {
 
     # Select and verify
     rows = Pg.query(conn, "SELECT data FROM test_json", [])
-    result = head(head(rows))
+    result = head(rows).0
     println("JSON variant result: " ++ result)
 
     # Parse the result back - jsonParse returns Json directly
@@ -58,12 +58,12 @@ test_json_operators(conn) = {
 
     # Use -> operator to extract field
     rows = Pg.query(conn, "SELECT data->>'name' FROM test_json", [])
-    name = head(head(rows))
+    name = head(rows).0
     assert_eq(name, "Bob")
 
     # Use jsonb_array_length
     rows2 = Pg.query(conn, "SELECT jsonb_array_length(data->'items') FROM test_json", [])
-    len = head(head(rows2))
+    len = head(rows2).0
     assert_eq(len, 3)
 }
 
@@ -83,7 +83,7 @@ test_nested_json(conn) = {
 
     # Extract nested value
     rows = Pg.query(conn, "SELECT data->'user'->>'name' FROM test_json", [])
-    name = head(head(rows))
+    name = head(rows).0
     assert_eq(name, "Charlie")
 }
 
@@ -94,7 +94,7 @@ test_json_null(conn) = {
     Pg.execute(conn, "INSERT INTO test_json (data) VALUES ($1)", [Null])
 
     rows = Pg.query(conn, "SELECT data FROM test_json", [])
-    result = head(head(rows))
+    result = head(rows).0
     println("JSON null result: " ++ result)
     assert_eq(result, "null")
 }

@@ -36,7 +36,7 @@ test_no_exception_on_success(conn) = {
         (kind, msg) -> []
     end
     # Should be [[42]] not error
-    assert_eq(head(head(result)), 42)
+    assert_eq(head(result).0, 42)
 }
 
 test_exception_pattern_match_kind(conn) = {
