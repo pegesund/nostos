@@ -6324,9 +6324,9 @@ impl AsyncProcess {
                 GcValue::String(self.heap.alloc_string(s))
             }
             PgValue::Vector(floats) => {
-                // Return vector as Float64Array
-                let ptr = self.heap.alloc_float64_array(floats.iter().map(|f| *f as f64).collect());
-                GcValue::Float64Array(ptr)
+                // Return vector as Float32Array (native type for pgvector)
+                let ptr = self.heap.alloc_float32_array(floats);
+                GcValue::Float32Array(ptr)
             }
         }
     }
@@ -6357,6 +6357,14 @@ impl AsyncProcess {
                     Ok(PgParam::Vector(floats))
                 } else {
                     Err(RuntimeError::IOError("Invalid float64 array pointer".to_string()))
+                }
+            }
+            GcValue::Float32Array(ptr) => {
+                // Float32Array is the native type for pgvector
+                if let Some(arr) = self.heap.get_float32_array(*ptr) {
+                    Ok(PgParam::Vector(arr.items.clone()))
+                } else {
+                    Err(RuntimeError::IOError("Invalid float32 array pointer".to_string()))
                 }
             }
             GcValue::Variant(ptr) => {
@@ -6397,7 +6405,7 @@ impl AsyncProcess {
                 }
             }
             _ => Err(RuntimeError::TypeError {
-                expected: "Int, Float, String, Bool, Unit, Float64Array, List[Float], or Json".to_string(),
+                expected: "Int, Float, String, Bool, Unit, Float32Array, Float64Array, List[Float], or Json".to_string(),
                 found: "unsupported type for Pg param".to_string(),
             }),
         }

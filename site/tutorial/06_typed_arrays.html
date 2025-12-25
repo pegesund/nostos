@@ -83,7 +83,7 @@
             <div class="mb-12">
                 <h1 class="text-4xl font-bold text-white mb-6">Typed Arrays</h1>
                 <p class="text-lg text-slate-400 leading-relaxed mb-8">
-                    For high-performance numerical computing, Nostos offers specialized typed arrays: <code>Int64Array</code> and <code>Float64Array</code>. These provide contiguous memory storage for unboxed numeric values, enabling efficient operations, especially when combined with Nostos's JIT compiler.
+                    For high-performance numerical computing, Nostos offers specialized typed arrays: <code>Int64Array</code>, <code>Float64Array</code>, and <code>Float32Array</code>. These provide contiguous memory storage for unboxed numeric values, enabling efficient operations, especially when combined with Nostos's JIT compiler.
                 </p>
 
                 <!-- Int64Array -->
@@ -139,12 +139,39 @@ main() = {
 </code></pre>
                 </div>
 
+                <!-- Float32Array -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Float32Array</h2>
+                <p class="text-slate-400 mb-4"><code>Float32Array</code> stores 32-bit floating-point numbers. It's the native format for pgvector and ideal for AI/ML embeddings where memory efficiency matters more than precision.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+main() = {
+    # Create from a list of floats
+    embedding = Float32Array.fromList([0.1, 0.2, 0.3, 0.4])
+
+    # Get length and access elements
+    len = Float32Array.length(embedding)  # 4
+    first = Float32Array.get(embedding, 0)  # 0.1
+
+    # Set returns a new array (functional style)
+    updated = Float32Array.set(embedding, 0, 0.5)
+
+    # Convert back to list
+    asList = Float32Array.toList(embedding)  # [0.1, 0.2, 0.3, 0.4]
+
+    # Create with size and initial value
+    zeros = Float32Array.make(128, 0.0)  # 128-dim zero vector
+
+    println("Vector length: " ++ show(len))
+}
+</code></pre>
+                </div>
+
                 <!-- Comparison with Lists -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Typed Arrays vs. Lists</h2>
                 <p class="text-slate-400 mb-4">While lists are flexible and immutable, typed arrays offer significant performance advantages for numerical work due to their contiguous memory, fixed element size, and direct indexing.</p>
                 <ul class="list-disc list-inside text-slate-400 mb-8 space-y-2">
                     <li>**Lists**: Immutable, linked-list structure, good for functional patterns and variable-sized elements.</li>
-                    <li>**Typed Arrays**: Mutable, contiguous memory, fixed element types (<code>Int64</code>, <code>Float64</code>), 0-indexed random access, excellent for performance-critical numerical computations.</li>
+                    <li>**Typed Arrays**: Mutable, contiguous memory, fixed element types (<code>Int64</code>, <code>Float64</code>, <code>Float32</code>), 0-indexed random access, excellent for performance-critical numerical computations.</li>
                 </ul>
 
             </div>

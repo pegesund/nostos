@@ -23,6 +23,38 @@ use native_tls::TlsConnector;
 
 use crate::process::{IoResponseValue, PgValue};
 
+/// Wrapper for pgvector binary format
+/// Format: 2 bytes dim (u16 big-endian), 2 bytes unused, n*4 bytes f32 (big-endian)
+struct PgVector(Vec<f32>);
+
+impl<'a> tokio_postgres::types::FromSql<'a> for PgVector {
+    fn from_sql(
+        _ty: &tokio_postgres::types::Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if raw.len() < 4 {
+            return Err("pgvector data too short".into());
+        }
+        // Dimension is first 2 bytes, big-endian
+        let dim = u16::from_be_bytes([raw[0], raw[1]]) as usize;
+        let expected_len = 4 + dim * 4;
+        if raw.len() < expected_len {
+            return Err(format!("pgvector data too short: expected {} bytes, got {}", expected_len, raw.len()).into());
+        }
+        let mut floats = Vec::with_capacity(dim);
+        for i in 0..dim {
+            let offset = 4 + i * 4;
+            let bytes = [raw[offset], raw[offset+1], raw[offset+2], raw[offset+3]];
+            floats.push(f32::from_be_bytes(bytes));
+        }
+        Ok(PgVector(floats))
+    }
+
+    fn accepts(ty: &tokio_postgres::types::Type) -> bool {
+        ty.name() == "vector"
+    }
+}
+
 /// PostgreSQL connection with prepared statements
 struct PgConnection {
     client: PgClient,
@@ -1523,17 +1555,10 @@ impl IoRuntime {
             _ => {
                 // Check for vector type by name (pgvector extension)
                 if col_type.name() == "vector" {
-                    // Vector type - parse from text representation
-                    match row.try_get::<_, String>(idx) {
-                        Ok(v) => {
-                            // Parse "[1.0, 2.0, 3.0]" format
-                            let trimmed = v.trim_start_matches('[').trim_end_matches(']');
-                            let floats: Vec<f32> = trimmed
-                                .split(',')
-                                .filter_map(|s| s.trim().parse::<f32>().ok())
-                                .collect();
-                            PgValue::Vector(floats)
-                        }
+                    // Vector type - decode pgvector binary format directly
+                    // pgvector format: 2 bytes dim (u16), 2 bytes unused, n*4 bytes f32 (big endian)
+                    match row.try_get::<_, PgVector>(idx) {
+                        Ok(v) => PgValue::Vector(v.0),
                         Err(_) => PgValue::Null,
                     }
                 } else {
@@ -1561,7 +1586,7 @@ impl IoRuntime {
                 PgParam::String(_) => format!("{}::text", placeholder),
                 PgParam::Timestamp(_) => format!("{}::timestamptz", placeholder),
                 PgParam::Json(_) => format!("{}::jsonb", placeholder),
-                PgParam::Vector(_) => format!("{}::vector", placeholder),
+                PgParam::Vector(_) => format!("{}::text::vector", placeholder),
             };
             // Only replace if not already typed (check for ::)
             let check_pattern = format!("{}::", placeholder);

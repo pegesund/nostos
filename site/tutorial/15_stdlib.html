@@ -106,6 +106,10 @@
                         <span class="text-blue-400">Crypto</span>
                         <span class="text-blue-400">Http</span>
                         <span class="text-blue-400">Json</span>
+                        <span class="text-blue-400">Pg</span>
+                        <span class="text-blue-400">Float32Array</span>
+                        <span class="text-blue-400">Float64Array</span>
+                        <span class="text-blue-400">Int64Array</span>
                     </div>
                 </div>
 
@@ -524,6 +528,94 @@
 }</code></pre>
                 </div>
 
+                <!-- PostgreSQL Module -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Pg Module (PostgreSQL)</h2>
+                <p class="text-slate-400 mb-4">Connect to PostgreSQL databases including cloud providers like Supabase and Neon.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Connect to local PostgreSQL
+handle = Pg.connect("host=localhost user=postgres password=secret dbname=mydb")
+
+# Connect to cloud providers (Supabase, Neon) with TLS
+handle = Pg.connect("postgresql://user:pass@db.xxx.supabase.co:5432/postgres?sslmode=require")
+handle = Pg.connect("postgresql://user:pass@ep-xxx.neon.tech/neondb?sslmode=require")
+
+# Query with parameters (returns list of lists)
+rows = Pg.query(handle, "SELECT id, name FROM users WHERE age > $1", [18])
+# Returns: [[1, "Alice"], [2, "Bob"]]
+
+# Execute (INSERT, UPDATE, DELETE)
+affected = Pg.execute(handle, "INSERT INTO users (name) VALUES ($1)", ["Charlie"])
+
+# Transactions
+Pg.begin(handle)
+Pg.execute(handle, "UPDATE accounts SET balance = balance - 100 WHERE id = $1", [1])
+Pg.commit(handle)  # or Pg.rollback(handle)
+
+# JSON support (for JSONB columns)
+Pg.execute(handle, "INSERT INTO docs (data) VALUES ($1)", ["{\"key\": \"value\"}"])
+
+# Vector support (pgvector extension) - use Float32Array for native f32 format
+embedding = Float32Array.fromList([0.1, 0.2, 0.3])
+Pg.execute(handle, "INSERT INTO items (embedding) VALUES ($1)", [embedding])
+
+# Query vectors - returned as Float32Array
+rows = Pg.query(handle, "SELECT embedding FROM items WHERE id = $1", [1])
+vec = head(head(rows))  # Float32Array
+values = Float32Array.toList(vec)  # Convert to list
+
+# Similarity search (L2 distance)
+query = Float32Array.fromList([0.1, 0.2, 0.3])
+results = Pg.query(handle, "SELECT id, embedding <-> $1 as distance FROM items ORDER BY distance LIMIT 5", [query])
+
+# Cosine similarity search
+results = Pg.query(handle, "SELECT id, 1 - (embedding <=> $1) as similarity FROM items ORDER BY similarity DESC LIMIT 5", [query])
+
+# Close connection
+Pg.close(handle)</code></pre>
+                </div>
+
+                <!-- Float32Array Module -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Float32Array Module</h2>
+                <p class="text-slate-400 mb-4">32-bit float arrays, ideal for AI/ML embeddings and pgvector. Native format for vector databases.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Create from list
+arr = Float32Array.fromList([1.0, 2.0, 3.0])
+
+# Create with size and initial value
+zeros = Float32Array.make(128, 0.0)  # 128-dim zero vector
+
+# Access elements
+len = Float32Array.length(arr)    # 3
+val = Float32Array.get(arr, 0)    # 1.0
+
+# Set returns new array (functional style)
+arr2 = Float32Array.set(arr, 0, 99.0)
+
+# Convert back to list
+list = Float32Array.toList(arr)   # [1.0, 2.0, 3.0]</code></pre>
+                </div>
+
+                <!-- Float64Array Module -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Float64Array Module</h2>
+                <p class="text-slate-400 mb-4">64-bit float arrays for high-precision numerical computing.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Create from list
+arr = Float64Array.fromList([1.0, 2.0, 3.0])
+
+# Create with size and initial value
+arr = Float64Array.make(100, 0.0)
+
+# Access elements
+len = Float64Array.length(arr)    # 3
+val = Float64Array.get(arr, 0)    # 1.0
+
+# Set returns new array (immutable)
+arr2 = Float64Array.set(arr, 0, 99.0)
+
+# Convert back to list
+list = Float64Array.toList(arr)   # [1.0, 2.0, 3.0]</code></pre>
+                </div>
+
                 <!-- Summary Box -->
                 <div class="bg-gradient-to-r from-blue-900/30 to-emerald-900/30 rounded-lg p-6 mb-8 border border-blue-800/50">
                     <h3 class="text-xl font-semibold text-white mb-4">Standard Library Summary</h3>
@@ -538,8 +630,10 @@
                         <li><strong>Time:</strong> Time for dates and timestamps</li>
                         <li><strong>Security:</strong> Crypto, Uuid for cryptographic operations</li>
                         <li><strong>Network:</strong> Http, Json for web services</li>
+                        <li><strong>Database:</strong> Pg for PostgreSQL (with TLS, JSON, vectors)</li>
                         <li><strong>Math:</strong> Math for numerical computing</li>
                         <li><strong>Random:</strong> Random for random number generation</li>
+                        <li><strong>Arrays:</strong> Float32Array, Float64Array, Int64Array for typed arrays</li>
                     </ul>
                 </div>
 

@@ -194,6 +194,14 @@ floats = newFloat64Array(5)   # Create array of 5 zeros
 floats[0] = 3.14
 floats[1] = 2.71
 y = floats[0]
+
+# Float32Array - array of 32-bit floats (ideal for pgvector)
+vec = Float32Array.fromList([1.0, 2.0, 3.0])
+len = Float32Array.length(vec)
+val = Float32Array.get(vec, 0)
+vec2 = Float32Array.set(vec, 0, 99.0)
+lst = Float32Array.toList(vec)
+zeros = Float32Array.make(5, 0.0)   # 5 elements, all 0.0
 ```
 
 Example: Sum an array
@@ -1518,10 +1526,12 @@ tan = Math.tan(0.0)      # 0.0
 
 ## PostgreSQL Database
 
-Connect to and query PostgreSQL databases:
+Connect to and query PostgreSQL databases.
+
+### Basic Connection
 
 ```nos
-# Connect to database
+# Connect to local database
 handle = Pg.connect("host=localhost user=postgres password=secret dbname=mydb")
 
 # Execute query with parameters
@@ -1532,19 +1542,105 @@ rows = Pg.query(handle, "SELECT id, name FROM users WHERE age > $1", [18])
 affected = Pg.execute(handle, "INSERT INTO users (name, age) VALUES ($1, $2)", ["Charlie", 25])
 # Returns number of affected rows
 
-# Transaction management
+# Close connection
+Pg.close(handle)
+```
+
+### Cloud Database Providers
+
+Nostos supports TLS connections to cloud PostgreSQL providers. Use `sslmode=require` in the connection string:
+
+```nos
+# Supabase
+# Note: URL-encode special characters in password (e.g., comma -> %2C, ! -> %21)
+handle = Pg.connect("postgresql://postgres:YourPass%21@db.xxxxx.supabase.co:5432/postgres?sslmode=require")
+
+# Neon
+handle = Pg.connect("postgresql://user:pass@ep-xxx-pooler.region.aws.neon.tech/neondb?sslmode=require")
+
+# Any PostgreSQL with TLS
+handle = Pg.connect("host=db.example.com user=app password=secret dbname=prod sslmode=require")
+```
+
+### Transactions
+
+```nos
 Pg.begin(handle)
 Pg.execute(handle, "UPDATE accounts SET balance = balance - 100 WHERE id = $1", [1])
 Pg.execute(handle, "UPDATE accounts SET balance = balance + 100 WHERE id = $1", [2])
 Pg.commit(handle)  # or Pg.rollback(handle) to cancel
 
-# Prepared statements for repeated queries
+# Or use Pg.transaction for automatic commit/rollback:
+Pg.transaction(handle, () => {
+    Pg.execute(handle, "UPDATE accounts SET balance = balance - 100 WHERE id = $1", [1])
+    Pg.execute(handle, "UPDATE accounts SET balance = balance + 100 WHERE id = $1", [2])
+})
+```
+
+### Prepared Statements
+
+```nos
 Pg.prepare(handle, "get_user", "SELECT * FROM users WHERE id = $1")
 rows = Pg.queryPrepared(handle, "get_user", [42])
 Pg.deallocate(handle, "get_user")
+```
 
-# Close connection
-Pg.close(handle)
+### JSON Support
+
+JSON and JSONB columns are fully supported:
+
+```nos
+# Insert JSON data - pass Json variant or string
+data = Object([("name", String("Alice")), ("age", Number(30.0))])
+Pg.execute(handle, "INSERT INTO docs (data) VALUES ($1)", [data])
+
+# Or as a string (automatically parsed as JSON for JSONB columns)
+Pg.execute(handle, "INSERT INTO docs (data) VALUES ($1)", ["{\"key\": \"value\"}"])
+
+# Query returns JSON as string - parse with jsonParse if needed
+rows = Pg.query(handle, "SELECT data FROM docs", [])
+jsonStr = head(head(rows))  # e.g., "{\"name\":\"Alice\",\"age\":30}"
+```
+
+### Vector Support (pgvector)
+
+For AI/ML applications using the pgvector extension. Uses `Float32Array` which matches pgvector's native f32 format:
+
+```nos
+# Insert vector using Float32Array (recommended - native pgvector format)
+embedding = Float32Array.fromList([0.1, 0.2, 0.3])
+Pg.execute(handle, "INSERT INTO items (embedding) VALUES ($1)", [embedding])
+
+# Float64Array also works (automatically converted to f32)
+embedding64 = Float64Array.fromList([0.1, 0.2, 0.3])
+Pg.execute(handle, "INSERT INTO items (embedding) VALUES ($1)", [embedding64])
+
+# Query returns vectors as Float32Array
+rows = Pg.query(handle, "SELECT embedding FROM items", [])
+vec = head(head(rows))  # Float32Array
+len = Float32Array.length(vec)
+first = Float32Array.get(vec, 0)
+lst = Float32Array.toList(vec)  # Convert to list
+
+# L2 distance similarity search
+query = Float32Array.fromList([0.1, 0.2, 0.3])
+rows = Pg.query(handle, "SELECT id, embedding <-> $1 as distance FROM items ORDER BY distance LIMIT 10", [query])
+
+# Cosine similarity search
+rows = Pg.query(handle, "SELECT id, 1 - (embedding <=> $1) as similarity FROM items ORDER BY similarity DESC LIMIT 10", [query])
+```
+
+### Error Handling
+
+PostgreSQL errors are thrown as exceptions:
+
+```nos
+result = try {
+    conn = Pg.connect("host=invalid")
+    "connected"
+} catch e -> {
+    "failed: " ++ show(e)  # e.g., (connection_error, PostgreSQL error: ...)
+} end
 ```
 
 ## HTTP Server
