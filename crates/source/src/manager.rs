@@ -844,6 +844,119 @@ impl SourceManager {
         self.modules.get(module_name).map(|module| module.generate_file_content())
     }
 
+    /// Get git commit history for a definition
+    /// Returns list of commits that modified this definition, newest first
+    pub fn get_definition_history(&self, name: &str) -> Result<Vec<git::CommitInfo>, String> {
+        // Parse qualified name
+        let (module_key, simple_name) = if name.contains('.') {
+            let last_dot = name.rfind('.').unwrap();
+            (name[..last_dot].to_string(), &name[last_dot + 1..])
+        } else {
+            // Look up module from def_index
+            let module_key = self.def_index.get(name)
+                .ok_or_else(|| format!("Definition not found: {}", name))?
+                .clone();
+            (module_key, name)
+        };
+
+        // Build path to definition file
+        let module_path: Vec<&str> = if module_key.is_empty() {
+            vec![]
+        } else {
+            module_key.split('.').collect()
+        };
+
+        let relative_path = if module_path.is_empty() {
+            format!("defs/{}.nos", simple_name)
+        } else {
+            format!("defs/{}/{}.nos", module_path.join("/"), simple_name)
+        };
+
+        let nostos_dir = self.project_root.join(".nostos");
+        git::get_file_history(&nostos_dir, &relative_path)
+    }
+
+    /// Get git commit history for a module
+    /// Returns list of commits that modified any definition in the module, newest first
+    pub fn get_module_history(&self, module_name: &str) -> Result<Vec<git::CommitInfo>, String> {
+        let module_path: Vec<&str> = if module_name.is_empty() {
+            vec![]
+        } else {
+            module_name.split('.').collect()
+        };
+
+        let relative_dir = if module_path.is_empty() {
+            "defs".to_string()
+        } else {
+            format!("defs/{}", module_path.join("/"))
+        };
+
+        let nostos_dir = self.project_root.join(".nostos");
+        git::get_directory_history(&nostos_dir, &relative_dir)
+    }
+
+    /// Get the source of a definition at a specific commit
+    pub fn get_definition_at_commit(&self, name: &str, commit: &str) -> Result<String, String> {
+        // Parse qualified name
+        let (module_key, simple_name) = if name.contains('.') {
+            let last_dot = name.rfind('.').unwrap();
+            (name[..last_dot].to_string(), &name[last_dot + 1..])
+        } else {
+            // Look up module from def_index
+            let module_key = self.def_index.get(name)
+                .ok_or_else(|| format!("Definition not found: {}", name))?
+                .clone();
+            (module_key, name)
+        };
+
+        // Build path to definition file
+        let module_path: Vec<&str> = if module_key.is_empty() {
+            vec![]
+        } else {
+            module_key.split('.').collect()
+        };
+
+        let relative_path = if module_path.is_empty() {
+            format!("defs/{}.nos", simple_name)
+        } else {
+            format!("defs/{}/{}.nos", module_path.join("/"), simple_name)
+        };
+
+        let nostos_dir = self.project_root.join(".nostos");
+        git::get_file_at_commit(&nostos_dir, commit, &relative_path)
+    }
+
+    /// Get the diff for a definition at a specific commit
+    pub fn get_definition_diff(&self, name: &str, commit: &str) -> Result<String, String> {
+        // Parse qualified name
+        let (module_key, simple_name) = if name.contains('.') {
+            let last_dot = name.rfind('.').unwrap();
+            (name[..last_dot].to_string(), &name[last_dot + 1..])
+        } else {
+            // Look up module from def_index
+            let module_key = self.def_index.get(name)
+                .ok_or_else(|| format!("Definition not found: {}", name))?
+                .clone();
+            (module_key, name)
+        };
+
+        // Build path to definition file
+        let module_path: Vec<&str> = if module_key.is_empty() {
+            vec![]
+        } else {
+            module_key.split('.').collect()
+        };
+
+        let relative_path = if module_path.is_empty() {
+            format!("defs/{}.nos", simple_name)
+        } else {
+            format!("defs/{}/{}.nos", module_path.join("/"), simple_name)
+        };
+
+        let nostos_dir = self.project_root.join(".nostos");
+        git::get_file_diff(&nostos_dir, commit, &relative_path)
+    }
+
     /// Save module metadata (together directives etc.)
     /// Parses together directives from content and updates the module
     pub fn save_module_metadata(&mut self, module_name: &str, content: &str) -> Result<(), String> {
@@ -3074,5 +3187,94 @@ bar() = 2
         let defs_file = root.join(".nostos/defs/main/greet.nos");
         let defs_content = fs::read_to_string(defs_file).unwrap();
         assert!(defs_content.contains("Hola"), "Defs should be updated: {}", defs_content);
+    }
+
+    #[test]
+    fn test_get_definition_history() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Create initial file
+        fs::write(root.join("main.nos"), "greet() = \"Hello\"").unwrap();
+
+        // Initialize SourceManager
+        let mut sm = SourceManager::new(root.to_path_buf()).unwrap();
+
+        // Get initial history
+        let history = sm.get_definition_history("greet").unwrap();
+        assert!(!history.is_empty(), "Should have at least one commit");
+        assert!(history[0].message.contains("Import"), "First commit should be import: {}", history[0].message);
+
+        // Update the definition
+        sm.update_definition("greet", "greet() = \"Bonjour\"").unwrap();
+
+        // Get updated history
+        let history2 = sm.get_definition_history("greet").unwrap();
+        assert!(history2.len() > history.len(), "Should have more commits after update");
+        assert!(history2[0].message.contains("Update"), "Latest commit should be update: {}", history2[0].message);
+    }
+
+    #[test]
+    fn test_get_definition_at_commit() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Create initial file
+        fs::write(root.join("main.nos"), "greet() = \"Hello\"").unwrap();
+
+        // Initialize and update
+        let mut sm = SourceManager::new(root.to_path_buf()).unwrap();
+        sm.update_definition("greet", "greet() = \"Bonjour\"").unwrap();
+
+        // Get history
+        let history = sm.get_definition_history("greet").unwrap();
+        assert!(history.len() >= 2, "Should have at least 2 commits");
+
+        // Get current version
+        let current = sm.get_definition_at_commit("greet", &history[0].hash).unwrap();
+        assert!(current.contains("Bonjour"), "Current should be Bonjour: {}", current);
+
+        // Get previous version
+        let previous = sm.get_definition_at_commit("greet", &history[1].hash).unwrap();
+        assert!(previous.contains("Hello"), "Previous should be Hello: {}", previous);
+    }
+
+    #[test]
+    fn test_get_definition_diff() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Create initial file
+        fs::write(root.join("main.nos"), "greet() = \"Hello\"").unwrap();
+
+        // Initialize and update
+        let mut sm = SourceManager::new(root.to_path_buf()).unwrap();
+        sm.update_definition("greet", "greet() = \"Bonjour\"").unwrap();
+
+        // Get history
+        let history = sm.get_definition_history("greet").unwrap();
+
+        // Get diff for the update commit
+        let diff = sm.get_definition_diff("greet", &history[0].hash).unwrap();
+        assert!(diff.contains("-") || diff.contains("+"), "Diff should show changes: {}", diff);
+    }
+
+    #[test]
+    fn test_get_module_history() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Create initial file with two functions
+        fs::write(root.join("main.nos"), "foo() = 1\nbar() = 2").unwrap();
+
+        // Initialize SourceManager
+        let mut sm = SourceManager::new(root.to_path_buf()).unwrap();
+
+        // Update one function
+        sm.update_definition("foo", "foo() = 42").unwrap();
+
+        // Get module history
+        let history = sm.get_module_history("main").unwrap();
+        assert!(history.len() >= 2, "Should have at least 2 commits (import + update)");
     }
 }

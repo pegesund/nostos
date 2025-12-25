@@ -16,3 +16,4 @@ pub use manager::SourceManager;
 pub use project::ProjectConfig;
 pub use definition::{Definition, DefinitionGroup, DefKind};
 pub use module::Module;
+pub use git::CommitInfo;
