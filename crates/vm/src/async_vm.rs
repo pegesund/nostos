@@ -1908,7 +1908,31 @@ impl AsyncProcess {
             // Call function/closure stored in a register
             Call(dst, func_reg, ref args) => {
                 let callee = reg!(func_reg);
-                let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r)).collect();
+                let mut arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r)).collect();
+
+                // Auto-untupling: if calling a function with arity N but passing 1 arg that's
+                // a tuple of N elements, auto-destructure the tuple. This enables:
+                //   [(1,2),(3,4)].map((a,b) => a + b)
+                // where the lambda has 2 params but map passes 1 tuple argument.
+                let func_arity = match &callee {
+                    GcValue::Function(f) => Some(f.arity),
+                    GcValue::Closure(ptr, _) => {
+                        self.heap.get_closure(*ptr).map(|c| c.function.arity)
+                    }
+                    _ => None,
+                };
+                if let Some(arity) = func_arity {
+                    if arg_values.len() == 1 && arity > 1 {
+                        if let GcValue::Tuple(ptr) = &arg_values[0] {
+                            if let Some(tuple) = self.heap.get_tuple(*ptr) {
+                                if tuple.items.len() == arity {
+                                    // Destructure the tuple into separate arguments
+                                    arg_values = tuple.items.clone();
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Fast path for binary operations - check InlineOp first
                 if arg_values.len() == 2 {
@@ -3769,9 +3793,29 @@ impl AsyncProcess {
             // === TailCall (preserve return_reg from current frame) ===
             TailCall(func_reg, ref args) => {
                 let func_val = reg!(func_reg);
-                let arg_values: Vec<GcValue> = args.iter().map(|&r| reg!(r)).collect();
+                let mut arg_values: Vec<GcValue> = args.iter().map(|&r| reg!(r)).collect();
                 // Preserve return_reg from current frame
                 let return_reg = self.frames.last().unwrap().return_reg;
+
+                // Auto-untupling for tail calls (same logic as regular Call)
+                let func_arity = match &func_val {
+                    GcValue::Function(f) => Some(f.arity),
+                    GcValue::Closure(ptr, _) => {
+                        self.heap.get_closure(*ptr).map(|c| c.function.arity)
+                    }
+                    _ => None,
+                };
+                if let Some(arity) = func_arity {
+                    if arg_values.len() == 1 && arity > 1 {
+                        if let GcValue::Tuple(ptr) = &arg_values[0] {
+                            if let Some(tuple) = self.heap.get_tuple(*ptr) {
+                                if tuple.items.len() == arity {
+                                    arg_values = tuple.items.clone();
+                                }
+                            }
+                        }
+                    }
+                }
 
                 match func_val {
                     GcValue::Function(func) => {

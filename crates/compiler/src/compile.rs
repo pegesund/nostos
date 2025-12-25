@@ -8717,15 +8717,26 @@ impl Compiler {
         let arity = params.len();
         let mut param_names = Vec::new();
 
-        // Allocate registers for parameters (type unknown for lambda params)
+        // Set next_reg to be after all parameters
+        self.next_reg = arity as Reg;
+
+        // Allocate registers for parameters and handle pattern destructuring
         for (i, param) in params.iter().enumerate() {
+            let arg_reg = i as Reg;
             if let Some(name) = self.pattern_binding_name(param) {
-                self.locals.insert(name.clone(), LocalInfo { reg: i as Reg, is_float: false, mutable: false });
+                // Simple variable pattern - bind directly to param register
+                self.locals.insert(name.clone(), LocalInfo { reg: arg_reg, is_float: false, mutable: false });
                 param_names.push(name);
             } else {
+                // Complex pattern (tuple, etc.) - need to destructure
                 param_names.push(format!("_arg{}", i));
+                // Compile pattern matching to extract bindings
+                // Note: we ignore the success_reg since lambda params always match structurally
+                let (_, bindings) = self.compile_pattern_test(param, arg_reg)?;
+                for (name, reg, is_float) in bindings {
+                    self.locals.insert(name, LocalInfo { reg, is_float, mutable: false });
+                }
             }
-            self.next_reg = (i + 1) as Reg;
         }
 
         // Set up capture indices for the lambda body to use
