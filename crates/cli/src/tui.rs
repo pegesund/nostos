@@ -1761,7 +1761,7 @@ fn poll_git_panel(s: &mut Cursive) {
                 close_git_panel(s);
                 return;
             }
-            GitPanelCommand::Restore { commit: _, content } => {
+            GitPanelCommand::Restore { commit, content } => {
                 // Get the target definition name
                 let target_name = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
                     state.borrow().git_panel_target.as_ref().map(|t| {
@@ -1773,23 +1773,42 @@ fn poll_git_panel(s: &mut Cursive) {
                 }).flatten();
 
                 if let Some(name) = target_name {
-                    // Restore the content
-                    let result = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
-                        state.borrow().engine.borrow_mut().save_definition(&name, &content)
-                    });
+                    // Show confirmation dialog
+                    let name_for_restore = name.clone();
+                    let content_for_restore = content.clone();
+                    let short_hash = if commit.len() > 7 { commit[..7].to_string() } else { commit.clone() };
 
-                    match result {
-                        Some(Ok(_)) => {
-                            log_to_repl(s, &format!("Restored '{}' from git history", name));
-                            close_git_panel(s);
-                        }
-                        Some(Err(e)) => {
-                            log_to_repl(s, &format!("Failed to restore: {}", e));
-                        }
-                        None => {
-                            log_to_repl(s, "Failed to restore: no state");
-                        }
-                    }
+                    s.add_layer(
+                        Dialog::text(format!(
+                            "Restore '{}' to version from commit {}?\n\nThis will overwrite the current version.",
+                            name, short_hash
+                        ))
+                        .title("Confirm Restore")
+                        .button("Yes", move |s| {
+                            s.pop_layer(); // Remove dialog
+
+                            // Perform the restore
+                            let result = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                                state.borrow().engine.borrow_mut().save_definition(&name_for_restore, &content_for_restore)
+                            });
+
+                            match result {
+                                Some(Ok(_)) => {
+                                    log_to_repl(s, &format!("Restored '{}' from git history", name_for_restore));
+                                    close_git_panel(s);
+                                }
+                                Some(Err(e)) => {
+                                    log_to_repl(s, &format!("Failed to restore: {}", e));
+                                }
+                                None => {
+                                    log_to_repl(s, "Failed to restore: no state");
+                                }
+                            }
+                        })
+                        .button("No", |s| {
+                            s.pop_layer(); // Just close dialog
+                        })
+                    );
                 }
                 return;
             }
