@@ -9,6 +9,6 @@ unwrapOr(res, default) = match res
 end
 
 main() = {
-    Result[Int, String] success = Ok(100)
+    success: Result[Int, String] = Ok(100)
     unwrapOr(success, 0)
 }

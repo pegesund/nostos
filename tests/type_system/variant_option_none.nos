@@ -9,6 +9,6 @@ unwrap(opt) = match opt
 end
 
 main() = {
-    Option[Int] maybe = None
+    maybe: Option[Int] = None
     unwrap(maybe)
 }

@@ -12,7 +12,7 @@ doubleUnwrap(opt) = match opt
 end
 
 main() = {
-    Option[Option[Int]] nested = Some(Some(42))
+    nested: Option[Option[Int]] = Some(Some(42))
     result: Int = doubleUnwrap(nested)
     result
 }

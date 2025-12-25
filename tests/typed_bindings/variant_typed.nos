@@ -4,6 +4,6 @@
 type Option[T] = Some(T) | None
 
 main() = {
-    Option[Int] maybe = Some(42)
+    maybe: Option[Int] = Some(42)
     maybe
 }

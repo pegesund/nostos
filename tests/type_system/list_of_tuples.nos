@@ -2,6 +2,6 @@
 # List of tuples
 
 main() = {
-    List[(Int, String)] pairs = [(1, "a"), (2, "b")]
+    pairs: List[(Int, String)] = [(1, "a"), (2, "b")]
     pairs
 }

@@ -2,7 +2,7 @@
 # Tuple destructuring with typed bindings
 
 main() = {
-    (Int, Int) pair = (10, 20)
+    pair: (Int, Int) = (10, 20)
     sum: Int = pair.0 + pair.1
     sum
 }

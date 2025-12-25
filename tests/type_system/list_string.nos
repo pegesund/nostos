@@ -2,6 +2,6 @@
 # List[String] type
 
 main() = {
-    List[String] strs = ["a", "b", "c"]
+    strs: List[String] = ["a", "b", "c"]
     strs
 }

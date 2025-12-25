@@ -2,6 +2,6 @@
 # Tuple type
 
 main() = {
-    (Int, String) pair = (1, "hello")
+    pair: (Int, String) = (1, "hello")
     pair
 }

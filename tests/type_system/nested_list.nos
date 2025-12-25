@@ -2,6 +2,6 @@
 # Nested list type
 
 main() = {
-    List[List[Int]] matrix = [[1, 2], [3, 4]]
+    matrix: List[List[Int]] = [[1, 2], [3, 4]]
     matrix
 }

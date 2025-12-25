@@ -9,7 +9,7 @@ getValue(e) = match e
 end
 
 main() = {
-    Either[Int, Int] left = Left(5)
-    Either[Int, Int] right = Right(10)
+    left: Either[Int, Int] = Left(5)
+    right: Either[Int, Int] = Right(10)
     getValue(left) + getValue(right)
 }

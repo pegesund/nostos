@@ -14,7 +14,7 @@ unwrap(opt) = match opt
 end
 
 main() = {
-    Option[Int] maybe = Some(42)
-    Option[Int] doubled = mapOpt(x => x * 2, maybe)
+    maybe: Option[Int] = Some(42)
+    doubled: Option[Int] = mapOpt(x => x * 2, maybe)
     unwrap(doubled)
 }

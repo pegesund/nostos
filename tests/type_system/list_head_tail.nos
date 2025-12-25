@@ -7,7 +7,7 @@ head(xs) = match xs
 end
 
 main() = {
-    List[Int] nums = [1, 2, 3]
+    nums: List[Int] = [1, 2, 3]
     first: Int = head(nums)
     first
 }

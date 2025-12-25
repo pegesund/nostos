@@ -16,7 +16,7 @@ unwrap(opt) = match opt
 end
 
 main() = {
-    Option[Int] maybe = Some(10)
-    Option[Int] result = flatMap(x => safeDiv(x, 2), maybe)
+    maybe: Option[Int] = Some(10)
+    result: Option[Int] = flatMap(x => safeDiv(x, 2), maybe)
     unwrap(result)
 }

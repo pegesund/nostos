@@ -6,12 +6,12 @@ type Status = Active | Inactive
 
 main() = {
     # Basic typed map
-    Map[String, Int] counts = %{ "a": 1, "b": 2 }
+    counts: Map[String, Int] = %{ "a": 1, "b": 2 }
     assert_eq(1, Map.get(counts, "a"))
     assert_eq(2, Map.get(counts, "b"))
 
     # Typed map with record values
-    Map[String, Person] people = %{
+    people: Map[String, Person] = %{
         "alice": Person("Alice", 30),
         "bob": Person("Bob", 25)
     }
@@ -20,7 +20,7 @@ main() = {
     assert_eq(30, alice.age)
 
     # Typed map with variant values
-    Map[String, Status] statuses = %{ "s1": Active, "s2": Inactive }
+    statuses: Map[String, Status] = %{ "s1": Active, "s2": Inactive }
     s1 = match Map.get(statuses, "s1")
         Active -> 1
         Inactive -> 0
@@ -28,13 +28,13 @@ main() = {
     assert_eq(1, s1)
 
     # Typed map with tuple values
-    Map[String, (Int, Int)] coords = %{ "origin": (0, 0), "point": (10, 20) }
+    coords: Map[String, (Int, Int)] = %{ "origin": (0, 0), "point": (10, 20) }
     (x, y) = Map.get(coords, "point")
     assert_eq(10, x)
     assert_eq(20, y)
 
     # Typed map with Int keys
-    Map[Int, String] names = %{ 1: "one", 2: "two" }
+    names: Map[Int, String] = %{ 1: "one", 2: "two" }
     assert_eq("one", Map.get(names, 1))
 
     0

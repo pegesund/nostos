@@ -7,7 +7,7 @@ filter(p, xs) = match xs
 end
 
 main() = {
-    List[Int] nums = [1, 2, 3, 4, 5]
-    List[Int] evens = filter(x => x % 2 == 0, nums)
+    nums: List[Int] = [1, 2, 3, 4, 5]
+    evens: List[Int] = filter(x => x % 2 == 0, nums)
     evens
 }

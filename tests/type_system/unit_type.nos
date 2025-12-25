@@ -4,6 +4,6 @@
 doNothing() = ()
 
 main() = {
-    () result = doNothing()
+    result: () = doNothing()
     result
 }

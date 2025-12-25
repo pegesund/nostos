@@ -7,7 +7,7 @@ map(f, xs) = match xs
 end
 
 main() = {
-    List[Int] nums = [1, 2, 3]
-    List[Int] doubled = map(x => x * 2, nums)
+    nums: List[Int] = [1, 2, 3]
+    doubled: List[Int] = map(x => x * 2, nums)
     doubled
 }
