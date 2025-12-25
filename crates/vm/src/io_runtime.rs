@@ -21,7 +21,7 @@ use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
 use tokio_postgres::{Client as PgClient, NoTls, Statement};
 use postgres_native_tls::MakeTlsConnector;
 use native_tls::TlsConnector;
-use deadpool_postgres::{Config as PgPoolConfig, Runtime as DeadpoolRuntime, ManagerConfig, RecyclingMethod};
+use deadpool_postgres::{Manager as PgPoolManager, Pool as PgPool, Runtime as DeadpoolRuntime, ManagerConfig, RecyclingMethod};
 
 use crate::process::{IoResponseValue, PgValue};
 
@@ -106,7 +106,7 @@ impl PgConnection {
 }
 
 /// Connection pools keyed by connection string
-type PgPools = Arc<TokioMutex<HashMap<String, deadpool_postgres::Pool>>>;
+type PgPools = Arc<TokioMutex<HashMap<String, PgPool>>>;
 
 /// Create a TLS connector for PostgreSQL
 fn create_tls_connector() -> Result<MakeTlsConnector, native_tls::Error> {
@@ -1244,21 +1244,35 @@ impl IoRuntime {
                         let pool_result = {
                             let mut pools_guard = pools.lock().await;
                             if !pools_guard.contains_key(&connection_string) {
-                                // Create new pool
-                                let mut cfg = PgPoolConfig::new();
-                                cfg.url = Some(connection_string.clone());
-                                cfg.manager = Some(ManagerConfig {
-                                    recycling_method: RecyclingMethod::Fast,
-                                });
+                                // Parse connection string using tokio_postgres (handles both URL and key=value formats)
+                                let pg_config: tokio_postgres::Config = match connection_string.parse() {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        let _ = response.send(Err(IoError::PgError(format!("Invalid connection string: {}", e))));
+                                        return;
+                                    }
+                                };
 
-                                let pool_create_result: Result<deadpool_postgres::Pool, IoError> = if use_tls {
+                                let mgr_config = ManagerConfig {
+                                    recycling_method: RecyclingMethod::Fast,
+                                };
+
+                                let pool_create_result: Result<PgPool, IoError> = if use_tls {
                                     match create_tls_connector() {
-                                        Ok(tls) => cfg.create_pool(Some(DeadpoolRuntime::Tokio1), tls)
-                                            .map_err(|e| IoError::PgError(format!("Pool creation error: {}", e))),
+                                        Ok(tls) => {
+                                            let mgr = PgPoolManager::from_config(pg_config, tls, mgr_config);
+                                            PgPool::builder(mgr)
+                                                .runtime(DeadpoolRuntime::Tokio1)
+                                                .build()
+                                                .map_err(|e| IoError::PgError(format!("Pool creation error: {}", e)))
+                                        }
                                         Err(e) => Err(IoError::PgError(format!("TLS error: {}", e))),
                                     }
                                 } else {
-                                    cfg.create_pool(Some(DeadpoolRuntime::Tokio1), NoTls)
+                                    let mgr = PgPoolManager::from_config(pg_config, NoTls, mgr_config);
+                                    PgPool::builder(mgr)
+                                        .runtime(DeadpoolRuntime::Tokio1)
+                                        .build()
                                         .map_err(|e| IoError::PgError(format!("Pool creation error: {}", e)))
                                 };
 
