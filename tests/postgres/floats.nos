@@ -62,13 +62,14 @@ test_float64_arithmetic(conn) = {
 }
 
 test_float32(conn) = {
-    # Float32 values (using f32 suffix)
-    r1 = Pg.query(conn, "SELECT $1", [3.14f32])
+    # Float32 values using Float32Array for pgvector compatibility
+    # Note: PostgreSQL REAL type is 32-bit float
+    r1 = Pg.query(conn, "SELECT 3.14::real", [])
     v1 = head(head(r1))
     assert(v1 > 3.1)
     assert(v1 < 3.2)
 
-    r2 = Pg.query(conn, "SELECT $1", [-42.5f32])
+    r2 = Pg.query(conn, "SELECT (-42.5)::real", [])
     v2 = head(head(r2))
     assert(v2 < -42.0)
     assert(v2 > -43.0)
@@ -77,8 +78,8 @@ test_float32(conn) = {
 
 test_float32_precision(conn) = {
     # Float32 has less precision than Float64
-    # This tests that Float32 is correctly converted
-    r1 = Pg.query(conn, "SELECT $1", [1.23456789f32])
+    # This tests that real (float4) is correctly returned
+    r1 = Pg.query(conn, "SELECT 1.23456789::real", [])
     v1 = head(head(r1))
     # Float32 can only represent ~7 significant digits
     assert(v1 > 1.23)

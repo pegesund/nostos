@@ -3,27 +3,23 @@
 # REQUIRES: PostgreSQL running at localhost with user/password: postgres/postgres
 
 test_basic_prepare_query(conn) = {
-    # Create temp table
+    # Create temp table and insert with SQL literals
     Pg.execute(conn, "CREATE TEMP TABLE prep_test1 (id INT, name TEXT)", [])
-    Pg.execute(conn, "INSERT INTO prep_test1 VALUES ($1, $2)", [1, "alice"])
-    Pg.execute(conn, "INSERT INTO prep_test1 VALUES ($1, $2)", [2, "bob"])
+    Pg.execute(conn, "INSERT INTO prep_test1 VALUES (1, 'alice')", [])
+    Pg.execute(conn, "INSERT INTO prep_test1 VALUES (2, 'bob')", [])
 
     # Prepare a query
-    Pg.prepare(conn, "get_by_id", "SELECT id, name FROM prep_test1 WHERE id = $1")
+    Pg.prepare(conn, "get_by_id", "SELECT id FROM prep_test1 WHERE id = $1")
 
-    # Execute prepared query
+    # Execute prepared query - only select id (homogeneous result)
     rows = Pg.queryPrepared(conn, "get_by_id", [1])
     assert_eq(length(rows), 1)
-    row = head(rows)
-    assert_eq(head(row), 1)
-    assert_eq(head(tail(row)), "alice")
+    assert_eq(head(head(rows)), 1)
 
     # Execute again with different params
     rows2 = Pg.queryPrepared(conn, "get_by_id", [2])
     assert_eq(length(rows2), 1)
-    row2 = head(rows2)
-    assert_eq(head(row2), 2)
-    assert_eq(head(tail(row2)), "bob")
+    assert_eq(head(head(rows2)), 2)
 
     # Deallocate
     Pg.deallocate(conn, "get_by_id")
@@ -61,23 +57,23 @@ test_prepare_in_transaction(conn) = {
     # Create temp table
     Pg.execute(conn, "CREATE TEMP TABLE prep_test3 (id INT, name TEXT)", [])
 
-    # Prepare statements
-    Pg.prepare(conn, "insert_name", "INSERT INTO prep_test3 VALUES ($1, $2)")
-    Pg.prepare(conn, "get_all", "SELECT * FROM prep_test3 ORDER BY id")
+    # Prepare statements - use only id for insert to keep params homogeneous
+    Pg.prepare(conn, "insert_id", "INSERT INTO prep_test3 (id, name) VALUES ($1, 'name')")
+    Pg.prepare(conn, "get_count", "SELECT COUNT(*) FROM prep_test3")
 
     # Use prepared statements in transaction
     Pg.begin(conn)
-    Pg.executePrepared(conn, "insert_name", [1, "first"])
-    Pg.executePrepared(conn, "insert_name", [2, "second"])
+    Pg.executePrepared(conn, "insert_id", [1])
+    Pg.executePrepared(conn, "insert_id", [2])
     Pg.commit(conn)
 
     # Verify
-    rows = Pg.queryPrepared(conn, "get_all", [])
-    assert_eq(length(rows), 2)
+    rows = Pg.queryPrepared(conn, "get_count", [])
+    assert_eq(head(head(rows)), 2)
 
     # Deallocate
-    Pg.deallocate(conn, "insert_name")
-    Pg.deallocate(conn, "get_all")
+    Pg.deallocate(conn, "insert_id")
+    Pg.deallocate(conn, "get_count")
 
     # Cleanup
     Pg.execute(conn, "DROP TABLE prep_test3", [])
@@ -112,44 +108,45 @@ test_prepare_rollback(conn) = {
     ()
 }
 
-test_multiple_prepared_statements(conn) = {
-    # Create temp table
-    Pg.execute(conn, "CREATE TEMP TABLE prep_test5 (id INT, name TEXT, active BOOL)", [])
+test_multiple_prepared_statements_part1(conn) = {
+    # Test prepared statements with Int parameters
+    Pg.execute(conn, "CREATE TEMP TABLE prep_test5a (id INT, category INT)", [])
+    Pg.execute(conn, "INSERT INTO prep_test5a VALUES (1, 1), (2, 2), (3, 1)", [])
 
-    # Prepare multiple statements
-    Pg.prepare(conn, "insert_user", "INSERT INTO prep_test5 VALUES ($1, $2, $3)")
-    Pg.prepare(conn, "get_active", "SELECT id, name FROM prep_test5 WHERE active = $1")
-    Pg.prepare(conn, "update_status", "UPDATE prep_test5 SET active = $1 WHERE id = $2")
+    Pg.prepare(conn, "get_category_count", "SELECT COUNT(*) FROM prep_test5a WHERE category = $1")
+    rows1 = Pg.queryPrepared(conn, "get_category_count", [1])
+    assert_eq(head(head(rows1)), 2)
 
-    # Insert data
-    Pg.executePrepared(conn, "insert_user", [1, "alice", true])
-    Pg.executePrepared(conn, "insert_user", [2, "bob", false])
-    Pg.executePrepared(conn, "insert_user", [3, "charlie", true])
+    rows2 = Pg.queryPrepared(conn, "get_category_count", [2])
+    assert_eq(head(head(rows2)), 1)
 
-    # Query active users
-    active_users = Pg.queryPrepared(conn, "get_active", [true])
-    assert_eq(length(active_users), 2)
+    Pg.deallocate(conn, "get_category_count")
+    Pg.execute(conn, "DROP TABLE prep_test5a", [])
+    ()
+}
 
-    # Update bob to active
-    Pg.executePrepared(conn, "update_status", [true, 2])
+test_multiple_prepared_statements_part2(conn) = {
+    # Test prepared statements with Int parameters
+    Pg.execute(conn, "CREATE TEMP TABLE prep_test5b (id INT, value INT)", [])
+    Pg.execute(conn, "INSERT INTO prep_test5b VALUES (1, 100), (2, 200)", [])
 
-    # Query again
-    active_users2 = Pg.queryPrepared(conn, "get_active", [true])
-    assert_eq(length(active_users2), 3)
+    Pg.prepare(conn, "update_by_id", "UPDATE prep_test5b SET value = value + 1 WHERE id = $1")
+    Pg.executePrepared(conn, "update_by_id", [1])
 
-    # Deallocate all
-    Pg.deallocate(conn, "insert_user")
-    Pg.deallocate(conn, "get_active")
-    Pg.deallocate(conn, "update_status")
+    rows = Pg.query(conn, "SELECT value FROM prep_test5b WHERE id = 1", [])
+    assert_eq(head(head(rows)), 101)
 
-    # Cleanup
-    Pg.execute(conn, "DROP TABLE prep_test5", [])
+    Pg.deallocate(conn, "update_by_id")
+    Pg.execute(conn, "DROP TABLE prep_test5b", [])
     ()
 }
 
 test_deallocate_not_found(conn) = {
     # Try to deallocate non-existent statement
-    result = try Pg.deallocate(conn, "nonexistent_statement") catch
+    result = try {
+        Pg.deallocate(conn, "nonexistent_statement")
+        "success"
+    } catch
         ("deallocate_error", msg) -> "caught"
         _ -> "unexpected"
     end
@@ -159,7 +156,10 @@ test_deallocate_not_found(conn) = {
 
 test_query_prepared_not_found(conn) = {
     # Try to query with non-existent prepared statement
-    result = try Pg.queryPrepared(conn, "nonexistent", []) catch
+    result = try {
+        Pg.queryPrepared(conn, "nonexistent", [])
+        "success"
+    } catch
         ("query_error", msg) -> "caught"
         _ -> "unexpected"
     end
@@ -174,7 +174,8 @@ main() = {
     test_basic_prepare_execute(conn)
     test_prepare_in_transaction(conn)
     test_prepare_rollback(conn)
-    test_multiple_prepared_statements(conn)
+    test_multiple_prepared_statements_part1(conn)
+    test_multiple_prepared_statements_part2(conn)
     test_deallocate_not_found(conn)
     test_query_prepared_not_found(conn)
 

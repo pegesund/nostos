@@ -5444,6 +5444,11 @@ impl AsyncProcess {
                         }
                         pg_params
                     }
+                    GcValue::Int64List(list) => {
+                        // Handle specialized Int64List
+                        use crate::io_runtime::PgParam;
+                        list.iter().map(|i| PgParam::Int(i)).collect()
+                    }
                     _ => return Err(RuntimeError::TypeError {
                         expected: "List".to_string(),
                         found: "non-list".to_string(),
@@ -5497,6 +5502,11 @@ impl AsyncProcess {
                             pg_params.push(param);
                         }
                         pg_params
+                    }
+                    GcValue::Int64List(list) => {
+                        // Handle specialized Int64List
+                        use crate::io_runtime::PgParam;
+                        list.iter().map(|i| PgParam::Int(i)).collect()
                     }
                     _ => return Err(RuntimeError::TypeError {
                         expected: "List".to_string(),
@@ -5715,6 +5725,11 @@ impl AsyncProcess {
                         }
                         pg_params
                     }
+                    GcValue::Int64List(list) => {
+                        // Handle specialized Int64List
+                        use crate::io_runtime::PgParam;
+                        list.iter().map(|i| PgParam::Int(i)).collect()
+                    }
                     _ => return Err(RuntimeError::TypeError {
                         expected: "List".to_string(),
                         found: "non-list".to_string(),
@@ -5767,6 +5782,11 @@ impl AsyncProcess {
                             pg_params.push(param);
                         }
                         pg_params
+                    }
+                    GcValue::Int64List(list) => {
+                        // Handle specialized Int64List
+                        use crate::io_runtime::PgParam;
+                        list.iter().map(|i| PgParam::Int(i)).collect()
                     }
                     _ => return Err(RuntimeError::TypeError {
                         expected: "List".to_string(),
