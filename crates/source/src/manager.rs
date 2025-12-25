@@ -195,8 +195,10 @@ impl SourceManager {
         let defs_dir = nostos_dir.join("defs");
         if defs_dir.exists() {
             self.load_from_defs_dir(&defs_dir)?;
-            // Also check for new .nos files that don't have defs yet
+            // Check for new .nos files that don't have defs yet
             self.import_new_source_files(&defs_dir)?;
+            // Check for .nos files that are newer than defs (external edits)
+            self.sync_updated_source_files(&defs_dir)?;
         } else {
             // Bootstrap from .nos files
             self.bootstrap_from_source_files()?;
@@ -417,6 +419,112 @@ impl SourceManager {
         // Git commit
         let nostos_dir = self.project_root.join(".nostos");
         git::add_and_commit(&nostos_dir, &["defs"], "Import new source files")?;
+
+        Ok(())
+    }
+
+    /// Sync updated .nos files that are newer than their corresponding defs
+    fn sync_updated_source_files(&mut self, defs_dir: &Path) -> Result<(), String> {
+        let nostos_exclude = self.project_root.join(".nostos");
+
+        // Find .nos files that are newer than their defs
+        let updated_files: Vec<(PathBuf, ModulePath, String)> = WalkDir::new(&self.project_root)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let path = e.path();
+                path.extension().map(|ext| ext == "nos").unwrap_or(false)
+                    && !path.starts_with(&nostos_exclude)
+            })
+            .filter_map(|entry| {
+                let path = entry.path().to_path_buf();
+                let relative = path.strip_prefix(&self.project_root).ok()?;
+
+                // Module path from file path
+                let module_path: ModulePath = {
+                    let mut components: Vec<String> = relative
+                        .parent()
+                        .map(|p| {
+                            p.components()
+                                .map(|c| c.as_os_str().to_string_lossy().to_string())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    if let Some(stem) = relative.file_stem() {
+                        components.push(stem.to_string_lossy().to_string());
+                    }
+                    components
+                };
+
+                // Find the defs directory for this module
+                let module_defs_dir = module_path.iter().fold(
+                    defs_dir.to_path_buf(),
+                    |p, s| p.join(s),
+                );
+
+                // Skip if defs directory doesn't exist (handled by import_new_source_files)
+                if !module_defs_dir.exists() {
+                    return None;
+                }
+
+                // Get .nos file mtime
+                let nos_mtime = path.metadata().ok()?.modified().ok()?;
+
+                // Get latest mtime from defs directory
+                let defs_mtime = WalkDir::new(&module_defs_dir)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().map(|ext| ext == "nos").unwrap_or(false))
+                    .filter_map(|e| e.path().metadata().ok()?.modified().ok())
+                    .max();
+
+                // If .nos is newer than all defs files, we need to re-import
+                if let Some(defs_mtime) = defs_mtime {
+                    if nos_mtime > defs_mtime {
+                        let content = fs::read_to_string(&path).ok()?;
+                        return Some((path, module_path, content));
+                    }
+                }
+
+                None
+            })
+            .collect();
+
+        if updated_files.is_empty() {
+            return Ok(());
+        }
+
+        // Re-import each updated file
+        for (_path, module_path, content) in &updated_files {
+            let module_key = module_path_to_string(module_path);
+
+            // Clear existing definitions for this module
+            if let Some(module) = self.modules.get_mut(&module_key) {
+                // Remove old definitions from index
+                for name in module.definition_names() {
+                    self.def_index.remove(name);
+                }
+                module.clear_definitions();
+            }
+
+            // Re-parse and add definitions
+            self.parse_and_add_definitions(module_path, content)?;
+        }
+
+        // Write updated definitions to .nostos/defs/
+        for (_path, module_path, _content) in &updated_files {
+            let module_key = module_path_to_string(module_path);
+            if let Some(module) = self.modules.get(&module_key) {
+                for name in module.definition_names() {
+                    self.write_definition_to_defs(&module_key, &name)?;
+                }
+            }
+        }
+
+        // Git commit
+        let nostos_dir = self.project_root.join(".nostos");
+        git::add_and_commit(&nostos_dir, &["defs"], "Sync updated source files")?;
 
         Ok(())
     }
@@ -781,11 +889,10 @@ impl SourceManager {
                     let changed = group.update_from_source(new_source);
                     if changed {
                         module.dirty = true;
-                        // Write to .nostos/defs/ and commit
+                        // Write to .nos first (source of truth), then copy to defs for git history
+                        self.write_module_files()?;
                         self.write_definition_to_defs(&module_key, simple_name)?;
                         self.commit_definition(&module_key, simple_name)?;
-                        // Also sync to the main .nos source file
-                        self.write_module_files()?;
                     }
                     return Ok(changed);
                 }
@@ -831,10 +938,10 @@ impl SourceManager {
         // Update def_index
         self.def_index.insert(simple_name.to_string(), module_key.clone());
 
-        // Write to .nostos/defs/ and commit
+        // Write to .nos first (source of truth), then copy to defs for git history
+        self.write_module_files()?;
         self.write_definition_to_defs(&module_key, simple_name)?;
         self.commit_definition(&module_key, simple_name)?;
-        self.write_module_files()?;
 
         Ok(true)
     }
@@ -1087,11 +1194,9 @@ impl SourceManager {
             self.def_index.insert(name.clone(), module_key.clone());
         }
 
-        // Write and commit only definitions that actually changed
-        for name in &changed_names {
-            debug_log!("[SourceManager] Writing definition to defs: {}", name);
-            self.write_definition_to_defs(&module_key, name)?;
-            self.commit_definition(&module_key, name)?;
+        // Write to .nos first (source of truth), then copy to defs for git history
+        if !changed_names.is_empty() || groups_changed {
+            self.write_module_files()?;
         }
 
         // Write _meta.nos if groups changed
@@ -1099,9 +1204,11 @@ impl SourceManager {
             self.write_meta_to_defs(&module_key)?;
         }
 
-        // Also sync to the main .nos source file if anything changed
-        if !changed_names.is_empty() || groups_changed {
-            self.write_module_files()?;
+        // Write and commit definitions that changed to defs for git history
+        for name in &changed_names {
+            debug_log!("[SourceManager] Writing definition to defs: {}", name);
+            self.write_definition_to_defs(&module_key, name)?;
+            self.commit_definition(&module_key, name)?;
         }
 
         debug_log!("[SourceManager] update_group_source completed, returning {:?}", changed_names);
@@ -1124,9 +1231,11 @@ impl SourceManager {
 
         let group = DefinitionGroup::new(name.to_string(), kind, source.to_string());
         module.add_definition(group);
+        module.dirty = true;
         self.def_index.insert(name.to_string(), module_key.clone());
 
-        // Write to .nostos/defs/ and commit
+        // Write to .nos first (source of truth), then copy to defs for git history
+        self.write_module_files()?;
         self.write_definition_to_defs(&module_key, name)?;
         self.commit_definition(&module_key, name)?;
 
@@ -2898,5 +3007,72 @@ bar() = 2
         let final_result = replace_call_in_source(&after_rename, "fib", "fibonacci");
 
         assert_eq!(final_result, "fibonacci(0) = 0\nfibonacci(1) = 1\nfibonacci(n) = fibonacci(n - 1) + fibonacci(n - 2)");
+    }
+
+    #[test]
+    fn test_sync_updated_source_files() {
+        use std::thread::sleep;
+        use std::time::Duration;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Create initial file
+        fs::write(root.join("main.nos"), "greet() = \"Hello\"").unwrap();
+
+        // First load - initializes .nostos/defs/
+        let sm = SourceManager::new(root.to_path_buf()).unwrap();
+        assert_eq!(sm.get_source("greet").unwrap(), "greet() = \"Hello\"");
+        drop(sm);
+
+        // Wait a moment to ensure timestamp difference
+        sleep(Duration::from_millis(100));
+
+        // Edit the .nos file externally
+        fs::write(root.join("main.nos"), "greet() = \"Bonjour\"").unwrap();
+
+        // Reload - should pick up the external edit
+        let sm2 = SourceManager::new(root.to_path_buf()).unwrap();
+        assert_eq!(sm2.get_source("greet").unwrap(), "greet() = \"Bonjour\"");
+
+        // Check that defs were updated too
+        let defs_file = root.join(".nostos/defs/main/greet.nos");
+        let defs_content = fs::read_to_string(defs_file).unwrap();
+        assert!(defs_content.contains("Bonjour"), "Defs should be updated: {}", defs_content);
+
+        // Check git log shows the sync
+        let nostos_dir = root.join(".nostos");
+        let output = std::process::Command::new("git")
+            .args(["log", "--oneline", "-5"])
+            .current_dir(&nostos_dir)
+            .output()
+            .unwrap();
+        let log = String::from_utf8_lossy(&output.stdout);
+        assert!(log.contains("Sync updated source files"), "Git log should contain sync commit: {}", log);
+    }
+
+    #[test]
+    fn test_update_writes_nos_first() {
+        // Verify that REPL edits write to .nos first, then to defs
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Create initial file
+        fs::write(root.join("main.nos"), "greet() = \"Hello\"").unwrap();
+
+        // Initialize SourceManager
+        let mut sm = SourceManager::new(root.to_path_buf()).unwrap();
+
+        // Update via REPL (simulated)
+        sm.update_definition("greet", "greet() = \"Hola\"").unwrap();
+
+        // Check .nos file was updated
+        let nos_content = fs::read_to_string(root.join("main.nos")).unwrap();
+        assert!(nos_content.contains("Hola"), ".nos should be updated: {}", nos_content);
+
+        // Check defs were also updated
+        let defs_file = root.join(".nostos/defs/main/greet.nos");
+        let defs_content = fs::read_to_string(defs_file).unwrap();
+        assert!(defs_content.contains("Hola"), "Defs should be updated: {}", defs_content);
     }
 }

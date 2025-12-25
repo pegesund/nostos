@@ -87,6 +87,12 @@ impl Module {
         removed
     }
 
+    /// Clear all definitions
+    pub fn clear_definitions(&mut self) {
+        self.definitions.clear();
+        self.dirty = true;
+    }
+
     /// Check if a definition exists
     pub fn has_definition(&self, name: &str) -> bool {
         self.definitions.contains_key(name)
