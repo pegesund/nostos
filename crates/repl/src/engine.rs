@@ -3109,6 +3109,26 @@ impl ReplEngine {
             known_functions.insert(type_name.to_string());
         }
 
+        // Add variant constructors from external types (e.g., Json.Object, Maybe.Some)
+        for (_, type_val) in self.compiler.get_all_types() {
+            for ctor in &type_val.constructors {
+                known_functions.insert(ctor.name.clone());
+            }
+        }
+
+        // Add module functions that are handled specially by the compiler
+        // (these are not in BUILTINS but are valid function calls)
+        for name in &[
+            "Float64Array.fromList", "Float64Array.length", "Float64Array.get",
+            "Float64Array.set", "Float64Array.toList", "Float64Array.make",
+            "Float32Array.fromList", "Float32Array.length", "Float32Array.get",
+            "Float32Array.set", "Float32Array.toList", "Float32Array.make",
+            "Int64Array.fromList", "Int64Array.length", "Int64Array.get",
+            "Int64Array.set", "Int64Array.toList", "Int64Array.make",
+        ] {
+            known_functions.insert(name.to_string());
+        }
+
         // Add functions defined in this module being checked
         for item in &module.items {
             if let Item::FnDef(fn_def) = item {
@@ -3437,7 +3457,7 @@ impl ReplEngine {
         // Collect all function calls from a statement
         fn collect_calls_stmt(
             stmt: &Stmt,
-            calls: &mut Vec<(String, usize, usize)>,
+            calls: &mut Vec<(String, usize, usize, bool)>,
             local_types: &mut HashMap<String, String>,
             variant_constructors: &HashMap<String, String>,
         ) {
@@ -3457,17 +3477,19 @@ impl ReplEngine {
         }
 
         // Collect all function calls from an expression
-        // Tuple: (call_name, offset, arg_count)
+        // Tuple: (call_name, offset, arg_count, is_qualified_call)
+        // is_qualified_call: true for Type.method(args), false for instance.method(args)
         fn collect_calls(
             expr: &Expr,
-            calls: &mut Vec<(String, usize, usize)>,
+            calls: &mut Vec<(String, usize, usize, bool)>,
             local_types: &mut HashMap<String, String>,
             variant_constructors: &HashMap<String, String>,
         ) {
             match expr {
                 Expr::Call(callee, _, args, span) => {
                     if let Some(name) = get_call_name(callee) {
-                        calls.push((name, span.start, args.len()));
+                        // Regular function calls are not qualified method calls
+                        calls.push((name, span.start, args.len(), false));
                     }
                     collect_calls(callee, calls, local_types, variant_constructors);
                     for arg in args {
@@ -3494,14 +3516,8 @@ impl ReplEngine {
                         _ => infer_expr_type(receiver, local_types, variant_constructors),
                     };
 
-                    // Use "?" as marker for unknown receiver type
-                    let recv_type = receiver_type.unwrap_or_else(|| "?".to_string());
-                    let call_name = format!("{}.{}", recv_type, method.node);
-                    // arg count for method = explicit args (receiver is implicit)
-                    calls.push((call_name, span.start, args.len()));
-                    // Only collect from receiver if it's not a module name
-                    // Module names (uppercase Record/Var) are used as qualifiers, not constructors
-                    let is_module_name = match receiver.as_ref() {
+                    // Check if receiver is a type/module name (qualified call) vs instance (UFCS)
+                    let is_qualified_call = match receiver.as_ref() {
                         Expr::Record(ident, fields, _) if fields.is_empty() => {
                             ident.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
                         }
@@ -3510,7 +3526,16 @@ impl ReplEngine {
                         }
                         _ => false,
                     };
-                    if !is_module_name {
+
+                    // Use "?" as marker for unknown receiver type
+                    let recv_type = receiver_type.unwrap_or_else(|| "?".to_string());
+                    let call_name = format!("{}.{}", recv_type, method.node);
+                    // arg count for method = explicit args (receiver is implicit for UFCS)
+                    calls.push((call_name, span.start, args.len(), is_qualified_call));
+
+                    // Only collect from receiver if it's not a module name
+                    // Module names (uppercase Record/Var) are used as qualifiers, not constructors
+                    if !is_qualified_call {
                         collect_calls(receiver, calls, local_types, variant_constructors);
                     }
                     for arg in args {
@@ -3572,7 +3597,8 @@ impl ReplEngine {
                 }
                 Expr::Record(name, fields, _) => {
                     // Add constructor name for validation (marked with "C:")
-                    calls.push((format!("C:{}", name.node), name.span.start, fields.len()));
+                    // Constructors are not qualified method calls
+                    calls.push((format!("C:{}", name.node), name.span.start, fields.len(), false));
                     for field in fields {
                         match field {
                             nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls, local_types, variant_constructors),
@@ -3680,7 +3706,7 @@ impl ReplEngine {
         }
 
         // Validate all calls
-        for (call_name, offset, arg_count) in all_calls {
+        for (call_name, offset, arg_count, is_qualified_call) in all_calls {
             // Check for constructor references (marked with "C:")
             if let Some(name) = call_name.strip_prefix("C:") {
                 // Uppercase name should be a known constructor or type
@@ -3734,7 +3760,11 @@ impl ReplEngine {
                 }
 
                 // Check arity for known method signatures
-                if let Some(expected_arity) = get_method_arity(type_name, method_name) {
+                if let Some(ufcs_arity) = get_method_arity(type_name, method_name) {
+                    // get_method_arity returns UFCS arity (receiver implicit).
+                    // For qualified calls like String.length(v1), receiver is an explicit arg (ufcs_arity + 1).
+                    // For UFCS calls like str.length(), use ufcs_arity directly.
+                    let expected_arity = if is_qualified_call { ufcs_arity + 1 } else { ufcs_arity };
                     if arg_count != expected_arity {
                         let (line, _col) = offset_to_line_col(content, offset);
                         return Err(format!(
@@ -10324,5 +10354,39 @@ mod debug_session_tests {
 
         println!("Source received: {:?}", source_received);
         assert!(source_received.is_some(), "Paused event should contain source code");
+    }
+}
+
+#[cfg(test)]
+mod postgres_module_tests {
+    use super::*;
+
+    #[test]
+    fn test_postgres_modules_compile() {
+        let mut engine = ReplEngine::new(ReplConfig { enable_jit: false, num_threads: 1 });
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        let test_files = [
+            ("exceptions", include_str!("../../../tests/postgres/exceptions.nos")),
+            ("execute", include_str!("../../../tests/postgres/execute.nos")),
+            ("floats", include_str!("../../../tests/postgres/floats.nos")),
+            ("integers", include_str!("../../../tests/postgres/integers.nos")),
+            ("json", include_str!("../../../tests/postgres/json.nos")),
+            ("other_types", include_str!("../../../tests/postgres/other_types.nos")),
+            ("prepared_statements", include_str!("../../../tests/postgres/prepared_statements.nos")),
+            ("ssl", include_str!("../../../tests/postgres/ssl.nos")),
+            ("strings", include_str!("../../../tests/postgres/strings.nos")),
+            ("transactions", include_str!("../../../tests/postgres/transactions.nos")),
+            ("vector", include_str!("../../../tests/postgres/vector.nos")),
+        ];
+
+        for (name, content) in test_files.iter() {
+            println!("=== Checking {} ===", name);
+            let result = engine.check_module_compiles(name, content);
+            match result {
+                Ok(()) => println!("{}: OK", name),
+                Err(e) => println!("{}: ERROR - {}", name, e),
+            }
+        }
     }
 }

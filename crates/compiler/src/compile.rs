@@ -9004,6 +9004,10 @@ impl Compiler {
                 TypeInfoKind::Record { fields, mutable: *mutable }
             }
             TypeKind::Variant => {
+                // Also register variant constructor names as known constructors
+                for c in &type_val.constructors {
+                    self.known_constructors.insert(c.name.clone());
+                }
                 let constructors = type_val.constructors.iter()
                     .map(|c| (c.name.clone(), c.fields.iter().map(|f| f.type_name.clone()).collect()))
                     .collect();
@@ -9228,6 +9232,11 @@ impl Compiler {
     /// Get documentation for a built-in function.
     pub fn get_builtin_doc(name: &str) -> Option<&'static str> {
         BUILTINS.iter().find(|b| b.name == name).map(|b| b.doc)
+    }
+
+    /// Get all builtins with their signatures for external registration.
+    pub fn get_builtins() -> Vec<(&'static str, &'static str)> {
+        BUILTINS.iter().map(|b| (b.name, b.signature)).collect()
     }
 
     /// Get function names formatted for user display.
