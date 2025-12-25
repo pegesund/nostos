@@ -8,7 +8,6 @@ test_boolean_true(conn) = {
 
     r2 = Pg.query(conn, "SELECT $1 AND true", [true])
     assert_eq(head(head(r2)), true)
-    ()
 }
 
 test_boolean_false(conn) = {
@@ -17,7 +16,6 @@ test_boolean_false(conn) = {
 
     r2 = Pg.query(conn, "SELECT $1 OR false", [false])
     assert_eq(head(head(r2)), false)
-    ()
 }
 
 test_boolean_logic(conn) = {
@@ -32,7 +30,6 @@ test_boolean_logic(conn) = {
 
     r4 = Pg.query(conn, "SELECT NOT $1", [true])
     assert_eq(head(head(r4)), false)
-    ()
 }
 
 test_null(conn) = {
@@ -42,7 +39,6 @@ test_null(conn) = {
 
     r2 = Pg.query(conn, "SELECT NULL IS NOT NULL", [])
     assert_eq(head(head(r2)), false)
-    ()
 }
 
 test_null_coalesce(conn) = {
@@ -52,7 +48,6 @@ test_null_coalesce(conn) = {
 
     r2 = Pg.query(conn, "SELECT COALESCE($1, 'actual')", ["provided"])
     assert_eq(head(head(r2)), "provided")
-    ()
 }
 
 test_mixed_types(conn) = {
@@ -61,7 +56,6 @@ test_mixed_types(conn) = {
     row = head(r1)
     assert_eq(head(row), 42)
     # Note: can't easily test other elements due to type heterogeneity
-    ()
 }
 
 test_multiple_rows(conn) = {
@@ -74,7 +68,6 @@ test_multiple_rows(conn) = {
     r2 = Pg.query(conn, "SELECT letter FROM (VALUES ('a'), ('b'), ('c')) AS t(letter)", [])
     assert_eq(length(r2), 3)
     assert_eq(head(head(r2)), "a")
-    ()
 }
 
 main() = {

@@ -19,7 +19,6 @@ test_json_string(conn) = {
     # Result is returned as a JSON string
     println("JSON string result: " ++ result)
     assert(result != "")
-    ()
 }
 
 # Test inserting Json variant directly
@@ -66,7 +65,6 @@ test_json_operators(conn) = {
     rows2 = Pg.query(conn, "SELECT jsonb_array_length(data->'items') FROM test_json", [])
     len = head(head(rows2))
     assert_eq(len, 3)
-    ()
 }
 
 # Test nested JSON
@@ -87,7 +85,6 @@ test_nested_json(conn) = {
     rows = Pg.query(conn, "SELECT data->'user'->>'name' FROM test_json", [])
     name = head(head(rows))
     assert_eq(name, "Charlie")
-    ()
 }
 
 # Test JSON null
@@ -100,7 +97,6 @@ test_json_null(conn) = {
     result = head(head(rows))
     println("JSON null result: " ++ result)
     assert_eq(result, "null")
-    ()
 }
 
 main() = {

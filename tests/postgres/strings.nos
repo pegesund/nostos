@@ -8,13 +8,11 @@ test_short_string(conn) = {
 
     r2 = Pg.query(conn, "SELECT $1", ["world"])
     assert_eq(head(head(r2)), "world")
-    ()
 }
 
 test_empty_string(conn) = {
     r1 = Pg.query(conn, "SELECT $1", [""])
     assert_eq(head(head(r1)), "")
-    ()
 }
 
 test_long_string(conn) = {
@@ -31,7 +29,6 @@ test_long_string(conn) = {
     v1 = head(head(r1))
     assert_eq(String.length(v1), 496)
     assert_eq(v1, long_str)
-    ()
 }
 
 test_unicode(conn) = {
@@ -46,7 +43,6 @@ test_unicode(conn) = {
     # Emoji
     r3 = Pg.query(conn, "SELECT $1", ["test 🎉 emoji"])
     assert_eq(head(head(r3)), "test 🎉 emoji")
-    ()
 }
 
 test_special_chars(conn) = {
@@ -61,13 +57,11 @@ test_special_chars(conn) = {
     # Newlines and tabs
     r3 = Pg.query(conn, "SELECT $1", ["line1\nline2\ttab"])
     assert_eq(head(head(r3)), "line1\nline2\ttab")
-    ()
 }
 
 test_string_concatenation(conn) = {
     r1 = Pg.query(conn, "SELECT $1 || ' ' || $2", ["hello", "world"])
     assert_eq(head(head(r1)), "hello world")
-    ()
 }
 
 main() = {

@@ -24,7 +24,6 @@ test_vector_basic(conn) = {
 
     # Verify values
     assert_eq(Float64Array.length(result), 3)
-    ()
 }
 
 # Test inserting vector as list of floats
@@ -39,7 +38,6 @@ test_vector_from_list(conn) = {
     result = head(head(rows))
     println("Vector from list: " ++ show(result))
     assert_eq(Float64Array.length(result), 3)
-    ()
 }
 
 # Test vector similarity search
@@ -60,7 +58,6 @@ test_vector_similarity(conn) = {
 
     println("Nearest vector ID: " ++ show(id) ++ ", distance: " ++ show(distance))
     assert_eq(id, 1)  # First vector should be nearest
-    ()
 }
 
 # Test L2 distance operator
@@ -77,7 +74,6 @@ test_vector_l2_distance(conn) = {
     println("L2 distance from origin: " ++ show(distance))
     # Distance should be 5 (3-4-5 triangle)
     assert(distance > 4.9 && distance < 5.1)
-    ()
 }
 
 main() = {

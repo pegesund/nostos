@@ -20,7 +20,6 @@ test_create_insert_drop(conn) = {
 
     # Drop table
     Pg.execute(conn, "DROP TABLE test_exec", [])
-    ()
 }
 
 test_update(conn) = {
@@ -42,7 +41,6 @@ test_update(conn) = {
 
     # Cleanup
     Pg.execute(conn, "DROP TABLE test_update", [])
-    ()
 }
 
 test_delete(conn) = {
@@ -64,7 +62,6 @@ test_delete(conn) = {
 
     # Cleanup
     Pg.execute(conn, "DROP TABLE test_delete", [])
-    ()
 }
 
 main() = {

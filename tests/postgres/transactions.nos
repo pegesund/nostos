@@ -22,7 +22,6 @@ test_basic_commit(conn) = {
 
     # Cleanup
     Pg.execute(conn, "DROP TABLE tx_test", [])
-    ()
 }
 
 test_basic_rollback(conn) = {
@@ -48,7 +47,6 @@ test_basic_rollback(conn) = {
 
     # Cleanup
     Pg.execute(conn, "DROP TABLE tx_test2", [])
-    ()
 }
 
 test_transaction_isolation(conn) = {
@@ -75,7 +73,6 @@ test_transaction_isolation(conn) = {
 
     # Cleanup
     Pg.execute(conn, "DROP TABLE tx_test3", [])
-    ()
 }
 
 test_rollback_on_error(conn) = {
@@ -107,7 +104,6 @@ test_rollback_on_error(conn) = {
 
     # Cleanup
     Pg.execute(conn, "DROP TABLE tx_test4", [])
-    ()
 }
 
 test_nested_operations(conn) = {
@@ -130,7 +126,6 @@ test_nested_operations(conn) = {
 
     # Cleanup
     Pg.execute(conn, "DROP TABLE tx_test5", [])
-    ()
 }
 
 # ===== Pg.transaction helper tests =====
@@ -150,7 +145,6 @@ test_transaction_helper_commit(conn) = {
     assert_eq(head(head(rows)), 2)
 
     Pg.execute(conn, "DROP TABLE tx_helper1", [])
-    ()
 }
 
 test_transaction_helper_user_exception(conn) = {
@@ -174,7 +168,6 @@ test_transaction_helper_user_exception(conn) = {
     assert_eq(head(head(rows)), 0)
 
     Pg.execute(conn, "DROP TABLE tx_helper2", [])
-    ()
 }
 
 test_transaction_helper_sql_error(conn) = {
@@ -200,7 +193,6 @@ test_transaction_helper_sql_error(conn) = {
     assert_eq(head(head(rows)), 1)
 
     Pg.execute(conn, "DROP TABLE tx_helper3", [])
-    ()
 }
 
 test_transaction_helper_return_value(conn) = {
@@ -215,7 +207,6 @@ test_transaction_helper_return_value(conn) = {
     assert_eq(result, 42)
 
     Pg.execute(conn, "DROP TABLE tx_helper4", [])
-    ()
 }
 
 main() = {

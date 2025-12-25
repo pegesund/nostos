@@ -8,7 +8,6 @@ test_small_integers(conn) = {
 
     r2 = Pg.query(conn, "SELECT $1", [-12345])
     assert_eq(head(head(r2)), -12345)
-    ()
 }
 
 test_int32_range(conn) = {
@@ -19,7 +18,6 @@ test_int32_range(conn) = {
     # Min Int32
     r2 = Pg.query(conn, "SELECT $1", [-2147483648])
     assert_eq(head(head(r2)), -2147483648)
-    ()
 }
 
 test_int64_range(conn) = {
@@ -32,13 +30,11 @@ test_int64_range(conn) = {
     neg_big = -9223372036854775807
     r2 = Pg.query(conn, "SELECT $1", [neg_big])
     assert_eq(head(head(r2)), neg_big)
-    ()
 }
 
 test_zero(conn) = {
     r1 = Pg.query(conn, "SELECT $1", [0])
     assert_eq(head(head(r1)), 0)
-    ()
 }
 
 test_arithmetic(conn) = {
@@ -51,7 +47,6 @@ test_arithmetic(conn) = {
     # Multiplication
     r2 = Pg.query(conn, "SELECT $1 * $2", [123456, 789012])
     assert_eq(head(head(r2)), 97408265472)
-    ()
 }
 
 main() = {

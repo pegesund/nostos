@@ -10389,4 +10389,43 @@ mod postgres_module_tests {
             }
         }
     }
+
+    #[test]
+    fn test_browser_floats_signatures() {
+        // Simulate what TUI browser does: load directory and get browser items
+        let mut engine = ReplEngine::new(ReplConfig { enable_jit: false, num_threads: 1 });
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Load the postgres directory (what TUI does when opening a folder)
+        let postgres_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/postgres");
+        let result = engine.load_directory(postgres_dir);
+        assert!(result.is_ok(), "load_directory should succeed: {:?}", result);
+
+        // Get browser items for the "floats" module
+        let items = engine.get_browser_items(&["floats".to_string()]);
+
+        // Check that test_float32 has a proper signature (not "a -> b")
+        let test_float32 = items.iter().find(|item| {
+            if let BrowserItem::Function { name, .. } = item {
+                name == "test_float32"
+            } else {
+                false
+            }
+        });
+
+        if let Some(BrowserItem::Function { signature, .. }) = test_float32 {
+            assert!(!signature.contains("a -> b"),
+                "test_float32 should not have placeholder signature 'a -> b', got: {}", signature);
+            // Should be "Int -> ()" since conn comes from Pg.query's first param type
+            assert!(signature.contains("()") || signature == "Int -> ()",
+                "test_float32 should return unit, got: {}", signature);
+        } else {
+            panic!("test_float32 not found in browser items");
+        }
+
+        // Also verify test_float32 compiled successfully
+        let status = engine.get_compile_status("floats.test_float32");
+        assert!(matches!(status, Some(CompileStatus::Compiled)),
+            "test_float32 should compile successfully, got: {:?}", status);
+    }
 }

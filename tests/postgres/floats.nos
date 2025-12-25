@@ -13,7 +13,6 @@ test_float64_basic(conn) = {
     v2 = head(head(r2))
     assert(v2 < -123.0)
     assert(v2 > -124.0)
-    ()
 }
 
 test_float64_large(conn) = {
@@ -27,7 +26,6 @@ test_float64_large(conn) = {
     r2 = Pg.query(conn, "SELECT $1", [-1.0e+50])
     v2 = head(head(r2))
     assert(v2 < -1.0e+49)
-    ()
 }
 
 test_float64_small(conn) = {
@@ -36,14 +34,12 @@ test_float64_small(conn) = {
     v1 = head(head(r1))
     assert(v1 > 0.0)
     assert(v1 < 1.0e-99)
-    ()
 }
 
 test_float64_zero(conn) = {
     r1 = Pg.query(conn, "SELECT $1", [0.0])
     v1 = head(head(r1))
     assert(v1 == 0.0)
-    ()
 }
 
 test_float64_arithmetic(conn) = {
@@ -58,7 +54,6 @@ test_float64_arithmetic(conn) = {
     # 0.1 + 0.2 = 0.3 (with float precision)
     assert(v2 > 0.29)
     assert(v2 < 0.31)
-    ()
 }
 
 test_float32(conn) = {
@@ -73,7 +68,6 @@ test_float32(conn) = {
     v2 = head(head(r2))
     assert(v2 < -42.0)
     assert(v2 > -43.0)
-    ()
 }
 
 test_float32_precision(conn) = {
@@ -84,7 +78,6 @@ test_float32_precision(conn) = {
     # Float32 can only represent ~7 significant digits
     assert(v1 > 1.23)
     assert(v1 < 1.24)
-    ()
 }
 
 main() = {

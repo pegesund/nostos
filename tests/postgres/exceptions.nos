@@ -10,7 +10,6 @@ test_query_syntax_error(conn) = {
     end
     # Result should be a string containing error info
     assert(length(result) > 0)
-    ()
 }
 
 test_query_missing_table(conn) = {
@@ -20,7 +19,6 @@ test_query_missing_table(conn) = {
         e -> "unexpected"
     end
     assert(length(result) > 0)
-    ()
 }
 
 test_execute_syntax_error(conn) = {
@@ -30,7 +28,6 @@ test_execute_syntax_error(conn) = {
         e -> "unexpected"
     end
     assert(length(result) > 0)
-    ()
 }
 
 test_no_exception_on_success(conn) = {
@@ -40,7 +37,6 @@ test_no_exception_on_success(conn) = {
     end
     # Should be [[42]] not error
     assert_eq(head(head(result)), 42)
-    ()
 }
 
 test_exception_pattern_match_kind(conn) = {
@@ -52,7 +48,6 @@ test_exception_pattern_match_kind(conn) = {
         _ -> "unknown"
     end
     assert_eq(kind, "query")
-    ()
 }
 
 test_exception_catch_all(conn) = {
@@ -62,7 +57,6 @@ test_exception_catch_all(conn) = {
     end
     # Should start with "query_error: "
     assert(length(result) > 12)
-    ()
 }
 
 test_nested_try_catch(conn) = {
@@ -78,7 +72,6 @@ test_nested_try_catch(conn) = {
     end
     # Inner catch should handle it
     assert_eq(outer, "inner caught")
-    ()
 }
 
 main() = {
