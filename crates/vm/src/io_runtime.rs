@@ -1146,10 +1146,9 @@ impl IoRuntime {
 
                         let connect_result: Result<(PgClient, _), tokio_postgres::Error> = if use_tls {
                             // Create TLS connector with permissive settings for self-signed certs
+                            // Note: We keep SNI enabled (default) for cloud providers like Neon that use it for routing
                             let tls_connector = match TlsConnector::builder()
                                 .danger_accept_invalid_certs(true) // For self-signed certs
-                                .danger_accept_invalid_hostnames(true) // For localhost testing
-                                .use_sni(false) // Disable SNI for localhost/self-signed
                                 .min_protocol_version(Some(native_tls::Protocol::Tlsv10)) // Allow older TLS
                                 .build() {
                                 Ok(c) => c,
