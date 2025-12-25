@@ -9646,8 +9646,17 @@ impl Compiler {
 
         // Register known functions in environment for recursive calls
         // Don't overwrite functions from standard_env (like println) that have trait constraints
-        for (fn_name, fn_val) in &self.functions {
-            if env.functions.contains_key(fn_name) {
+        // Sort function names to ensure deterministic processing order - this matters for overloaded
+        // functions with different arities. When sorted, "foo/" comes before "foo/_", so the
+        // 0-arity version gets registered as the base name "foo" first.
+        let mut fn_names: Vec<_> = self.functions.keys().cloned().collect();
+        fn_names.sort();
+        for fn_name in fn_names {
+            let fn_val = match self.functions.get(&fn_name) {
+                Some(v) => v,
+                None => continue,
+            };
+            if env.functions.contains_key(&fn_name) {
                 // Skip - don't overwrite built-in functions with proper type params/constraints
                 continue;
             }
@@ -9924,7 +9933,16 @@ impl Compiler {
 
         // Register known functions FIRST - these have actual inferred types
         // after compilation, not just type variables
-        for (fn_name, fn_val) in &self.functions {
+        // Sort function names to ensure deterministic processing order - this matters for overloaded
+        // functions with different arities. When sorted, "foo/" comes before "foo/_", so the
+        // 0-arity version gets registered as the base name "foo" first.
+        let mut fn_names_sorted: Vec<_> = self.functions.keys().cloned().collect();
+        fn_names_sorted.sort();
+        for fn_name in fn_names_sorted {
+            let fn_val = match self.functions.get(&fn_name) {
+                Some(v) => v,
+                None => continue,
+            };
             // Skip placeholder functions - they have no signature set yet
             // A function has been properly compiled if it has a signature
             if fn_val.signature.is_none() {
@@ -9967,8 +9985,8 @@ impl Compiler {
             };
 
             // Register with full key (e.g., "bar2/")
-            if !env.functions.contains_key(fn_name) {
-                env.functions.insert(fn_name.clone(), fn_type.clone());
+            if !env.functions.contains_key(&fn_name) {
+                env.functions.insert(fn_name, fn_type.clone());
             }
         }
 
@@ -9993,7 +10011,10 @@ impl Compiler {
 
         // First pass: register local names for functions NOT in the current module
         // (only if not already present)
-        for fn_name in self.functions.keys() {
+        // Sort to ensure "foo/" (0-arity) comes before "foo/_" (1-arity)
+        let mut fn_keys_sorted: Vec<_> = self.functions.keys().cloned().collect();
+        fn_keys_sorted.sort();
+        for fn_name in &fn_keys_sorted {
             let base_name = fn_name.split('/').next().unwrap_or(fn_name);
             let in_current_module = current_module_prefix.as_ref()
                 .map(|prefix| base_name.starts_with(prefix))
@@ -10028,7 +10049,9 @@ impl Compiler {
 
         // Second pass: register local names for functions IN the current module
         // (these OVERWRITE any existing local names to ensure same-module priority)
-        for fn_name in self.functions.keys() {
+        // Sort and iterate so that "foo/" (0-arity) is processed LAST and wins
+        // (since we're overwriting, the last one processed wins)
+        for fn_name in fn_keys_sorted.iter().rev() {
             let base_name = fn_name.split('/').next().unwrap_or(fn_name);
             let in_current_module = current_module_prefix.as_ref()
                 .map(|prefix| base_name.starts_with(prefix))
@@ -11245,25 +11268,33 @@ impl Compiler {
                 .map(|ty| self.type_expr_to_string(ty));
 
             // Insert a placeholder function for forward reference
-            let placeholder = FunctionValue {
-                name: full_name.clone(),
-                arity,
-                param_names: vec![],
-                code: Arc::new(Chunk::new()),
-                module: if self.module_path.is_empty() { None } else { Some(self.module_path.join(".")) },
-                source_span: None,
-                jit_code: None,
-                call_count: AtomicU32::new(0),
-                debug_symbols: vec![],
-                // REPL introspection fields - will be populated when compiled
-                source_code: None,
-                source_file: None,
-                doc: None,
-                signature: None,
-                param_types,
-                return_type,
+            // But DON'T overwrite if the function already exists with a valid signature
+            // (this preserves the old working function if recompilation fails)
+            let should_insert = match self.functions.get(&full_name) {
+                None => true,  // New function, insert placeholder
+                Some(existing) => existing.signature.is_none(),  // Only overwrite if existing is also a placeholder
             };
-            self.functions.insert(full_name.clone(), Arc::new(placeholder));
+            if should_insert {
+                let placeholder = FunctionValue {
+                    name: full_name.clone(),
+                    arity,
+                    param_names: vec![],
+                    code: Arc::new(Chunk::new()),
+                    module: if self.module_path.is_empty() { None } else { Some(self.module_path.join(".")) },
+                    source_span: None,
+                    jit_code: None,
+                    call_count: AtomicU32::new(0),
+                    debug_symbols: vec![],
+                    // REPL introspection fields - will be populated when compiled
+                    source_code: None,
+                    source_file: None,
+                    doc: None,
+                    signature: None,
+                    param_types,
+                    return_type,
+                };
+                self.functions.insert(full_name.clone(), Arc::new(placeholder));
+            }
 
             // Assign function index for direct calls (no HashMap lookup at runtime!)
             if !self.function_indices.contains_key(&full_name) {

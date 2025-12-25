@@ -339,6 +339,27 @@ impl TypeEnv {
         self.types.get(name)
     }
 
+    /// Look up a function by name with arity-aware resolution.
+    /// First tries arity-qualified name (e.g., `foo/_` for 1 arg), then falls back to exact match.
+    /// This is essential for resolving overloaded functions by call arity.
+    pub fn lookup_function_with_arity(&self, name: &str, arity: usize) -> Option<&FunctionType> {
+        // Don't apply arity resolution if name already has a slash (already qualified)
+        if !name.contains('/') {
+            // Construct arity-qualified name: "foo/" for 0 args, "foo/_" for 1, "foo/_,_" for 2, etc.
+            let arity_suffix = if arity == 0 {
+                "/".to_string()
+            } else {
+                format!("/{}", vec!["_"; arity].join(","))
+            };
+            let qualified_name = format!("{}{}", name, arity_suffix);
+            if let Some(ft) = self.functions.get(&qualified_name) {
+                return Some(ft);
+            }
+        }
+        // Fall back to exact match
+        self.functions.get(name)
+    }
+
     /// Look up the field types for a variant constructor.
     /// Given a type name (e.g., "Expr") and constructor name (e.g., "Add"),
     /// returns the concrete field types from the type definition.

@@ -763,7 +763,32 @@ impl<'a> InferCtx<'a> {
 
             // Function call (with optional type args)
             Expr::Call(func, _type_args, args, _) => {
-                let func_ty = self.infer_expr(func)?;
+                // Special handling for simple variable function calls: use arity-aware lookup
+                // This is essential for resolving overloaded functions correctly
+                let func_ty = if let Expr::Var(ident) = func.as_ref() {
+                    let name = &ident.node;
+                    // First check if it's a local binding (lambdas, let-bound functions)
+                    if let Some((ty, _)) = self.env.lookup(name) {
+                        ty.clone()
+                    } else if let Some(sig) = self.env.lookup_function_with_arity(name, args.len()).cloned() {
+                        // Use arity-aware lookup for overloaded functions
+                        let is_recursive = self.current_function.as_ref() == Some(name);
+                        if is_recursive {
+                            Type::Function(sig)
+                        } else {
+                            self.instantiate_function(&sig)
+                        }
+                    } else if let Some(ty) = self.lookup_constructor(name) {
+                        // Could be a constructor call
+                        ty
+                    } else {
+                        return Err(TypeError::UnknownIdent(name.clone()));
+                    }
+                } else {
+                    // For non-variable function expressions, infer normally
+                    self.infer_expr(func)?
+                };
+
                 let mut arg_types = Vec::new();
                 for arg in args {
                     arg_types.push(self.infer_expr(arg)?);
