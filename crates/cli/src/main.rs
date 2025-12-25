@@ -31,6 +31,12 @@ fn visit_dirs(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) -> std
             let entry = entry?;
             let path = entry.path();
             if path.is_dir() {
+                // Skip .nostos directory - it contains per-definition files for REPL/TUI
+                if let Some(name) = path.file_name() {
+                    if name == ".nostos" {
+                        continue;
+                    }
+                }
                 visit_dirs(&path, files)?;
             } else {
                 if let Some(ext) = path.extension() {
