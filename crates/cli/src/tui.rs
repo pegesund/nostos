@@ -2142,12 +2142,6 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
              let engine = engine_for_graph.clone();
              show_call_graph_dialog(s, engine, name);
         })
-        .on_event(Event::CtrlChar('i'), {
-            let name = name.to_string();
-            move |s| {
-                open_git_history_for_definition(s, &name);
-            }
-        })
         .on_event(Event::CtrlChar('s'), move |s| {
             debug_log(&format!("Ctrl+S pressed for: {}", name_for_save));
             let content = match s.call_on_name(&editor_id_save, |v: &mut CodeEditor| v.get_content()) {
