@@ -102,7 +102,7 @@ use stdlib.json.{jsonParse, jsonStringify, Json}
 
 main() = {
     # Parse a JSON string (single quotes make it cleaner!)
-    json = jsonParse('{"name": "Alice", "age": 30}')
+    json: Json = jsonParse('{"name": "Alice", "age": 30}')
 
     # The Json type is a variant:
     # Null | Bool(Bool) | Number(Float) | String(String)
@@ -126,10 +126,10 @@ type Person = { name: String, age: Int }
 
 main() = {
     # Parse JSON string
-    json = jsonParse('{"name": "Alice", "age": 30}')
+    json: Json = jsonParse('{"name": "Alice", "age": 30}')
 
     # Convert to typed value (fromJson is a builtin, no import needed)
-    person = fromJson[Person](json)
+    person: Person = fromJson[Person](json)
 
     println(person.name)  # "Alice"
     println(person.age)   # 30
@@ -163,13 +163,13 @@ type Pair = { data: (Int, String) }
 
 main() = {
     # Nested record example
-    json = jsonParse('{"name": "Bob", "address": {"city": "Oslo", "zip": 1234}}')
-    person = fromJson[Person](json)
+    json: Json = jsonParse('{"name": "Bob", "address": {"city": "Oslo", "zip": 1234}}')
+    person: Person = fromJson[Person](json)
     println(person.address.city)  # "Oslo"
 
     # Tuple example
-    json2 = jsonParse('{"data": [42, "hello"]}')
-    pair = fromJson[Pair](json2)
+    json2: Json = jsonParse('{"data": [42, "hello"]}')
+    pair: Pair = fromJson[Pair](json2)
     println(pair.data)  # (42, hello)
 }</code></pre>
                 </div>
@@ -185,14 +185,14 @@ getValue(Err(_)) = 0
 
 main() = {
     # Ok(42) is represented as: {"Ok": {"_0": 42}}
-    json = jsonParse('{"Ok": {"_0": 42}}')
-    result = fromJson[Result](json)
+    json: Json = jsonParse('{"Ok": {"_0": 42}}')
+    result: Result = fromJson[Result](json)
 
     println(getValue(result))  # 42
 
     # Err("fail") is: {"Err": {"_0": "something went wrong"}}
-    json2 = jsonParse('{"Err": {"_0": "something went wrong"}}')
-    result2 = fromJson[Result](json2)
+    json2: Json = jsonParse('{"Err": {"_0": "something went wrong"}}')
+    result2: Result = fromJson[Result](json2)
     println(tagOf(result2))  # "Err"
 }
 
@@ -213,10 +213,10 @@ type Status = Active | Pending | Done
 
 main() = {
     # Missing required field
-    json = jsonParse('{"name": "Alice"}')
+    json: Json = jsonParse('{"name": "Alice"}')
 
     try {
-        person = fromJson[Person](json)
+        person: Person = fromJson[Person](json)
         "success: " ++ person.name
     } catch e -> "Error: " ++ e end
     # Returns: "Error: Missing field: age"
@@ -241,16 +241,16 @@ main() = {
 
 main() = {
     # Create a user
-    user = User { id: 1, name: "Bob", active: true }
+    user: User = User { id: 1, name: "Bob", active: true }
 
     # Convert to JSON using reflect
-    json = reflect(user)
-    jsonStr = jsonStringify(json)
+    json: Json = reflect(user)
+    jsonStr: String = jsonStringify(json)
     println("JSON: " ++ jsonStr)
 
     # Parse back to typed value
-    parsed = jsonParse(jsonStr)
-    user2 = fromJson[User](parsed)
+    parsed: Json = jsonParse(jsonStr)
+    user2: User = fromJson[User](parsed)
 
     println("Equal: " ++ show(user == user2))  # true
 }</code></pre>
@@ -263,11 +263,11 @@ main() = {
 <pre><code class="language-nostos">type IpResponse = { origin: String }
 
 main() = {
-    (status, resp) = Http.get("https://httpbin.org/ip")
+    (status, resp): (String, HttpResponse) = Http.get("https://httpbin.org/ip")
 
     if status == "ok" then {
-        json = jsonParse(resp.body)
-        ipResp = fromJson[IpResponse](json)
+        json: Json = jsonParse(resp.body)
+        ipResp: IpResponse = fromJson[IpResponse](json)
         println("Your IP: " ++ ipResp.origin)
     } else {
         println("Failed to fetch IP")
