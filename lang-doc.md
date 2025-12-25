@@ -1562,6 +1562,37 @@ handle = Pg.connect("postgresql://user:pass@ep-xxx-pooler.region.aws.neon.tech/n
 handle = Pg.connect("host=db.example.com user=app password=secret dbname=prod sslmode=require")
 ```
 
+### Connection Pooling
+
+Nostos automatically pools PostgreSQL connections for efficiency. Connections to the same database URL are reused from a pool rather than creating new connections each time:
+
+```nos
+# First connection creates a pool for this URL
+conn1 = Pg.connect("postgresql://user:pass@localhost/mydb")
+Pg.query(conn1, "SELECT 1", [])
+Pg.close(conn1)  # Returns connection to pool
+
+# Second connection reuses from pool (fast, no new connection overhead)
+conn2 = Pg.connect("postgresql://user:pass@localhost/mydb")
+Pg.query(conn2, "SELECT 2", [])
+Pg.close(conn2)
+
+# Multiple simultaneous connections are supported
+connA = Pg.connect("postgresql://user:pass@localhost/mydb")
+connB = Pg.connect("postgresql://user:pass@localhost/mydb")
+connC = Pg.connect("postgresql://user:pass@localhost/mydb")
+# ... use all three ...
+Pg.close(connA)
+Pg.close(connB)
+Pg.close(connC)
+```
+
+Pooling benefits:
+- **Performance**: Reuses existing connections instead of creating new ones
+- **Automatic**: No configuration needed, works transparently
+- **Per-URL pools**: Each unique connection string gets its own pool
+- **TLS support**: Works with both local (non-TLS) and cloud (TLS) databases
+
 ### Transactions
 
 ```nos

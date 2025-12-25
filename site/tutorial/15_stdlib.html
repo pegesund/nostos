@@ -574,6 +574,29 @@ results = Pg.query(handle, "SELECT id, 1 - (embedding <=> $1) as similarity FROM
 Pg.close(handle)</code></pre>
                 </div>
 
+                <!-- Connection Pooling -->
+                <div class="bg-gradient-to-r from-blue-900/20 to-emerald-900/20 rounded-lg p-6 mb-8 border border-blue-800/30">
+                    <h3 class="text-lg font-semibold text-white mb-3">Connection Pooling</h3>
+                    <p class="text-slate-400 mb-4">
+                        Nostos automatically pools PostgreSQL connections. When you call <code>Pg.close()</code>, the connection returns to the pool for reuse. Subsequent <code>Pg.connect()</code> calls to the same URL reuse pooled connections instead of creating new ones.
+                    </p>
+                    <div class="bg-nostos-code rounded-lg p-4 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Connection reuse example
+conn1 = Pg.connect("postgresql://localhost/mydb")
+Pg.query(conn1, "SELECT 1", [])
+Pg.close(conn1)  # Returns to pool
+
+conn2 = Pg.connect("postgresql://localhost/mydb")  # Reuses pooled connection
+Pg.query(conn2, "SELECT 2", [])
+Pg.close(conn2)</code></pre>
+                    </div>
+                    <ul class="list-disc list-inside text-slate-400 mt-4 space-y-1">
+                        <li><strong>Automatic:</strong> No configuration needed</li>
+                        <li><strong>Per-URL pools:</strong> Each connection string gets its own pool</li>
+                        <li><strong>TLS support:</strong> Works with local and cloud databases</li>
+                    </ul>
+                </div>
+
                 <!-- Float32Array Module -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Float32Array Module</h2>
                 <p class="text-slate-400 mb-4">32-bit float arrays, ideal for AI/ML embeddings and pgvector. Native format for vector databases.</p>
