@@ -4836,6 +4836,10 @@ impl ReplEngine {
                     Err(format!("No breakpoint on: {}", args))
                 }
             }
+            ":tutorial" | ":tut" => {
+                // Return a special signal that the TUI intercepts to open the tutorial panel
+                Ok("__OPEN_TUTORIAL__".to_string())
+            }
             _ => Err(format!("Unknown command: {}. Type :help for available commands.", cmd)),
         }
     }
@@ -5432,6 +5436,7 @@ impl ReplEngine {
   :demo            Load demo folder (demo/*.nos)
   :load <file>     Load a .nos file
   :profile <expr>  Run expression with profiling (JIT functions show as [JIT])
+  :tutorial, :tut  Open the tutorial (TUI only)
   :quit, :q        Exit (TUI only)
 
 Keyboard shortcuts (TUI):
