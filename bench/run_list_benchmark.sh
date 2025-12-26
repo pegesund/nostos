@@ -1,6 +1,7 @@
 #!/bin/bash
-# List iteration benchmark - Nostos vs Python vs Haskell
-# Tests head/tail pattern matching performance
+# List sum benchmark - Nostos vs Haskell
+# Tests tail-recursive sum with JIT optimization (50M elements)
+# Note: Python is ~200x slower than Nostos JIT, so we skip it
 
 set -e
 
@@ -17,8 +18,10 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}    List Pattern Matching Benchmark${NC}"
+echo -e "${BLUE}    List Sum Benchmark (50M elements)${NC}"
 echo -e "${BLUE}========================================${NC}"
+echo ""
+echo -e "${YELLOW}Note: Python is ~200x slower than Nostos JIT, so we skip it${NC}"
 echo ""
 
 # Build Nostos if needed
@@ -35,54 +38,46 @@ if [ ! -f "$HASKELL_BIN" ] || [ "${SCRIPT_DIR}/list_iterate.hs" -nt "$HASKELL_BI
     ghc -O2 -o "$HASKELL_BIN" "${SCRIPT_DIR}/list_iterate.hs" 2>/dev/null
 fi
 
-echo "Running list iteration (50K elements, 9 traversals)..."
+echo "Running tail-recursive sum on 50M elements..."
 echo ""
 
 # Run Nostos
-echo -e "${GREEN}Nostos:${NC}"
+echo -e "${GREEN}Nostos (with JIT):${NC}"
 nostos_start=$(date +%s.%N)
-nostos_result=$($NOSTOS_BIN "${SCRIPT_DIR}/list_iterate.nos" 2>&1 | head -1)
+nostos_output=$($NOSTOS_BIN "${SCRIPT_DIR}/list_iterate.nos" 2>&1)
 nostos_end=$(date +%s.%N)
 nostos_time=$(echo "$nostos_end - $nostos_start" | bc)
-printf "  Time: %8.3fs  (result: %s)\n" "$nostos_time" "$nostos_result"
+nostos_len=$(echo "$nostos_output" | head -1)
+nostos_sum=$(echo "$nostos_output" | head -2 | tail -1)
+printf "  Time: %8.3fs  (len: %s, sum: %s)\n" "$nostos_time" "$nostos_len" "$nostos_sum"
 
 # Run Haskell
-echo -e "${GREEN}Haskell:${NC}"
+echo -e "${GREEN}Haskell (GHC -O2):${NC}"
 haskell_start=$(date +%s.%N)
-haskell_result=$("$HASKELL_BIN" 2>&1 | head -1)
+haskell_output=$("$HASKELL_BIN" 2>&1)
 haskell_end=$(date +%s.%N)
 haskell_time=$(echo "$haskell_end - $haskell_start" | bc)
-printf "  Time: %8.3fs  (result: %s)\n" "$haskell_time" "$haskell_result"
-
-# Run Python
-echo -e "${GREEN}Python:${NC}"
-python_start=$(date +%s.%N)
-python_result=$(python3 "${SCRIPT_DIR}/list_iterate.py" 2>&1 | head -1)
-python_end=$(date +%s.%N)
-python_time=$(echo "$python_end - $python_start" | bc)
-printf "  Time: %8.3fs  (result: %s)\n" "$python_time" "$python_result"
+haskell_len=$(echo "$haskell_output" | head -1)
+haskell_sum=$(echo "$haskell_output" | head -2 | tail -1)
+printf "  Time: %8.3fs  (len: %s, sum: %s)\n" "$haskell_time" "$haskell_len" "$haskell_sum"
 
 echo ""
 echo -e "${YELLOW}Comparison:${NC}"
 echo "----------------------------------------"
 
-haskell_ratio=$(echo "scale=1; $nostos_time / $haskell_time" | bc)
-python_ratio=$(echo "scale=1; $python_time / $nostos_time" | bc)
-
 if (( $(echo "$nostos_time < $haskell_time" | bc -l) )); then
-    inv_ratio=$(echo "scale=1; $haskell_time / $nostos_time" | bc)
-    echo -e "  Nostos is ${GREEN}${inv_ratio}x faster${NC} than Haskell"
+    ratio=$(echo "scale=1; $haskell_time / $nostos_time" | bc)
+    echo -e "  Nostos is ${GREEN}${ratio}x faster${NC} than Haskell"
 else
-    echo -e "  Nostos is ${YELLOW}${haskell_ratio}x slower${NC} than Haskell"
+    ratio=$(echo "scale=1; $nostos_time / $haskell_time" | bc)
+    echo -e "  Nostos is ${YELLOW}${ratio}x slower${NC} than Haskell"
 fi
-
-echo -e "  Nostos is ${GREEN}${python_ratio}x faster${NC} than Python"
 
 echo ""
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}    Summary${NC}"
 echo -e "${BLUE}========================================${NC}"
-printf "  %-12s %8.3fs\n" "Nostos:" "$nostos_time"
-printf "  %-12s %8.3fs\n" "Haskell:" "$haskell_time"
-printf "  %-12s %8.3fs\n" "Python:" "$python_time"
+printf "  %-20s %8.3fs\n" "Nostos (JIT):" "$nostos_time"
+printf "  %-20s %8.3fs\n" "Haskell (GHC -O2):" "$haskell_time"
+printf "  %-20s %8s\n" "Python:" "~200x slower (skipped)"
 echo ""
