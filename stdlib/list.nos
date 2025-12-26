@@ -222,3 +222,76 @@ minimum([x | xs]) = {
     m = minimum(xs)
     if x < m then x else m
 }
+
+# Sum all elements (requires numeric list)
+sum(list) = list.fold(0, (acc, x) => acc + x)
+
+# Product of all elements (requires numeric list)
+product(list) = list.fold(1, (acc, x) => acc * x)
+
+# Find index of first element equal to target
+indexOf([], _) = None
+indexOf(list, target) = indexOfAcc(list, target, 0)
+indexOfAcc([], _, _) = None
+indexOfAcc([x | xs], target, idx) = if x == target then Some(idx) else indexOfAcc(xs, target, idx + 1)
+
+# Sort with custom comparator (comparator returns -1, 0, or 1)
+sortBy([], _) = []
+sortBy([pivot | rest], cmp) = {
+    lesser = rest.filter(x => cmp(x, pivot) < 0)
+    greater = rest.filter(x => cmp(x, pivot) >= 0)
+    concat(sortBy(lesser, cmp), [pivot | sortBy(greater, cmp)])
+}
+
+# Insert element between all elements
+intersperse([], _) = []
+intersperse([x], _) = [x]
+intersperse([x | xs], sep) = [x, sep | intersperse(xs, sep)]
+
+# Split list at first element not satisfying predicate
+# Returns (takeWhile(pred), dropWhile(pred))
+# Named spanList to avoid conflict with Html.span
+spanList([], _) = ([], [])
+spanList([x | xs], pred) = if pred(x) then {
+    (ys, zs) = spanList(xs, pred)
+    ([x | ys], zs)
+} else ([], [x | xs])
+
+# Group consecutive elements by key function
+groupBy([], _) = []
+groupBy([x | xs], keyFn) = groupByAcc(xs, keyFn, keyFn(x), [x], [])
+groupByAcc([], _, _, current, acc) = reverse([reverse(current) | acc])
+groupByAcc([x | xs], keyFn, prevKey, current, acc) = {
+    key = keyFn(x)
+    if key == prevKey
+    then groupByAcc(xs, keyFn, key, [x | current], acc)
+    else groupByAcc(xs, keyFn, key, [x], [reverse(current) | acc])
+}
+
+# Transpose a list of lists (rows become columns)
+transpose([]) = []
+transpose(rows) = {
+    # Check if first row is empty (base case for inner recursion)
+    if isEmpty(head(rows))
+    then []
+    else {
+        heads = rows.map(r => head(r))
+        tails = rows.map(r => tail(r))
+        [heads | transpose(tails)]
+    }
+}
+
+# Apply function to pairs of adjacent elements
+pairwise([], _) = []
+pairwise([_], _) = []
+pairwise([x, y | rest], f) = [f(x, y) | pairwise([y | rest], f)]
+
+# Check if list is sorted
+isSorted([]) = true
+isSorted([_]) = true
+isSorted([x, y | rest]) = x <= y && isSorted([y | rest])
+
+# Check if list is sorted by comparator
+isSortedBy([], _) = true
+isSortedBy([_], _) = true
+isSortedBy([x, y | rest], cmp) = cmp(x, y) <= 0 && isSortedBy([y | rest], cmp)

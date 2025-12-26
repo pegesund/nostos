@@ -403,6 +403,11 @@ impl GcInt64List {
         self.data.iter().skip(self.offset).sum()
     }
 
+    #[inline]
+    pub fn product(&self) -> i64 {
+        self.data.iter().skip(self.offset).product()
+    }
+
     /// Get element at index - O(log n)
     #[inline]
     pub fn get(&self, index: usize) -> Option<i64> {

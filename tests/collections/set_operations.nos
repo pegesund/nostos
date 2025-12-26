@@ -1,0 +1,46 @@
+# expect: 0
+# Test new Set operations
+
+main() = {
+    # Create test sets with strings to avoid Int64List optimization
+    s1 = Set.fromList(["a", "b", "c", "d", "e"])
+    s2 = Set.fromList(["c", "d", "e", "f", "g"])
+
+    # Test Set.fromList
+    assert(Set.size(s1) == 5)
+    assert(Set.contains(s1, "c"))
+
+    # Test Set.symmetricDifference (elements in either but not both)
+    symDiff = Set.symmetricDifference(s1, s2)
+    assert(Set.contains(symDiff, "a"))
+    assert(Set.contains(symDiff, "b"))
+    assert(!Set.contains(symDiff, "c"))
+    assert(!Set.contains(symDiff, "d"))
+    assert(!Set.contains(symDiff, "e"))
+    assert(Set.contains(symDiff, "f"))
+    assert(Set.contains(symDiff, "g"))
+    assert(Set.size(symDiff) == 4)
+
+    # Test Set.isSubset
+    s3 = Set.fromList(["b", "c"])
+    assert(Set.isSubset(s3, s1))
+    assert(!Set.isSubset(s1, s3))
+    assert(Set.isSubset(s1, s1))
+
+    # Test Set.isProperSubset
+    assert(Set.isProperSubset(s3, s1))
+    assert(!Set.isProperSubset(s1, s1))
+
+    # Test existing operations still work
+    u = Set.union(s1, s2)
+    assert(Set.size(u) == 7)
+
+    inter = Set.intersection(s1, s2)
+    assert(Set.size(inter) == 3)
+
+    diff = Set.difference(s1, s2)
+    assert(Set.size(diff) == 2)
+
+    println("All Set tests passed!")
+    0
+}
