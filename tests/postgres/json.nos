@@ -38,7 +38,7 @@ test_json_variant(conn) = {
 
     # Parse the result back - jsonParse returns Json directly
     parsed = jsonParse(result)
-    match parsed
+    match parsed {
         Object(fields) -> {
             println("Parsed successfully as Object")
             ()
@@ -47,6 +47,7 @@ test_json_variant(conn) = {
             println("Unexpected parse result")
             ()
         }
+    }
 }
 
 # Test JSON operators in queries
