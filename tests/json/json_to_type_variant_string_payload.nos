@@ -1,13 +1,13 @@
 # expect: hello world
 # Test jsonToType with string payload in variant
 use stdlib.json.{jsonParse, jsonStringify}
-type Message = Text(String) | Binary(Int)
+type Message = TextMsg(String) | Binary(Int)
 
-getText(Text(s)) = s
+getText(TextMsg(s)) = s
 getText(Binary(_)) = "binary"
 
 main() = {
-    json = jsonParse("{\"Text\": \"hello world\"}")
+    json = jsonParse("{\"TextMsg\": \"hello world\"}")
     msg = jsonToType[Message](json)
     getText(msg)
 }
