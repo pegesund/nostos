@@ -17,11 +17,12 @@ use std::rc::Rc;
 use std::process::ExitCode;
 use std::io::Write;
 
-use crate::repl_panel::ReplPanel;
+use crate::repl_panel::{ReplPanel, ReplPanelCommand};
 use crate::inspector_panel::InspectorPanel;
 use crate::nostos_panel::NostosPanel;
 use crate::debug_panel::{DebugPanel, DebugPanelCommand};
 use crate::git_panel::{GitHistoryPanel, GitPanelCommand, HistoryTarget};
+use crate::tutorial;
 
 /// Debug logging disabled. Uncomment to enable.
 #[allow(unused)]
@@ -515,6 +516,9 @@ struct TuiState {
     current_panel: Option<PanelInfo>,
     /// Currently open panel ID (if nostos_panel_open is true) - new API
     current_panel_id: Option<u64>,
+    /// Tutorial panel state
+    tutorial_open: bool,
+    tutorial_chapter_idx: usize,
 }
 
 pub fn run_tui(args: &[String]) -> ExitCode {
@@ -575,6 +579,8 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         git_panel_target: None,
         current_panel: None,
         current_panel_id: None,
+        tutorial_open: false,
+        tutorial_chapter_idx: 0,
     })));
 
     // Components
@@ -740,6 +746,8 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         poll_debug_output(s);
         // Poll git panel for commands and data fetching
         poll_git_panel(s);
+        // Poll REPL panels for TUI commands (like opening tutorial)
+        poll_repl_panel_commands(s);
     });
 
     siv.run();
@@ -1057,9 +1065,9 @@ fn poll_debug_events(s: &mut Cursive) {
 /// Uses LinearLayout for equal window distribution
 /// Navigation: Ctrl+Left/Right to move between windows
 fn rebuild_workspace(s: &mut Cursive) {
-    let (editor_names, repl_ids, engine, inspector_open, console_open, nostos_panel_open, debug_panel_open, git_panel_open, git_panel_target, current_panel, current_panel_id) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+    let (editor_names, repl_ids, engine, inspector_open, console_open, nostos_panel_open, debug_panel_open, git_panel_open, git_panel_target, current_panel, current_panel_id, tutorial_open, tutorial_chapter_idx) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let state = state.borrow();
-        (state.open_editors.clone(), state.open_repls.clone(), state.engine.clone(), state.inspector_open, state.console_open, state.nostos_panel_open, state.debug_panel_open, state.git_panel_open, state.git_panel_target.clone(), state.current_panel.clone(), state.current_panel_id)
+        (state.open_editors.clone(), state.open_repls.clone(), state.engine.clone(), state.inspector_open, state.console_open, state.nostos_panel_open, state.debug_panel_open, state.git_panel_open, state.git_panel_target.clone(), state.current_panel.clone(), state.current_panel_id, state.tutorial_open, state.tutorial_chapter_idx)
     }).unwrap();
 
     // Get console content BEFORE clearing workspace
@@ -1189,10 +1197,17 @@ fn rebuild_workspace(s: &mut Cursive) {
         None
     };
 
-    if windows.is_empty() && nostos_view.is_none() && git_view.is_none() {
+    // Tutorial panel (if open)
+    let tutorial_view: Option<Box<dyn View>> = if tutorial_open {
+        Some(Box::new(create_tutorial_view(tutorial_chapter_idx)))
+    } else {
+        None
+    };
+
+    if windows.is_empty() && nostos_view.is_none() && git_view.is_none() && tutorial_view.is_none() {
         // Empty workspace - show hint
         let layout = LinearLayout::vertical()
-            .child(TextView::new("Workspace empty. Ctrl+B for Browser, Ctrl+R for REPL.")
+            .child(TextView::new("Workspace empty. Ctrl+B for Browser, Ctrl+R for REPL, :tutorial for Tutorial.")
                 .center()
                 .full_width()
                 .full_height());
@@ -1237,6 +1252,11 @@ fn rebuild_workspace(s: &mut Cursive) {
     // Add git history panel as separate row if open
     if let Some(git) = git_view {
         layout.add_child(git);
+    }
+
+    // Add tutorial panel as separate row if open
+    if let Some(tutorial) = tutorial_view {
+        layout.add_child(tutorial);
     }
 
     s.add_fullscreen_layer(layout);
@@ -1868,6 +1888,273 @@ fn poll_git_panel(s: &mut Cursive) {
                 s.call_on_name("git_panel", |panel: &mut GitHistoryPanel| {
                     panel.set_content(&commit_hash, content);
                 });
+            }
+        }
+    }
+}
+
+/// Create the tutorial panel view
+fn create_tutorial_view(chapter_idx: usize) -> BoxedView {
+    let title = tutorial::format_chapter_title(chapter_idx);
+
+    if chapter_idx == 0 {
+        // Index page - show selectable chapter list
+        create_tutorial_index_view(&title)
+    } else {
+        // Regular chapter - show content
+        create_tutorial_content_view(chapter_idx, &title)
+    }
+}
+
+/// Create the index/table of contents view with selectable chapters
+fn create_tutorial_index_view(title: &str) -> BoxedView {
+    let mut layout = LinearLayout::vertical();
+
+    // Header
+    let mut header = StyledString::new();
+    header.append_plain("\n");
+    header.append_styled("  NOSTOS TUTORIAL", Style::from(Color::Rgb(0, 255, 255)).combine(cursive::theme::Effect::Bold));
+    header.append_plain("\n\n");
+    header.append_styled("  Navigation:", Style::from(Color::Rgb(255, 255, 0)));
+    header.append_plain("\n");
+    header.append_styled("    Up/Down", Style::from(Color::Rgb(100, 200, 255)));
+    header.append_plain(" - Select chapter\n");
+    header.append_styled("    Enter", Style::from(Color::Rgb(100, 200, 255)));
+    header.append_plain("   - Go to chapter\n");
+    header.append_styled("    Ctrl+W", Style::from(Color::Rgb(100, 200, 255)));
+    header.append_plain("  - Close tutorial\n\n");
+    header.append_styled("  Chapters:", Style::from(Color::Rgb(255, 255, 0)));
+    header.append_plain("\n");
+
+    layout.add_child(TextView::new(header));
+
+    // Chapter list as SelectView
+    let mut select = SelectView::new();
+
+    // Add chapters with colored labels
+    for (idx, chapter) in tutorial::CHAPTERS.iter().enumerate().skip(1) {
+        let label = format!("  {:2}. {}", chapter.number, chapter.title);
+        select.add_item(label, idx);
+    }
+
+    select.set_on_submit(|s, &idx| {
+        go_to_tutorial_chapter(s, idx);
+    });
+
+    // Style the select view
+    let select_with_scroll = select
+        .with_name("tutorial_select")
+        .scrollable();
+
+    layout.add_child(select_with_scroll);
+
+    let panel_with_events = OnEventView::new(layout)
+        .on_event(Key::Esc, |s| {
+            close_tutorial_panel(s);
+        })
+        .on_event(Event::CtrlChar('w'), |s| {
+            close_tutorial_panel(s);
+        })
+        .on_event(Event::Char('q'), |s| {
+            close_tutorial_panel(s);
+        });
+
+    BoxedView::boxed(ActiveWindow::new(panel_with_events.full_height(), title).full_width())
+}
+
+/// Create a regular chapter content view
+fn create_tutorial_content_view(chapter_idx: usize, title: &str) -> BoxedView {
+    let chapter = tutorial::get_chapter(chapter_idx).unwrap_or(&tutorial::CHAPTERS[0]);
+
+    // Apply simple syntax highlighting to the markdown content
+    let content = highlight_tutorial_content(chapter.content);
+
+    let text_view = TextView::new(content)
+        .scrollable()
+        .with_name("tutorial_content");
+
+    let panel_with_events = OnEventView::new(text_view)
+        .on_event(Key::Esc, |s| {
+            close_tutorial_panel(s);
+        })
+        .on_event(Event::CtrlChar('w'), |s| {
+            close_tutorial_panel(s);
+        })
+        .on_event(Event::Char('q'), |s| {
+            close_tutorial_panel(s);
+        })
+        // Left/Right for chapter navigation
+        .on_event(Key::Left, |s| {
+            navigate_tutorial_chapter(s, -1);
+        })
+        .on_event(Key::Right, |s| {
+            navigate_tutorial_chapter(s, 1);
+        })
+        // Minus/Plus for chapter navigation (alternative)
+        .on_event(Event::Char('-'), |s| {
+            navigate_tutorial_chapter(s, -1);
+        })
+        .on_event(Event::Char('+'), |s| {
+            navigate_tutorial_chapter(s, 1);
+        })
+        // Home to go back to index
+        .on_event(Key::Home, |s| {
+            go_to_tutorial_chapter(s, 0);
+        })
+        .on_event(Event::Char('h'), |s| {
+            go_to_tutorial_chapter(s, 0);
+        });
+
+    BoxedView::boxed(ActiveWindow::new(panel_with_events.full_height(), title).full_width())
+}
+
+/// Apply syntax highlighting to tutorial markdown content
+fn highlight_tutorial_content(content: &str) -> StyledString {
+    let mut styled = StyledString::new();
+
+    let mut in_code_block = false;
+    let mut code_buffer = String::new();
+
+    for line in content.lines() {
+        if line.starts_with("```") {
+            if in_code_block {
+                // End of code block - syntax highlight the collected code
+                let highlighted = syntax_highlight_code(&code_buffer);
+                styled.append(highlighted);
+                code_buffer.clear();
+                in_code_block = false;
+            } else {
+                // Start of code block
+                in_code_block = true;
+            }
+        } else if in_code_block {
+            code_buffer.push_str(line);
+            code_buffer.push('\n');
+        } else if line.starts_with("# ") {
+            // H1 header - bold cyan
+            styled.append_styled(line, Style::from(Color::Rgb(0, 255, 255)).combine(cursive::theme::Effect::Bold));
+            styled.append_plain("\n");
+        } else if line.starts_with("## ") {
+            // H2 header - bold green
+            styled.append_styled(line, Style::from(Color::Rgb(0, 255, 0)).combine(cursive::theme::Effect::Bold));
+            styled.append_plain("\n");
+        } else if line.starts_with("### ") {
+            // H3 header - bold yellow
+            styled.append_styled(line, Style::from(Color::Rgb(255, 255, 0)).combine(cursive::theme::Effect::Bold));
+            styled.append_plain("\n");
+        } else if line.starts_with("- ") || line.starts_with("* ") {
+            // List item - dim bullet, normal text
+            styled.append_styled("• ", Style::from(Color::Rgb(100, 100, 100)));
+            styled.append_plain(&line[2..]);
+            styled.append_plain("\n");
+        } else if line.starts_with("|") {
+            // Table row - gray
+            styled.append_styled(line, Style::from(Color::Rgb(180, 180, 180)));
+            styled.append_plain("\n");
+        } else if line.starts_with("> ") {
+            // Quote - italic/dimmed
+            styled.append_styled(line, Style::from(Color::Rgb(150, 150, 150)));
+            styled.append_plain("\n");
+        } else if line.starts_with("**") && line.ends_with("**") {
+            // Bold text
+            styled.append_styled(&line[2..line.len()-2], Style::from(cursive::theme::Effect::Bold));
+            styled.append_plain("\n");
+        } else {
+            // Normal text
+            styled.append_plain(line);
+            styled.append_plain("\n");
+        }
+    }
+
+    // Handle any remaining code in buffer (shouldn't happen with well-formed markdown)
+    if !code_buffer.is_empty() {
+        let highlighted = syntax_highlight_code(&code_buffer);
+        styled.append(highlighted);
+    }
+
+    styled
+}
+
+/// Close the tutorial panel
+fn close_tutorial_panel(s: &mut Cursive) {
+    s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let mut state = state.borrow_mut();
+        state.tutorial_open = false;
+    });
+    rebuild_workspace(s);
+    s.focus_name("repl_log").ok();
+}
+
+/// Open the tutorial panel
+fn open_tutorial_panel(s: &mut Cursive) {
+    s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let mut state = state.borrow_mut();
+        state.tutorial_open = true;
+    });
+    rebuild_workspace(s);
+    s.focus_name("tutorial_content").ok();
+}
+
+/// Navigate to a different tutorial chapter (relative)
+fn navigate_tutorial_chapter(s: &mut Cursive, delta: i32) {
+    let (current_idx, should_rebuild) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let mut state = state.borrow_mut();
+        let current = state.tutorial_chapter_idx as i32;
+        let new_idx = current + delta;
+        let max_idx = tutorial::chapter_count() as i32 - 1;
+
+        if new_idx >= 0 && new_idx <= max_idx {
+            state.tutorial_chapter_idx = new_idx as usize;
+            (new_idx as usize, true)
+        } else {
+            (state.tutorial_chapter_idx, false)
+        }
+    }).unwrap();
+
+    if should_rebuild {
+        rebuild_workspace(s);
+        focus_tutorial_view(s, current_idx);
+    }
+}
+
+/// Go to a specific tutorial chapter (absolute)
+fn go_to_tutorial_chapter(s: &mut Cursive, chapter_idx: usize) {
+    s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow_mut().tutorial_chapter_idx = chapter_idx;
+    });
+    rebuild_workspace(s);
+    focus_tutorial_view(s, chapter_idx);
+}
+
+/// Focus the appropriate view in the tutorial panel
+fn focus_tutorial_view(s: &mut Cursive, chapter_idx: usize) {
+    if chapter_idx == 0 {
+        s.focus_name("tutorial_select").ok();
+    } else {
+        s.focus_name("tutorial_content").ok();
+    }
+}
+
+/// Poll REPL panels for TUI commands
+fn poll_repl_panel_commands(s: &mut Cursive) {
+    // Get list of REPL panel IDs
+    let repl_ids: Vec<usize> = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().open_repls.clone()
+    }).unwrap_or_default();
+
+    // Check each REPL panel for pending commands
+    for repl_id in repl_ids {
+        let panel_name = format!("repl_panel_{}", repl_id);
+        let cmd = s.call_on_name(&panel_name, |panel: &mut ReplPanel| {
+            panel.take_pending_tui_command()
+        }).flatten();
+
+        if let Some(cmd) = cmd {
+            match cmd {
+                ReplPanelCommand::OpenTutorial => {
+                    open_tutorial_panel(s);
+                    return; // Only handle one command per poll
+                }
             }
         }
     }
@@ -3870,6 +4157,11 @@ fn cycle_window(s: &mut Cursive) {
             windows.push("debug_panel".to_string());
         }
 
+        // Tutorial panel
+        if state.tutorial_open {
+            windows.push("tutorial_content".to_string());
+        }
+
         if windows.is_empty() {
             return "repl_log".to_string();
         }
@@ -3914,6 +4206,11 @@ fn cycle_window_backward(s: &mut Cursive) {
         // Debug panel
         if state.debug_panel_open {
             windows.push("debug_panel".to_string());
+        }
+
+        // Tutorial panel
+        if state.tutorial_open {
+            windows.push("tutorial_content".to_string());
         }
 
         if windows.is_empty() {
