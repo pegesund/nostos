@@ -10,7 +10,7 @@ main() = {
     me = self()
     spawn { worker(me) }
 
-    first = receive x -> x end
-    second = receive x -> x end
+    first = receive { x -> x }
+    second = receive { x -> x }
     first + second
 }

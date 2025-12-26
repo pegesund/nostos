@@ -34,7 +34,7 @@ main() = {
     spawn { writer(me, 100) }
 
     # Wait for writer to finish
-    receive "write_done" -> () end
+    receive { "write_done" -> () }
 
     # Now spawn readers - they should all see the final value
     spawn { reader(me) }
@@ -43,9 +43,9 @@ main() = {
     spawn { reader(me) }
 
     # All readers should see 1 (the last write was write_value(1))
-    receive v -> assert_eq(1, v) end
-    receive v -> assert_eq(1, v) end
-    receive v -> assert_eq(1, v) end
-    receive v -> assert_eq(1, v) end
+    receive { v -> assert_eq(1, v) }
+    receive { v -> assert_eq(1, v) }
+    receive { v -> assert_eq(1, v) }
+    receive { v -> assert_eq(1, v) }
     0
 }

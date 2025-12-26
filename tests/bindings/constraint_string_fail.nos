@@ -3,8 +3,8 @@
 
 main() = {
     name = "alice"
-    match ("bob", 42)
+    match ("bob", 42) {
         (name, age) -> "matched"
         _ -> "not matched"
-    end
+    }
 }

@@ -1,10 +1,10 @@
 # expect: [2, 4, 6]
 # List map with typed result
 
-map(f, xs) = match xs
+map(f, xs) = match xs {
     [] -> []
     [h | t] -> [f(h) | map(f, t)]
-end
+}
 
 main() = {
     nums: List[Int] = [1, 2, 3]

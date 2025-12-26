@@ -11,7 +11,7 @@ spawn_many(parent, n, acc) = {
     } else {
         me = self()
         spawn { short_lived(me) }
-        val = receive x -> x end
+        val = receive { x -> x }
         spawn_many(parent, n - 1, acc + val)
     }
 }
@@ -22,7 +22,7 @@ main() = {
     # Spawn 500 short-lived processes sequentially
     spawn { spawn_many(me, 500, 0) }
 
-    total = receive x -> x end
+    total = receive { x -> x }
     assert_eq(500, total)
     0
 }

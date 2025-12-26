@@ -12,9 +12,7 @@ worker(parent, n) = {
 main() = {
     me = self()
     spawn { worker(me, 5) }
-    result = receive
-        r -> r
-    end
+    result = receive { r -> r }
     assert_eq(25, result)
     0
 }

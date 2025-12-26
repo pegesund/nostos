@@ -2,9 +2,10 @@
 # Test Process.* introspection functions
 
 # Helper to check if list is empty
-isEmpty(xs) = match xs
+isEmpty(xs) = match xs {
     [] -> true
     _ -> false
+}
 
 main() = {
     me = self()
@@ -31,15 +32,11 @@ main() = {
     child = spawn {
         parent <- "started"
         # Wait for a message that will never come (we'll kill this process)
-        receive
-            "never" -> ()
-        end
+        receive { "never" -> () }
     }
 
     # Wait for child to start
-    receive
-        "started" -> ()
-    end
+    receive { "started" -> () }
 
     # Child should be alive
     assert(Process.alive(child))

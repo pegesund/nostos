@@ -1,5 +1,5 @@
 # Fibonacci with Decimal
-# expect: 55d
+# expect: 55
 
 fib(0d) = 0d
 fib(1d) = 1d

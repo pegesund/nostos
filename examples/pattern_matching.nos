@@ -33,11 +33,11 @@ classify_number(n) when n < 0 = "negative"
 classify_number(0) = "zero"
 
 # Match on tuple of conditions
-compare(a, b) = match (a > b, a < b)
+compare(a, b) = match (a > b, a < b) {
     (true, _) -> "greater"
     (_, true) -> "less"
     _ -> "equal"
-end
+}
 
 # List patterns
 describe_list([]) = "empty"

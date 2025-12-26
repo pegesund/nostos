@@ -29,7 +29,7 @@ beast(monitor) = {
 # Collect messages and count heartbeats (1s) vs beast result (832040)
 collect(0, beats) = beats
 collect(n, beats) = {
-    msg = receive x -> x end
+    msg = receive { x -> x }
     new_beats = if msg == 1 then beats + 1 else beats
     collect(n - 1, new_beats)
 }

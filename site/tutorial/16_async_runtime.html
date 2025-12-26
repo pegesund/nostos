@@ -163,7 +163,7 @@ main() = {
 
     # Wait for all - workers yield while waiting for lock
     for i = 0 to 1000 {
-        receive "done" -> () end
+        receive { "done" -> () }
     }
 
     println("Final: " ++ show(counter))  # Always 1000
@@ -193,7 +193,7 @@ fetch_all(urls) = {
     })
 
     # Collect results
-    urls.map(_ => receive (url, result) -> (url, result) end)
+    urls.map(_ => receive { (url, result) -> (url, result) })
 }</code></pre>
                 </div>
 
@@ -235,7 +235,7 @@ main() = {
     # Main can continue doing other things
     println("Computing in background...")
 
-    receive result -> println("Got: " ++ show(result)) end
+    receive { result -> println("Got: " ++ show(result)) }
 }</code></pre>
                 </div>
 

@@ -3,7 +3,7 @@
 
 main() = {
     data = (1, 2, 3, 4, 5)
-    match data
+    match data {
         (_, _, x, _, _) -> x
-    end
+    }
 }

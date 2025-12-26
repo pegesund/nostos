@@ -3,13 +3,13 @@
 
 type Option[T] = Some(T) | None
 
-doubleUnwrap(opt) = match opt
-    Some(inner) -> match inner
+doubleUnwrap(opt) = match opt {
+Some(inner) -> match inner {
         Some(x) -> x
         None -> 0
-    end
+}
     None -> 0
-end
+    }
 
 main() = {
     nested: Option[Option[Int]] = Some(Some(42))

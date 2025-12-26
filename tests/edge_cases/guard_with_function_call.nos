@@ -4,12 +4,12 @@
 is_even(n) = n % 2 == 0
 
 classify(n) =
-    match n
+    match n {
         x when x > 0 && is_even(x) -> "positive even"
         x when x > 0 -> "positive odd"
         x when x < 0 && is_even(x) -> "negative even"
         x when x < 0 -> "negative odd"
         _ -> "zero"
-    end
+    }
 
 main() = classify(42)

@@ -2,11 +2,11 @@
 # Matching on empty list
 
 handle_list(list) =
-    match list
+    match list {
         [] -> "empty"
         [x] -> "one"
         [x, y] -> "two"
         _ -> "many"
-    end
+    }
 
 main() = handle_list([])

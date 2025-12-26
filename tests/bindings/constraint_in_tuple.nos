@@ -3,8 +3,8 @@
 
 main() = {
     x = 1
-    match ((2, 3), 4)
+    match ((2, 3), 4) {
         ((x, y), z) -> x + y + z   # x must equal 1
         _ -> 999
-    end
+    }
 }

@@ -125,7 +125,7 @@ main() = {
     result = try {
         p = fromJson[Person](badJson)
         "Got person: " ++ p.name
-    } catch e -> "Error: " ++ e end
+    } catch { e -> "Error: " ++ e }
     println("   " ++ result)
 
     println("\n=== All examples completed! ===")

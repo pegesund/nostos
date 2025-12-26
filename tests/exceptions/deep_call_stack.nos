@@ -6,7 +6,7 @@ level2() = level3()
 level1() = level2()
 
 main() = {
-    result = try level1() catch e -> e end
+    result = try { level1() } catch { e -> e }
     assert_eq("deep error", result)
     0
 }

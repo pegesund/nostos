@@ -28,9 +28,7 @@ main() = {
     # Collect results
     var total = 0
     for i = 1 to count + 1 {
-        total = receive
-            r -> total + r
-        end
+        total = receive { r -> total + r }
     }
 
     # 10 * (1 + 2 + ... + 20) = 10 * 210 = 2100

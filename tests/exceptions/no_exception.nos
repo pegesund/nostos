@@ -2,7 +2,7 @@
 # Try block without exception returns normally
 
 main() = {
-    result = try 100 + 200 catch _ -> 0 end
+    result = try { 100 + 200 } catch { _ -> 0 }
     assert_eq(300, result)
     0
 }

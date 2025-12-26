@@ -23,9 +23,9 @@ spawn_workers(parent, f, [h | t], idx) = {
 
 # Collect n results into a list (unordered)
 collect(0, acc) = acc
-collect(n, acc) = receive
+collect(n, acc) = receive {
     (idx, result) -> collect(n - 1, [(idx, result) | acc])
-end
+}
 
 # Sort by index and extract values
 sort_by_index([]) = []

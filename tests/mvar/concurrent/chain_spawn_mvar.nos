@@ -18,9 +18,7 @@ chain_link(parent, depth, value) = {
     else {
         me = self()
         spawn { chain_link(me, depth - 1, value * 2) }
-        receive msg ->
-            parent <- msg
-        end
+        receive { msg -> parent <- msg }
     }
 }
 
@@ -33,9 +31,9 @@ main() = {
     spawn { chain_link(me, 4, 100) }
 
     # Wait for all chains to complete
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # 3 chains * 4 links = 12 total chain_length
     assert_eq(12, chain_length)

@@ -10,5 +10,5 @@ main() = {
     try {
         r = jsonToType[Result](json)
         "success"
-    } catch e -> "caught: " ++ e end
+    } catch { e -> "caught: " ++ e }
 }

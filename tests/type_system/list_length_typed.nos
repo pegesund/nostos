@@ -1,10 +1,10 @@
 # expect: 5
 # List length with typed result
 
-len(xs) = match xs
+len(xs) = match xs {
     [] -> 0
     [_ | t] -> 1 + len(t)
-end
+}
 
 main() = {
     nums: List[Int] = [1, 2, 3, 4, 5]

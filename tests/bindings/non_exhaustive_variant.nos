@@ -5,8 +5,8 @@ type Color = Red | Green | Blue
 
 main() = {
     c = Blue
-    match c
+    match c {
         Red -> 1
         Green -> 2
-    end
+    }
 }

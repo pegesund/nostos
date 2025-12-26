@@ -35,14 +35,14 @@ main() = {
     spawn { worker(me, 50) }
 
     # Wait for all workers
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Counter should be exactly 400
     assert_eq(400, get_counter())

@@ -26,7 +26,7 @@ worker_tuple(parent) = {
 }
 
 wait_all(0) = ()
-wait_all(n) = receive _ -> wait_all(n - 1) end
+wait_all(n) = receive { _ -> wait_all(n - 1) }
 
 main() = {
     me = self()
@@ -43,17 +43,17 @@ main() = {
     assert_eq(30, person.age)
 
     # Verify unit variant
-    s1 = match Map.get(data, "status1")
+    s1 = match Map.get(data, "status1") {
         Active -> 1
         _ -> 0
-    end
+    }
     assert_eq(1, s1)
 
     # Verify variant with payload
-    msg = match Map.get(data, "status2")
+    msg = match Map.get(data, "status2") {
         Pending(m) -> m
         _ -> "none"
-    end
+    }
     assert_eq("review", msg)
 
     # Verify tuple

@@ -5,7 +5,7 @@ main() = {
   path = "/tmp/nostos_test_file_exists.txt"
 
   # Make sure it doesn't exist (ignore error)
-  try { File.remove(path) } catch _ -> () end
+  try { { File.remove(path) } } catch { _ -> () }
 
   exists1 = File.exists(path)
   if exists1 then false

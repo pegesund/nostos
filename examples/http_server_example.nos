@@ -30,7 +30,7 @@ serverLoop(server) = {
     headers = [("Content-Type", "text/plain")]
     Server.respond(req.id, statusCode, headers, responseBody)
     serverLoop(server)
-  } catch e -> () end
+  } catch { e -> () }
   result
 }
 
@@ -40,9 +40,9 @@ clientRequest(parent, path) = {
   try {
     response = Http.get(url)
     parent <- ("response", path, response.status)
-  } catch e ->
+  } catch { e ->
     parent <- ("error", path, 0)
-  end
+  }
 }
 
 # Collect responses from client workers
@@ -50,7 +50,7 @@ collectResponses(count, expected) = {
   if count == expected then
     count
   else
-    receive
+    receive {
       ("response", path, status) -> {
         print("  ")
         print(path)
@@ -64,9 +64,8 @@ collectResponses(count, expected) = {
         println(" -> ERROR")
         collectResponses(count + 1, expected)
       }
-    after 5000 ->
-      count
-    end
+      after 5000 -> count
+    }
 }
 
 # Main - demonstrates server + client in same VM
@@ -117,8 +116,8 @@ main() = {
 
     # Clean up
     Server.close(server)
-  } catch e ->
+  } catch { e ->
     println("Error: " ++ e)
-  end
+  }
   result
 }

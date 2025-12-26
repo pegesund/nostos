@@ -197,7 +197,7 @@ fetch_user(id) =
 
 main() = {
     # These throws can be caught with try/catch
-    result = try safe_divide(10, 0) catch e -> "Error: " ++ e end
+    result = try { safe_divide(10, 0) } catch { e -> "Error: " ++ e }
     println(result)  # "Error: division by zero"
 }
 </code></pre>

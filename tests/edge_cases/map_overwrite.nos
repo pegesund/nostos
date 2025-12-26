@@ -3,8 +3,8 @@
 
 main() = {
     m = %{"a": 1, "a": 2}
-    match m
+    match m {
         %{"a": v} -> v
         _ -> 0
-    end
+    }
 }

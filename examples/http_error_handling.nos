@@ -19,11 +19,11 @@ basicErrorHandling() = {
     print("    Connection successful! HTTP status: ")
     println(response.status)
     true
-  } catch e -> {
+  } catch { e -> {
     print("    Connection error: ")
     println(e)
     false
-  } end
+  } }
 
   # Valid URL should succeed
   assert_eq(true, result)
@@ -40,11 +40,11 @@ dnsErrorHandling() = {
     print("    Unexpected success: ")
     println(response.status)
     false
-  } catch e -> {
+  } catch { e -> {
     print("    Expected error: ")
     println(e)
     true
-  } end
+  } }
 
   # Invalid domain should throw an exception
   assert_eq(true, gotError)
@@ -62,11 +62,11 @@ httpStatusHandling() = {
     println(response.status)
     println("    Note: Any HTTP status (200, 404, 503) means the connection worked")
     response.status
-  } catch e -> {
+  } catch { e -> {
     print("    Connection error: ")
     println(e)
     0
-  } end
+  } }
 
   # Connection should succeed (404 is HTTP status, not a connection error)
   assert_eq(404, result)
@@ -78,9 +78,9 @@ httpWorker(parent, id, url) = {
   try {
     response = Http.get(url)
     parent <- ("success", id, response.status)
-  } catch e ->
+  } catch { e ->
     parent <- ("failure", id, e)
-  end
+  }
 }
 
 workerErrorHandling() = {
@@ -91,23 +91,23 @@ workerErrorHandling() = {
   spawn { httpWorker(me, 2, "https://invalid-domain-xyz.com/") }
   spawn { httpWorker(me, 3, "https://httpbin.org/status/500") }
 
-  r1 = receive
+  r1 = receive {
     ("success", id, httpStatus) -> ("worker " ++ show(id), "success", httpStatus)
     ("failure", id, errMsg) -> ("worker " ++ show(id), "failure", errMsg)
-  after 10000 -> ("timeout", "no response", 0)
-  end
+    after 10000 -> ("timeout", "no response", 0)
+  }
 
-  r2 = receive
+  r2 = receive {
     ("success", id, httpStatus) -> ("worker " ++ show(id), "success", httpStatus)
     ("failure", id, errMsg) -> ("worker " ++ show(id), "failure", errMsg)
-  after 10000 -> ("timeout", "no response", 0)
-  end
+    after 10000 -> ("timeout", "no response", 0)
+  }
 
-  r3 = receive
+  r3 = receive {
     ("success", id, httpStatus) -> ("worker " ++ show(id), "success", httpStatus)
     ("failure", id, errMsg) -> ("worker " ++ show(id), "failure", errMsg)
-  after 10000 -> ("timeout", "no response", 0)
-  end
+    after 10000 -> ("timeout", "no response", 0)
+  }
 
   print("  Result 1: ")
   println(r1)
@@ -126,14 +126,14 @@ retryRequest(url, retriesLeft) = {
     result = try {
       response = Http.get(url)
       ("ok", response)
-    } catch e -> {
+    } catch { e -> {
       print("    Retry ")
       print(4 - retriesLeft)
       print(" failed: ")
       println(e)
       sleep(500)
       retryRequest(url, retriesLeft - 1)
-    } end
+    } }
     result
   }
 }
@@ -164,11 +164,11 @@ fileErrorHandling() = {
     print("    Unexpected content: ")
     println(content)
     false
-  } catch e -> {
+  } catch { e -> {
     print("    Expected error: ")
     println(e)
     true
-  } end
+  } }
 
   # Reading non-existent file should throw
   assert_eq(true, gotError)
@@ -183,11 +183,11 @@ fileErrorHandling() = {
     print("    Read back: ")
     println(content)
     true
-  } catch e -> {
+  } catch { e -> {
     print("    Error: ")
     println(e)
     false
-  } end
+  } }
 
   assert_eq(true, writeResult)
   println("")

@@ -5,9 +5,9 @@ type Option[T] = Some(T) | None
 
 main() = {
     opt = Some(3)
-    result: Int = match opt
+    result: Int = match opt {
         Some(x) -> x * 2
         None -> 0
-    end
+    }
     result
 }

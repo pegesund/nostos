@@ -30,9 +30,9 @@ serverLoop(server, count) = {
       Server.respond(req.id, statusCode, [("Content-Type", "text/plain")], body)
       serverLoop(server, count + 1)
     }
-  } catch e ->
+  } catch { e ->
     println("Error accepting request: " ++ e)
-  end
+  }
   result
 }
 
@@ -46,9 +46,9 @@ sendTestAndShutdown() = {
     println("Client: Sending shutdown...")
     Http.get("http://localhost:8080/shutdown")
     ()
-  } catch e ->
+  } catch { e ->
     println("Client error: " ++ e)
-  end
+  }
 }
 
 main() = {
@@ -70,8 +70,8 @@ main() = {
     # Clean up
     Server.close(server)
     println("Server shutdown complete.")
-  } catch e ->
+  } catch { e ->
     println("Error starting server: " ++ e)
-  end
+  }
   result
 }

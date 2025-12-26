@@ -2,9 +2,9 @@
 # Complex guard expressions
 
 check(pair) =
-    match pair
+    match pair {
         (x, y) when x > 0 && y > 0 && x + y > 10 -> "match"
         _ -> "no match"
-    end
+    }
 
 main() = check((7, 8))

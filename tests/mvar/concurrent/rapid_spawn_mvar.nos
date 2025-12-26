@@ -30,7 +30,7 @@ spawn_quick_workers(parent, n) = if n <= 0 then () else {
 
 # Wait for n completions
 wait_all(n) = if n <= 0 then () else {
-    receive _ -> () end
+    receive { _ -> () }
     _ = wait_all(n - 1)
     ()
 }

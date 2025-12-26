@@ -4,10 +4,10 @@
 type Number = Zero | Succ(Number)
 
 to_int(n) =
-    match n
+    match n {
         Zero -> 0
         Succ(prev) -> 1 + to_int(prev)
-    end
+    }
 
 make_number(n) =
     if n <= 0 then Zero

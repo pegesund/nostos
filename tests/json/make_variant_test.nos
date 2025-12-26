@@ -11,15 +11,15 @@ main() = {
     result_err = makeVariant[Result]("Err", err_fields)
 
     # Check the variants
-    check_ok = match result_ok
+    check_ok = match result_ok {
         Ok(n) -> n == 42
         Err(_) -> false
-    end
+    }
 
-    check_err = match result_err
+    check_err = match result_err {
         Ok(_) -> false
         Err(msg) -> msg == "error message"
-    end
+    }
 
     check_ok && check_err
 }

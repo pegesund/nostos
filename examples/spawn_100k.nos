@@ -22,10 +22,10 @@ main() = {
     # Collect and sum results from workers
     for i = 0 to num_workers { # Using _ because we don't need the loop counter here
         # Receive the message and perform update within the clause
-        receive
+        receive {
             Increase(counter_value) -> {  total_sum_of_counters = total_sum_of_counters + counter_value }
             Nothing -> () # Handle 'Nothing' messages explicitly without updating the sum
-        end
+        }
     }
 
     println("All workers completed! Total sum of counters: " ++ show(total_sum_of_counters))

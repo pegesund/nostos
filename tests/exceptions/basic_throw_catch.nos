@@ -2,7 +2,7 @@
 # Basic throw and catch
 
 main() = {
-    result = try throw("error") catch e -> e end
+    result = try { throw("error") } catch { e -> e }
     assert_eq("error", result)
     0
 }

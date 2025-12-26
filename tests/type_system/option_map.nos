@@ -3,15 +3,15 @@
 
 type Option[T] = Some(T) | None
 
-mapOpt(f, opt) = match opt
+mapOpt(f, opt) = match opt {
     Some(x) -> Some(f(x))
     None -> None
-end
+}
 
-unwrap(opt) = match opt
+unwrap(opt) = match opt {
     Some(x) -> x
     None -> 0
-end
+}
 
 main() = {
     maybe: Option[Int] = Some(42)

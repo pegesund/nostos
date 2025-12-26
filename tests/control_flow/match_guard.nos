@@ -1,11 +1,11 @@
 # expect: 0
 # Match with guards
 
-classify(n) = match n
+classify(n) = match n {
     x when x > 0 -> 1
     x when x < 0 -> -1
     _ -> 0
-end
+}
 
 main() = {
     assert_eq(1, classify(42))

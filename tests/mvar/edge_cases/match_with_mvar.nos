@@ -8,12 +8,12 @@ get_state() = state
 # Safe: reads state and computes next value without calling other mvar functions
 next_state() = {
     s = state
-    state = match s
+    state = match s {
         1 -> 2
         2 -> 3
         3 -> 1
         _ -> 0
-    end
+    }
     state
 }
 

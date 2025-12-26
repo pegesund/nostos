@@ -65,10 +65,10 @@ type Box = Box(Int)
 
 # A function that works with any Eq type
 find_in_list[T: Eq](list: List, target: T) -> Bool = {
-    match list
+    match list {
         [] -> false
         [x | rest] -> if x == target then true else find_in_list(rest, target)
-    end
+    }
 }
 
 # ========== Main Demo ==========

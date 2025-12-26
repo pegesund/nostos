@@ -7,18 +7,18 @@ main() = {
     m3 = %{"g": 7, "h": 8, "i": 9}
 
     # Access elements using match
-    v1 = match m1
+    v1 = match m1 {
         %{"a": x} -> x
         _ -> 0
-    end
-    v2 = match m2
+    }
+    v2 = match m2 {
         %{"e": x} -> x
         _ -> 0
-    end
-    v3 = match m3
+    }
+    v3 = match m3 {
         %{"i": x} -> x
         _ -> 0
-    end
+    }
 
     v1 + v2 + v3 == 15
 }

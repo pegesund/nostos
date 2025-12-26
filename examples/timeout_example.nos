@@ -13,11 +13,10 @@
 simpleTimeout() = {
   println("Pattern 1: Simple timeout")
 
-  result = receive
+  result = receive {
     msg -> ("received", msg)
-  after 500 ->
-    ("timeout", "")
-  end
+    after 500 -> ("timeout", "")
+  }
 
   # Should timeout since no message is sent
   assert_eq(("timeout", ""), result)
@@ -37,11 +36,10 @@ httpWithRetry() = {
   }
 
   # Wait with timeout
-  result = receive
+  result = receive {
     ("http_done", status, body) -> ("success", status)
-  after 3000 ->
-    ("timeout", 0)
-  end
+    after 3000 -> ("timeout", 0)
+  }
 
   print("  Result: ")
   println(result)
@@ -68,11 +66,10 @@ raceRequests() = {
   }
 
   # Take the first response
-  result = receive
+  result = receive {
     (server, status) -> (server, status)
-  after 5000 ->
-    ("none", 0)
-  end
+    after 5000 -> ("none", 0)
+  }
 
   print("  First responder: ")
   println(result)
@@ -103,9 +100,9 @@ collectWithTimeout() = {
   }
 
   # Simple receive loop with count
-  r1 = receive ("worker", id) -> id after 500 -> 0 end
-  r2 = receive ("worker", id) -> id after 500 -> 0 end
-  r3 = receive ("worker", id) -> id after 500 -> 0 end
+  r1 = receive { ("worker", id) -> id after 500 -> 0 }
+  r2 = receive { ("worker", id) -> id after 500 -> 0 }
+  r3 = receive { ("worker", id) -> id after 500 -> 0 }
 
   print("  Received workers: ")
   print(r1)
@@ -128,20 +125,18 @@ sleepVsTimeout() = {
   }
 
   # Timeout before worker finishes (100ms < 300ms)
-  result = receive
+  result = receive {
     msg1 -> ("got", msg1)
-  after 100 ->
-    ("timeout", "")
-  end
+    after 100 -> ("timeout", "")
+  }
 
   assert_eq(("timeout", ""), result)
 
   # Now wait longer - should get message
-  result2 = receive
+  result2 = receive {
     msg2 -> ("got", msg2)
-  after 1000 ->
-    ("timeout", "")
-  end
+    after 1000 -> ("timeout", "")
+  }
 
   assert_eq(("got", "done"), result2)
   println("  Sleep vs timeout works correctly")

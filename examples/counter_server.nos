@@ -10,7 +10,7 @@
 type Message = Inc(Pid) | Dec(Pid) | Get(Pid) | Stop | Ok(Int) | Value(Int)
 
 # Counter loop with state
-counter_loop(state) = receive
+counter_loop(state) = receive {
     Inc(sender) -> {
         sender <- Ok(state + 1)
         counter_loop(state + 1)
@@ -24,7 +24,7 @@ counter_loop(state) = receive
         counter_loop(state)
     }
     Stop -> state
-end
+}
 
 # Start a counter with initial value
 start_counter(initial) = spawn { counter_loop(initial) }
@@ -32,23 +32,23 @@ start_counter(initial) = spawn { counter_loop(initial) }
 # Client operations
 increment(counter) = {
     counter <- Inc(self())
-    receive
+    receive {
         Ok(val) -> val
-    end
+    }
 }
 
 decrement(counter) = {
     counter <- Dec(self())
-    receive
+    receive {
         Ok(val) -> val
-    end
+    }
 }
 
 get_value(counter) = {
     counter <- Get(self())
-    receive
+    receive {
         Value(val) -> val
-    end
+    }
 }
 
 stop(counter) = {

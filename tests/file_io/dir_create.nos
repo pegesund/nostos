@@ -5,7 +5,7 @@ main() = {
   path = "/tmp/nostos_test_dir_create"
 
   # Clean up first (ignore error if not found)
-  try { Dir.remove(path) } catch _ -> () end
+  try { { Dir.remove(path) } } catch { _ -> () }
 
   Dir.create(path)
   exists = Dir.exists(path)

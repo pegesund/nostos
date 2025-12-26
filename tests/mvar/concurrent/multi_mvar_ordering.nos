@@ -65,12 +65,12 @@ main() = {
     _ = spawn { worker_abg(me, 10) }
 
     # Wait for all
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Each MVar should have:
     # gab: 2 workers * 10 iterations * 1 = 20

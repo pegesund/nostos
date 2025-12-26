@@ -22,41 +22,36 @@ factorial(n) = n * factorial(n - 1)
 
 # Basic try/catch - the caught value becomes the result
 basic_example() =
-    try throw("caught me!")
-    catch e -> e
-    end
+    try { throw("caught me!") }
+    catch { e -> e }
 
 # Using try/catch for safe operations with defaults
 # Takes a thunk (zero-arg function) to delay evaluation
 safe_with_default(risky_fn, default) =
-    try risky_fn()
-    catch _ -> default
-    end
+    try { risky_fn() }
+    catch { _ -> default }
 
 # Pattern matching in catch - handle different error types differently
 classify_error(code) =
-    try
+    try {
         if code == 1 then throw("not_found")
         else if code == 2 then throw("forbidden")
         else if code == 3 then throw(500)
         else "ok"
-    catch
+    }
+    catch {
         "not_found" -> "Error: Resource not found"
         "forbidden" -> "Error: Access denied"
         n -> "Error: Server error"
-    end
+    }
 
 # Nested try/catch - inner exceptions can be caught by outer handlers
 nested_handlers() =
-    try
-        try
-            throw("deep error")
-        catch
-            "deep error" -> "handled deep"
-        end
-    catch
-        e -> "outer handler got: " ++ e
-    end
+    try {
+        try { throw("deep error") }
+        catch { "deep error" -> "handled deep" }
+    }
+    catch { e -> "outer handler got: " ++ e }
 
 main() = {
     # === Basic throw and catch ===
@@ -70,7 +65,7 @@ main() = {
     assert_eq(3, safe_divide(9, 3))
 
     # Division by zero is caught gracefully
-    div_result = try safe_divide(10, 0) catch e1 -> e1 end
+    div_result = try { safe_divide(10, 0) } catch { e1 -> e1 }
     assert_eq("division by zero", div_result)
 
     # === Factorial with validation ===
@@ -79,7 +74,7 @@ main() = {
     assert_eq(120, factorial(5))
 
     # Negative input throws an exception
-    neg_result = try factorial(-5) catch e2 -> e2 end
+    neg_result = try { factorial(-5) } catch { e2 -> e2 }
     assert_eq("negative number not allowed", neg_result)
 
     # === Safe operations with defaults ===

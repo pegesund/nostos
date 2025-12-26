@@ -34,25 +34,25 @@ main() = {
   spawn { fileWorker(me, 9) }
   spawn { fileWorker(me, 10) }
   
-  r1 = receive x -> x end
+  r1 = receive { x -> x }
   println("Worker done: " ++ show(r1))
-  r2 = receive x -> x end
+  r2 = receive { x -> x }
   println("Worker done: " ++ show(r2))
-  r3 = receive x -> x end
+  r3 = receive { x -> x }
   println("Worker done: " ++ show(r3))
-  r4 = receive x -> x end
+  r4 = receive { x -> x }
   println("Worker done: " ++ show(r4))
-  r5 = receive x -> x end
+  r5 = receive { x -> x }
   println("Worker done: " ++ show(r5))
-  r6 = receive x -> x end
+  r6 = receive { x -> x }
   println("Worker done: " ++ show(r6))
-  r7 = receive x -> x end
+  r7 = receive { x -> x }
   println("Worker done: " ++ show(r7))
-  r8 = receive x -> x end
+  r8 = receive { x -> x }
   println("Worker done: " ++ show(r8))
-  r9 = receive x -> x end
+  r9 = receive { x -> x }
   println("Worker done: " ++ show(r9))
-  r10 = receive x -> x end
+  r10 = receive { x -> x }
   println("Worker done: " ++ show(r10))
   
   println("")

@@ -31,10 +31,10 @@ main() = {
     spawn { worker(me, 31, 40) }
 
     # Wait for all
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Sum of 1 to 40 = 40 * 41 / 2 = 820
     assert_eq(820, get_sum())

@@ -11,7 +11,7 @@ sender(target, count) = {
 receive_all(expected, acc) = {
     if expected == 0 then acc
     else {
-        n = receive x -> x end
+        n = receive { x -> x }
         # Messages should arrive in reverse order (10, 9, 8, ... 1)
         receive_all(expected - 1, [n | acc])
     }

@@ -3,10 +3,10 @@
 
 type Either[L, R] = Left(L) | Right(R)
 
-getValue(e) = match e
+getValue(e) = match e {
     Left(x) -> x
     Right(x) -> x
-end
+}
 
 main() = {
     left: Either[Int, Int] = Left(5)

@@ -11,11 +11,7 @@ main() = {
     spawn { worker(me, 10) }
 
     # Receive both results and sum them
-    result = receive
-        a -> receive
-            b -> a + b
-        end
-    end
+    result = receive { a -> receive { b -> a + b } }
     assert_eq(30, result)
     0
 }

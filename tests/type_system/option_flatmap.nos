@@ -3,17 +3,17 @@
 
 type Option[T] = Some(T) | None
 
-flatMap(f, opt) = match opt
+flatMap(f, opt) = match opt {
     Some(x) -> f(x)
     None -> None
-end
+}
 
 safeDiv(a, b) = if b == 0 then None else Some(a / b)
 
-unwrap(opt) = match opt
+unwrap(opt) = match opt {
     Some(x) -> x
     None -> 0
-end
+}
 
 main() = {
     maybe: Option[Int] = Some(10)

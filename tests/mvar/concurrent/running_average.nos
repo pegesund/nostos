@@ -13,13 +13,13 @@ add_value(v) = {
 get_total() = total
 get_count() = count
 
-add_values(vals) = match vals
+add_values(vals) = match vals {
     [] -> ()
     [v | rest] -> {
         add_value(v)
         add_values(rest)
     }
-end
+}
 
 worker(parent, vals) = {
     add_values(vals)
@@ -36,10 +36,10 @@ main() = {
     spawn { worker(me, [100, 110, 120]) }
 
     # Wait for all
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Total: 10+20+30+40+50+60+70+80+90+100+110+120 = 780
     # Count: 12

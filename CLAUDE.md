@@ -3,6 +3,29 @@
 - build release, not debug
 - remember that comments in nostos are with # and NOT with //
 
+## CRITICAL: Never Hide Bugs - Fix The Code
+
+**THIS IS THE MOST IMPORTANT RULE. VIOLATING THIS IS UNACCEPTABLE.**
+
+When a test fails:
+1. **FIX THE CODE** - The test is correct, the code is broken
+2. **NEVER change test expectations** to match broken behavior
+3. **NEVER remove tests** because they expose bugs
+4. **NEVER claim "all tests pass"** without actually running ALL tests
+
+Tests exist to catch bugs. When they fail, they are doing their job. The fix is ALWAYS to fix the underlying code, not to hide the bug by modifying or removing the test.
+
+**Examples of what NOT to do:**
+- Changing `# expect: 100` to `# expect: 0` because code returns wrong value - NO!
+- Removing a test file because it exposes a bug - NO!
+- Saying "all tests pass" after only running 159 of 648 tests - NO!
+
+**What to do instead:**
+- Investigate WHY the test fails
+- Find and fix the bug in the compiler/VM/runtime
+- Verify the test passes with the fix
+- Only then commit
+
 ## Commit Early and Often
 
 **IMPORTANT: Commit working code immediately to avoid losing it.**

@@ -2,11 +2,11 @@
 # String literal patterns
 
 greet(msg) =
-    match msg
+    match msg {
         "hello" -> "found hello"
         "world" -> "found world"
         "foo" -> "found foo"
         _ -> "unknown"
-    end
+    }
 
 main() = greet("hello")

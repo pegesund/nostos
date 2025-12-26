@@ -1,10 +1,10 @@
 # expect: 1
 # List head with typed binding
 
-head(xs) = match xs
+head(xs) = match xs {
     [h | _] -> h
     [] -> 0
-end
+}
 
 main() = {
     nums: List[Int] = [1, 2, 3]

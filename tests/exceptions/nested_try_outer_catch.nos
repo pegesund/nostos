@@ -2,15 +2,7 @@
 # Nested try - exception propagates to outer catch
 
 main() = {
-    result = try
-        try
-            throw("escape")
-        catch
-            "wrong" -> "not this"
-        end
-    catch
-        e -> "outer caught: " ++ e
-    end
+    result = try { try { throw("escape") } catch { "wrong" -> "not this" } } catch { e -> "outer caught: " ++ e }
     assert_eq("outer caught: escape", result)
     0
 }

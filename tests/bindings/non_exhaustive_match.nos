@@ -3,7 +3,7 @@
 
 main() = {
     x = 1
-    match (2, 3)
+    match (2, 3) {
         (x, y) -> x + y   # x must equal 1, so this doesn't match, no other arms
-    end
+    }
 }

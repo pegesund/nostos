@@ -30,10 +30,10 @@ main() = {
     spawn { light_worker(me, 3) }
 
     # Collect all 4 results
-    r1 = receive x -> x end
-    r2 = receive x -> x end
-    r3 = receive x -> x end
-    r4 = receive x -> x end
+    r1 = receive { x -> x }
+    r2 = receive { x -> x }
+    r3 = receive { x -> x }
+    r4 = receive { x -> x }
 
     # Sum them - should include 75025 (fib 25) + 1 + 2 + 3 = 75031
     total = r1 + r2 + r3 + r4

@@ -6,7 +6,7 @@ type Outer = { inner: Inner, z: Int }
 
 main() = {
     data = Outer(Inner(3, 4), 3)
-    match data
+    match data {
         Outer(Inner(x, y), z) -> x + y + z
-    end
+    }
 }

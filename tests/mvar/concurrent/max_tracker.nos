@@ -14,13 +14,13 @@ update_max(n) = {
 
 get_max() = max_val
 
-check_values(vals) = match vals
+check_values(vals) = match vals {
     [] -> ()
     [v | rest] -> {
         update_max(v)
         check_values(rest)
     }
-end
+}
 
 worker(parent, vals) = {
     check_values(vals)
@@ -37,10 +37,10 @@ main() = {
     spawn { worker(me, [10, 5, 80]) }
 
     # Wait for all
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Maximum should be 95
     assert_eq(95, get_max())

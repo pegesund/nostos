@@ -8,9 +8,7 @@ child(parent) = {
 main() = {
     me = self()
     spawn { child(me) }
-    result = receive
-        msg -> msg
-    end
+    result = receive { msg -> msg }
     assert_eq(42, result)
     0
 }

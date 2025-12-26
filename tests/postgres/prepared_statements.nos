@@ -140,10 +140,10 @@ test_deallocate_not_found(conn) = {
     result = try {
         Pg.deallocate(conn, "nonexistent_statement")
         "success"
-    } catch
+    } catch {
         ("deallocate_error", msg) -> "caught"
         _ -> "unexpected"
-    end
+    }
     assert_eq(result, "caught")
 }
 
@@ -152,10 +152,10 @@ test_query_prepared_not_found(conn) = {
     result = try {
         Pg.queryPrepared(conn, "nonexistent", [])
         "success"
-    } catch
+    } catch {
         ("query_error", msg) -> "caught"
         _ -> "unexpected"
-    end
+    }
     assert_eq(result, "caught")
 }
 

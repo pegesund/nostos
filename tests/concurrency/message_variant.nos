@@ -8,9 +8,7 @@ worker(parent) = {
 main() = {
     me = self()
     spawn { worker(me) }
-    result = receive
-        n -> n
-    end
+    result = receive { n -> n }
     assert_eq(100, result)
     0
 }

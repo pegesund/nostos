@@ -32,9 +32,9 @@ main() = {
     # Collect all responses and count correct ones
     var correct = 0
     for i = 0 to n {
-        correct = receive
+        correct = receive {
             value -> if value == secret then correct + 1 else correct
-        end
+        }
     }
 
     println("Verification complete!")

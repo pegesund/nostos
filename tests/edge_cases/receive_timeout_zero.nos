@@ -2,9 +2,9 @@
 # Receive with zero timeout (immediate)
 
 main() = {
-    receive
+    receive {
         msg -> "got message"
     after 0 ->
         "timeout"
-    end
+    }
 }

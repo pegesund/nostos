@@ -11,13 +11,13 @@ write_value(n) = {
 
 read_value() = shared
 
-do_writes(vs) = match vs
+do_writes(vs) = match vs {
     [] -> ()
     [v | rest] -> {
         write_value(v)
         do_writes(rest)
     }
-end
+}
 
 do_reads(n, sum) = if n <= 0 then sum else {
     v = read_value()
@@ -45,11 +45,11 @@ main() = {
     spawn { reader(me, 5) }
 
     # Wait for writer
-    receive "writer_done" -> () end
+    receive { "writer_done" -> () }
 
     # Wait for readers
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Final value should be 5
     assert_eq(5, read_value())

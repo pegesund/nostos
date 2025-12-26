@@ -1,10 +1,10 @@
 # expect: 0
 # GC preserves map structures
 
-check_map(m) = match m
+check_map(m) = match m {
     %{"key": val} -> val
     _ -> 0
-end
+}
 
 build_map(0, m) = m
 build_map(n, m) = {

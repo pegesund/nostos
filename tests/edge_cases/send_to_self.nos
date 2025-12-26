@@ -4,5 +4,5 @@
 main() = {
     me = self()
     me <- 42
-    receive msg -> msg end
+    receive { msg -> msg }
 }

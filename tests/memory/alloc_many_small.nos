@@ -6,10 +6,10 @@ make_list(n, acc) =
     else make_list(n - 1, [n | acc])
 
 countList(list, acc) =
-    match list
+    match list {
         [] -> acc
         [_ | rest] -> countList(rest, acc + 1)
-    end
+    }
 
 main() = {
     list = make_list(1000, [])

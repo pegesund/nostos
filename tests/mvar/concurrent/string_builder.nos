@@ -13,13 +13,13 @@ append_char(c) = {
 get_result() = result
 get_count() = append_count
 
-do_appends(chars) = match chars
+do_appends(chars) = match chars {
     [] -> ()
     [c | rest] -> {
         append_char(c)
         do_appends(rest)
     }
-end
+}
 
 worker(parent, chars) = {
     do_appends(chars)
@@ -36,10 +36,10 @@ main() = {
     spawn { worker(me, ["g", "h"]) }
 
     # Wait for all
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Total appends should be 8
     assert_eq(8, get_count())

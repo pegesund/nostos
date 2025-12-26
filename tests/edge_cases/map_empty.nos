@@ -3,8 +3,8 @@
 
 main() = {
     empty = %{}
-    match empty
+    match empty {
         %{"key": v} -> "found"
         _ -> "not found"
-    end
+    }
 }

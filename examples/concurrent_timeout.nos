@@ -18,7 +18,7 @@ timeout_counter(parent, id, count, timeout_ms) = {
 
 count_timeouts(remaining, timeout_ms, acc) = {
     if remaining > 0 then {
-        result = receive x -> 0 after timeout_ms -> 1 end
+        result = receive { x -> 0 after timeout_ms -> 1 }
         count_timeouts(remaining - 1, timeout_ms, acc + result)
     } else {
         acc
@@ -27,11 +27,10 @@ count_timeouts(remaining, timeout_ms, acc) = {
 
 # Process that receives, optionally gets a message
 message_receiver(parent, id, timeout_ms) = {
-    result = receive
+    result = receive {
         msg -> msg
-    after timeout_ms ->
-        "timeout"
-    end
+        after timeout_ms -> "timeout"
+    }
     parent <- (id, result)
     ()
 }
@@ -39,7 +38,7 @@ message_receiver(parent, id, timeout_ms) = {
 # Collect N results
 collect_n(remaining) = {
     if remaining > 0 then {
-        result = receive r -> r after 10000 -> ("error", -1) end
+        result = receive { r -> r after 10000 -> ("error", -1) }
         results = collect_n(remaining - 1)
         [result | results]
     } else {

@@ -811,26 +811,37 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                 span: to_span(span),
             });
 
-        // Match expression
+        // Match expression: match expr { pattern -> body, ... }
         let match_expr = just(Token::Match)
             .ignore_then(expr.clone())
+            .then_ignore(nl.clone())
+            .then_ignore(just(Token::LBrace))
             .then(match_arm.clone().repeated().at_least(1))
             .then_ignore(nl.clone())
-            .then_ignore(just(Token::End).or_not())
+            .then_ignore(just(Token::RBrace))
             .map_with_span(|(scrutinee, arms), span| {
                 Expr::Match(Box::new(scrutinee), arms, to_span(span))
             });
 
-        // Try expression: try { expr } catch pattern -> expr finally { expr } end
+        // Try expression: try { stmts } catch { pattern -> expr } finally { expr }
+        // The body is parsed as a block expression (handles multiple statements)
         let try_expr = just(Token::Try)
-            .ignore_then(nl.clone().ignore_then(expr.clone()))
+            .ignore_then(nl.clone())
+            .ignore_then(expr.clone())  // Parse block expression: { stmt1; stmt2; ... }
             .then_ignore(nl.clone())
             .then_ignore(just(Token::Catch))
+            .then_ignore(nl.clone())
+            .then_ignore(just(Token::LBrace))
             .then(match_arm.clone().repeated())
             .then_ignore(nl.clone())
-            .then(just(Token::Finally).ignore_then(nl.clone().ignore_then(expr.clone())).or_not())
-            .then_ignore(nl.clone())
-            .then_ignore(just(Token::End))
+            .then_ignore(just(Token::RBrace))
+            .then(
+                nl.clone()
+                    .ignore_then(just(Token::Finally))
+                    .ignore_then(nl.clone())
+                    .ignore_then(expr.clone())  // Parse block expression
+                    .or_not()
+            )
             .map_with_span(|((body, catches), finally), span| {
                 Expr::Try(Box::new(body), catches, finally.map(Box::new), to_span(span))
             });
@@ -852,19 +863,21 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
             .then_ignore(just(Token::End))
             .map_with_span(|stmts, span| Expr::Do(stmts, to_span(span)));
 
-        // Receive expression (concurrency)
+        // Receive expression (concurrency): receive { pattern -> expr, after timeout -> expr }
         let receive_expr = just(Token::Receive)
+            .ignore_then(nl.clone())
+            .ignore_then(just(Token::LBrace))
             .ignore_then(match_arm.clone().repeated())
-            .then_ignore(nl.clone())
             .then(
-                just(Token::After)
+                nl.clone()
+                    .ignore_then(just(Token::After))
                     .ignore_then(nl.clone().ignore_then(expr.clone()))
                     .then_ignore(just(Token::RightArrow))
                     .then(nl.clone().ignore_then(expr.clone()))
                     .or_not(),
             )
             .then_ignore(nl.clone())
-            .then_ignore(just(Token::End))
+            .then_ignore(just(Token::RBrace))
             .map_with_span(|(arms, timeout), span| {
                 let timeout = timeout.map(|(t, body)| (Box::new(t), Box::new(body)));
                 Expr::Receive(arms, timeout, to_span(span))

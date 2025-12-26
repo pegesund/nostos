@@ -23,11 +23,11 @@ main() = {
     # Collect and sum results from workers
     for i = 0 to num_workers { # Changed _ to i to resolve syntax error
         # Receive the message and perform update within the clause
-        total_sum_of_counters = receive # Rebind total_sum_of_counters
+        total_sum_of_counters = receive { # Rebind total_sum_of_counters
             Increase(counter_value) -> {
                 total_sum_of_counters + counter_value
             }
-        end
+        }
     }
 
     println("All workers completed! Total sum of counters: " ++ show(total_sum_of_counters))

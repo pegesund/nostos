@@ -19,13 +19,13 @@ get_high() = high_count
 
 categorize(v) = if v < 50 then inc_low() else inc_high()
 
-process_values(vals) = match vals
+process_values(vals) = match vals {
     [] -> ()
     [v | rest] -> {
         categorize(v)
         process_values(rest)
     }
-end
+}
 
 worker(parent, vals) = {
     process_values(vals)
@@ -42,10 +42,10 @@ main() = {
     spawn { worker(me, [15, 85, 25, 75]) }  # 2 low, 2 high
 
     # Wait for all
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Should have 8 low and 8 high
     assert_eq(8, get_low())

@@ -3,8 +3,8 @@
 
 main() = {
     x = 10
-    result = match x
+    result = match x {
         x -> x * 2
-    end
+    }
     result
 }

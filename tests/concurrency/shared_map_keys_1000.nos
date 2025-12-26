@@ -17,7 +17,7 @@ spawn_workers(parent, n: Int) = if n <= 0 then () else {
 }
 
 wait_all(n: Int) = if n <= 0 then () else {
-    receive _ -> wait_all(n - 1) end
+    receive { _ -> wait_all(n - 1) }
 }
 
 main() = {

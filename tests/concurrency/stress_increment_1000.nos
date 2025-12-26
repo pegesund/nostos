@@ -20,7 +20,7 @@ spawn_workers(parent, n: Int) = if n <= 0 then () else {
 
 # Wait for n completion messages
 wait_for(n: Int) = if n <= 0 then () else {
-    receive _ -> () end
+    receive { _ -> () }
     wait_for(n - 1)
 }
 

@@ -1,5 +1,5 @@
 # Fibonacci with BigInt (can handle arbitrarily large numbers)
-# expect: 55n
+# expect: 55
 
 fib(0n) = 0n
 fib(1n) = 1n

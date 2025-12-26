@@ -2,9 +2,7 @@
 # GC handles chain of processes passing data with garbage
 
 chain_node(next, is_last, parent) = {
-    msg = receive
-        n -> n
-    end
+    msg = receive { n -> n }
 
     # Create garbage
     garbage = [msg, msg * 2, msg * 3]
@@ -33,9 +31,7 @@ main() = {
     node5 <- 10
 
     # Should get 10 + 5 = 15
-    result = receive
-        r -> r
-    end
+    result = receive { r -> r }
 
     assert_eq(15, result)
     0

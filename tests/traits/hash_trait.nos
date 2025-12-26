@@ -9,9 +9,9 @@ end
 
 Point: Hash
     hash(self) = {
-        match self
+        match self {
             Point(x, y) -> x * 31 + y
-        end
+        }
     }
 end
 

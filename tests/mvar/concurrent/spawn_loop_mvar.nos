@@ -33,7 +33,7 @@ spawn_workers_helper(parent, n, remaining) =
 
 # Wait for n messages
 wait_for_workers(n) = if n <= 0 then () else {
-    receive _ -> () end
+    receive { _ -> () }
     _ = wait_for_workers(n - 1)
     ()
 }

@@ -23,11 +23,7 @@ timed_counter(parent, id, count, delay) = {
 # Recursive receive helper
 collect_n(remaining) = {
     if remaining > 0 then {
-        result = receive
-            id -> id
-        after 5000 ->
-            0
-        end
+        result = receive { id -> id after 5000 -> 0 }
         if result == 0 then {
             println("TIMEOUT waiting for worker!")
             0
@@ -42,7 +38,7 @@ collect_n(remaining) = {
 # Recursive timeout counter
 count_timeouts_rec(n, acc) = {
     if n > 0 then {
-        result = receive x -> 0 after 10 -> 1 end
+        result = receive { x -> 0 after 10 -> 1 }
         count_timeouts_rec(n - 1, acc + result)
     } else {
         acc
@@ -52,7 +48,7 @@ count_timeouts_rec(n, acc) = {
 # Recursive timeout runner
 run_timeout_rec(n) = {
     if n > 0 then {
-        result = receive x -> x after 100 -> "timeout" end
+        result = receive { x -> x after 100 -> "timeout" }
         assert(result == "timeout")
         run_timeout_rec(n - 1)
     } else {
@@ -115,7 +111,7 @@ test_interleaved() = {
     spawn { interleaved_worker(me) }
 
     # Receive with short timeout - might miss some
-    r1 = receive n1 -> n1 after 30 -> 0 end
+    r1 = receive { n1 -> n1 after 30 -> 0 }
     println("First receive (30ms timeout):")
     println(r1)
 
@@ -123,17 +119,17 @@ test_interleaved() = {
     sleep(100)
 
     # Now there should be messages waiting
-    r2 = receive n2 -> n2 after 10 -> 0 end
+    r2 = receive { n2 -> n2 after 10 -> 0 }
     println("Second receive (after 100ms sleep):")
     println(r2)
 
-    r3 = receive n3 -> n3 after 10 -> 0 end
+    r3 = receive { n3 -> n3 after 10 -> 0 }
     println("Third receive:")
     println(r3)
 
     # Wait for any remaining
     sleep(100)
-    r4 = receive n4 -> n4 after 10 -> 0 end
+    r4 = receive { n4 -> n4 after 10 -> 0 }
     println("Fourth receive:")
     println(r4)
 
@@ -183,11 +179,11 @@ test_sleep_ordering() = {
     spawn { sleeper(me, 1, 50) }
 
     # Receive in order - shorter sleeps should arrive first
-    first = receive v1 -> v1 after 1000 -> 0 end
-    second = receive v2 -> v2 after 1000 -> 0 end
-    third = receive v3 -> v3 after 1000 -> 0 end
-    fourth = receive v4 -> v4 after 1000 -> 0 end
-    fifth = receive v5 -> v5 after 1000 -> 0 end
+    first = receive { v1 -> v1 after 1000 -> 0 }
+    second = receive { v2 -> v2 after 1000 -> 0 }
+    third = receive { v3 -> v3 after 1000 -> 0 }
+    fourth = receive { v4 -> v4 after 1000 -> 0 }
+    fifth = receive { v5 -> v5 after 1000 -> 0 }
 
     println("Order received (should be 1,2,3,4,5):")
     println(first)

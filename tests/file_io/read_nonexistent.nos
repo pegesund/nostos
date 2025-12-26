@@ -6,6 +6,6 @@ main() = {
   result = try {
     File.readAll(path)
     false
-  } catch e -> true end
+  } catch { e -> true }
   result
 }

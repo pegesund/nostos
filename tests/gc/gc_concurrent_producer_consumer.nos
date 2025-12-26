@@ -12,7 +12,7 @@ producer(consumer, count) = {
 }
 
 consumer(parent, acc) = {
-    n = receive x -> x end
+    n = receive { x -> x }
     if n == 0 then {
         parent <- acc
     } else {
@@ -31,7 +31,7 @@ main() = {
     spawn { producer(c, 50) }
 
     # Wait for final sum
-    result = receive r -> r end
+    result = receive { r -> r }
 
     # Sum of 1..50 = 1275
     assert_eq(1275, result)

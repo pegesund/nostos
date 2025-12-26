@@ -4,10 +4,10 @@
 type Tree = Leaf(Int) | Node(Tree, Tree)
 
 sum_tree(tree) =
-    match tree
+    match tree {
         Leaf(n) -> n
         Node(left, right) -> sum_tree(left) + sum_tree(right)
-    end
+    }
 
 main() = {
     tree = Node(Node(Leaf(1), Leaf(2)), Node(Leaf(3), Node(Leaf(4), Leaf(5))))

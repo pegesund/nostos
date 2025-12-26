@@ -2,9 +2,9 @@
 # Each arm should have fresh variable bindings
 
 main() = {
-    match 10
+    match 10 {
         5 -> 10
         10 -> 30
         x -> x * 4
-    end
+    }
 }

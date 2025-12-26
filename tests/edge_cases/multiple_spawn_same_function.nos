@@ -12,9 +12,9 @@ main() = {
     spawn { worker(me, 3) }
 
     # Receive all three (order may vary)
-    a = receive x -> x end
-    b = receive x -> x end
-    c = receive x -> x end
+    a = receive { x -> x }
+    b = receive { x -> x }
+    c = receive { x -> x }
 
     # Sum should be 1+2+3=6
     assert_eq(6, a + b + c)

@@ -3,7 +3,7 @@
 
 main() = {
     x = 5
-    match (5, 3)
+    match (5, 3) {
         (x, y) when y > 5 -> x + y   # x constraint passes, guard fails
-    end
+    }
 }

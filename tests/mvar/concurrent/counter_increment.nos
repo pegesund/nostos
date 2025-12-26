@@ -29,10 +29,10 @@ main() = {
     spawn { worker(me, 25) }
 
     # Wait for all workers
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Counter should be exactly 100 if locking works
     assert_eq(100, increment() - 1)  # increment returns new value, so subtract 1

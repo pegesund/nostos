@@ -6,10 +6,10 @@
 type Container = Full(Int) | Wb(Int)
 
 check(c) =
-    match c
+    match c {
         Full(x) -> "full: " ++ show(x)
         Wb(x) -> "wb: " ++ show(x)
-    end
+    }
 
 main() = {
     a = Full(1)

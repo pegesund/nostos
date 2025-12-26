@@ -35,9 +35,9 @@ main() = {
     parent_work(10)
 
     # Wait for all children
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # 3 children * 20 ops * 1 + parent * 10 ops * 10 = 60 + 100 = 160
     assert_eq(160, shared_value)

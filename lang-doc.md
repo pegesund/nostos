@@ -230,17 +230,17 @@ fillRange(arr, i) =
 
 ### Match Expression
 ```nos
-describe(n) = match n
+describe(n) = match n {
     0 -> "zero"
     1 -> "one"
     _ -> "many"
-end
+}
 
 # With guards
-abs(n) = match n
+abs(n) = match n {
     x when x >= 0 -> x
     x -> -x
-end
+}
 ```
 
 ### Patterns in Function Definitions
@@ -285,12 +285,12 @@ sign(n) = if n > 0 then 1 else if n < 0 then -1 else 0
 
 ### Match Expression
 ```nos
-classify(n) = match n
+classify(n) = match n {
     0 -> "zero"
     1 -> "one"
     2 -> "two"
     _ -> "many"
-end
+}
 ```
 
 ### Loops
@@ -378,18 +378,15 @@ throw(ErrorRecord { code: 404, msg: "not found" })
 ### Try/Catch
 ```nos
 # Basic try/catch
-result = try
-    risky_operation()
-catch
-    e -> handle_error(e)
-end
+result = try { risky_operation() }
+    catch { e -> handle_error(e) }
 
 # The caught value becomes the result if an exception occurs
 safe_divide(a, b) =
     if b == 0 then throw("division by zero")
     else a / b
 
-result = try safe_divide(10, 0) catch e -> e end
+result = try { safe_divide(10, 0) } catch { e -> e }
 # result = "division by zero"
 ```
 
@@ -397,40 +394,36 @@ result = try safe_divide(10, 0) catch e -> e end
 ```nos
 # Handle different exception types differently
 classify_error(code) =
-    try
+    try {
         if code == 1 then throw("not_found")
         else if code == 2 then throw("forbidden")
         else "ok"
-    catch
+    }
+    catch {
         "not_found" -> "Error: Not found"
         "forbidden" -> "Error: Access denied"
         other -> "Error: Unknown"
-    end
+    }
 ```
 
 ### Nested Try/Catch
 ```nos
 # Inner exceptions can be caught by outer handlers
 nested_example() =
-    try
-        try
-            throw("inner error")
-        catch
-            "other" -> "handled other"
-        end
+    try {
+        try { throw("inner error") }
+        catch { "other" -> "handled other" }
         # "inner error" doesn't match, propagates up
-    catch
-        e -> "outer caught: " ++ e
-    end
+    }
+    catch { e -> "outer caught: " ++ e }
 ```
 
 ### Safe Wrapper Pattern
 ```nos
 # Use a thunk (zero-arg function) to delay evaluation
 safe_call(risky_fn, default) =
-    try risky_fn()
-    catch _ -> default
-    end
+    try { risky_fn() }
+    catch { _ -> default }
 
 # Usage
 result = safe_call(() => dangerous_operation(), -1)
@@ -564,10 +557,10 @@ show_first[T: Show, U](x: T, y: U) -> String = show(x)
 are_equal[T: Eq](x: T, y: T) -> Bool = x == y
 
 # Generic hash-based lookup
-lookup[K: Eq, V](items: List, key: K) -> V = match items
+lookup[K: Eq, V](items: List, key: K) -> V = match items {
     [] -> panic("Key not found")
     [(k, v) | rest] -> if k == key then v else lookup(rest, key)
-end
+}
 
 # Works with any type that implements Eq (all types do)
 type UserId = UserId(Int)
@@ -601,7 +594,6 @@ Trait bounds are checked at compile time. This is most useful for custom traits 
 ```nos
 trait Printable
     toText(x) -> String
-end
 
 printable[T: Printable](x: T) -> String = toText(x)
 
@@ -628,9 +620,7 @@ child_func(parent) = {
 main() = {
     me = self(),                    # Get current process's Pid
     spawn(() => child_func(me)),    # Spawn child process
-    receive
-        n -> n                      # Receive message, return it
-    end
+    receive { n -> n }              # Receive message, return it
 }
 ```
 
@@ -645,29 +635,24 @@ parent <- Result(value)   # Send variant
 ### Receive Expression
 ```nos
 # Basic receive
-receive
-    msg -> handle(msg)
-end
+receive { msg -> handle(msg) }
 
 # Pattern matching in receive
-receive
+receive {
     (a, b) -> a + b
     n -> n * 2
-end
+}
 
 # Receive with timeout (returns timeout_value if no message within N ms)
-receive
+receive {
     msg -> handle(msg)
-after 1000 ->
-    timeout_value
-end
+    after 1000 -> timeout_value
+}
 
 # Multiple receives
-receive
-    a -> receive
-        b -> a + b
-    end
-end
+receive {
+    a -> receive { b -> a + b }
+}
 ```
 
 ### Sleep Function
@@ -695,11 +680,9 @@ main() = {
     me = self(),
     spawn(() => worker(me, 5)),
     spawn(() => worker(me, 10)),
-    receive
-        a -> receive
-            b -> a + b    # Returns 25 + 100 = 125
-        end
-    end
+    receive {
+        a -> receive { b -> a + b }    # Returns 25 + 100 = 125
+    }
 }
 ```
 
@@ -1037,7 +1020,7 @@ main() = {
     try {
         person = fromJson[Person](json)
         "success"
-    } catch e -> "Error: " ++ e end
+    } catch { e -> "Error: " ++ e }
     # Returns: "Error: Missing field: age"
 }
 ```
@@ -1669,9 +1652,9 @@ PostgreSQL errors are thrown as exceptions:
 result = try {
     conn = Pg.connect("host=invalid")
     "connected"
-} catch e -> {
+} catch { e ->
     "failed: " ++ show(e)  # e.g., (connection_error, PostgreSQL error: ...)
-} end
+}
 ```
 
 ## HTTP Server
@@ -1697,11 +1680,11 @@ Server.close(handle)
 ### Simple Web Server Example
 
 ```nos
-handleRequest(req) = match req.path
+handleRequest(req) = match req.path {
     "/" -> (200, "Welcome!")
     "/api/hello" -> (200, "{\"message\": \"Hello!\"}")
     _ -> (404, "Not found")
-end
+}
 
 serverLoop(handle) = {
     req = Server.accept(handle)
@@ -1771,16 +1754,16 @@ When `--json-errors` is enabled, runtime errors are output as JSON:
 
 The following are reserved keywords:
 - `if`, `then`, `else`
-- `match`, `end`
+- `match`, `try`, `catch`
 - `while`, `for`, `to`, `break`, `continue`
-- `receive`
+- `receive`, `after`
 - `spawn`, `spawn_link`, `spawn_monitor`
 - `self`
 - `true`, `false`
-- `type`, `trait`, `impl`
+- `type`, `trait`, `end`
 - `when`
 
-**Note**: `end` is a keyword and cannot be used as a variable name (use `stop`, `limit`, etc. instead).
+**Note**: `end` is used for trait definitions and cannot be used as a variable name.
 
 ## Known Limitations
 
@@ -1793,10 +1776,10 @@ flatten(List([h | t])) = ...    # [h | t] pattern fails inside List()
 # Workaround: extract the inner list first
 get_inner(List(lst)) = lst
 
-flatten(lst) = match get_inner(lst)
+flatten(lst) = match get_inner(lst) {
     [] -> []
     [h | t] -> ...
-end
+}
 ```
 
 ### Module-Level Value Bindings

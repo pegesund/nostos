@@ -2,13 +2,13 @@
 # Test passing a map between processes with Map operations
 
 worker(parent) = {
-    receive map -> {
+    receive { map -> {
         # Verify received map is empty
         size = Map.size(map)
         # Add a key and send back
         updated = Map.insert(map, "answer", 42)
         parent <- (size, updated)
-    } end
+    } }
 }
 
 main() = {
@@ -19,7 +19,7 @@ main() = {
     child <- %{}
 
     # Receive result
-    (received_size, result) = receive m -> m end
+    (received_size, result) = receive { m -> m }
 
     # Verify the received empty map had size 0
     assert_eq(0, received_size)

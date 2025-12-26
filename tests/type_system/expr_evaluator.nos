@@ -3,11 +3,11 @@
 
 type Expr = Num(Int) | Add(Expr, Expr) | Mul(Expr, Expr)
 
-evaluate(expr) = match expr
+evaluate(expr) = match expr {
     Num(n) -> n
     Add(e1, e2) -> evaluate(e1) + evaluate(e2)
     Mul(e1, e2) -> evaluate(e1) * evaluate(e2)
-end
+}
 
 main() = {
     e: Expr = Add(Mul(Num(3), Num(4)), Num(5))

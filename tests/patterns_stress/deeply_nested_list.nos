@@ -3,15 +3,15 @@
 
 main() = {
     data = [[1, 2], [3, 4]]
-    match data
+    match data {
         [first | [second | _]] -> {
-            match first
+match first {
                 [a, b] -> {
-                    match second
+                    match second {
                         [c, d] -> a + b + c + d
-                    end
+    }
                 }
-            end
+            }
         }
-    end
+                    }
 }

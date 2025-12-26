@@ -53,10 +53,10 @@ acceptLoop(server, main_pid) = {
       acceptLoop(server, main_pid) # Continue accepting requests
     }
     ()
-  } catch e ->
+  } catch { e ->
     # Exit if Server.accept returns error (e.g., server closed)
     ()
-  end
+  }
   result
 }
 
@@ -73,7 +73,7 @@ sendShutdown() = {
   try {
     response = Http.get("http://localhost:8080/shutdown")
     ()
-  } catch e -> () end
+  } catch { e -> () }
 }
 
 main() = {
@@ -88,14 +88,14 @@ main() = {
     spawn { sendShutdown() }
 
     # Keep main alive, listening for shutdown signal
-    receive
+    receive {
       ("shutdown", _) -> {
         Server.close(server)
         println("Server shutdown complete.")
       }
-    end
-  } catch e ->
+    }
+  } catch { e ->
     println("Error: Failed to bind server on port 8080: " ++ e)
-  end
+  }
   result
 }

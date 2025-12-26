@@ -24,7 +24,7 @@ main() = {
     spawn(() => sum_float64_worker(float_arr, me))
 
     # Receive result: 1.0+2.0+3.0+4.0 = 10.0
-    result = receive x -> x end
+    result = receive { x -> x }
     assert_eq(10.0, result)
     0
 }

@@ -14,13 +14,13 @@ update_min(n) = {
 
 get_min() = min_val
 
-check_values(vals) = match vals
+check_values(vals) = match vals {
     [] -> ()
     [v | rest] -> {
         update_min(v)
         check_values(rest)
     }
-end
+}
 
 worker(parent, vals) = {
     check_values(vals)
@@ -37,10 +37,10 @@ main() = {
     spawn { worker(me, [100, 5, 80]) }  # Contains the minimum: 5
 
     # Wait for all
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Minimum should be 5
     assert_eq(5, get_min())

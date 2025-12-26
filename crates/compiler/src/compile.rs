@@ -11915,10 +11915,11 @@ mod tests {
     fn test_e2e_match_literals() {
         // Match syntax uses -> not =>
         let source = r#"
-            describe(n) = match n
+            describe(n) = match n {
                 0 -> "zero"
                 1 -> "one"
                 _ -> "many"
+            }
             main() = describe(1)
         "#;
         let result = compile_and_run(source);
@@ -11931,8 +11932,9 @@ mod tests {
     #[test]
     fn test_e2e_match_variable_binding() {
         let source = "
-            double(x) = match x
+            double(x) = match x {
                 n -> n + n
+            }
             main() = double(21)
         ";
         let result = compile_and_run(source);
@@ -11942,8 +11944,9 @@ mod tests {
     #[test]
     fn test_e2e_match_tuple_pattern() {
         let source = "
-            first(pair) = match pair
+            first(pair) = match pair {
                 (a, _) -> a
+            }
             main() = first((42, 100))
         ";
         let result = compile_and_run(source);
@@ -11953,9 +11956,10 @@ mod tests {
     #[test]
     fn test_e2e_list_cons_pattern() {
         let source = "
-            sum(xs) = match xs
+            sum(xs) = match xs {
                 [] -> 0
                 [h | t] -> h + sum(t)
+            }
             main() = sum([1, 2, 3, 4, 5])
         ";
         // 1 + 2 + 3 + 4 + 5 = 15
@@ -11966,9 +11970,10 @@ mod tests {
     #[test]
     fn test_e2e_list_head_tail() {
         let source = "
-            head(xs) = match xs
+            head(xs) = match xs {
                 [h | _] -> h
                 [] -> 0
+            }
             main() = head([42, 1, 2])
         ";
         let result = compile_and_run(source);
@@ -12027,9 +12032,10 @@ mod tests {
     fn test_e2e_variant_match() {
         let source = "
             type Option[T] = Some(T) | None
-            unwrap(opt) = match opt
+            unwrap(opt) = match opt {
                 Some(x) -> x
                 None -> 0
+            }
             main() = unwrap(Some(42))
         ";
         let result = compile_and_run(source);
@@ -12040,9 +12046,10 @@ mod tests {
     fn test_e2e_variant_none() {
         let source = "
             type Option[T] = Some(T) | None
-            unwrap(opt) = match opt
+            unwrap(opt) = match opt {
                 Some(x) -> x
                 None -> 0
+            }
             main() = unwrap(None)
         ";
         let result = compile_and_run(source);
@@ -12054,9 +12061,10 @@ mod tests {
     #[test]
     fn test_e2e_list_length() {
         let source = "
-            len(xs) = match xs
+            len(xs) = match xs {
                 [] -> 0
                 [_ | t] -> 1 + len(t)
+            }
             main() = len([1, 2, 3, 4, 5])
         ";
         let result = compile_and_run(source);
@@ -12066,12 +12074,14 @@ mod tests {
     #[test]
     fn test_e2e_list_map() {
         let source = "
-            map(f, xs) = match xs
+            map(f, xs) = match xs {
                 [] -> []
                 [h | t] -> [f(h) | map(f, t)]
-            sum(xs) = match xs
+            }
+            sum(xs) = match xs {
                 [] -> 0
                 [h | t] -> h + sum(t)
+            }
             main() = sum(map(x => x * 2, [1, 2, 3]))
         ";
         // [2, 4, 6] => sum = 12
@@ -12082,12 +12092,14 @@ mod tests {
     #[test]
     fn test_e2e_list_filter() {
         let source = "
-            filter(pred, xs) = match xs
+            filter(pred, xs) = match xs {
                 [] -> []
                 [h | t] -> if pred(h) then [h | filter(pred, t)] else filter(pred, t)
-            sum(xs) = match xs
+            }
+            sum(xs) = match xs {
                 [] -> 0
                 [h | t] -> h + sum(t)
+            }
             main() = sum(filter(x => x > 2, [1, 2, 3, 4, 5]))
         ";
         // [3, 4, 5] => sum = 12
@@ -12098,12 +12110,14 @@ mod tests {
     #[test]
     fn test_e2e_list_append() {
         let source = "
-            append(xs, ys) = match xs
+            append(xs, ys) = match xs {
                 [] -> ys
                 [h | t] -> [h | append(t, ys)]
-            sum(xs) = match xs
+            }
+            sum(xs) = match xs {
                 [] -> 0
                 [h | t] -> h + sum(t)
+            }
             main() = sum(append([1, 2], [3, 4, 5]))
         ";
         // [1, 2, 3, 4, 5] => sum = 15
@@ -12114,13 +12128,15 @@ mod tests {
     #[test]
     fn test_e2e_list_reverse() {
         let source = "
-            reverseHelper(xs, acc) = match xs
+            reverseHelper(xs, acc) = match xs {
                 [] -> acc
                 [h | t] -> reverseHelper(t, [h | acc])
+            }
             reverse(xs) = reverseHelper(xs, [])
-            head(xs) = match xs
+            head(xs) = match xs {
                 [h | _] -> h
                 [] -> 0
+            }
             main() = head(reverse([1, 2, 3, 4, 5]))
         ";
         // reverse [1,2,3,4,5] = [5,4,3,2,1], head = 5
@@ -12131,9 +12147,10 @@ mod tests {
     #[test]
     fn test_e2e_list_fold() {
         let source = "
-            foldl(f, acc, xs) = match xs
+            foldl(f, acc, xs) = match xs {
                 [] -> acc
                 [h | t] -> foldl(f, f(acc, h), t)
+            }
             main() = foldl((acc, x) => acc + x, 0, [1, 2, 3, 4, 5])
         ";
         // sum = 15
@@ -12145,11 +12162,13 @@ mod tests {
     fn test_e2e_nested_variant_match() {
         let source = "
             type Option[T] = Some(T) | None
-            doubleUnwrap(opt) = match opt
-                Some(inner) -> match inner
+            doubleUnwrap(opt) = match opt {
+                Some(inner) -> match inner {
                     Some(x) -> x
                     None -> 0
+                }
                 None -> 0
+            }
             main() = doubleUnwrap(Some(Some(42)))
         ";
         let result = compile_and_run(source);
@@ -12160,9 +12179,10 @@ mod tests {
     fn test_e2e_either_pattern() {
         let source = "
             type Either[L, R] = Left(L) | Right(R)
-            handle(result) = match result
+            handle(result) = match result {
                 Left(err) -> 0 - err
                 Right(val) -> val
+            }
             main() = handle(Left(5)) + handle(Right(10))
         ";
         // -5 + 10 = 5
@@ -12236,12 +12256,14 @@ mod tests {
     #[test]
     fn test_e2e_list_take() {
         let source = "
-            take(n, xs) = if n == 0 then [] else match xs
+            take(n, xs) = if n == 0 then [] else match xs {
                 [] -> []
                 [h | t] -> [h | take(n - 1, t)]
-            sum(xs) = match xs
+            }
+            sum(xs) = match xs {
                 [] -> 0
                 [h | t] -> h + sum(t)
+            }
             main() = sum(take(3, [1, 2, 3, 4, 5]))
         ";
         // take 3 [1,2,3,4,5] = [1,2,3], sum = 6
@@ -12252,12 +12274,14 @@ mod tests {
     #[test]
     fn test_e2e_list_drop() {
         let source = "
-            drop(n, xs) = if n == 0 then xs else match xs
+            drop(n, xs) = if n == 0 then xs else match xs {
                 [] -> []
                 [_ | t] -> drop(n - 1, t)
-            sum(xs) = match xs
+            }
+            sum(xs) = match xs {
                 [] -> 0
                 [h | t] -> h + sum(t)
+            }
             main() = sum(drop(2, [1, 2, 3, 4, 5]))
         ";
         // drop 2 [1,2,3,4,5] = [3,4,5], sum = 12
@@ -12282,12 +12306,14 @@ mod tests {
     fn test_e2e_option_map() {
         let source = "
             type Option[T] = Some(T) | None
-            mapOpt(f, opt) = match opt
+            mapOpt(f, opt) = match opt {
                 Some(x) -> Some(f(x))
                 None -> None
-            unwrap(opt) = match opt
+            }
+            unwrap(opt) = match opt {
                 Some(x) -> x
                 None -> 0
+            }
             main() = unwrap(mapOpt(x => x * 2, Some(21)))
         ";
         let result = compile_and_run(source);
@@ -12298,13 +12324,15 @@ mod tests {
     fn test_e2e_option_flatmap() {
         let source = "
             type Option[T] = Some(T) | None
-            flatMap(f, opt) = match opt
+            flatMap(f, opt) = match opt {
                 Some(x) -> f(x)
                 None -> None
+            }
             safeDiv(a, b) = if b == 0 then None else Some(a / b)
-            unwrap(opt) = match opt
+            unwrap(opt) = match opt {
                 Some(x) -> x
                 None -> 0
+            }
             main() = unwrap(flatMap(x => safeDiv(x, 2), Some(10)))
         ";
         // Some(10) -> safeDiv(10, 2) = Some(5) -> unwrap = 5
@@ -12315,14 +12343,17 @@ mod tests {
     #[test]
     fn test_e2e_list_zip() {
         let source = "
-            zip(xs, ys) = match xs
+            zip(xs, ys) = match xs {
                 [] -> []
-                [hx | tx] -> match ys
+                [hx | tx] -> match ys {
                     [] -> []
                     [hy | ty] -> [(hx, hy) | zip(tx, ty)]
-            sumPairs(ps) = match ps
+                }
+            }
+            sumPairs(ps) = match ps {
                 [] -> 0
                 [p | t] -> p.0 + p.1 + sumPairs(t)
+            }
             main() = sumPairs(zip([1, 2, 3], [10, 20, 30]))
         ";
         // zip = [(1,10), (2,20), (3,30)], sumPairs = 1+10+2+20+3+30 = 66
@@ -12354,9 +12385,10 @@ mod tests {
     #[test]
     fn test_e2e_wildcard_pattern() {
         let source = "
-            first(xs) = match xs
+            first(xs) = match xs {
                 [a, _, _] -> a
                 _ -> 0
+            }
             main() = first([42, 100, 200])
         ";
         let result = compile_and_run(source);
@@ -12366,9 +12398,10 @@ mod tests {
     #[test]
     fn test_e2e_list_exact_pattern() {
         let source = "
-            sumThree(xs) = match xs
+            sumThree(xs) = match xs {
                 [a, b, c] -> a + b + c
                 _ -> 0
+            }
             main() = sumThree([10, 20, 12])
         ";
         let result = compile_and_run(source);
@@ -12416,15 +12449,18 @@ mod tests {
     #[test]
     fn test_e2e_higher_order_list_operations() {
         let source = "
-            map(f, xs) = match xs
+            map(f, xs) = match xs {
                 [] -> []
                 [h | t] -> [f(h) | map(f, t)]
-            filter(p, xs) = match xs
+            }
+            filter(p, xs) = match xs {
                 [] -> []
                 [h | t] -> if p(h) then [h | filter(p, t)] else filter(p, t)
-            foldl(f, acc, xs) = match xs
+            }
+            foldl(f, acc, xs) = match xs {
                 [] -> acc
                 [h | t] -> foldl(f, f(acc, h), t)
+            }
             main() = {
                 nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
                 doubled = map(x => x * 2, nums)
@@ -12443,12 +12479,14 @@ mod tests {
     fn test_e2e_list_nth() {
         let source = "
             type Option[T] = Some(T) | None
-            nth(n, xs) = match xs
+            nth(n, xs) = match xs {
                 [] -> None
                 [h | t] -> if n == 0 then Some(h) else nth(n - 1, t)
-            unwrap(opt) = match opt
+            }
+            unwrap(opt) = match opt {
                 Some(x) -> x
                 None -> 0
+            }
             main() = unwrap(nth(2, [10, 20, 30, 40]))
         ";
         // nth 2 = 30
@@ -12459,12 +12497,14 @@ mod tests {
     #[test]
     fn test_e2e_list_all_any() {
         let source = "
-            all(p, xs) = match xs
+            all(p, xs) = match xs {
                 [] -> true
                 [h | t] -> if p(h) then all(p, t) else false
-            any(p, xs) = match xs
+            }
+            any(p, xs) = match xs {
                 [] -> false
                 [h | t] -> if p(h) then true else any(p, t)
+            }
             main() = all(x => x > 0, [1, 2, 3]) && any(x => x > 2, [1, 2, 3])
         ";
         let result = compile_and_run(source);
@@ -12475,9 +12515,10 @@ mod tests {
     fn test_e2e_tree_sum() {
         let source = "
             type Tree[T] = Leaf(T) | Node(Tree[T], Tree[T])
-            sumTree(tree) = match tree
+            sumTree(tree) = match tree {
                 Leaf(v) -> v
                 Node(l, r) -> sumTree(l) + sumTree(r)
+            }
             main() = sumTree(Node(Node(Leaf(1), Leaf(2)), Node(Leaf(3), Leaf(4))))
         ";
         let result = compile_and_run(source);
@@ -12489,9 +12530,10 @@ mod tests {
         let source = "
             type Tree[T] = Leaf(T) | Node(Tree[T], Tree[T])
             max(a, b) = if a > b then a else b
-            depth(tree) = match tree
+            depth(tree) = match tree {
                 Leaf(_) -> 1
                 Node(l, r) -> 1 + max(depth(l), depth(r))
+            }
             main() = depth(Node(Node(Leaf(1), Node(Leaf(2), Leaf(3))), Leaf(4)))
         ";
         // left subtree depth: 3, right: 1, total = 4
@@ -12503,10 +12545,11 @@ mod tests {
     fn test_e2e_expression_evaluator() {
         let source = "
             type Expr = Num(Int) | Add(Expr, Expr) | Mul(Expr, Expr)
-            eval(expr) = match expr
+            eval(expr) = match expr {
                 Num(n) -> n
                 Add(e1, e2) -> eval(e1) + eval(e2)
                 Mul(e1, e2) -> eval(e1) * eval(e2)
+            }
             main() = eval(Add(Mul(Num(3), Num(4)), Num(5)))
         ";
         let result = compile_and_run(source);
@@ -13368,7 +13411,7 @@ mod tests {
     fn test_try_catch_basic() {
         // throw and catch should work
         let source = r#"
-            main() = try throw("error") catch e -> e end
+            main() = try { throw("error") } catch { e -> e }
         "#;
         let result = compile_and_run(source);
         match result {
@@ -13381,7 +13424,7 @@ mod tests {
     fn test_try_catch_no_exception() {
         // When no exception, return the try body value
         let source = r#"
-            main() = try 42 catch _ -> 0 end
+            main() = try { 42 } catch { _ -> 0 }
         "#;
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int64(42)));
@@ -13391,10 +13434,10 @@ mod tests {
     fn test_try_catch_pattern_matching() {
         // Pattern matching in catch
         let source = r#"
-            main() = try throw("special") catch
+            main() = try { throw("special") } catch {
                 "special" -> 1
                 other -> 2
-            end
+            }
         "#;
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int64(1)));
@@ -13404,10 +13447,10 @@ mod tests {
     fn test_try_catch_pattern_fallthrough() {
         // Non-matching pattern falls to next
         let source = r#"
-            main() = try throw("other") catch
+            main() = try { throw("other") } catch {
                 "special" -> 1
                 _ -> 2
-            end
+            }
         "#;
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int64(2)));
@@ -13418,7 +13461,7 @@ mod tests {
         // ? operator returns value on success
         let source = r#"
             might_fail(fail) = if fail then throw("error") else 42
-            main() = try might_fail(false)? + 1 catch _ -> 0 end
+            main() = try { might_fail(false)? + 1 } catch { _ -> 0 }
         "#;
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int64(43)));
@@ -13430,7 +13473,7 @@ mod tests {
         let source = r#"
             might_fail(fail) = if fail then throw("error") else 42
             propagate() = might_fail(true)? + 1
-            main() = try propagate() catch e -> e end
+            main() = try { propagate() } catch { e -> e }
         "#;
         let result = compile_and_run(source);
         match result {
@@ -13444,11 +13487,11 @@ mod tests {
         // Nested try/catch
         let source = r#"
             main() = try {
-                inner = try throw("inner") catch _ -> throw("outer") end
+                inner = try { throw("inner") } catch { _ -> throw("outer") }
                 inner
-            } catch
+            } catch {
                 e -> e
-            end
+            }
         "#;
         let result = compile_and_run(source);
         match result {
@@ -13461,7 +13504,7 @@ mod tests {
     fn test_throw_integer() {
         // Can throw any value, not just strings
         let source = r#"
-            main() = try throw(42) catch e -> e end
+            main() = try { throw(42) } catch { e -> e }
         "#;
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int64(42)));
@@ -14733,10 +14776,10 @@ mvar listCursor: Int = 0
 listRenderItem(idx, item, cursor) =
     if idx == cursor then "> " ++ item else "  " ++ item
 
-listRenderList(items, idx, cursor) = match items
+listRenderList(items, idx, cursor) = match items {
     [] -> ""
     [item | rest] -> listRenderItem(idx, item, cursor) ++ "\n" ++ listRenderList(rest, idx + 1, cursor)
-end
+}
 
 listView() = {
     header = "=== List Demo ===\n\n"

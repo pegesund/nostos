@@ -2,7 +2,7 @@
 # Match with many arms
 
 classify(n) =
-    match n
+    match n {
         0 -> 0
         1 -> 1
         2 -> 2
@@ -15,6 +15,6 @@ classify(n) =
         9 -> 9
         10 -> 10
         _ -> -1
-    end
+    }
 
 main() = classify(10)

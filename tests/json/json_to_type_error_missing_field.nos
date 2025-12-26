@@ -9,5 +9,5 @@ main() = {
     try {
         p = jsonToType[Person](json)
         "success: " ++ p.name
-    } catch e -> "caught: " ++ e end
+    } catch { e -> "caught: " ++ e }
 }

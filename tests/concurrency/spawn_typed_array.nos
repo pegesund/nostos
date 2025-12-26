@@ -21,7 +21,7 @@ main() = {
     spawn(() => sum_int64_worker(int_arr, me))
 
     # Receive result: 1+2+3+4+5 = 15
-    result = receive x -> x end
+    result = receive { x -> x }
     assert_eq(15, result)
     0
 }

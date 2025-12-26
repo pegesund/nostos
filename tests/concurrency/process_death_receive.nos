@@ -14,7 +14,7 @@ main() = {
     spawn { worker_that_dies(me) }
 
     # Should receive the started message
-    msg = receive m -> m end
+    msg = receive { m -> m }
     assert_eq("started", msg)
 
     # The worker dies, we should not hang forever

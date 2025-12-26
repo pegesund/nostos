@@ -4,12 +4,12 @@
 
 # Worker: receives a map, adds its id to it, passes it to next worker
 worker(id: Int, next_pid) = {
-    receive map -> {
+    receive { map -> {
         # Add our id to the map
         updated = Map.insert(map, id, id * 10)
         # Pass to next worker (or back to main if next_pid is main)
         next_pid <- updated
-    } end
+    } }
 }
 
 # Create a chain of workers, returns the first worker's pid
@@ -33,7 +33,7 @@ main() = {
     first <- %{}
 
     # Receive final map (after passing through all 100 workers)
-    final_map = receive m -> m end
+    final_map = receive { m -> m }
 
     # Verify: map should have 10 entries
     assert_eq(10, Map.size(final_map))

@@ -34,10 +34,10 @@ main() = {
     spawn { worker(me, 25) }
 
     # Wait for all
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Countdown should reach 0
     assert_eq(0, get_countdown())

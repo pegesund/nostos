@@ -9,7 +9,7 @@
 
 forwarder(next) = {
     println("Forwarder waiting...")
-    msg = receive n -> n after 5000 -> -1 end
+    msg = receive { n -> n after 5000 -> -1 }
     println("Forwarder got:")
     println(msg)
     if msg == -1 then {
@@ -47,7 +47,7 @@ main() = {
     node2 <- 10
 
     println("Waiting for result...")
-    result = receive n -> n after 5000 -> -999 end
+    result = receive { n -> n after 5000 -> -999 }
     # 10 -> node2 (+1) -> node1 (+1) -> me = 12
     assert_eq(12, result)
 

@@ -34,8 +34,8 @@ level1_worker(parent, id) = {
     spawn { level2_worker(me, id * 10 + 2) }
 
     # Wait for level-2 workers
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
 
     increment()
     parent <- ("done", id, 1)
@@ -49,8 +49,8 @@ main() = {
     spawn { level1_worker(me, 2) }
 
     # Wait for level-1 workers
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Counter: 2 level-1 workers * 2 increments + 4 level-2 workers * 2 increments = 12
     assert_eq(12, counter)

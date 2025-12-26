@@ -2,12 +2,12 @@
 # Multiple guards in sequence
 
 classify(n) =
-    match n
+    match n {
         x when x < 0 -> "negative"
         x when x == 0 -> "zero"
         x when x < 10 -> "small"
         x when x < 100 -> "medium"
         _ -> "large"
-    end
+    }
 
 main() = classify(500)

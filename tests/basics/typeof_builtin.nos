@@ -14,6 +14,6 @@ main() = {
        boolType == "Bool" &&
        stringType == "String" &&
        charType == "Char" &&
-       listType == "List"
+       listType == "Int64List"
     then 1 else 0
 }

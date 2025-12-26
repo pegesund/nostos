@@ -50,10 +50,10 @@ main() = {
     spawn { worker_ba(me, 20) }
 
     # Wait for all
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Total should still be 2000
     total = get_a() + get_b()

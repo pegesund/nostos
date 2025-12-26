@@ -13,23 +13,23 @@ main() = {
 
     # Test unit variants as values
     statuses = %{ "s1": Active, "s2": Inactive }
-    s1 = match Map.get(statuses, "s1")
+    s1 = match Map.get(statuses, "s1") {
         Active -> 1
         _ -> 0
-    end
+    }
     assert_eq(1, s1)
-    s2 = match Map.get(statuses, "s2")
+    s2 = match Map.get(statuses, "s2") {
         Inactive -> 2
         _ -> 0
-    end
+    }
     assert_eq(2, s2)
 
     # Test variant with payload
     pending_map = %{ "task": Pending("waiting for review") }
-    msg = match Map.get(pending_map, "task")
+    msg = match Map.get(pending_map, "task") {
         Pending(m) -> m
         _ -> "none"
-    end
+    }
     assert_eq("waiting for review", msg)
 
     # Test tuples as values

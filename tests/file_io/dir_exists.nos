@@ -5,7 +5,7 @@ main() = {
   path = "/tmp/nostos_test_dir_exists"
 
   # Make sure it doesn't exist (ignore error)
-  try { Dir.remove(path) } catch _ -> () end
+  try { { Dir.remove(path) } } catch { _ -> () }
 
   exists1 = Dir.exists(path)
   if exists1 then false

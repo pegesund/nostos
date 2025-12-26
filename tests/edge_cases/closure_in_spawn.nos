@@ -12,5 +12,5 @@ main() = {
         me <- result
     }
 
-    receive msg -> msg end
+    receive { msg -> msg }
 }

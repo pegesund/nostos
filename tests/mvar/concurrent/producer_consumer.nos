@@ -55,10 +55,10 @@ main() = {
     spawn { consumer(me, 30) }
 
     # Wait for all
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Should have produced 60 items
     assert_eq(60, get_produced())

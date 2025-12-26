@@ -2,15 +2,15 @@
 # Pattern matching in catch clauses
 
 classify(code) =
-    try
+    try {
         if code == 1 then throw("not_found")
         else if code == 2 then throw("forbidden")
         else "ok"
-    catch
+    } catch {
         "not_found" -> 404
         "forbidden" -> 403
         _ -> 500
-    end
+    }
 
 main() = {
     assert_eq(404, classify(1))

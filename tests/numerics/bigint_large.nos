@@ -1,4 +1,4 @@
-# expect: 1000000000000000000n
+# expect: 1000000000000000000
 # BigInt handles large numbers - multiplication
 
 main() = {

@@ -218,7 +218,7 @@ main() = {
     try {
         person: Person = fromJson[Person](json)
         "success: " ++ person.name
-    } catch e -> "Error: " ++ e end
+    } catch { e -> "Error: " ++ e }
     # Returns: "Error: Missing field: age"
 }</code></pre>
                 </div>

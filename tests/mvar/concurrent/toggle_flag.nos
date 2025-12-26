@@ -32,10 +32,10 @@ main() = {
     spawn { worker(me, 25) }
 
     # Wait for all
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Total toggles should be 100
     assert_eq(100, get_count())

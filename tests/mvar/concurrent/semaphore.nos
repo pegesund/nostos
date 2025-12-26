@@ -46,10 +46,10 @@ main() = {
     spawn { worker(me, 10) }
 
     # Wait for all
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # Available should be back to 3 (all released)
     assert_eq(3, get_available())

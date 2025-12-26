@@ -52,10 +52,10 @@ main() = {
     spawn { worker(me) }
 
     # Wait for all workers to finish
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
-    receive _ -> () end
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
+    receive { _ -> () }
 
     # All 10 tasks should be processed
     assert_eq(10, task_counter)

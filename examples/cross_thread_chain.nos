@@ -11,11 +11,7 @@
 
 # Chain link: receives, transforms, passes to next
 chain_link(next, transform, delay) = {
-    value = receive
-        n -> n
-    after 5000 ->
-        -9999
-    end
+    value = receive { n -> n after 5000 -> -9999 }
     if value == -9999 then {
         next <- -9999
         ()
@@ -31,7 +27,7 @@ chain_link(next, transform, delay) = {
 # Multi-message chain link
 multi_chain_link(next, transform, count) = {
     if count > 0 then {
-        value = receive n -> n after 5000 -> -9999 end
+        value = receive { n -> n after 5000 -> -9999 }
         if value == -9999 then {
             next <- -9999
             ()
@@ -61,7 +57,7 @@ test_simple_chain() = {
     link5 <- 0
 
     # Receive result (0 + 10*5 = 50)
-    result = receive n -> n after 5000 -> -1 end
+    result = receive { n -> n after 5000 -> -1 }
     println("Result (expect 50):")
     println(result)
     assert(result == 50)
@@ -84,7 +80,7 @@ test_delayed_chain() = {
     link3 <- 1
 
     # Receive result (1 * 2 * 2 * 2 = 8)
-    result = receive n -> n after 5000 -> -1 end
+    result = receive { n -> n after 5000 -> -1 }
     println("Result (expect 8):")
     println(result)
     assert(result == 8)
@@ -95,7 +91,7 @@ test_delayed_chain() = {
 # Collector for multiple results
 collect_ordered(remaining, acc) = {
     if remaining > 0 then {
-        r = receive n -> n after 5000 -> -9999 end
+        r = receive { n -> n after 5000 -> -9999 }
         collect_ordered(remaining - 1, [r | acc])
     } else {
         acc
@@ -179,7 +175,7 @@ test_parallel_chains() = {
 
 # Pipeline stage that processes and forwards
 pipeline_stage(next, delay, id) = {
-    value = receive n -> n after 5000 -> -1 end
+    value = receive { n -> n after 5000 -> -1 }
     if value == -1 then {
         ()
     } else {
@@ -209,9 +205,9 @@ test_pipeline() = {
     slow <- 42
 
     # Collect all three results
-    r1 = receive r -> r after 5000 -> ("error", -1) end
-    r2 = receive r -> r after 5000 -> ("error", -1) end
-    r3 = receive r -> r after 5000 -> ("error", -1) end
+    r1 = receive { r -> r after 5000 -> ("error", -1) }
+    r2 = receive { r -> r after 5000 -> ("error", -1) }
+    r3 = receive { r -> r after 5000 -> ("error", -1) }
 
     println("Results (should be fast, medium, slow in order):")
     print_result(r1)
@@ -250,7 +246,7 @@ test_deep_chain() = {
     first <- 0
 
     # Result should be 20
-    result = receive n -> n after 10000 -> -1 end
+    result = receive { n -> n after 10000 -> -1 }
     println("Result (expect 20):")
     println(result)
     assert(result == 20)

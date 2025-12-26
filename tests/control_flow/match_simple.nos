@@ -1,11 +1,11 @@
 # expect: 0
 # Simple match expression
 
-classify(n) = match n
+classify(n) = match n {
     0 -> 0
     1 -> 10
     _ -> 100
-end
+}
 
 main() = {
     assert_eq(10, classify(1))

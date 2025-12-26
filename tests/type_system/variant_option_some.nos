@@ -3,10 +3,10 @@
 
 type Option[T] = Some(T) | None
 
-unwrap(opt) = match opt
+unwrap(opt) = match opt {
     Some(x) -> x
     None -> 0
-end
+}
 
 main() = {
     maybe: Option[Int] = Some(42)

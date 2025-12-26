@@ -213,7 +213,7 @@ main() = {
 
     # Wait for all workers
     for i = 0 to 10 {
-        receive "done" -> () end
+        receive { "done" -> () }
     }
 
     println("Total: " ++ show(total))  # Always 100

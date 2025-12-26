@@ -2,15 +2,7 @@
 # Nested try - inner catch handles exception
 
 main() = {
-    result = try
-        try
-            throw("inner")
-        catch
-            "inner" -> "caught inside"
-        end
-    catch
-        e -> "outer: " ++ e
-    end
+    result = try { try { throw("inner") } catch { "inner" -> "caught inside" } } catch { e -> "outer: " ++ e }
     assert_eq("caught inside", result)
     0
 }

@@ -3,9 +3,9 @@
 
 main() = {
     x = 5
-    match x
+    match x {
         n when n > 10 -> "big"
         n when n > 3 -> "medium"
         _ -> "small"
-    end
+    }
 }
