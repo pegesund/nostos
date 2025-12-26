@@ -951,6 +951,64 @@ impl Autocomplete {
             vec![
                 ("length", "() -> Int", "Get the number of elements in the tuple"),
             ]
+        } else if base_type == "Float64Array" {
+            vec![
+                ("fromList", "(List Float) -> Float64Array", "Create array from a list of floats"),
+                ("length", "() -> Int", "Get the number of elements"),
+                ("get", "(Int) -> Float", "Get element at index"),
+                ("set", "(Int, Float) -> Float64Array", "Set element at index, returns new array"),
+                ("toList", "() -> List Float", "Convert to a list of floats"),
+                ("make", "(Int, Float) -> Float64Array", "Create array of size with default value"),
+            ]
+        } else if base_type == "Int64Array" {
+            vec![
+                ("fromList", "(List Int) -> Int64Array", "Create array from a list of integers"),
+                ("length", "() -> Int", "Get the number of elements"),
+                ("get", "(Int) -> Int", "Get element at index"),
+                ("set", "(Int, Int) -> Int64Array", "Set element at index, returns new array"),
+                ("toList", "() -> List Int", "Convert to a list of integers"),
+                ("make", "(Int, Int) -> Int64Array", "Create array of size with default value"),
+            ]
+        } else if base_type == "Float32Array" {
+            vec![
+                ("fromList", "(List Float) -> Float32Array", "Create array from a list of floats"),
+                ("length", "() -> Int", "Get the number of elements"),
+                ("get", "(Int) -> Float", "Get element at index"),
+                ("set", "(Int, Float) -> Float32Array", "Set element at index, returns new array"),
+                ("toList", "() -> List Float", "Convert to a list of floats"),
+                ("make", "(Int, Float) -> Float32Array", "Create array of size with default value"),
+            ]
+        } else if base_type == "Buffer" {
+            vec![
+                ("new", "() -> Buffer", "Create a new empty buffer"),
+                ("append", "(String) -> Buffer", "Append a string to the buffer"),
+                ("toString", "() -> String", "Convert buffer contents to string"),
+            ]
+        } else if base_type == "Uuid" {
+            vec![
+                ("v4", "() -> String", "Generate a random UUID v4"),
+                ("isValid", "(String) -> Bool", "Check if string is a valid UUID"),
+            ]
+        } else if base_type == "Crypto" {
+            vec![
+                ("sha256", "(String) -> String", "Compute SHA-256 hash, returns hex string"),
+                ("sha512", "(String) -> String", "Compute SHA-512 hash, returns hex string"),
+                ("md5", "(String) -> String", "Compute MD5 hash (insecure), returns hex string"),
+                ("bcryptHash", "(String, Int) -> String", "Hash password with bcrypt"),
+                ("bcryptVerify", "(String, String) -> Bool", "Verify password against bcrypt hash"),
+                ("randomBytes", "(Int) -> String", "Generate n random bytes as hex string"),
+            ]
+        } else if base_type == "Runtime" {
+            vec![
+                ("threadCount", "() -> Int", "Get number of available CPU threads"),
+                ("uptimeMs", "() -> Int", "Get milliseconds since program started"),
+                ("memoryKb", "() -> Int", "Get current process memory usage in KB"),
+                ("pid", "() -> Int", "Get current process ID"),
+                ("loadAvg", "() -> (Float, Float, Float)", "Get 1, 5, 15 minute load averages"),
+                ("numThreads", "() -> Int", "Get number of OS threads in process"),
+                ("tokioWorkers", "() -> Int", "Get number of tokio worker threads"),
+                ("blockingThreads", "() -> Int", "Get number of tokio blocking threads"),
+            ]
         } else {
             vec![]
         }
