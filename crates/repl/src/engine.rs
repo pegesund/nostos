@@ -10899,4 +10899,37 @@ mod postgres_module_tests {
         assert!(matches!(status, Some(CompileStatus::Compiled)),
             "test_float32 should compile successfully, got: {:?}", status);
     }
+
+    #[test]
+    fn test_get_variable_type_for_float64array() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Float64Array binding
+        let result = engine.eval("arr = Float64Array.fromList([1.0, 2.0, 3.0])");
+        assert!(result.is_ok(), "Should define arr: {:?}", result);
+
+        let arr_type = engine.get_variable_type("arr");
+        println!("arr type: {:?}", arr_type);
+        assert!(arr_type.is_some(), "Should have type for arr");
+        let type_str = arr_type.unwrap();
+        assert!(type_str.contains("Float64Array"), "arr should be Float64Array, got: {}", type_str);
+    }
+
+    #[test]
+    fn test_float64array_ufcs_method_dispatch() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Define a Float64Array variable
+        let result = engine.eval("arr = Float64Array.fromList([1.0, 2.0, 3.0])");
+        assert!(result.is_ok(), "Should define arr: {:?}", result);
+
+        // Try to call length method on it (UFCS)
+        let result = engine.eval("arr.length()");
+        assert!(result.is_ok(), "Should call arr.length(): {:?}", result);
+
+        let result_str = result.unwrap();
+        assert_eq!(result_str.trim(), "3", "Result should be 3: {}", result_str);
+    }
 }

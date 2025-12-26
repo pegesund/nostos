@@ -109,6 +109,30 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "newFloat64Array", signature: "Int -> Float64Array", doc: "Create a new Float64 array of given size" },
     BuiltinInfo { name: "newFloat32Array", signature: "Int -> Float32Array", doc: "Create a new Float32 array of given size (for vectors)" },
 
+    // Float64Array methods
+    BuiltinInfo { name: "Float64Array.fromList", signature: "[Float] -> Float64Array", doc: "Create Float64Array from a list of floats" },
+    BuiltinInfo { name: "Float64Array.length", signature: "Float64Array -> Int", doc: "Get the number of elements" },
+    BuiltinInfo { name: "Float64Array.get", signature: "Float64Array -> Int -> Float", doc: "Get element at index" },
+    BuiltinInfo { name: "Float64Array.set", signature: "Float64Array -> Int -> Float -> Float64Array", doc: "Set element at index, returns new array" },
+    BuiltinInfo { name: "Float64Array.toList", signature: "Float64Array -> [Float]", doc: "Convert to a list of floats" },
+    BuiltinInfo { name: "Float64Array.make", signature: "Int -> Float -> Float64Array", doc: "Create array of size with default value" },
+
+    // Int64Array methods
+    BuiltinInfo { name: "Int64Array.fromList", signature: "[Int] -> Int64Array", doc: "Create Int64Array from a list of integers" },
+    BuiltinInfo { name: "Int64Array.length", signature: "Int64Array -> Int", doc: "Get the number of elements" },
+    BuiltinInfo { name: "Int64Array.get", signature: "Int64Array -> Int -> Int", doc: "Get element at index" },
+    BuiltinInfo { name: "Int64Array.set", signature: "Int64Array -> Int -> Int -> Int64Array", doc: "Set element at index, returns new array" },
+    BuiltinInfo { name: "Int64Array.toList", signature: "Int64Array -> [Int]", doc: "Convert to a list of integers" },
+    BuiltinInfo { name: "Int64Array.make", signature: "Int -> Int -> Int64Array", doc: "Create array of size with default value" },
+
+    // Float32Array methods
+    BuiltinInfo { name: "Float32Array.fromList", signature: "[Float] -> Float32Array", doc: "Create Float32Array from a list of floats" },
+    BuiltinInfo { name: "Float32Array.length", signature: "Float32Array -> Int", doc: "Get the number of elements" },
+    BuiltinInfo { name: "Float32Array.get", signature: "Float32Array -> Int -> Float", doc: "Get element at index" },
+    BuiltinInfo { name: "Float32Array.set", signature: "Float32Array -> Int -> Float -> Float32Array", doc: "Set element at index, returns new array" },
+    BuiltinInfo { name: "Float32Array.toList", signature: "Float32Array -> [Float]", doc: "Convert to a list of floats" },
+    BuiltinInfo { name: "Float32Array.make", signature: "Int -> Float -> Float32Array", doc: "Create array of size with default value" },
+
     // === File I/O ===
     // All File functions throw exceptions on error
     BuiltinInfo { name: "File.readAll", signature: "String -> String", doc: "Read entire file contents, throws on error" },
