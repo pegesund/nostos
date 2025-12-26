@@ -12,5 +12,5 @@ pub use session::{
     Definition, DefineSuccess, FunctionError, ReplError, ReplSession, TryDefineResult,
     extract_dependencies_from_fn,
 };
-pub use engine::{ReplEngine, ReplConfig, BrowserItem, CompileStatus, SaveCompileResult, SearchResult, PanelInfo, PanelState};
+pub use engine::{ReplEngine, ReplConfig, BrowserItem, CompileStatus, SaveCompileResult, SearchResult, PanelInfo, PanelState, NostletInfo};
 pub use nostos_vm::{InspectEntry, ThreadSafeValue, ThreadSafeMapKey, SharedMap, SharedMapKey, SharedMapValue};
