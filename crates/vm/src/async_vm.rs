@@ -11161,7 +11161,197 @@ impl AsyncVM {
                 Ok(GcValue::Unit)
             }),
         }));
+
+        // Runtime.threadCount() -> Int - number of available CPU threads
+        self.register_native("Runtime.threadCount", Arc::new(GcNativeFn {
+            name: "Runtime.threadCount".to_string(),
+            arity: 0,
+            func: Box::new(|_args, _heap| {
+                let count = std::thread::available_parallelism()
+                    .map(|n| n.get() as i64)
+                    .unwrap_or(1);
+                Ok(GcValue::Int64(count))
+            }),
+        }));
+
+        // Runtime.uptimeMs() -> Int - milliseconds since program start
+        use std::sync::OnceLock;
+        static START_TIME: OnceLock<std::time::Instant> = OnceLock::new();
+        START_TIME.get_or_init(std::time::Instant::now);
+
+        self.register_native("Runtime.uptimeMs", Arc::new(GcNativeFn {
+            name: "Runtime.uptimeMs".to_string(),
+            arity: 0,
+            func: Box::new(|_args, _heap| {
+                let uptime = START_TIME.get()
+                    .map(|start| start.elapsed().as_millis() as i64)
+                    .unwrap_or(0);
+                Ok(GcValue::Int64(uptime))
+            }),
+        }));
+
+        // Runtime.memoryKb() -> Int - current process memory usage in KB (Linux only, returns 0 on other platforms)
+        self.register_native("Runtime.memoryKb", Arc::new(GcNativeFn {
+            name: "Runtime.memoryKb".to_string(),
+            arity: 0,
+            func: Box::new(|_args, _heap| {
+                #[cfg(target_os = "linux")]
+                {
+                    // Read from /proc/self/statm - second field is RSS in pages
+                    if let Ok(content) = std::fs::read_to_string("/proc/self/statm") {
+                        let parts: Vec<&str> = content.split_whitespace().collect();
+                        if parts.len() >= 2 {
+                            if let Ok(pages) = parts[1].parse::<i64>() {
+                                // Convert pages to KB (assuming 4KB pages)
+                                return Ok(GcValue::Int64(pages * 4));
+                            }
+                        }
+                    }
+                    Ok(GcValue::Int64(0))
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    Ok(GcValue::Int64(0))
+                }
+            }),
+        }));
+
+        // Runtime.pid() -> Int - current process ID
+        self.register_native("Runtime.pid", Arc::new(GcNativeFn {
+            name: "Runtime.pid".to_string(),
+            arity: 0,
+            func: Box::new(|_args, _heap| {
+                Ok(GcValue::Int64(std::process::id() as i64))
+            }),
+        }));
+
+        // Runtime.loadAvg() -> (Float, Float, Float) - 1, 5, 15 minute load averages (Linux only)
+        self.register_native("Runtime.loadAvg", Arc::new(GcNativeFn {
+            name: "Runtime.loadAvg".to_string(),
+            arity: 0,
+            func: Box::new(|_args, heap| {
+                #[cfg(target_os = "linux")]
+                {
+                    if let Ok(content) = std::fs::read_to_string("/proc/loadavg") {
+                        let parts: Vec<&str> = content.split_whitespace().collect();
+                        if parts.len() >= 3 {
+                            let load1 = parts[0].parse::<f64>().unwrap_or(0.0);
+                            let load5 = parts[1].parse::<f64>().unwrap_or(0.0);
+                            let load15 = parts[2].parse::<f64>().unwrap_or(0.0);
+                            let tuple = heap.alloc_tuple(vec![
+                                GcValue::Float64(load1),
+                                GcValue::Float64(load5),
+                                GcValue::Float64(load15),
+                            ]);
+                            return Ok(GcValue::Tuple(tuple));
+                        }
+                    }
+                    let tuple = heap.alloc_tuple(vec![
+                        GcValue::Float64(0.0),
+                        GcValue::Float64(0.0),
+                        GcValue::Float64(0.0),
+                    ]);
+                    Ok(GcValue::Tuple(tuple))
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let tuple = heap.alloc_tuple(vec![
+                        GcValue::Float64(0.0),
+                        GcValue::Float64(0.0),
+                        GcValue::Float64(0.0),
+                    ]);
+                    Ok(GcValue::Tuple(tuple))
+                }
+            }),
+        }));
+
+        // Runtime.numThreads() -> Int - number of OS threads in process (Linux only)
+        self.register_native("Runtime.numThreads", Arc::new(GcNativeFn {
+            name: "Runtime.numThreads".to_string(),
+            arity: 0,
+            func: Box::new(|_args, _heap| {
+                #[cfg(target_os = "linux")]
+                {
+                    // Read from /proc/self/status - Threads: N
+                    if let Ok(content) = std::fs::read_to_string("/proc/self/status") {
+                        for line in content.lines() {
+                            if line.starts_with("Threads:") {
+                                if let Some(count_str) = line.split_whitespace().nth(1) {
+                                    if let Ok(count) = count_str.parse::<i64>() {
+                                        return Ok(GcValue::Int64(count));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(GcValue::Int64(0))
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    Ok(GcValue::Int64(0))
+                }
+            }),
+        }));
+
+        // Runtime.tokioWorkers() -> Int - number of tokio worker threads (Linux only)
+        self.register_native("Runtime.tokioWorkers", Arc::new(GcNativeFn {
+            name: "Runtime.tokioWorkers".to_string(),
+            arity: 0,
+            func: Box::new(|_args, _heap| {
+                #[cfg(target_os = "linux")]
+                {
+                    let mut count = 0i64;
+                    // Read thread names from /proc/self/task/*/comm
+                    if let Ok(entries) = std::fs::read_dir("/proc/self/task") {
+                        for entry in entries.flatten() {
+                            let comm_path = entry.path().join("comm");
+                            if let Ok(name) = std::fs::read_to_string(&comm_path) {
+                                let name = name.trim();
+                                if name.starts_with("tokio-runtime-w") {
+                                    count += 1;
+                                }
+                            }
+                        }
+                    }
+                    Ok(GcValue::Int64(count))
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    Ok(GcValue::Int64(0))
+                }
+            }),
+        }));
+
+        // Runtime.blockingThreads() -> Int - number of tokio blocking threads (Linux only)
+        self.register_native("Runtime.blockingThreads", Arc::new(GcNativeFn {
+            name: "Runtime.blockingThreads".to_string(),
+            arity: 0,
+            func: Box::new(|_args, _heap| {
+                #[cfg(target_os = "linux")]
+                {
+                    let mut count = 0i64;
+                    if let Ok(entries) = std::fs::read_dir("/proc/self/task") {
+                        for entry in entries.flatten() {
+                            let comm_path = entry.path().join("comm");
+                            if let Ok(name) = std::fs::read_to_string(&comm_path) {
+                                let name = name.trim();
+                                if name.starts_with("tokio-runtime-b") {
+                                    count += 1;
+                                }
+                            }
+                        }
+                    }
+                    Ok(GcValue::Int64(count))
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    Ok(GcValue::Int64(0))
+                }
+            }),
+        }));
+
     }
+
     /// Run the main function and return the result.
     pub fn run(&mut self, main_fn_name: &str) -> Result<SendableValue, String> {
         let (result, _profile) = self.run_with_profile(main_fn_name)?;

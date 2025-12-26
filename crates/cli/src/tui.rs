@@ -4002,6 +4002,11 @@ fn cycle_window(s: &mut Cursive) {
             windows.push(format!("editor_{}", name));
         }
 
+        // Nostlets
+        for module_name in &state.open_nostlets {
+            windows.push(module_name.clone());
+        }
+
         // REPL panels
         for id in &state.open_repls {
             windows.push(format!("repl_panel_{}", id));
@@ -4046,6 +4051,11 @@ fn cycle_window_backward(s: &mut Cursive) {
         // Editors
         for name in &state.open_editors {
             windows.push(format!("editor_{}", name));
+        }
+
+        // Nostlets
+        for module_name in &state.open_nostlets {
+            windows.push(module_name.clone());
         }
 
         // REPL panels

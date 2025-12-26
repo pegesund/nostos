@@ -810,14 +810,16 @@ impl ReplEngine {
                 .expect("File should be under one of the nostlet paths");
 
             // Build module name: nostlets.vm_stats, etc.
+            // Note: hyphens in filenames are converted to underscores to avoid
+            // being parsed as minus operators in expressions like nostlets.runtime_stats.render()
             let relative = file_path.strip_prefix(base_path).unwrap();
             let mut components: Vec<String> = vec!["nostlets".to_string()];
             for component in relative.components() {
                 let s = component.as_os_str().to_string_lossy().to_string();
                 if s.ends_with(".nos") {
-                    components.push(s.trim_end_matches(".nos").to_string());
+                    components.push(s.trim_end_matches(".nos").replace('-', "_"));
                 } else {
-                    components.push(s);
+                    components.push(s.replace('-', "_"));
                 }
             }
             let module_name = components.join(".");
