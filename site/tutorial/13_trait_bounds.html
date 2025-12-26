@@ -228,10 +228,10 @@ main() = {
 type NotFound = NotFound
 type Found = Found(V)
 
-lookup[K: Eq, V](items: List, key: K) = match items
+lookup[K: Eq, V](items: List, key: K) = match items {
     [] -> NotFound
     [(k, v) | rest] -> if k == key then Found(v) else lookup(rest, key)
-end
+}
 
 # Custom types - all have builtin Eq
 type UserId = UserId(Int)
