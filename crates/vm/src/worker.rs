@@ -2506,6 +2506,65 @@ impl Worker {
                 });
             }
 
+            // === String Buffer (for efficient HTML rendering) ===
+            Instruction::BufferNew(dst) => {
+                let buf_ptr = self.scheduler.with_process_mut(pid, |proc| {
+                    proc.heap.alloc_buffer()
+                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
+                set_reg!(dst, GcValue::Buffer(buf_ptr));
+            }
+
+            Instruction::BufferAppend(buf_reg, str_reg) => {
+                let buf = get_reg!(buf_reg);
+                let str_val = get_reg!(str_reg);
+                match &buf {
+                    GcValue::Buffer(buf_ptr) => {
+                        // Get the string to append
+                        let s = self.scheduler.with_process(pid, |proc| {
+                            proc.heap.display_value(&str_val)
+                        }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
+
+                        // Get the buffer and append
+                        self.scheduler.with_process(pid, |proc| {
+                            if let Some(gc_buf) = proc.heap.get_buffer(buf_ptr.clone()) {
+                                gc_buf.append(&s);
+                            }
+                        });
+                    }
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Buffer".to_string(),
+                            found: format!("{:?}", buf),
+                        });
+                    }
+                }
+            }
+
+            Instruction::BufferToString(dst, buf_reg) => {
+                let buf = get_reg!(buf_reg);
+                match &buf {
+                    GcValue::Buffer(buf_ptr) => {
+                        let result = self.scheduler.with_process_mut(pid, |proc| {
+                            // Get the buffer contents
+                            let s = if let Some(gc_buf) = proc.heap.get_buffer(buf_ptr.clone()) {
+                                gc_buf.to_string()
+                            } else {
+                                String::new()
+                            };
+                            // Allocate as a string
+                            proc.heap.alloc_string(s)
+                        }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
+                        set_reg!(dst, GcValue::String(result));
+                    }
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Buffer".to_string(),
+                            found: format!("{:?}", buf),
+                        });
+                    }
+                }
+            }
+
             // === Assertions ===
             Instruction::Assert(cond) => {
                 let val = get_reg!(cond);

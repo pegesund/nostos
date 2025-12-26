@@ -385,6 +385,7 @@ fn format_value_short(value: &GcValue) -> String {
         GcValue::BigInt(_) => "<BigInt>".to_string(),
         GcValue::Type(t) => format!("<Type {}>", t.name),
         GcValue::Pointer(p) => format!("<Pointer 0x{:x}>", p),
+        GcValue::Buffer(_) => "<Buffer>".to_string(),
     }
 }
 

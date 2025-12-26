@@ -1101,6 +1101,14 @@ pub enum Instruction {
     /// Write mvar: mvar[name_idx] = src (assumes lock is already held)
     MvarWrite(ConstIdx, Reg),
 
+    // === String Buffer (for efficient HTML rendering) ===
+    /// Create a new string buffer: dst = Buffer.new()
+    BufferNew(Reg),
+    /// Append string to buffer: buffer.append(str)
+    BufferAppend(Reg, Reg),
+    /// Convert buffer to string: dst = buffer.toString()
+    BufferToString(Reg, Reg),
+
     // === Debug ===
     /// No operation (for alignment/debugging)
     Nop,

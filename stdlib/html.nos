@@ -96,11 +96,11 @@ escapeChar(c) = match c {
     _ -> String.from_chars([c])
 }
 
-escapeHtml(str) = {
-    chars = String.chars(str)
-    escaped = chars.map(c => escapeChar(c))
-    escaped.fold("", (acc, s) => acc ++ s)
-}
+# Escape HTML using recursion (avoid method calls for stdlib compatibility)
+escapeHtmlChars([]) = ""
+escapeHtmlChars([c | rest]) = escapeChar(c) ++ escapeHtmlChars(rest)
+
+escapeHtml(str) = escapeHtmlChars(String.chars(str))
 
 renderAttr((name, value)) = " " ++ name ++ "=\"" ++ escapeHtml(value) ++ "\""
 
@@ -124,16 +124,55 @@ isSelfClosing(tag) = match tag {
     _ -> false
 }
 
+# Buffer-optimized rendering using VM buffer instructions
+renderAttrToBuffer((name, value), buf) = {
+    Buffer.append(buf, " ")
+    Buffer.append(buf, name)
+    Buffer.append(buf, "=\"")
+    Buffer.append(buf, escapeHtml(value))
+    Buffer.append(buf, "\"")
+}
+
+renderAttrsToBuffer([], _buf) = ()
+renderAttrsToBuffer([attr | rest], buf) = {
+    renderAttrToBuffer(attr, buf)
+    renderAttrsToBuffer(rest, buf)
+}
+
+renderChildrenToBuffer([], _buf) = ()
+renderChildrenToBuffer([child | rest], buf) = {
+    renderToBuffer(child, buf)
+    renderChildrenToBuffer(rest, buf)
+}
+
+renderToBuffer(node, buf) = match node {
+    Element(tag, attrs, children) ->
+        if isSelfClosing(tag) then {
+            Buffer.append(buf, "<")
+            Buffer.append(buf, tag)
+            renderAttrsToBuffer(attrs, buf)
+            Buffer.append(buf, " />")
+        } else {
+            Buffer.append(buf, "<")
+            Buffer.append(buf, tag)
+            renderAttrsToBuffer(attrs, buf)
+            Buffer.append(buf, ">")
+            renderChildrenToBuffer(children, buf)
+            Buffer.append(buf, "</")
+            Buffer.append(buf, tag)
+            Buffer.append(buf, ">")
+        }
+    Text(str) -> Buffer.append(buf, escapeHtml(str))
+    Raw(str) -> Buffer.append(buf, str)
+    Empty -> ()
+}
+
+render(node) = {
+    buf = Buffer.new()
+    renderToBuffer(node, buf)
+    Buffer.toString(buf)
+}
+
+# Legacy non-buffered functions for backwards compatibility
 renderChildren([]) = ""
 renderChildren([child | rest]) = render(child) ++ renderChildren(rest)
-
-render(node) = match node {
-    Element(tag, attrs, children) ->
-        if isSelfClosing(tag) then
-            "<" ++ tag ++ renderAttrs(attrs) ++ " />"
-        else
-            "<" ++ tag ++ renderAttrs(attrs) ++ ">" ++ renderChildren(children) ++ "</" ++ tag ++ ">"
-    Text(str) -> escapeHtml(str)
-    Raw(str) -> str
-    Empty -> ""
-}
