@@ -577,9 +577,14 @@ impl JitCompiler {
                         }
                     }
                 }
-                // Error handling - Panic/Throw are allowed but should never be reached in correct execution
+                // Error handling - Panic is allowed (should never be reached), but Throw must be
+                // rejected because JIT-compiled functions can't unwind to interpreted catch blocks
                 Instruction::Panic(_) => {}
-                Instruction::Throw(_) => {}
+                Instruction::Throw(_) => {
+                    return Err(JitError::NotSuitable(
+                        "contains Throw instruction - cannot unwind to catch block".to_string()
+                    ));
+                }
 
                 // CallDirect to other compiled functions - allowed if callee is already JIT-compiled
                 Instruction::CallDirect(_, func_idx, args) => {
@@ -1037,11 +1042,14 @@ impl JitCompiler {
                     }
 
                     // Error handling - generate trap (should never be reached in correct execution)
-                    Instruction::Panic(_) | Instruction::Throw(_) => {
+                    // Note: Throw is rejected in detect_numeric_type, so only Panic can reach here
+                    Instruction::Panic(_) => {
                         // Use user trap code 1 (0 is reserved/invalid)
                         builder.ins().trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
                         block_terminated = true;
                     }
+                    // This shouldn't happen - Throw is rejected during eligibility check
+                    Instruction::Throw(_) => unreachable!("Throw should be rejected in detect_numeric_type"),
 
                     // Call to another JIT-compiled function
                     Instruction::CallDirect(dst, callee_idx, arg_regs) => {
