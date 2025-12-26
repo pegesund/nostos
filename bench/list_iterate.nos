@@ -1,65 +1,15 @@
-# List iteration benchmark - focuses on [x|xs] pattern matching
-# Does NOT use native listSum/listMax - tests pure pattern matching performance
+# List sum benchmark - 50M elements
+# Tests tail-recursive sum with JIT optimization
 
-# Count elements using pattern matching
-countList([]) = 0
-countList([_ | xs]) = 1 + countList(xs)
-
-# Sum using pattern matching (not tail recursive)
-sumRec([]) = 0
-sumRec([x | xs]) = x + sumRec(xs)
-
-# Sum using tail recursion with pattern matching
-sumTail([], acc) = acc
-sumTail([x | xs], acc) = sumTail(xs, acc + x)
-
-# Find max using pattern matching
-maxRec([x]) = x
-maxRec([x | xs]) = {
-    m = maxRec(xs)
-    if x > m then x else m
-}
-
-# Reverse using pattern matching (builds new list)
-reverseAcc([], acc) = acc
-reverseAcc([x | xs], acc) = reverseAcc(xs, [x | acc])
-
-# Build test list
-buildList(0) = []
-buildList(n) = [n | buildList(n - 1)]
-
-# 10 calls per helper for direct call optimization
-count10(list) = countList(list) + countList(list) + countList(list) + countList(list) + countList(list) +
-                countList(list) + countList(list) + countList(list) + countList(list) + countList(list)
-
-sumTail10(list) = sumTail(list, 0) + sumTail(list, 0) + sumTail(list, 0) + sumTail(list, 0) + sumTail(list, 0) +
-                  sumTail(list, 0) + sumTail(list, 0) + sumTail(list, 0) + sumTail(list, 0) + sumTail(list, 0)
-
-sumRec10(list) = sumRec(list) + sumRec(list) + sumRec(list) + sumRec(list) + sumRec(list) +
-                 sumRec(list) + sumRec(list) + sumRec(list) + sumRec(list) + sumRec(list)
+# Sum with length verification (forces list materialization)
+sumTR([], acc) = acc
+sumTR([x | xs], acc) = sumTR(xs, acc + x)
 
 main() = {
-    n = 100000
-
-    # Build list once
-    list = buildList(n)
-
-    # Run 100 iterations each (10 x 10) with direct calls for JIT dispatch
-
-    # Test 1: Count (pure iteration) - 100x
-    c = count10(list) + count10(list) + count10(list) + count10(list) + count10(list) +
-        count10(list) + count10(list) + count10(list) + count10(list) + count10(list)
-    println(c)
-
-    # Test 2: Sum tail recursive - 100x
-    s = sumTail10(list) + sumTail10(list) + sumTail10(list) + sumTail10(list) + sumTail10(list) +
-        sumTail10(list) + sumTail10(list) + sumTail10(list) + sumTail10(list) + sumTail10(list)
-    println(s)
-
-    # Test 3: Sum non-tail recursive (optimized) - 100x
-    r = sumRec10(list) + sumRec10(list) + sumRec10(list) + sumRec10(list) + sumRec10(list) +
-        sumRec10(list) + sumRec10(list) + sumRec10(list) + sumRec10(list) + sumRec10(list)
-    println(r)
-
-    c + s + r
+    list = range(1, 50000001)
+    len = length(list)
+    println(len)
+    sum = sumTR(list, 0)
+    println(sum)
+    0
 }
