@@ -37,6 +37,9 @@ if [ ! -f "$BINARY" ]; then
     (cd "$ROOT_DIR" && cargo build --release)
 fi
 
+# Remove all .nostos directories to avoid picking up definition files as tests
+find "$TEST_DIR" -type d -name ".nostos" -exec rm -rf {} + 2>/dev/null || true
+
 # Normalize output to match test harness format:
 # - Remove quotes from strings (but keep char quotes like 'a')
 # - Handle nested structures (tuples, lists)
