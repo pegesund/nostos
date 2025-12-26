@@ -520,6 +520,12 @@ struct TuiState {
     /// Tutorial panel state
     tutorial_open: bool,
     tutorial_chapter_idx: usize,
+    /// Fullscreen window name (None = normal view, Some = fullscreen that window)
+    fullscreen_window: Option<String>,
+    /// Last focused window name (for fullscreen toggle)
+    last_focused_window: Option<String>,
+    /// Saved window widths before fullscreen (exact values from layout)
+    saved_window_widths: std::collections::HashMap<String, usize>,
 }
 
 pub fn run_tui(args: &[String]) -> ExitCode {
@@ -595,6 +601,9 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         current_panel_id: None,
         tutorial_open: false,
         tutorial_chapter_idx: 0,
+        fullscreen_window: None,
+        last_focused_window: Some("repl_log".to_string()),
+        saved_window_widths: std::collections::HashMap::new(),
     })));
 
     // Components
@@ -626,7 +635,6 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         });
 
     // 2. Workspace - LinearLayout for equal window distribution
-    // Console is smaller - use max_width to limit size
     let console_view = ActiveWindow::new(repl_log_with_events, "Console").max_width(60);
 
     let layout = LinearLayout::horizontal()
@@ -691,6 +699,11 @@ pub fn run_tui(args: &[String]) -> ExitCode {
     let engine_for_nostlets = engine.clone();
     siv.set_on_pre_event(Event::CtrlChar('n'), move |s| {
         show_nostlet_picker(s, engine_for_nostlets.clone());
+    });
+
+    // Global Ctrl+Z to toggle fullscreen for focused window
+    siv.set_on_pre_event(Event::CtrlChar('z'), |s| {
+        toggle_fullscreen(s);
     });
 
     // Debug commands - F-keys only (letter keys handled via REPL :c/:n/:s/:o commands)
@@ -1040,7 +1053,7 @@ fn poll_debug_events(s: &mut Cursive) {
             state.borrow_mut().debug_panel_open = true;
         });
         rebuild_workspace(s);
-        s.focus_name("debug_panel").ok();
+        focus_window(s, "debug_panel");
     }
 
     // NOW update debug panel with events (panel exists now)
@@ -1085,9 +1098,9 @@ fn poll_debug_events(s: &mut Cursive) {
 /// Uses LinearLayout for equal window distribution
 /// Navigation: Ctrl+Left/Right to move between windows
 fn rebuild_workspace(s: &mut Cursive) {
-    let (editor_names, nostlet_names, repl_ids, engine, inspector_open, console_open, nostos_panel_open, debug_panel_open, git_panel_open, git_panel_target, current_panel, current_panel_id, tutorial_open, tutorial_chapter_idx) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+    let (editor_names, nostlet_names, repl_ids, engine, inspector_open, console_open, nostos_panel_open, debug_panel_open, git_panel_open, git_panel_target, current_panel, current_panel_id, tutorial_open, tutorial_chapter_idx, fullscreen_window, saved_window_widths) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let state = state.borrow();
-        (state.open_editors.clone(), state.open_nostlets.clone(), state.open_repls.clone(), state.engine.clone(), state.inspector_open, state.console_open, state.nostos_panel_open, state.debug_panel_open, state.git_panel_open, state.git_panel_target.clone(), state.current_panel.clone(), state.current_panel_id, state.tutorial_open, state.tutorial_chapter_idx)
+        (state.open_editors.clone(), state.open_nostlets.clone(), state.open_repls.clone(), state.engine.clone(), state.inspector_open, state.console_open, state.nostos_panel_open, state.debug_panel_open, state.git_panel_open, state.git_panel_target.clone(), state.current_panel.clone(), state.current_panel_id, state.tutorial_open, state.tutorial_chapter_idx, state.fullscreen_window.clone(), state.saved_window_widths.clone())
     }).unwrap();
 
     // Get console content BEFORE clearing workspace
@@ -1131,6 +1144,52 @@ fn rebuild_workspace(s: &mut Cursive) {
     // Remove old layer and create fresh one
     s.pop_layer();
 
+    // Handle fullscreen mode - show only one window
+    if let Some(ref fs_window) = fullscreen_window {
+        if fs_window == "repl_log" && console_open {
+            let view = create_fullscreen_console_view(&repl_log_content);
+            s.add_fullscreen_layer(view);
+            return;
+        } else if fs_window.starts_with("editor_") {
+            let name = fs_window.strip_prefix("editor_").unwrap();
+            if editor_names.contains(&name.to_string()) {
+                let read_only = engine.borrow().is_eval_function(name);
+                let view = create_editor_view(s, &engine, name, read_only);
+                s.add_fullscreen_layer(view);
+                return;
+            }
+        } else if fs_window.starts_with("repl_panel_") {
+            if let Some(id_str) = fs_window.strip_prefix("repl_panel_") {
+                if let Ok(repl_id) = id_str.parse::<usize>() {
+                    if repl_ids.contains(&repl_id) {
+                        let eval_state = repl_eval_handles.remove(&repl_id);
+                        let debug_state = repl_debug_sessions.remove(&repl_id);
+                        let view = create_repl_panel_view(&engine, repl_id, repl_histories.remove(&repl_id), eval_state, debug_state);
+                        s.add_fullscreen_layer(view);
+                        return;
+                    }
+                }
+            }
+        } else if fs_window == "inspector_panel" && inspector_open {
+            let view = create_inspector_view(&engine);
+            s.add_fullscreen_layer(view);
+            return;
+        } else if fs_window == "tutorial_content" && tutorial_open {
+            let view = create_tutorial_view(tutorial_chapter_idx);
+            s.add_fullscreen_layer(view);
+            return;
+        } else if fs_window == "debug_panel" && debug_panel_open {
+            let view = create_debug_view(&engine);
+            s.add_fullscreen_layer(view);
+            return;
+        } else if nostlet_names.contains(fs_window) {
+            let view = create_nostlet_view(&engine, fs_window);
+            s.add_fullscreen_layer(view);
+            return;
+        }
+        // If fullscreen window not found, fall through to normal layout
+    }
+
     // Create console view
     let repl_log = FocusableConsole::new(
         TextView::new(repl_log_content).scrollable().scroll_x(true)
@@ -1156,24 +1215,42 @@ fn rebuild_workspace(s: &mut Cursive) {
             rebuild_workspace(s);
         });
 
-    // Console is smaller - use max_width to limit size
-    let console = ActiveWindow::new(repl_log_with_events, "Console").max_width(60);
-
-    // Collect all window views
-    let mut windows: Vec<Box<dyn View>> = Vec::new();
+    // Collect all window views with their names for width restoration
+    let mut windows: Vec<(String, Box<dyn View>)> = Vec::new();
 
     if console_open {
-        windows.push(Box::new(console));
+        // When restoring from fullscreen, use saved width; otherwise use max_width(60)
+        if let Some(&width) = saved_window_widths.get("aw_console") {
+            let console = ActiveWindow::new(repl_log_with_events, "Console")
+                .with_track_name("aw_console")
+                .fixed_width(width);
+            windows.push(("aw_console".to_string(), Box::new(console)));
+        } else {
+            let console = ActiveWindow::new(repl_log_with_events, "Console")
+                .with_track_name("aw_console")
+                .max_width(60);
+            windows.push(("aw_console".to_string(), Box::new(console)));
+        }
     }
 
     if inspector_open {
-        let inspector_view = create_inspector_view(&engine);
-        windows.push(Box::new(inspector_view));
+        let name = "aw_inspector".to_string();
+        let view = create_inspector_view(&engine);
+        if let Some(&width) = saved_window_widths.get(&name) {
+            windows.push((name, Box::new(BoxedView::boxed(view).fixed_width(width))));
+        } else {
+            windows.push((name, Box::new(view)));
+        }
     }
 
     if debug_panel_open {
-        let debug_view = create_debug_view(&engine);
-        windows.push(Box::new(debug_view));
+        let name = "aw_debug".to_string();
+        let view = create_debug_view(&engine);
+        if let Some(&width) = saved_window_widths.get(&name) {
+            windows.push((name, Box::new(BoxedView::boxed(view).fixed_width(width))));
+        } else {
+            windows.push((name, Box::new(view)));
+        }
     }
 
     // Restore debug panel state after window is added but before layout is finalized
@@ -1181,21 +1258,36 @@ fn rebuild_workspace(s: &mut Cursive) {
     let saved_debug_state = debug_panel_state;
 
     for name in &editor_names {
+        let view_name = format!("aw_editor_{}", name);
         let read_only = engine.borrow().is_eval_function(name);
         let editor_view = create_editor_view(s, &engine, name, read_only);
-        windows.push(Box::new(editor_view));
+        if let Some(&width) = saved_window_widths.get(&view_name) {
+            windows.push((view_name, Box::new(BoxedView::boxed(editor_view).fixed_width(width))));
+        } else {
+            windows.push((view_name, Box::new(editor_view)));
+        }
     }
 
     for module_name in &nostlet_names {
+        let view_name = format!("aw_nostlet_{}", module_name);
         let nostlet_view = create_nostlet_view(&engine, module_name);
-        windows.push(Box::new(nostlet_view));
+        if let Some(&width) = saved_window_widths.get(&view_name) {
+            windows.push((view_name, Box::new(BoxedView::boxed(nostlet_view).fixed_width(width))));
+        } else {
+            windows.push((view_name, Box::new(nostlet_view)));
+        }
     }
 
     for &repl_id in &repl_ids {
+        let view_name = format!("aw_repl_{}", repl_id);
         let eval_state = repl_eval_handles.remove(&repl_id);
         let debug_state = repl_debug_sessions.remove(&repl_id);
         let repl_view = create_repl_panel_view(&engine, repl_id, repl_histories.remove(&repl_id), eval_state, debug_state);
-        windows.push(Box::new(repl_view));
+        if let Some(&width) = saved_window_widths.get(&view_name) {
+            windows.push((view_name, Box::new(BoxedView::boxed(repl_view).fixed_width(width))));
+        } else {
+            windows.push((view_name, Box::new(repl_view)));
+        }
     }
 
     // Nostos panel (if open)
@@ -1247,8 +1339,8 @@ fn rebuild_workspace(s: &mut Cursive) {
     if windows.len() <= 6 {
         // Single row
         let mut row = LinearLayout::horizontal();
-        for window in windows {
-            row.add_child(window);
+        for (_name, view) in windows {
+            row.add_child(view);
         }
         layout.add_child(row.full_width().full_height());
     } else {
@@ -1257,11 +1349,11 @@ fn rebuild_workspace(s: &mut Cursive) {
         let mut row1 = LinearLayout::horizontal();
         let mut row2 = LinearLayout::horizontal();
 
-        for (i, window) in windows.into_iter().enumerate() {
+        for (i, (_name, view)) in windows.into_iter().enumerate() {
             if i < mid {
-                row1.add_child(window);
+                row1.add_child(view);
             } else {
-                row2.add_child(window);
+                row2.add_child(view);
             }
         }
 
@@ -1336,7 +1428,9 @@ fn create_repl_panel_view(
             close_repl_panel(s, panel_id_close);
         });
 
-    ActiveWindow::new(panel_with_events, &format!("REPL #{}", repl_id)).full_width()
+    ActiveWindow::new(panel_with_events, &format!("REPL #{}", repl_id))
+        .with_track_name(&format!("aw_repl_{}", repl_id))
+        .full_width()
 }
 
 /// Create the Nostos panel view from PanelInfo
@@ -1586,7 +1680,7 @@ fn open_repl_panel(s: &mut Cursive) {
             rebuild_workspace(s);
             // Focus the new REPL panel
             let panel_id = format!("repl_panel_{}", id);
-            s.focus_name(&panel_id).ok();
+            focus_window(s, &panel_id);
             log_to_repl(s, &format!("Opened REPL #{}", id));
         }
         Err(msg) => {
@@ -1661,12 +1755,12 @@ fn toggle_inspector(s: &mut Cursive) {
     if inspector_open {
         // rebuild_workspace will create the inspector panel and drain entries
         rebuild_workspace(s);
-        s.focus_name("inspector_panel").ok();
+        focus_window(s, "inspector_panel");
         log_to_repl(s, "Inspector panel opened (Alt+I or :ins to close)");
     } else {
         rebuild_workspace(s);
         // Focus fallback if nothing else
-        s.focus_name("repl_log").ok();
+        focus_window(s, "repl_log");
         log_to_repl(s, "Inspector panel closed");
     }
 }
@@ -1681,11 +1775,11 @@ fn toggle_debug_panel(s: &mut Cursive) {
 
     if debug_panel_open {
         rebuild_workspace(s);
-        s.focus_name("debug_panel").ok();
+        focus_window(s, "debug_panel");
         log_to_repl(s, "Debug panel opened - use c/n/s/o keys when focused (Ctrl+D to close)");
     } else {
         rebuild_workspace(s);
-        s.focus_name("repl_log").ok();
+        focus_window(s, "repl_log");
         log_to_repl(s, "Debug panel closed");
     }
 }
@@ -1699,8 +1793,45 @@ fn close_debug_panel(s: &mut Cursive) {
         state.borrow_mut().debug_panel_open = false;
     });
     rebuild_workspace(s);
-    s.focus_name("repl_log").ok();
+    focus_window(s, "repl_log");
     log_to_repl(s, "Debug panel closed - execution continuing");
+}
+
+/// Toggle fullscreen mode for the currently focused window
+fn toggle_fullscreen(s: &mut Cursive) {
+    // Get actual widths from global storage (set during layout by ActiveWindow)
+    let current_widths = crate::custom_views::get_all_window_widths();
+
+    let (focus_target, was_exiting_fullscreen) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let mut state = state.borrow_mut();
+
+        if state.fullscreen_window.is_some() {
+            // Exit fullscreen - saved widths are already set from when we entered
+            let target = state.fullscreen_window.clone();
+            state.fullscreen_window = None;
+            (target, true)
+        } else {
+            // Enter fullscreen - save the ACTUAL widths from layout
+            state.saved_window_widths = current_widths;
+
+            let target = state.last_focused_window.clone();
+            state.fullscreen_window = target.clone();
+            (target, false)
+        }
+    }).unwrap();
+
+    rebuild_workspace(s);
+
+    // Clear saved widths after restore so subsequent operations work normally
+    if was_exiting_fullscreen {
+        s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+            state.borrow_mut().saved_window_widths.clear();
+        });
+    }
+
+    if let Some(target) = focus_target {
+        s.focus_name(&target).ok();
+    }
 }
 
 /// Create the debug panel view
@@ -1726,6 +1857,7 @@ fn create_debug_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
         });
 
     ActiveWindow::new(panel_with_events, "Debug")
+        .with_track_name("aw_debug")
 }
 
 /// Open git history for a definition
@@ -2117,7 +2249,7 @@ fn open_tutorial_panel(s: &mut Cursive) {
         state.tutorial_open = true;
     });
     rebuild_workspace(s);
-    s.focus_name("tutorial_content").ok();
+    focus_window(s, "tutorial_content");
 }
 
 /// Navigate to a different tutorial chapter (relative)
@@ -2154,9 +2286,9 @@ fn go_to_tutorial_chapter(s: &mut Cursive, chapter_idx: usize) {
 /// Focus the appropriate view in the tutorial panel
 fn focus_tutorial_view(s: &mut Cursive, chapter_idx: usize) {
     if chapter_idx == 0 {
-        s.focus_name("tutorial_select").ok();
+        focus_window(s, "tutorial_select");
     } else {
-        s.focus_name("tutorial_content").ok();
+        focus_window(s, "tutorial_content");
     }
 }
 
@@ -2383,6 +2515,9 @@ fn open_nostlet_panel(s: &mut Cursive, _engine: Rc<RefCell<ReplEngine>>, nostlet
 
     // Rebuild workspace - create_nostlet_view will be called for this panel
     rebuild_workspace(s);
+
+    // Focus the new nostlet
+    focus_window(s, &module_name);
 }
 
 /// Close a nostlet panel
@@ -2433,6 +2568,7 @@ fn create_nostlet_view(engine: &Rc<RefCell<ReplEngine>>, module_name: &str) -> i
 
     // Wrap in ActiveWindow for consistent styling
     ActiveWindow::new(panel_with_events, &title)
+        .with_track_name(&format!("aw_nostlet_{}", module_name))
 }
 
 /// Create the inspector panel view
@@ -2479,7 +2615,42 @@ fn create_inspector_view(engine: &Rc<RefCell<ReplEngine>>) -> impl View {
             log_to_repl(s, "Inspector panel closed");
         });
 
-    ActiveWindow::new(panel_with_events, "Inspector").full_width()
+    ActiveWindow::new(panel_with_events, "Inspector")
+        .with_track_name("aw_inspector")
+        .full_width()
+}
+
+/// Create a fullscreen console view (without max_width limitation)
+fn create_fullscreen_console_view(content: &str) -> impl View {
+    let repl_log = FocusableConsole::new(
+        TextView::new(content.to_string()).scrollable().scroll_x(true)
+    ).with_name("repl_log");
+
+    let repl_log_with_events = OnEventView::new(repl_log)
+        .on_event(Event::CtrlChar('y'), |s| {
+            if let Some(text) = s.call_on_name("repl_log", |view: &mut FocusableConsole| {
+                view.get_content()
+            }) {
+                if !text.is_empty() {
+                    match copy_to_system_clipboard(&text) {
+                        Ok(_) => log_to_repl(s, &format!("Copied {} chars", text.len())),
+                        Err(e) => log_to_repl(s, &format!("Copy failed: {}", e)),
+                    }
+                }
+            }
+        })
+        .on_event(Event::CtrlChar('w'), |s| {
+            s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                state.borrow_mut().console_open = false;
+                state.borrow_mut().fullscreen_window = None;
+            });
+            rebuild_workspace(s);
+        })
+        .on_event(Event::CtrlChar('z'), |s| {
+            toggle_fullscreen(s);
+        });
+
+    ActiveWindow::new(repl_log_with_events, "Console (Fullscreen)")
 }
 
 /// Create an editor view for a given name
@@ -3047,7 +3218,9 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
     } else {
         name.to_string()
     };
-    ActiveWindow::new(editor_with_events.full_height(), &title).full_width()
+    ActiveWindow::new(editor_with_events.full_height(), &title)
+        .with_track_name(&format!("aw_editor_{}", name))
+        .full_width()
 }
 
 fn open_editor(s: &mut Cursive, name: &str) {
@@ -3078,11 +3251,7 @@ fn open_editor(s: &mut Cursive, name: &str) {
     // Focus the new editor
     let editor_id = format!("editor_{}", name);
     eprintln!("[TUI] Focusing editor: {}", editor_id);
-    if let Err(e) = s.focus_name(&editor_id) {
-        eprintln!("[TUI] Failed to focus {}: {:?}", editor_id, e);
-    } else {
-        eprintln!("[TUI] Successfully focused {}", editor_id);
-    }
+    focus_window(s, &editor_id);
 }
 
 fn close_editor(s: &mut Cursive, name: &str) {
@@ -4173,7 +4342,6 @@ fn rebuild_workspace_with_viewer(s: &mut Cursive, viewer_name: &str, viewer_cont
             }
         });
 
-    // Console is smaller and shrinks first - use max_width to limit size
     let console = ActiveWindow::new(repl_log_with_events, "Console").max_width(60);
 
     if total_windows <= 3 {
@@ -4283,6 +4451,14 @@ fn close_viewer(s: &mut Cursive, viewer_name: &str) {
     }
 }
 
+/// Focus a window and update last_focused_window for fullscreen toggle
+fn focus_window(s: &mut Cursive, name: &str) {
+    s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow_mut().last_focused_window = Some(name.to_string());
+    });
+    s.focus_name(name).ok();
+}
+
 fn cycle_window(s: &mut Cursive) {
     let target = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let mut state = state.borrow_mut();
@@ -4336,7 +4512,7 @@ fn cycle_window(s: &mut Cursive) {
         windows[state.active_window_idx].clone()
     }).unwrap();
 
-    s.focus_name(&target).ok();
+    focus_window(s, &target);
 }
 
 fn cycle_window_backward(s: &mut Cursive) {
@@ -4397,7 +4573,7 @@ fn cycle_window_backward(s: &mut Cursive) {
         windows[state.active_window_idx].clone()
     }).unwrap();
 
-    s.focus_name(&target).ok();
+    focus_window(s, &target);
 }
 
 fn close_active_editor(s: &mut Cursive) {

@@ -619,6 +619,21 @@ impl CodeEditor {
         self.content.join("\n")
     }
 
+    /// Set the content of the editor
+    pub fn set_content(&mut self, text: &str) {
+        self.content = text.lines().map(String::from).collect();
+        if self.content.is_empty() {
+            self.content = vec![String::new()];
+        }
+        // Reset cursor if it's out of bounds
+        if self.cursor.0 >= self.content.len() {
+            self.cursor.0 = self.content.len().saturating_sub(1);
+        }
+        if self.cursor.1 > self.content[self.cursor.0].len() {
+            self.cursor.1 = self.content[self.cursor.0].len();
+        }
+    }
+
     /// Check if the editor has unsaved changes
     pub fn is_dirty(&self) -> bool {
         self.get_content() != self.saved_content

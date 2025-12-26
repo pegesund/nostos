@@ -3,11 +3,33 @@ use cursive::view::{View, ViewWrapper, Selector};
 use cursive::{Printer, Vec2, Rect};
 use cursive::theme::{Color, ColorStyle};
 use cursive::views::{ScrollView, TextView};
+use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+// Global storage for window widths (updated during layout)
+static WINDOW_WIDTHS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+
+fn get_widths_map() -> &'static Mutex<HashMap<String, usize>> {
+    WINDOW_WIDTHS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn save_window_width(name: &str, width: usize) {
+    if let Ok(mut map) = get_widths_map().lock() {
+        map.insert(name.to_string(), width);
+    }
+}
+
+pub fn get_all_window_widths() -> HashMap<String, usize> {
+    get_widths_map().lock().ok().map(|map| map.clone()).unwrap_or_default()
+}
 
 /// A wrapper that draws a colored border when focused.
 pub struct ActiveWindow<V> {
     view: V,
     title: String,
+    /// Unique name for width tracking (optional)
+    track_name: Option<String>,
 }
 
 impl<V: View> ActiveWindow<V> {
@@ -15,7 +37,14 @@ impl<V: View> ActiveWindow<V> {
         Self {
             view,
             title: title.to_string(),
+            track_name: None,
         }
+    }
+
+    /// Set a name for width tracking (used for fullscreen restore)
+    pub fn with_track_name(mut self, name: &str) -> Self {
+        self.track_name = Some(name.to_string());
+        self
     }
 }
 
@@ -65,6 +94,10 @@ impl<V: View> ViewWrapper for ActiveWindow<V> {
     }
 
     fn wrap_layout(&mut self, size: Vec2) {
+        // Save width to global map if tracking is enabled
+        if let Some(ref name) = self.track_name {
+            save_window_width(name, size.x);
+        }
         self.view.layout(size.saturating_sub((2, 2)));
     }
 
@@ -102,6 +135,12 @@ impl FocusableConsole {
     /// Append styled text to the console and scroll to bottom
     pub fn append_styled(&mut self, styled: cursive::utils::markup::StyledString) {
         self.view.get_inner_mut().append(styled);
+        self.view.scroll_to_bottom();
+    }
+
+    /// Set the content of the console
+    pub fn set_content(&mut self, content: &str) {
+        self.view.get_inner_mut().set_content(content);
         self.view.scroll_to_bottom();
     }
 }
