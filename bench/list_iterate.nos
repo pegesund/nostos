@@ -28,30 +28,38 @@ reverseAcc([x | xs], acc) = reverseAcc(xs, [x | acc])
 buildList(0) = []
 buildList(n) = [n | buildList(n - 1)]
 
+# 10 calls per helper for direct call optimization
+count10(list) = countList(list) + countList(list) + countList(list) + countList(list) + countList(list) +
+                countList(list) + countList(list) + countList(list) + countList(list) + countList(list)
+
+sumTail10(list) = sumTail(list, 0) + sumTail(list, 0) + sumTail(list, 0) + sumTail(list, 0) + sumTail(list, 0) +
+                  sumTail(list, 0) + sumTail(list, 0) + sumTail(list, 0) + sumTail(list, 0) + sumTail(list, 0)
+
+sumRec10(list) = sumRec(list) + sumRec(list) + sumRec(list) + sumRec(list) + sumRec(list) +
+                 sumRec(list) + sumRec(list) + sumRec(list) + sumRec(list) + sumRec(list)
+
 main() = {
-    n = 50000
-    
+    n = 100000
+
     # Build list once
     list = buildList(n)
-    
-    # Test 1: Count (pure iteration)
-    c1 = countList(list)
-    c2 = countList(list)
-    c3 = countList(list)
-    
-    # Test 2: Sum tail recursive (pure iteration)
-    s1 = sumTail(list, 0)
-    s2 = sumTail(list, 0)
-    s3 = sumTail(list, 0)
-    
-    # Test 3: Sum non-tail recursive
-    r1 = sumRec(list)
-    r2 = sumRec(list)
-    r3 = sumRec(list)
-    
-    println(c1)
-    println(s1)
-    println(r1)
-    
-    c1 + s1 + r1
+
+    # Run 100 iterations each (10 x 10) with direct calls for JIT dispatch
+
+    # Test 1: Count (pure iteration) - 100x
+    c = count10(list) + count10(list) + count10(list) + count10(list) + count10(list) +
+        count10(list) + count10(list) + count10(list) + count10(list) + count10(list)
+    println(c)
+
+    # Test 2: Sum tail recursive - 100x
+    s = sumTail10(list) + sumTail10(list) + sumTail10(list) + sumTail10(list) + sumTail10(list) +
+        sumTail10(list) + sumTail10(list) + sumTail10(list) + sumTail10(list) + sumTail10(list)
+    println(s)
+
+    # Test 3: Sum non-tail recursive (optimized) - 100x
+    r = sumRec10(list) + sumRec10(list) + sumRec10(list) + sumRec10(list) + sumRec10(list) +
+        sumRec10(list) + sumRec10(list) + sumRec10(list) + sumRec10(list) + sumRec10(list)
+    println(r)
+
+    c + s + r
 }

@@ -121,6 +121,8 @@ pub struct AsyncSharedState {
     pub jit_array_fill_functions: RwLock<HashMap<u16, crate::shared_types::JitArrayFillFn>>,
     /// JIT recursive array sum functions (arity 3: arr, idx, acc)
     pub jit_array_sum_functions: RwLock<HashMap<u16, crate::shared_types::JitArraySumFn>>,
+    /// JIT list sum functions: (data_ptr, len) -> sum
+    pub jit_list_sum_functions: RwLock<HashMap<u16, crate::shared_types::JitListSumFn>>,
 
     /// Shutdown signal (permanent).
     pub shutdown: AtomicBool,
@@ -1758,6 +1760,26 @@ impl AsyncProcess {
                                 }
                             }
                         }
+                        // List sum optimization - use native sum() instead of interpreter
+                        // This avoids copying and is O(n) directly on the imbl::Vector
+                        if self.shared.jit_list_sum_functions.read().unwrap().contains_key(&func_idx_u16) {
+                            if let GcValue::Int64List(ref list) = reg_ref!(args[0]) {
+                                // Direct sum on imbl::Vector - no copy needed!
+                                let (result, duration) = if profiling {
+                                    let start = Instant::now();
+                                    let r = list.sum();
+                                    (r, Some(start.elapsed()))
+                                } else {
+                                    (list.sum(), None)
+                                };
+                                set_reg!(dst, GcValue::Int64(result));
+                                if let Some(d) = duration {
+                                    let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    self.profile_jit_call(&name, d);
+                                }
+                                return Ok(StepResult::Continue);
+                            }
+                        }
                     }
                     2 => {
                         // Try numeric JIT first
@@ -2313,6 +2335,33 @@ impl AsyncProcess {
                                 }
                             }
                         }
+                        // List sum optimization - use native sum() directly
+                        if self.shared.jit_list_sum_functions.read().unwrap().contains_key(&func_idx_u16) {
+                            if let GcValue::Int64List(ref list) = reg_ref!(args[0]) {
+                                // Direct sum on imbl::Vector - no copy!
+                                let (res, duration) = if profiling {
+                                    let start = Instant::now();
+                                    let r = list.sum();
+                                    (r, Some(start.elapsed()))
+                                } else {
+                                    (list.sum(), None)
+                                };
+                                if let Some(d) = duration {
+                                    let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    self.profile_jit_call(&name, d);
+                                }
+                                let result = GcValue::Int64(res);
+                                let return_reg = self.frames.last().unwrap().return_reg;
+                                self.frames.pop();
+                                if self.frames.is_empty() {
+                                    return Ok(StepResult::Finished(result));
+                                } else if let Some(ret_reg) = return_reg {
+                                    let frame = self.frames.last_mut().unwrap();
+                                    frame.registers[ret_reg as usize] = result;
+                                }
+                                return Ok(StepResult::Continue);
+                            }
+                        }
                     }
                     2 => {
                         // Try numeric JIT first
@@ -2620,9 +2669,12 @@ impl AsyncProcess {
                     }
 
                     let frame = self.frames.last_mut().unwrap();
+                    let num_args = args.len();
 
-                    // Clear all registers to Unit (in-place, no allocation)
-                    for reg in frame.registers.iter_mut() {
+                    // Only clear registers beyond the argument positions
+                    // Registers 0..num_args will be overwritten with saved args
+                    // This avoids dropping values that might trigger atomic ops
+                    for reg in frame.registers.iter_mut().skip(num_args) {
                         *reg = GcValue::Unit;
                     }
 
@@ -2638,7 +2690,9 @@ impl AsyncProcess {
                     // Fallback for >8 args (rare)
                     let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r)).collect();
                     let frame = self.frames.last_mut().unwrap();
-                    for reg in frame.registers.iter_mut() {
+                    let num_args = arg_values.len();
+                    // Only clear registers beyond arguments
+                    for reg in frame.registers.iter_mut().skip(num_args) {
                         *reg = GcValue::Unit;
                     }
                     for (i, arg) in arg_values.into_iter().enumerate() {
@@ -2845,10 +2899,9 @@ impl AsyncProcess {
                 match list_val {
                     GcValue::List(list) => {
                         if !list.is_empty() {
-                            // Clone only the head element, not the whole list
-                            let head = list.head().cloned().unwrap_or(GcValue::Unit);
-                            // tail() is O(1) - just Arc clone + offset increment
-                            let tail = list.tail();
+                            // Use unchecked versions - we just verified non-empty
+                            let head = list.head_unchecked().clone();
+                            let tail = list.tail_unchecked();
                             set_reg!(head_dst, head);
                             set_reg!(tail_dst, GcValue::List(tail));
                         } else {
@@ -2857,8 +2910,9 @@ impl AsyncProcess {
                     }
                     GcValue::Int64List(list) => {
                         if !list.is_empty() {
-                            let head = list.head().unwrap();
-                            let tail = list.tail();
+                            // Use unchecked versions - we just verified non-empty
+                            let head = list.head_unchecked();
+                            let tail = list.tail_unchecked();
                             set_reg!(head_dst, GcValue::Int64(head));
                             set_reg!(tail_dst, GcValue::Int64List(tail));
                         } else {
@@ -2898,8 +2952,9 @@ impl AsyncProcess {
                 let list_val = reg_ref!(list_reg);
                 if let GcValue::Int64List(list) = list_val {
                     if !list.is_empty() {
-                        let head = list.head().unwrap();
-                        let tail = list.tail();
+                        // Use unchecked versions - we just verified non-empty
+                        let head = list.head_unchecked();
+                        let tail = list.tail_unchecked();
                         set_reg!(head_dst, GcValue::Int64(head));
                         set_reg!(tail_dst, GcValue::Int64List(tail));
                     } else {
@@ -2970,10 +3025,11 @@ impl AsyncProcess {
             }
 
             ListHead(dst, list_reg) => {
-                let list_val = reg!(list_reg);
+                let list_val = reg_ref!(list_reg);
                 let result = match list_val {
                     GcValue::List(list) => {
-                        if let Some(head) = list.items().first() {
+                        // Use O(log n) head() instead of O(n) items().first()
+                        if let Some(head) = list.head() {
                             head.clone()
                         } else {
                             return Err(RuntimeError::IndexOutOfBounds { index: 0, length: 0 });
@@ -3173,38 +3229,40 @@ impl AsyncProcess {
                     GcValue::Int64(i) => i as usize,
                     _ => return Err(RuntimeError::Panic("Index: index must be Int64".into())),
                 };
-                let coll_val = reg!(coll);
+                let coll_val = reg_ref!(coll);
                 let value = match coll_val {
                     GcValue::List(list) => {
-                        list.items().get(idx_val).cloned()
+                        // Use O(log n) get() instead of O(n) items().get()
+                        list.get(idx_val).cloned()
                             .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?
                     }
                     GcValue::Int64List(list) => {
-                        let val = list.iter().nth(idx_val)
+                        // Use O(log n) indexing via imbl::Vector
+                        let val = list.get(idx_val)
                             .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?;
                         GcValue::Int64(val)
                     }
                     GcValue::Tuple(ptr) => {
-                        let tuple = self.heap.get_tuple(ptr)
+                        let tuple = self.heap.get_tuple(*ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".into()))?;
                         tuple.items.get(idx_val).cloned()
                             .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?
                     }
                     GcValue::Array(ptr) => {
-                        let array = self.heap.get_array(ptr)
+                        let array = self.heap.get_array(*ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid array reference".into()))?;
                         array.items.get(idx_val).cloned()
                             .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?
                     }
                     GcValue::Int64Array(ptr) => {
-                        let array = self.heap.get_int64_array(ptr)
+                        let array = self.heap.get_int64_array(*ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid int64 array reference".into()))?;
                         let val = *array.items.get(idx_val)
                             .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?;
                         GcValue::Int64(val)
                     }
                     GcValue::Float64Array(ptr) => {
-                        let array = self.heap.get_float64_array(ptr)
+                        let array = self.heap.get_float64_array(*ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid float64 array reference".into()))?;
                         let val = *array.items.get(idx_val)
                             .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?;
@@ -7510,6 +7568,7 @@ impl AsyncVM {
             jit_loop_array_functions: RwLock::new(HashMap::new()),
             jit_array_fill_functions: RwLock::new(HashMap::new()),
             jit_array_sum_functions: RwLock::new(HashMap::new()),
+            jit_list_sum_functions: RwLock::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
             interrupt: AtomicBool::new(false),
             process_registry: TokioRwLock::new(HashMap::new()),
@@ -7615,6 +7674,12 @@ impl AsyncVM {
     /// Register a JIT recursive array sum function (arity 3) - safe during concurrent evals.
     pub fn register_jit_array_sum_function(&mut self, func_index: u16, jit_fn: crate::shared_types::JitArraySumFn) {
         self.shared.jit_array_sum_functions.write().unwrap()
+            .insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT list sum function - safe during concurrent evals.
+    pub fn register_jit_list_sum_function(&mut self, func_index: u16, jit_fn: crate::shared_types::JitListSumFn) {
+        self.shared.jit_list_sum_functions.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
@@ -9098,7 +9163,7 @@ impl AsyncVM {
         self.register_native("range", Arc::new(GcNativeFn {
             name: "range".to_string(),
             arity: 2,
-            func: Box::new(|args, heap| {
+            func: Box::new(|args, _heap| {
                 let start = match &args[0] {
                     GcValue::Int64(n) => *n,
                     _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
@@ -9107,8 +9172,9 @@ impl AsyncVM {
                     GcValue::Int64(n) => *n,
                     _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
                 };
-                let items: Vec<GcValue> = (start..end).map(GcValue::Int64).collect();
-                Ok(GcValue::List(heap.make_list(items)))
+                // Use specialized Int64List for better performance
+                let items: Vec<i64> = (start..end).collect();
+                Ok(GcValue::Int64List(GcInt64List::from_vec(items)))
             }),
         }));
 
