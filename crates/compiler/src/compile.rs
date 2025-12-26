@@ -7430,6 +7430,10 @@ impl Compiler {
         // Optimization: in tail position with a simple value, emit Return directly
         // Skip this optimization if the then_branch is a tail call (already emits TailCall*)
         if is_tail && !self.is_tail_call_expr(then_branch) {
+            // Emit MvarUnlock for all held locks before returning
+            for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+            }
             self.chunk.emit(Instruction::Return(then_reg), 0);
         } else {
             self.chunk.emit(Instruction::Move(dst, then_reg), 0);
@@ -7444,6 +7448,10 @@ impl Compiler {
 
         // Same optimization for else branch
         if is_tail && !self.is_tail_call_expr(else_branch) {
+            // Emit MvarUnlock for all held locks before returning
+            for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+            }
             self.chunk.emit(Instruction::Return(else_reg), 0);
         } else {
             self.chunk.emit(Instruction::Move(dst, else_reg), 0);

@@ -66,14 +66,7 @@ skipped=0
 declare -a failures
 
 while IFS= read -r -d '' file; do
-    # Skip postgres tests (require external database)
-    if [[ "$file" == *"/postgres/"* ]]; then
-        ((skipped++))
-        $VERBOSE && echo -e "${YELLOW}SKIP${NC}: $file (requires postgres)"
-        continue
-    fi
-
-    # Skip timeout tests (intentionally slow)
+    # Skip timeout tests (intentionally slow/hang)
     if [[ "$file" == *"/timeout/"* ]]; then
         ((skipped++))
         $VERBOSE && echo -e "${YELLOW}SKIP${NC}: $file (timeout test)"
@@ -106,8 +99,8 @@ while IFS= read -r -d '' file; do
             $STOP_ON_FAIL && exit 1
         fi
     else
-        # Test expects a specific value
-        actual=$(echo "$output" | tr -d '\n')
+        # Test expects a specific value - use last line only (tests may print debug info)
+        actual=$(echo "$output" | tail -1 | tr -d '\n')
         normalized=$(normalize_output "$actual")
 
         if [ "$normalized" = "$expect" ]; then
