@@ -496,6 +496,229 @@ fn run_with_async_vm(
     }
 }
 
+const REGISTRY_URL: &str = "https://raw.githubusercontent.com/pegesund/nostos/master/nostlets-registry.json";
+
+/// Run the nostlet subcommand
+fn run_nostlet_command(args: &[String]) -> ExitCode {
+    if args.is_empty() {
+        eprintln!("Usage: nostos nostlet <command>");
+        eprintln!();
+        eprintln!("Commands:");
+        eprintln!("  list              List available nostlets from registry");
+        eprintln!("  install <name>    Install a nostlet to ~/.nostos/nostlets/");
+        eprintln!("  installed         List locally installed nostlets");
+        return ExitCode::FAILURE;
+    }
+
+    match args[0].as_str() {
+        "list" => nostlet_list(),
+        "install" => {
+            if args.len() < 2 {
+                eprintln!("Usage: nostos nostlet install <name>");
+                return ExitCode::FAILURE;
+            }
+            nostlet_install(&args[1])
+        }
+        "installed" => nostlet_installed(),
+        _ => {
+            eprintln!("Unknown nostlet command: {}", args[0]);
+            eprintln!("Use 'nostos nostlet' for help");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Fetch the nostlet registry from GitHub
+fn fetch_registry() -> Result<serde_json::Value, String> {
+    let response = ureq::get(REGISTRY_URL)
+        .call()
+        .map_err(|e| format!("Failed to fetch registry: {}", e))?;
+
+    let body = response
+        .into_string()
+        .map_err(|e| format!("Failed to read registry: {}", e))?;
+
+    serde_json::from_str(&body).map_err(|e| format!("Failed to parse registry: {}", e))
+}
+
+/// List available nostlets from registry
+fn nostlet_list() -> ExitCode {
+    println!("Fetching nostlet registry...");
+
+    let registry = match fetch_registry() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let nostlets = match registry.get("nostlets").and_then(|n| n.as_array()) {
+        Some(n) => n,
+        None => {
+            eprintln!("Error: Invalid registry format");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if nostlets.is_empty() {
+        println!("No nostlets available in registry.");
+        return ExitCode::SUCCESS;
+    }
+
+    println!();
+    println!("Available nostlets:");
+    println!("{:-<60}", "");
+
+    for nostlet in nostlets {
+        let name = nostlet.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+        let desc = nostlet.get("description").and_then(|d| d.as_str()).unwrap_or("");
+        let author = nostlet.get("author").and_then(|a| a.as_str()).unwrap_or("unknown");
+
+        println!("  {} - {}", name, desc);
+        println!("    by {}", author);
+        println!();
+    }
+
+    println!("Install with: nostos nostlet install <name>");
+    ExitCode::SUCCESS
+}
+
+/// Install a nostlet from registry
+fn nostlet_install(name: &str) -> ExitCode {
+    println!("Fetching nostlet registry...");
+
+    let registry = match fetch_registry() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let nostlets = match registry.get("nostlets").and_then(|n| n.as_array()) {
+        Some(n) => n,
+        None => {
+            eprintln!("Error: Invalid registry format");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Find the nostlet by name
+    let nostlet = nostlets.iter().find(|n| {
+        n.get("name").and_then(|nm| nm.as_str()) == Some(name)
+    });
+
+    let nostlet = match nostlet {
+        Some(n) => n,
+        None => {
+            eprintln!("Error: Nostlet '{}' not found in registry", name);
+            eprintln!("Use 'nostos nostlet list' to see available nostlets");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let url = match nostlet.get("url").and_then(|u| u.as_str()) {
+        Some(u) => u,
+        None => {
+            eprintln!("Error: Nostlet '{}' has no download URL", name);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    println!("Downloading {} from {}...", name, url);
+
+    // Fetch the nostlet file
+    let response = match ureq::get(url).call() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: Failed to download nostlet: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let content = match response.into_string() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error: Failed to read nostlet: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Create ~/.nostos/nostlets/ directory if it doesn't exist
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => {
+            eprintln!("Error: Could not determine home directory");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let nostlets_dir = home.join(".nostos").join("nostlets");
+    if let Err(e) = fs::create_dir_all(&nostlets_dir) {
+        eprintln!("Error: Failed to create nostlets directory: {}", e);
+        return ExitCode::FAILURE;
+    }
+
+    // Write the nostlet file
+    let file_path = nostlets_dir.join(format!("{}.nos", name));
+    if let Err(e) = fs::write(&file_path, &content) {
+        eprintln!("Error: Failed to write nostlet file: {}", e);
+        return ExitCode::FAILURE;
+    }
+
+    println!("Installed {} to {}", name, file_path.display());
+    println!("Open the TUI and press Ctrl+N to use it!");
+    ExitCode::SUCCESS
+}
+
+/// List locally installed nostlets
+fn nostlet_installed() -> ExitCode {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => {
+            eprintln!("Error: Could not determine home directory");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let nostlets_dir = home.join(".nostos").join("nostlets");
+
+    if !nostlets_dir.exists() {
+        println!("No nostlets installed.");
+        println!("Use 'nostos nostlet list' to see available nostlets");
+        return ExitCode::SUCCESS;
+    }
+
+    let entries = match fs::read_dir(&nostlets_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Error reading nostlets directory: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut found = false;
+    println!("Installed nostlets in {}:", nostlets_dir.display());
+    println!("{:-<60}", "");
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().map(|e| e == "nos").unwrap_or(false) {
+            if let Some(name) = path.file_stem() {
+                println!("  {}", name.to_string_lossy());
+                found = true;
+            }
+        }
+    }
+
+    if !found {
+        println!("  (none)");
+    }
+
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
 
@@ -504,6 +727,8 @@ fn main() -> ExitCode {
         eprintln!();
         eprintln!("Commands:");
         eprintln!("  repl       Start the interactive REPL");
+        eprintln!("  tui        Start the TUI editor");
+        eprintln!("  nostlet    Manage nostlets (plugins)");
         eprintln!();
         eprintln!("Run a Nostos program file or start the REPL.");
         eprintln!();
@@ -513,13 +738,16 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    // Check for repl subcommand
+    // Check for subcommands
     if args.len() >= 2 {
         if args[1] == "repl" {
             return run_repl(&args[2..]);
         }
         if args[1] == "tui" {
             return tui::run_tui(&args[2..]);
+        }
+        if args[1] == "nostlet" {
+            return run_nostlet_command(&args[2..]);
         }
     }
 

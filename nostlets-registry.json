@@ -1,0 +1,13 @@
+{
+  "version": "1.0",
+  "description": "Central registry of available Nostos nostlets. Submit PRs to add your nostlets.",
+  "nostlets": [
+    {
+      "name": "hello",
+      "description": "Simple hello world nostlet example",
+      "author": "nostos",
+      "url": "https://raw.githubusercontent.com/pegesund/nostos/master/examples/nostlets/hello.nos",
+      "tags": ["example", "starter"]
+    }
+  ]
+}

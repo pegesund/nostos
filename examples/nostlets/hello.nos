@@ -1,0 +1,28 @@
+# Hello World Nostlet
+# A simple example nostlet to demonstrate the nostlet system
+
+nostlet_name() = "Hello World"
+
+nostlet_description() = "A simple example nostlet"
+
+# State for the counter
+mvar counter = 0
+
+render() = {
+    c = MVar.read(counter)
+    "Welcome to Nostlets!\n\n" ++
+    "Press 'r' to refresh\n" ++
+    "Press '+' to increment counter\n" ++
+    "Press '-' to decrement counter\n" ++
+    "Press 'Esc' or 'Ctrl+W' to close\n\n" ++
+    "Counter: " ++ toString(c)
+}
+
+onKey(key) = {
+    if key == "+" then
+        MVar.modify(counter, c => c + 1)
+    else if key == "-" then
+        MVar.modify(counter, c => c - 1)
+    else
+        ()
+}
