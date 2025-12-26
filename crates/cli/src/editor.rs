@@ -1211,7 +1211,7 @@ impl View for CodeEditor {
         // Check if this is an editing event (for tracking edit time)
         let is_edit = matches!(event,
             Event::Char(_) | Event::Key(Key::Enter) | Event::Key(Key::Backspace) |
-            Event::Key(Key::Del) | Event::Key(Key::Tab)
+            Event::Key(Key::Del) | Event::Key(Key::Tab) | Event::CtrlChar('k')
         );
 
         // In read-only mode, ignore all editing events but allow navigation
@@ -1222,10 +1222,10 @@ impl View for CodeEditor {
                 Event::Key(Key::Up) | Event::Key(Key::Down) |
                 Event::Key(Key::Home) | Event::Key(Key::End) |
                 Event::Key(Key::PageUp) | Event::Key(Key::PageDown) |
-                Event::Key(Key::Esc) => { /* fall through to normal handling */ }
+                Event::Key(Key::Esc) | Event::CtrlChar('a') => { /* fall through to normal handling */ }
                 // Editing is blocked
                 Event::Char(_) | Event::Key(Key::Enter) | Event::Key(Key::Backspace) |
-                Event::Key(Key::Del) | Event::Key(Key::Tab) => {
+                Event::Key(Key::Del) | Event::Key(Key::Tab) | Event::CtrlChar('k') => {
                     return EventResult::Consumed(None); // Consume but do nothing
                 }
                 _ => { /* other events fall through */ }
@@ -1374,6 +1374,33 @@ impl View for CodeEditor {
             // Ctrl+F to show all functions in current module
             Event::CtrlChar('f') => {
                 self.show_module_functions();
+                EventResult::Consumed(None)
+            }
+            // Ctrl+A to go to start of line
+            Event::CtrlChar('a') => {
+                self.ac_state.reset();
+                self.cursor.0 = 0;
+                EventResult::Consumed(None)
+            }
+            // Ctrl+K to delete current line
+            Event::CtrlChar('k') => {
+                self.ac_state.reset();
+                if self.content.len() > 1 {
+                    self.content.remove(self.cursor.1);
+                    // Adjust cursor if it was on the last line
+                    if self.cursor.1 >= self.content.len() {
+                        self.cursor.1 = self.content.len() - 1;
+                    }
+                    // Ensure cursor column is within bounds
+                    let line_len = self.line_char_count(self.cursor.1);
+                    if self.cursor.0 > line_len {
+                        self.cursor.0 = line_len;
+                    }
+                } else {
+                    // Only one line - clear it instead of removing
+                    self.content[0].clear();
+                    self.cursor.0 = 0;
+                }
                 EventResult::Consumed(None)
             }
             _ => EventResult::Ignored,
