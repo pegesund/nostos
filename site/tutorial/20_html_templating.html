@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTML Templating - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75;
+        }
+        .hljs-function {
+            color: #e5c07b;
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/pegesund/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+
+        <!-- Sidebar -->
+        <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_type_system.html" class="block text-slate-400 hover:text-white transition">7. Type System</a></li>
+                    <li><a href="08_traits.html" class="block text-slate-400 hover:text-white transition">8. Traits</a></li>
+                    <li><a href="09_builtin_traits.html" class="block text-slate-400 hover:text-white transition">9. Builtin Traits</a></li>
+                    <li><a href="10_trait_bounds.html" class="block text-slate-400 hover:text-white transition">10. Trait Bounds</a></li>
+                    <li><a href="11_error_handling.html" class="block text-slate-400 hover:text-white transition">11. Error Handling</a></li>
+                    <li><a href="12_modules.html" class="block text-slate-400 hover:text-white transition">12. Modules & Imports</a></li>
+                    <li><a href="13_stdlib.html" class="block text-slate-400 hover:text-white transition">13. Standard Library</a></li>
+                    <li><a href="14_json.html" class="block text-slate-400 hover:text-white transition">14. JSON</a></li>
+                    <li><a href="15_concurrency.html" class="block text-slate-400 hover:text-white transition">15. Concurrency</a></li>
+                    <li><a href="16_async_runtime.html" class="block text-slate-400 hover:text-white transition">16. Async Runtime</a></li>
+                    <li><a href="17_async_io_http.html" class="block text-slate-400 hover:text-white transition">17. Async I/O & HTTP</a></li>
+                    <li><a href="18_reflection.html" class="block text-slate-400 hover:text-white transition">18. Reflection & Eval</a></li>
+                    <li><a href="19_debugging_profiling.html" class="block text-slate-400 hover:text-white transition">19. Debugging & Profiling</a></li>
+                    <li><a href="20_html_templating.html" class="block text-blue-400 font-medium">20. HTML Templating</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">HTML Templating</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Nostos provides a functional HTML templating system with the <code>Html(...)</code> syntax.
+                    Inside <code>Html(...)</code>, bare tag names like <code>div</code>, <code>h1</code>, and <code>p</code>
+                    are automatically resolved to their <code>stdlib.html</code> equivalents, giving you a clean,
+                    JSX-like syntax without the noise of fully qualified names.
+                </p>
+
+                <!-- Basic Usage -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Basic Usage</h2>
+                <p class="text-slate-400 mb-4">Import the functions you need from <code>stdlib.html</code> and wrap your template in <code>Html(...)</code>.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.html.{Html, render, div, h1_, p_}
+
+main() = {
+    # Build an HTML tree
+    page = Html(
+        div([
+            h1_("Welcome to Nostos!"),
+            p_("This is a paragraph.")
+        ])
+    )
+
+    # Render to string
+    html = render(page)
+    println(html)
+    # Output: &lt;div&gt;&lt;h1&gt;Welcome to Nostos!&lt;/h1&gt;&lt;p&gt;This is a paragraph.&lt;/p&gt;&lt;/div&gt;
+}</code></pre>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <p class="text-slate-400 text-sm"><strong>Note:</strong> The <code>Html(...)</code> wrapper enables scoped name resolution. Without it, you'd need to write <code>stdlib.html.div</code> everywhere.</p>
+                </div>
+
+                <!-- Tag Functions -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Tag Functions</h2>
+                <p class="text-slate-400 mb-4">There are two types of tag functions:</p>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Container Tags (take children list)</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Container tags take a List[Html] of children
+div([...])      # &lt;div&gt;...&lt;/div&gt;
+span([...])     # &lt;span&gt;...&lt;/span&gt;
+ul([...])       # &lt;ul&gt;...&lt;/ul&gt;
+ol([...])       # &lt;ol&gt;...&lt;/ol&gt;
+li([...])       # &lt;li&gt;...&lt;/li&gt;
+table([...])    # &lt;table&gt;...&lt;/table&gt;
+thead([...])    # &lt;thead&gt;...&lt;/thead&gt;
+tbody([...])    # &lt;tbody&gt;...&lt;/tbody&gt;
+tr([...])       # &lt;tr&gt;...&lt;/tr&gt;
+th([...])       # &lt;th&gt;...&lt;/th&gt;
+td([...])       # &lt;td&gt;...&lt;/td&gt;
+nav([...])      # &lt;nav&gt;...&lt;/nav&gt;
+header([...])   # &lt;header&gt;...&lt;/header&gt;
+footer([...])   # &lt;footer&gt;...&lt;/footer&gt;
+section([...])  # &lt;section&gt;...&lt;/section&gt;
+article([...])  # &lt;article&gt;...&lt;/article&gt;
+form([...])     # &lt;form&gt;...&lt;/form&gt;
+button([...])   # &lt;button&gt;...&lt;/button&gt;</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Text Tags (take a string)</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Text tags (ending with _) take a String
+div_("text")    # &lt;div&gt;text&lt;/div&gt;
+span_("text")   # &lt;span&gt;text&lt;/span&gt;
+p_("text")      # &lt;p&gt;text&lt;/p&gt;
+h1_("text")     # &lt;h1&gt;text&lt;/h1&gt;
+h2_("text")     # &lt;h2&gt;text&lt;/h2&gt;
+h3_("text")     # &lt;h3&gt;text&lt;/h3&gt;
+li_("text")     # &lt;li&gt;text&lt;/li&gt;
+th_("text")     # &lt;th&gt;text&lt;/th&gt;
+td_("text")     # &lt;td&gt;text&lt;/td&gt;
+strong("text")  # &lt;strong&gt;text&lt;/strong&gt;
+em("text")      # &lt;em&gt;text&lt;/em&gt;
+code_("text")   # &lt;code&gt;text&lt;/code&gt;
+button_("text") # &lt;button&gt;text&lt;/button&gt;</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Self-Closing Tags</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Self-closing tags
+br()            # &lt;br /&gt;
+hr()            # &lt;hr /&gt;
+img(attrs)      # &lt;img ... /&gt;
+input(attrs)    # &lt;input ... /&gt;
+meta(attrs)     # &lt;meta ... /&gt;
+linkTag(attrs)  # &lt;link ... /&gt;</code></pre>
+                </div>
+
+                <!-- Attributes -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Attributes</h2>
+                <p class="text-slate-400 mb-4">Attributes are passed as a list of <code>(name, value)</code> tuples.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.html.{Html, render, a_, img, div, el}
+
+main() = {
+    page = Html(
+        div([
+            # Link with href attribute
+            a_([("href", "https://example.com"), ("class", "link")], "Click here"),
+
+            # Image with attributes
+            img([("src", "/logo.png"), ("alt", "Logo"), ("width", "100")])
+        ])
+    )
+
+    println(render(page))
+    # &lt;div&gt;&lt;a href="https://example.com" class="link"&gt;Click here&lt;/a&gt;&lt;img src="/logo.png" alt="Logo" width="100" /&gt;&lt;/div&gt;
+}</code></pre>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <p class="text-slate-400 text-sm"><strong>Tip:</strong> For custom elements or elements with attributes and children, use <code>el(tag, attrs, children)</code>.</p>
+                </div>
+
+                <!-- HTML Escaping -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Automatic HTML Escaping</h2>
+                <p class="text-slate-400 mb-4">Text content is automatically escaped to prevent XSS attacks.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.html.{Html, render, p_}
+
+main() = {
+    # User input with malicious content
+    userInput = "&lt;script&gt;alert('xss')&lt;/script&gt;"
+
+    page = Html(p_(userInput))
+    println(render(page))
+    # Safe output: &lt;p&gt;&amp;lt;script&amp;gt;alert(&amp;#39;xss&amp;#39;)&amp;lt;/script&amp;gt;&lt;/p&gt;
+}</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">For raw HTML (use with caution!), use <code>raw()</code>:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.html.{Html, render, div, raw}
+
+main() = {
+    # Only use raw() for trusted content!
+    trustedHtml = "&lt;strong&gt;Bold&lt;/strong&gt;"
+
+    page = Html(div([raw(trustedHtml)]))
+    println(render(page))
+    # Output: &lt;div&gt;&lt;strong&gt;Bold&lt;/strong&gt;&lt;/div&gt;
+}</code></pre>
+                </div>
+
+                <!-- Building Dynamic Content -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Dynamic Content</h2>
+                <p class="text-slate-400 mb-4">Use <code>map</code> and list operations to build dynamic HTML.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.html.{Html, render, ul, li_}
+
+main() = {
+    items = ["Apple", "Banana", "Cherry"]
+
+    page = Html(
+        ul(items.map(item => li_(item)))
+    )
+
+    println(render(page))
+    # &lt;ul&gt;&lt;li&gt;Apple&lt;/li&gt;&lt;li&gt;Banana&lt;/li&gt;&lt;li&gt;Cherry&lt;/li&gt;&lt;/ul&gt;
+}</code></pre>
+                </div>
+
+                <!-- Components -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Components</h2>
+                <p class="text-slate-400 mb-4">Create reusable components as functions that return <code>Html</code>.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.html.{Html, render, div, h2_, p_, ul, li_}
+
+# A reusable card component
+card(title, content) = Html(
+    div([
+        h2_(title),
+        p_(content)
+    ])
+)
+
+# A navigation component
+navMenu(links) = Html(
+    ul(links.map((name, url) =>
+        li_([a_([("href", url)], name)])
+    ))
+)
+
+main() = {
+    myCard = card("Hello", "This is a card component")
+    println(render(myCard))
+}</code></pre>
+                </div>
+
+                <!-- Conditionals -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Conditional Rendering</h2>
+                <p class="text-slate-400 mb-4">Use <code>if/else</code> expressions and <code>empty()</code> for conditional content.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.html.{Html, render, div, p_, span_, empty}
+
+main() = {
+    isLoggedIn = true
+    userName = "Alice"
+
+    page = Html(
+        div([
+            if isLoggedIn then
+                span_("Welcome, " ++ userName ++ "!")
+            else
+                span_("Please log in"),
+
+            # empty() renders to nothing
+            if isLoggedIn then p_("You have 3 notifications") else empty()
+        ])
+    )
+
+    println(render(page))
+}</code></pre>
+                </div>
+
+                <!-- Full Page Example -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Full Page Example</h2>
+                <p class="text-slate-400 mb-4">Here's a complete example building a simple web page.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.html.{Html, render, el, head, body, title_, meta, div, h1_, p_, ul, li_, a_}
+
+main() = {
+    page = Html(
+        el("html", [("lang", "en")], [
+            head([
+                meta([("charset", "UTF-8")]),
+                title_("My Nostos Page")
+            ]),
+            body([
+                div([
+                    h1_("Welcome to Nostos"),
+                    p_("A functional programming language with HTML templating."),
+                    ul([
+                        li_(a_([("href", "/about")], "About")),
+                        li_(a_([("href", "/docs")], "Documentation")),
+                        li_(a_([("href", "/examples")], "Examples"))
+                    ])
+                ])
+            ])
+        ])
+    )
+
+    println(render(page))
+}</code></pre>
+                </div>
+
+                <!-- Performance -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Buffer-Optimized Rendering</h2>
+                <p class="text-slate-400 mb-4">
+                    The <code>render</code> function uses buffer-based string building internally,
+                    avoiding the overhead of repeated string concatenation. This makes rendering
+                    efficient even for large HTML trees.
+                </p>
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <p class="text-slate-400 text-sm"><strong>Implementation detail:</strong> The VM provides <code>Buffer.new()</code>, <code>Buffer.append()</code>, and <code>Buffer.toString()</code> instructions that the <code>render</code> function uses for O(n) string building instead of O(n²) concatenation.</p>
+                </div>
+
+                <!-- Navigation -->
+                <div class="flex justify-between mt-12 pt-8 border-t border-slate-800">
+                    <a href="19_debugging_profiling.html" class="text-blue-400 hover:text-blue-300 transition">&larr; Debugging & Profiling</a>
+                    <span class="text-slate-600">End of Tutorial</span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>
+        // Custom language definition for Nostos
+        hljs.registerLanguage('nostos', function(hljs) {
+            return {
+                keywords: {
+                    keyword: 'if then else match type let in use import module trait impl deriving where for while do return break continue spawn receive send try catch throw async await mvar',
+                    literal: 'true false None Some Ok Err',
+                    built_in: 'println print assert_eq Html render'
+                },
+                contains: [
+                    hljs.HASH_COMMENT_MODE,
+                    hljs.QUOTE_STRING_MODE,
+                    hljs.C_NUMBER_MODE,
+                    {
+                        className: 'function',
+                        begin: /[a-z_][a-zA-Z0-9_]*(?=\s*\()/
+                    },
+                    {
+                        className: 'type',
+                        begin: /\b[A-Z][a-zA-Z0-9_]*\b/
+                    },
+                    {
+                        className: 'operator',
+                        begin: /[+\-*\/%=<>!&|]+|->|=>|\|/
+                    }
+                ]
+            };
+        });
+        hljs.highlightAll();
+    </script>
+</body>
+</html>
