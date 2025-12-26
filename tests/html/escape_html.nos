@@ -1,9 +1,10 @@
 # expect: <p>&lt;script&gt;</p>
 # HTML escaping works correctly
 
-use stdlib.html.{Html, render, p_}
+use stdlib.html.{Html, render}
 
 main() = {
-    page = Html(p_("<script>"))
+    # p("<script>") uses the overloaded p(str: String) variant
+    page = Html(p("<script>"))
     render(page)
 }

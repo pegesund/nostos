@@ -96,16 +96,16 @@
 
                 <!-- Basic Usage -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Basic Usage</h2>
-                <p class="text-slate-400 mb-4">Import the functions you need from <code>stdlib.html</code> and wrap your template in <code>Html(...)</code>.</p>
+                <p class="text-slate-400 mb-4">You only need to import <code>Html</code> and <code>render</code>. Inside <code>Html(...)</code>, all tag functions are automatically available.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.html.{Html, render, div, h1_, p_}
+<pre><code class="language-nostos">use stdlib.html.{Html, render}
 
 main() = {
-    # Build an HTML tree
+    # Build an HTML tree - no need to import div, h1, p!
     page = Html(
         div([
-            h1_("Welcome to Nostos!"),
-            p_("This is a paragraph.")
+            h1("Welcome to Nostos!"),
+            p("This is a paragraph.")
         ])
     )
 
@@ -117,52 +117,60 @@ main() = {
                 </div>
 
                 <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
-                    <p class="text-slate-400 text-sm"><strong>Note:</strong> The <code>Html(...)</code> wrapper enables scoped name resolution. Without it, you'd need to write <code>stdlib.html.div</code> everywhere.</p>
+                    <p class="text-slate-400 text-sm"><strong>Note:</strong> The <code>Html(...)</code> wrapper enables scoped name resolution. Without it, you'd need to write <code>stdlib.html.div</code> everywhere. The magic of <code>Html(...)</code> is that you get access to 40+ tag functions with just a 2-item import!</p>
                 </div>
 
                 <!-- Tag Functions -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Tag Functions</h2>
-                <p class="text-slate-400 mb-4">There are two types of tag functions:</p>
+                <p class="text-slate-400 mb-4">Most tag functions are overloaded - they accept either a list of children or a string:</p>
 
-                <h3 class="text-xl font-semibold text-white mb-3">Container Tags (take children list)</h3>
+                <h3 class="text-xl font-semibold text-white mb-3">Overloaded Tags</h3>
                 <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos"># Container tags take a List[Html] of children
-div([...])      # &lt;div&gt;...&lt;/div&gt;
+<pre><code class="language-nostos"># Most tags are overloaded - same function name, different argument types
+div([...])      # &lt;div&gt;...&lt;/div&gt;  - with child elements
+div("text")     # &lt;div&gt;text&lt;/div&gt; - with text content
+
 span([...])     # &lt;span&gt;...&lt;/span&gt;
+span("text")    # &lt;span&gt;text&lt;/span&gt;
+
+p([...])        # &lt;p&gt;...&lt;/p&gt;
+p("text")       # &lt;p&gt;text&lt;/p&gt;
+
+h1([...])       # &lt;h1&gt;...&lt;/h1&gt;
+h1("title")     # &lt;h1&gt;title&lt;/h1&gt;
+
+li([...])       # &lt;li&gt;...&lt;/li&gt;
+li("item")      # &lt;li&gt;item&lt;/li&gt;
+
+# ... and many more: h2, h3, h4, h5, h6, th, td, button, label</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Container-Only Tags</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Some tags only accept children (no text overload)
 ul([...])       # &lt;ul&gt;...&lt;/ul&gt;
 ol([...])       # &lt;ol&gt;...&lt;/ol&gt;
-li([...])       # &lt;li&gt;...&lt;/li&gt;
 table([...])    # &lt;table&gt;...&lt;/table&gt;
 thead([...])    # &lt;thead&gt;...&lt;/thead&gt;
 tbody([...])    # &lt;tbody&gt;...&lt;/tbody&gt;
 tr([...])       # &lt;tr&gt;...&lt;/tr&gt;
-th([...])       # &lt;th&gt;...&lt;/th&gt;
-td([...])       # &lt;td&gt;...&lt;/td&gt;
 nav([...])      # &lt;nav&gt;...&lt;/nav&gt;
 header([...])   # &lt;header&gt;...&lt;/header&gt;
 footer([...])   # &lt;footer&gt;...&lt;/footer&gt;
 section([...])  # &lt;section&gt;...&lt;/section&gt;
 article([...])  # &lt;article&gt;...&lt;/article&gt;
-form([...])     # &lt;form&gt;...&lt;/form&gt;
-button([...])   # &lt;button&gt;...&lt;/button&gt;</code></pre>
+form([...])     # &lt;form&gt;...&lt;/form&gt;</code></pre>
                 </div>
 
-                <h3 class="text-xl font-semibold text-white mb-3">Text Tags (take a string)</h3>
+                <h3 class="text-xl font-semibold text-white mb-3">Text-Only Tags</h3>
                 <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos"># Text tags (ending with _) take a String
-div_("text")    # &lt;div&gt;text&lt;/div&gt;
-span_("text")   # &lt;span&gt;text&lt;/span&gt;
-p_("text")      # &lt;p&gt;text&lt;/p&gt;
-h1_("text")     # &lt;h1&gt;text&lt;/h1&gt;
-h2_("text")     # &lt;h2&gt;text&lt;/h2&gt;
-h3_("text")     # &lt;h3&gt;text&lt;/h3&gt;
-li_("text")     # &lt;li&gt;text&lt;/li&gt;
-th_("text")     # &lt;th&gt;text&lt;/th&gt;
-td_("text")     # &lt;td&gt;text&lt;/td&gt;
+<pre><code class="language-nostos"># Some tags only accept text
+title("text")   # &lt;title&gt;text&lt;/title&gt;
 strong("text")  # &lt;strong&gt;text&lt;/strong&gt;
 em("text")      # &lt;em&gt;text&lt;/em&gt;
-code_("text")   # &lt;code&gt;text&lt;/code&gt;
-button_("text") # &lt;button&gt;text&lt;/button&gt;</code></pre>
+code("text")    # &lt;code&gt;text&lt;/code&gt;
+pre("text")     # &lt;pre&gt;text&lt;/pre&gt;
+small("text")   # &lt;small&gt;text&lt;/small&gt;</code></pre>
                 </div>
 
                 <h3 class="text-xl font-semibold text-white mb-3">Self-Closing Tags</h3>
@@ -180,13 +188,13 @@ linkTag(attrs)  # &lt;link ... /&gt;</code></pre>
                 <h2 class="text-2xl font-semibold text-white mb-4">Attributes</h2>
                 <p class="text-slate-400 mb-4">Attributes are passed as a list of <code>(name, value)</code> tuples.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.html.{Html, render, a_, img, div, el}
+<pre><code class="language-nostos">use stdlib.html.{Html, render}
 
 main() = {
     page = Html(
         div([
-            # Link with href attribute
-            a_([("href", "https://example.com"), ("class", "link")], "Click here"),
+            # Link with href attribute - a(attrs, text) is overloaded
+            a([("href", "https://example.com"), ("class", "link")], "Click here"),
 
             # Image with attributes
             img([("src", "/logo.png"), ("alt", "Logo"), ("width", "100")])
@@ -206,13 +214,13 @@ main() = {
                 <h2 class="text-2xl font-semibold text-white mb-4">Automatic HTML Escaping</h2>
                 <p class="text-slate-400 mb-4">Text content is automatically escaped to prevent XSS attacks.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.html.{Html, render, p_}
+<pre><code class="language-nostos">use stdlib.html.{Html, render}
 
 main() = {
     # User input with malicious content
     userInput = "&lt;script&gt;alert('xss')&lt;/script&gt;"
 
-    page = Html(p_(userInput))
+    page = Html(p(userInput))
     println(render(page))
     # Safe output: &lt;p&gt;&amp;lt;script&amp;gt;alert(&amp;#39;xss&amp;#39;)&amp;lt;/script&amp;gt;&lt;/p&gt;
 }</code></pre>
@@ -220,7 +228,7 @@ main() = {
 
                 <p class="text-slate-400 mb-4">For raw HTML (use with caution!), use <code>raw()</code>:</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.html.{Html, render, div, raw}
+<pre><code class="language-nostos">use stdlib.html.{Html, render}
 
 main() = {
     # Only use raw() for trusted content!
@@ -236,13 +244,13 @@ main() = {
                 <h2 class="text-2xl font-semibold text-white mb-4">Dynamic Content</h2>
                 <p class="text-slate-400 mb-4">Use <code>map</code> and list operations to build dynamic HTML.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.html.{Html, render, ul, li_}
+<pre><code class="language-nostos">use stdlib.html.{Html, render}
 
 main() = {
     items = ["Apple", "Banana", "Cherry"]
 
     page = Html(
-        ul(items.map(item => li_(item)))
+        ul(items.map(item => li(item)))
     )
 
     println(render(page))
@@ -254,20 +262,20 @@ main() = {
                 <h2 class="text-2xl font-semibold text-white mb-4">Components</h2>
                 <p class="text-slate-400 mb-4">Create reusable components as functions that return <code>Html</code>.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.html.{Html, render, div, h2_, p_, ul, li_}
+<pre><code class="language-nostos">use stdlib.html.{Html, render}
 
 # A reusable card component
 card(title, content) = Html(
     div([
-        h2_(title),
-        p_(content)
+        h2(title),
+        p(content)
     ])
 )
 
 # A navigation component
 navMenu(links) = Html(
     ul(links.map((name, url) =>
-        li_([a_([("href", url)], name)])
+        li([a([("href", url)], name)])
     ))
 )
 
@@ -281,7 +289,7 @@ main() = {
                 <h2 class="text-2xl font-semibold text-white mb-4">Conditional Rendering</h2>
                 <p class="text-slate-400 mb-4">Use <code>if/else</code> expressions and <code>empty()</code> for conditional content.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.html.{Html, render, div, p_, span_, empty}
+<pre><code class="language-nostos">use stdlib.html.{Html, render}
 
 main() = {
     isLoggedIn = true
@@ -290,12 +298,12 @@ main() = {
     page = Html(
         div([
             if isLoggedIn then
-                span_("Welcome, " ++ userName ++ "!")
+                span("Welcome, " ++ userName ++ "!")
             else
-                span_("Please log in"),
+                span("Please log in"),
 
             # empty() renders to nothing
-            if isLoggedIn then p_("You have 3 notifications") else empty()
+            if isLoggedIn then p("You have 3 notifications") else empty()
         ])
     )
 
@@ -307,23 +315,23 @@ main() = {
                 <h2 class="text-2xl font-semibold text-white mb-4">Full Page Example</h2>
                 <p class="text-slate-400 mb-4">Here's a complete example building a simple web page.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.html.{Html, render, el, head, body, title_, meta, div, h1_, p_, ul, li_, a_}
+<pre><code class="language-nostos">use stdlib.html.{Html, render}
 
 main() = {
     page = Html(
         el("html", [("lang", "en")], [
             head([
                 meta([("charset", "UTF-8")]),
-                title_("My Nostos Page")
+                title("My Nostos Page")
             ]),
             body([
                 div([
-                    h1_("Welcome to Nostos"),
-                    p_("A functional programming language with HTML templating."),
+                    h1("Welcome to Nostos"),
+                    p("A functional programming language with HTML templating."),
                     ul([
-                        li_(a_([("href", "/about")], "About")),
-                        li_(a_([("href", "/docs")], "Documentation")),
-                        li_(a_([("href", "/examples")], "Examples"))
+                        li([a([("href", "/about")], "About")]),
+                        li([a([("href", "/docs")], "Documentation")]),
+                        li([a([("href", "/examples")], "Examples")])
                     ])
                 ])
             ])
