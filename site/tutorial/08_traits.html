@@ -183,6 +183,139 @@ main() = {
 </code></pre>
                 </div>
 
+                <!-- Custom Domain Traits -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Defining Your Own Traits</h2>
+                <p class="text-slate-400 mb-4">
+                    Beyond standard traits like Show and Eq, you can define traits that capture domain-specific behavior. Here are practical examples of custom traits.
+                </p>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Example: Serializable Trait</h3>
+                <p class="text-slate-400 mb-4">A trait for types that can serialize to and from a string format:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Define a trait for serialization
+trait Serializable
+    serialize(self) -> String
+    deserialize(data: String) -> Self
+end
+
+type Config = { host: String, port: Int, debug: Bool }
+
+Config: Serializable
+    serialize(self) = self.host ++ ":" ++ self.port.show() ++ ":" ++ self.debug.show()
+
+    deserialize(data) = {
+        parts = data.split(":")
+        Config(parts.get(0), parts.get(1).parseInt(), parts.get(2) == "true")
+    }
+end
+
+main() = {
+    config = Config("localhost", 8080, true)
+    saved = config.serialize()          # "localhost:8080:true"
+    loaded = Config.deserialize(saved)  # Config back from string
+}
+</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Example: Drawable Trait</h3>
+                <p class="text-slate-400 mb-4">A trait for shapes that can be drawn and measured:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Define a trait for drawable shapes
+trait Drawable
+    draw(self) -> String
+    area(self) -> Float
+    perimeter(self) -> Float
+end
+
+type Circle = { radius: Float }
+type Rectangle = { width: Float, height: Float }
+
+Circle: Drawable
+    draw(self) = "O (radius=" ++ self.radius.show() ++ ")"
+    area(self) = 3.14159 * self.radius * self.radius
+    perimeter(self) = 2.0 * 3.14159 * self.radius
+end
+
+Rectangle: Drawable
+    draw(self) = "[" ++ self.width.show() ++ "x" ++ self.height.show() ++ "]"
+    area(self) = self.width * self.height
+    perimeter(self) = 2.0 * (self.width + self.height)
+end
+
+# Works with any Drawable
+print_shape_info(shape: T) when T: Drawable = {
+    println(shape.draw())
+    println("  Area: " ++ shape.area().show())
+    println("  Perimeter: " ++ shape.perimeter().show())
+}
+
+main() = {
+    circle = Circle(5.0)
+    rect = Rectangle(4.0, 3.0)
+
+    print_shape_info(circle)
+    print_shape_info(rect)
+}
+</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Example: Validator Trait</h3>
+                <p class="text-slate-400 mb-4">A trait for types that can validate themselves:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Define a validation trait
+trait Validator
+    validate(self) -> Result[(), String]
+    isValid?(self) -> Bool
+end
+
+type Email = { address: String }
+type Age = { value: Int }
+
+Email: Validator
+    validate(self) = {
+        if self.address.contains?("@") then Ok(())
+        else Err("Invalid email: missing @")
+    }
+    isValid?(self) = self.address.contains?("@")
+end
+
+Age: Validator
+    validate(self) = {
+        if self.value < 0 then Err("Age cannot be negative")
+        else if self.value > 150 then Err("Age seems unrealistic")
+        else Ok(())
+    }
+    isValid?(self) = self.value >= 0 && self.value <= 150
+end
+
+# Validate a list of items
+validate_all(items: List[T]) when T: Validator = {
+    items.map(item => item.validate())
+         .filter(r => match r { Err(_) -> true; _ -> false })
+}
+
+main() = {
+    email = Email("user@example.com")
+    bad_email = Email("invalid")
+    age = Age(25)
+
+    println(email.isValid?())      # true
+    println(bad_email.isValid?())  # false
+    println(age.validate())        # Ok(())
+}
+</code></pre>
+                </div>
+
+                <div class="bg-gradient-to-r from-blue-900/20 to-emerald-900/20 rounded-lg p-6 mb-8 border border-blue-800/30">
+                    <h3 class="text-lg font-semibold text-white mb-3">When to Define Custom Traits</h3>
+                    <ul class="list-disc list-inside text-slate-400 space-y-2">
+                        <li><strong>Shared behavior:</strong> Multiple types need the same set of operations</li>
+                        <li><strong>Polymorphism:</strong> You want functions to work with any type that has certain capabilities</li>
+                        <li><strong>Decoupling:</strong> Separate "what" from "how" - define interface, implement details per type</li>
+                        <li><strong>Testing:</strong> Mock implementations can satisfy the same trait as real ones</li>
+                    </ul>
+                </div>
+
                 <!-- Operator Overloading -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Operator Overloading</h2>
                 <p class="text-slate-400 mb-4">
