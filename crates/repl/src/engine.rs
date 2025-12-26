@@ -745,44 +745,53 @@ impl ReplEngine {
         Ok(())
     }
 
-    /// Discover and register nostlets from the nostlets/ directory
+    /// Discover and register nostlets from ~/.nostos/nostlets/ and ./nostlets/
     /// Nostlets are Nostos modules that export: nostlet_name(), nostlet_description(), render(), onKey(key)
     pub fn discover_nostlets(&mut self) -> Result<usize, String> {
-        let nostlets_candidates = vec![
+        let mut nostlet_paths: Vec<PathBuf> = Vec::new();
+
+        // 1. Check user's home directory first: ~/.nostos/nostlets/
+        if let Some(home) = dirs::home_dir() {
+            let user_nostlets = home.join(".nostos").join("nostlets");
+            if user_nostlets.is_dir() {
+                nostlet_paths.push(user_nostlets);
+            }
+        }
+
+        // 2. Check project-local nostlets/ directory
+        let local_candidates = vec![
             PathBuf::from("nostlets"),
             PathBuf::from("../nostlets"),
             PathBuf::from("../../nostlets"),
         ];
-
-        let mut nostlets_path = None;
-
-        for path in nostlets_candidates {
+        for path in local_candidates {
             if path.is_dir() {
-                nostlets_path = Some(path);
+                nostlet_paths.push(path);
                 break;
             }
         }
 
-        // Try relative to executable
-        if nostlets_path.is_none() {
-            if let Ok(mut p) = std::env::current_exe() {
-                p.pop(); // remove binary name
-                p.pop(); // remove release/debug
-                p.pop(); // remove target
-                p.push("nostlets");
-                if p.is_dir() {
-                    nostlets_path = Some(p);
-                }
+        // 3. Try relative to executable (for installed binaries)
+        if let Ok(mut p) = std::env::current_exe() {
+            p.pop(); // remove binary name
+            p.pop(); // remove release/debug
+            p.pop(); // remove target
+            p.push("nostlets");
+            if p.is_dir() && !nostlet_paths.contains(&p) {
+                nostlet_paths.push(p);
             }
         }
 
-        let Some(path) = nostlets_path else {
-            // No nostlets directory found - that's OK
+        if nostlet_paths.is_empty() {
+            // No nostlets directories found - that's OK
             return Ok(0);
-        };
+        }
 
+        // Collect all nostlet files from all paths
         let mut nostlet_files = Vec::new();
-        visit_dirs(&path, &mut nostlet_files)?;
+        for path in &nostlet_paths {
+            visit_dirs(path, &mut nostlet_files)?;
+        }
 
         let mut count = 0;
 
@@ -795,8 +804,13 @@ impl ReplEngine {
             let (module_opt, _) = parse(&source);
             let Some(module) = module_opt else { continue };
 
+            // Find which base path this file belongs to
+            let base_path = nostlet_paths.iter()
+                .find(|p| file_path.starts_with(p))
+                .expect("File should be under one of the nostlet paths");
+
             // Build module name: nostlets.vm_stats, etc.
-            let relative = file_path.strip_prefix(&path).unwrap();
+            let relative = file_path.strip_prefix(base_path).unwrap();
             let mut components: Vec<String> = vec!["nostlets".to_string()];
             for component in relative.components() {
                 let s = component.as_os_str().to_string_lossy().to_string();

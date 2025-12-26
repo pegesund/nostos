@@ -13,5 +13,6 @@ nostos-source = { path = "../source" }
 thiserror.workspace = true
 parking_lot = "0.12"
 imbl = "3"
+dirs = "5"
 
 [dev-dependencies]
