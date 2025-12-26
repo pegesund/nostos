@@ -501,6 +501,7 @@ mod nomouse_backend {
 
 struct TuiState {
     open_editors: Vec<String>,
+    open_nostlets: Vec<String>,  // Nostlet panel module names
     open_repls: Vec<usize>,  // REPL instance IDs
     next_repl_id: usize,
     active_window_idx: usize,
@@ -575,6 +576,7 @@ pub fn run_tui(args: &[String]) -> ExitCode {
     // Initialize State
     siv.set_user_data(Rc::new(RefCell::new(TuiState {
         open_editors: Vec::new(),
+        open_nostlets: Vec::new(),
         open_repls: Vec::new(),
         next_repl_id: 1,
         active_window_idx: 0,
@@ -1075,9 +1077,9 @@ fn poll_debug_events(s: &mut Cursive) {
 /// Uses LinearLayout for equal window distribution
 /// Navigation: Ctrl+Left/Right to move between windows
 fn rebuild_workspace(s: &mut Cursive) {
-    let (editor_names, repl_ids, engine, inspector_open, console_open, nostos_panel_open, debug_panel_open, git_panel_open, git_panel_target, current_panel, current_panel_id) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+    let (editor_names, nostlet_names, repl_ids, engine, inspector_open, console_open, nostos_panel_open, debug_panel_open, git_panel_open, git_panel_target, current_panel, current_panel_id) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let state = state.borrow();
-        (state.open_editors.clone(), state.open_repls.clone(), state.engine.clone(), state.inspector_open, state.console_open, state.nostos_panel_open, state.debug_panel_open, state.git_panel_open, state.git_panel_target.clone(), state.current_panel.clone(), state.current_panel_id)
+        (state.open_editors.clone(), state.open_nostlets.clone(), state.open_repls.clone(), state.engine.clone(), state.inspector_open, state.console_open, state.nostos_panel_open, state.debug_panel_open, state.git_panel_open, state.git_panel_target.clone(), state.current_panel.clone(), state.current_panel_id)
     }).unwrap();
 
     // Get console content BEFORE clearing workspace
@@ -1171,15 +1173,14 @@ fn rebuild_workspace(s: &mut Cursive) {
     let saved_debug_state = debug_panel_state;
 
     for name in &editor_names {
-        if name.starts_with("nostlet_") {
-            // Create nostlet panel
-            let nostlet_view = create_nostlet_view(&engine, name);
-            windows.push(Box::new(nostlet_view));
-        } else {
-            let read_only = engine.borrow().is_eval_function(name);
-            let editor_view = create_editor_view(s, &engine, name, read_only);
-            windows.push(Box::new(editor_view));
-        }
+        let read_only = engine.borrow().is_eval_function(name);
+        let editor_view = create_editor_view(s, &engine, name, read_only);
+        windows.push(Box::new(editor_view));
+    }
+
+    for module_name in &nostlet_names {
+        let nostlet_view = create_nostlet_view(&engine, module_name);
+        windows.push(Box::new(nostlet_view));
     }
 
     for &repl_id in &repl_ids {
@@ -2063,19 +2064,19 @@ fn show_nostlet_picker(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>) {
 
 /// Open a nostlet panel
 fn open_nostlet_panel(s: &mut Cursive, _engine: Rc<RefCell<ReplEngine>>, nostlet: NostletInfo) {
-    // Use the module name as the panel identifier (with "nostlet_" prefix for detection)
-    let panel_id = format!("nostlet_{}", nostlet.module_name);
+    let module_name = nostlet.module_name.clone();
 
     // Check if already open, and limit total windows
     let can_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let mut state = state.borrow_mut();
-        if state.open_editors.contains(&panel_id) {
+        if state.open_nostlets.contains(&module_name) {
             return Err("Nostlet already open");
         }
-        if state.open_editors.len() >= 11 {
+        let total_windows = state.open_editors.len() + state.open_nostlets.len() + state.open_repls.len();
+        if total_windows >= 11 {
             return Err("Max 12 windows");
         }
-        state.open_editors.push(panel_id.clone());
+        state.open_nostlets.push(module_name.clone());
         Ok(())
     }).unwrap();
 
@@ -2089,23 +2090,20 @@ fn open_nostlet_panel(s: &mut Cursive, _engine: Rc<RefCell<ReplEngine>>, nostlet
 }
 
 /// Close a nostlet panel
-fn close_nostlet_panel(s: &mut Cursive, panel_id: &str) {
+fn close_nostlet_panel(s: &mut Cursive, module_name: &str) {
     s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let mut state = state.borrow_mut();
-        // Find and remove from open_editors
-        if let Some(pos) = state.open_editors.iter().position(|id| id == panel_id) {
-            state.open_editors.remove(pos);
+        // Find and remove from open_nostlets
+        if let Some(pos) = state.open_nostlets.iter().position(|id| id == module_name) {
+            state.open_nostlets.remove(pos);
         }
     });
     rebuild_workspace(s);
 }
 
 /// Create a nostlet panel view
-fn create_nostlet_view(engine: &Rc<RefCell<ReplEngine>>, panel_id: &str) -> impl View {
+fn create_nostlet_view(engine: &Rc<RefCell<ReplEngine>>, module_name: &str) -> impl View {
     use crate::nostos_panel::NostosPanel;
-
-    // Extract module name from panel_id (strip "nostlet_" prefix)
-    let module_name = panel_id.strip_prefix("nostlet_").unwrap_or(panel_id);
 
     // Get nostlet info from engine
     let (render_fn, key_handler_fn, title) = {
@@ -2127,14 +2125,14 @@ fn create_nostlet_view(engine: &Rc<RefCell<ReplEngine>>, panel_id: &str) -> impl
     );
 
     // Wrap with event handlers for close
-    let panel_id_close = panel_id.to_string();
-    let panel_id_esc = panel_id.to_string();
-    let panel_with_events = OnEventView::new(panel.with_name(panel_id))
+    let module_close = module_name.to_string();
+    let module_esc = module_name.to_string();
+    let panel_with_events = OnEventView::new(panel.with_name(module_name))
         .on_event(Event::CtrlChar('w'), move |s| {
-            close_nostlet_panel(s, &panel_id_close);
+            close_nostlet_panel(s, &module_close);
         })
         .on_event(Key::Esc, move |s| {
-            close_nostlet_panel(s, &panel_id_esc);
+            close_nostlet_panel(s, &module_esc);
         });
 
     // Wrap in ActiveWindow for consistent styling
@@ -3893,9 +3891,6 @@ fn rebuild_workspace_with_viewer(s: &mut Cursive, viewer_name: &str, viewer_cont
             } else if name.starts_with("var_") {
                 // Existing viewer - skip for now (would need stored content)
                 continue;
-            } else if name.starts_with("nostlet_") {
-                let nostlet_view = create_nostlet_view(&engine, name);
-                row.add_child(nostlet_view);
             } else {
                 let read_only = engine.borrow().is_eval_function(name);
                 let editor_view = create_editor_view(s, &engine, name, read_only);
@@ -3916,8 +3911,6 @@ fn rebuild_workspace_with_viewer(s: &mut Cursive, viewer_name: &str, viewer_cont
                 Box::new(create_variable_viewer(name, viewer_content))
             } else if name.starts_with("var_") {
                 continue;
-            } else if name.starts_with("nostlet_") {
-                Box::new(create_nostlet_view(&engine, name))
             } else {
                 Box::new(create_editor_view(s, &engine, name, read_only))
             };
