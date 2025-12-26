@@ -2202,6 +2202,10 @@ impl ReplEngine {
         for builtin in Compiler::get_builtin_names() {
             functions.push(builtin.to_string());
         }
+        // Add Buffer methods for autocomplete (not in BUILTINS to avoid type conflicts with html.nos)
+        functions.push("Buffer.new".to_string());
+        functions.push("Buffer.append".to_string());
+        functions.push("Buffer.toString".to_string());
         functions.sort();
         functions.dedup();
         functions
