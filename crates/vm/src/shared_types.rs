@@ -249,6 +249,13 @@ pub type JitLoopArrayFn = fn(*const i64, i64) -> i64;
 pub type JitArrayFillFn = fn(*const i64, i64, i64) -> i64;
 /// Recursive array sum function: (arr_ptr, len, idx, acc) -> i64
 pub type JitArraySumFn = fn(*const i64, i64, i64, i64) -> i64;
+/// List sum function: (data_ptr, len) -> i64
+/// Used for JIT-compiled list pattern matching that reduces to sum
+pub type JitListSumFn = fn(*const i64, i64) -> i64;
+
+/// Tail-recursive list sum function: (data_ptr, len, initial_acc) -> i64
+/// Used for JIT-compiled tail-recursive sum: sumTR([], acc) = acc; sumTR([x|xs], acc) = sumTR(xs, acc+x)
+pub type JitListSumTrFn = fn(*const i64, i64, i64) -> i64;
 
 // ============================================================================
 // Sendable types for cross-thread messaging

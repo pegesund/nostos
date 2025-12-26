@@ -248,6 +248,12 @@ impl GcList {
         self.data.get(self.offset)
     }
 
+    /// Get head assuming non-empty (caller must ensure)
+    #[inline]
+    pub fn head_unchecked(&self) -> &GcValue {
+        self.data.get(self.offset).unwrap()
+    }
+
     /// Create a tail view - O(1)! Just increment offset.
     #[inline]
     pub fn tail(&self) -> GcList {
@@ -258,22 +264,24 @@ impl GcList {
         }
     }
 
+    /// Get tail assuming non-empty (caller must ensure)
+    #[inline]
+    pub fn tail_unchecked(&self) -> GcList {
+        GcList { data: self.data.clone(), offset: self.offset + 1 }
+    }
+
     /// Cons: prepend an element - O(log n) with structural sharing
     #[inline]
     pub fn cons(&self, head: GcValue) -> GcList {
-        if self.offset == 0 {
-            let mut new_data = self.data.clone();
-            new_data.push_front(head);
-            GcList { data: new_data, offset: 0 }
+        // Use skip() to create a proper subvector when offset > 0
+        // skip() is O(log n) and creates structural sharing
+        let mut new_data = if self.offset > 0 {
+            self.data.skip(self.offset)
         } else {
-            // Materialize slice and prepend
-            let mut new_data: ImblVector<GcValue> = self.data.iter()
-                .skip(self.offset)
-                .cloned()
-                .collect();
-            new_data.push_front(head);
-            GcList { data: new_data, offset: 0 }
-        }
+            self.data.clone()
+        };
+        new_data.push_front(head);
+        GcList { data: new_data, offset: 0 }
     }
 
     /// Get element at index - O(log n)
@@ -349,6 +357,13 @@ impl GcInt64List {
         self.data.get(self.offset).copied()
     }
 
+    /// Get head assuming non-empty (caller must ensure non-empty)
+    #[inline]
+    pub fn head_unchecked(&self) -> i64 {
+        // Caller ensures list is non-empty, so unwrap is safe
+        *self.data.get(self.offset).unwrap()
+    }
+
     #[inline]
     pub fn tail(&self) -> GcInt64List {
         if self.is_empty() {
@@ -358,21 +373,24 @@ impl GcInt64List {
         }
     }
 
+    /// Get tail without bounds check (caller must ensure non-empty)
+    #[inline]
+    pub fn tail_unchecked(&self) -> GcInt64List {
+        GcInt64List { data: self.data.clone(), offset: self.offset + 1 }
+    }
+
     /// O(log n) cons using persistent data structure
     #[inline]
     pub fn cons(&self, head: i64) -> GcInt64List {
-        // If we have an offset, we need to create a new vector from the visible portion
-        if self.offset > 0 {
-            let new_data: ImblVector<i64> = std::iter::once(head)
-                .chain(self.data.iter().skip(self.offset).copied())
-                .collect();
-            GcInt64List { data: new_data, offset: 0 }
+        // Use skip() to create a proper subvector when offset > 0
+        // skip() is O(log n) and creates structural sharing
+        let mut new_data = if self.offset > 0 {
+            self.data.skip(self.offset)
         } else {
-            // No offset - can use efficient push_front
-            let mut new_data = self.data.clone();
-            new_data.push_front(head);
-            GcInt64List { data: new_data, offset: 0 }
-        }
+            self.data.clone()
+        };
+        new_data.push_front(head);
+        GcInt64List { data: new_data, offset: 0 }
     }
 
     #[inline]
@@ -383,6 +401,12 @@ impl GcInt64List {
     #[inline]
     pub fn sum(&self) -> i64 {
         self.data.iter().skip(self.offset).sum()
+    }
+
+    /// Get element at index - O(log n)
+    #[inline]
+    pub fn get(&self, index: usize) -> Option<i64> {
+        self.data.get(self.offset + index).copied()
     }
 }
 
