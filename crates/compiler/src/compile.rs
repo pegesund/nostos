@@ -2566,7 +2566,7 @@ impl Compiler {
                         break;
                     }
                 } else {
-                    // Unknown argument type - wildcard in candidate accepts unknown
+                    // Unknown argument type - accept any candidate type, give lower score
                     score += 1;
                 }
             }
@@ -11001,31 +11001,45 @@ impl Compiler {
 
     /// Transform an expression inside Html(...) to resolve bare HTML tag names
     /// to their qualified stdlib.html.* equivalents.
+    /// IMPORTANT: Only transforms names that are being CALLED as functions, not variable references.
     fn transform_html_expr(&self, expr: &Expr) -> Expr {
         match expr {
-            // Transform bare identifiers that are HTML tag names
-            Expr::Var(ident) if Self::HTML_SCOPED_NAMES.contains(&ident.node.as_str()) => {
-                // Transform `div` to `stdlib.html.div`
-                let span = ident.span;
-                let stdlib_var = Expr::Var(Spanned::new("stdlib".to_string(), span));
-                let html_access = Expr::FieldAccess(
-                    Box::new(stdlib_var),
-                    Spanned::new("html".to_string(), span),
-                    span,
-                );
-                Expr::FieldAccess(
-                    Box::new(html_access),
-                    ident.clone(),
-                    span,
-                )
-            }
-
-            // Recursively transform function calls
+            // Transform function calls where the function is a bare HTML tag name
+            // e.g., div([...]) -> stdlib.html.div([...])
+            // But NOT: h2(title) where title is a variable -> h2(title) stays as-is for the arg
             Expr::Call(func, type_args, args, span) => {
-                let new_func = self.transform_html_expr(func);
+                // Transform function if it's a bare HTML tag name
+                let new_func = if let Expr::Var(ident) = func.as_ref() {
+                    if Self::HTML_SCOPED_NAMES.contains(&ident.node.as_str()) {
+                        // Transform `div` to `stdlib.html.div`
+                        let fn_span = ident.span;
+                        let stdlib_var = Expr::Var(Spanned::new("stdlib".to_string(), fn_span));
+                        let html_access = Expr::FieldAccess(
+                            Box::new(stdlib_var),
+                            Spanned::new("html".to_string(), fn_span),
+                            fn_span,
+                        );
+                        Expr::FieldAccess(
+                            Box::new(html_access),
+                            ident.clone(),
+                            fn_span,
+                        )
+                    } else {
+                        // Not an HTML tag, keep as-is
+                        func.as_ref().clone()
+                    }
+                } else {
+                    // Function is not a simple Var, recurse
+                    self.transform_html_expr(func)
+                };
+                // Recursively transform arguments
                 let new_args: Vec<Expr> = args.iter().map(|a| self.transform_html_expr(a)).collect();
                 Expr::Call(Box::new(new_func), type_args.clone(), new_args, *span)
             }
+
+            // Bare variable references are NOT transformed - they might be local variables
+            // e.g., h2(title) where title is a parameter stays as h2(title)
+            Expr::Var(_) => expr.clone(),
 
             // Recursively transform method calls
             Expr::MethodCall(obj, method, args, span) => {

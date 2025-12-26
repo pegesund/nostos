@@ -260,29 +260,30 @@ main() = {
 
                 <!-- Components -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Components</h2>
-                <p class="text-slate-400 mb-4">Create reusable components as functions that return <code>Html</code>.</p>
+                <p class="text-slate-400 mb-4">Create reusable components as functions. Components can call other components.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.html.{Html, render}
+<pre><code class="language-nostos">use stdlib.html.{Html, render, div, h1, h2, p}
 
 # A reusable card component
-card(title, content) = Html(
-    div([
-        h2(title),
-        p(content)
-    ])
-)
+# Type annotations help overload resolution for h2(String) vs h2(List)
+card(title: String, content: String) =
+    div([h2(title), p(content)])
 
-# A navigation component
-navMenu(links) = Html(
-    ul(links.map((name, url) =>
-        li([a([("href", url)], name)])
-    ))
-)
-
+# Page that uses the card component multiple times
 main() = {
-    myCard = card("Hello", "This is a card component")
-    println(render(myCard))
+    page = div([
+        h1("My Page"),
+        card("Welcome", "Thanks for visiting!"),
+        card("Features", "Check out our cool features.")
+    ])
+
+    println(render(page))
+    # &lt;div&gt;&lt;h1&gt;My Page&lt;/h1&gt;&lt;div&gt;&lt;h2&gt;Welcome&lt;/h2&gt;&lt;p&gt;Thanks...&lt;/p&gt;&lt;/div&gt;...&lt;/div&gt;
 }</code></pre>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <p class="text-slate-400 text-sm"><strong>Tip:</strong> Add type annotations to component parameters (e.g., <code>title: String</code>) when using overloaded tag functions. This helps the compiler choose between <code>h2(String)</code> and <code>h2(List[Html])</code>.</p>
                 </div>
 
                 <!-- Conditionals -->
