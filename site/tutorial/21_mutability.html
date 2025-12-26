@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mutability - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75; /* A distinct red/orange for operators */
+        }
+        .hljs-function {
+            color: #e5c07b; /* A distinct yellow/gold for functions */
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/yourusername/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+
+        <!-- Sidebar -->
+        <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_type_system.html" class="block text-slate-400 hover:text-white transition">7. Type System</a></li>
+                    <li><a href="08_traits.html" class="block text-slate-400 hover:text-white transition">8. Traits</a></li>
+                    <li><a href="09_builtin_traits.html" class="block text-slate-400 hover:text-white transition">9. Builtin Traits</a></li>
+                    <li><a href="10_trait_bounds.html" class="block text-slate-400 hover:text-white transition">10. Trait Bounds</a></li>
+                    <li><a href="11_error_handling.html" class="block text-slate-400 hover:text-white transition">11. Error Handling</a></li>
+                    <li><a href="12_modules.html" class="block text-slate-400 hover:text-white transition">12. Modules & Imports</a></li>
+                    <li><a href="13_stdlib.html" class="block text-slate-400 hover:text-white transition">13. Standard Library</a></li>
+                    <li><a href="14_json.html" class="block text-slate-400 hover:text-white transition">14. JSON</a></li>
+                    <li><a href="15_concurrency.html" class="block text-slate-400 hover:text-white transition">15. Concurrency</a></li>
+                    <li><a href="16_async_runtime.html" class="block text-slate-400 hover:text-white transition">16. Async Runtime</a></li>
+                    <li><a href="17_async_io_http.html" class="block text-slate-400 hover:text-white transition">17. Async I/O & HTTP</a></li>
+                    <li><a href="18_reflection.html" class="block text-slate-400 hover:text-white transition">18. Reflection & Eval</a></li>
+                    <li><a href="19_debugging_profiling.html" class="block text-slate-400 hover:text-white transition">19. Debugging & Profiling</a></li>
+                    <li><a href="20_html_templating.html" class="block text-slate-400 hover:text-white transition">20. HTML Templating</a></li>
+                    <li><a href="21_mutability.html" class="block text-blue-400 font-medium">21. Mutability</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Mutability & Persistent Data Structures</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Nostos uses <strong>persistent data structures</strong> - Lists, Maps, and Sets are immutable. Operations like <code>insert</code> or <code>append</code> return a <em>new</em> structure, leaving the original unchanged. Combined with mutable bindings, this gives you the best of both worlds: the safety of immutability with the convenience of imperative-style updates.
+                </p>
+
+                <!-- Immutable vs Mutable Bindings -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Immutable vs Mutable Bindings</h2>
+                <p class="text-slate-400 mb-4">Quick recap: bindings are immutable by default. Use <code>var</code> for mutable bindings.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Immutable binding
+x = 10
+# x = 20  # ERROR: Can't rebind to different value
+
+# Mutable binding
+var count = 0
+count = count + 1  # OK
+count = count + 1  # OK
+println(count)     # 2</code></pre>
+                </div>
+
+                <!-- Persistent Data Structures -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Persistent Data Structures</h2>
+                <p class="text-slate-400 mb-4">
+                    Lists, Maps, and Sets in Nostos are <strong>persistent</strong> (immutable). When you "modify" them, you get a new structure - the original remains unchanged.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">original = [1, 2, 3]
+modified = original ++ [4]  # Append returns a NEW list
+
+println(original)  # [1, 2, 3] - unchanged!
+println(modified)  # [1, 2, 3, 4]
+
+# Same for Maps
+map1 = %{"a": 1}
+map2 = map1.insert("b", 2)  # Returns a NEW map
+
+println(map1)  # %{"a": 1} - unchanged!
+println(map2)  # %{"a": 1, "b": 2}</code></pre>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <p class="text-slate-400 text-sm"><strong>Why persistent?</strong> Persistent structures are inherently thread-safe - no locks needed when sharing between processes. They also make debugging easier since values never change unexpectedly.</p>
+                </div>
+
+                <!-- The Pattern: Mutable Var + Persistent Structure -->
+                <h2 class="text-2xl font-semibold text-white mb-4">The Pattern: Mutable Var + Persistent Structure</h2>
+                <p class="text-slate-400 mb-4">
+                    The idiomatic way to build up a collection is to use a mutable binding that holds successive versions of a persistent structure:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Building a list with a mutable binding
+main() = {
+    var items = []
+
+    items = items ++ [1]
+    items = items ++ [2]
+    items = items ++ [3]
+
+    println(items)  # [1, 2, 3]
+}</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">
+                    The same pattern works for Maps and Sets:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Building a map incrementally
+main() = {
+    var config = %{}
+
+    config = config.insert("debug", true)
+    config = config.insert("port", 8080)
+    config = config.insert("host", "localhost")
+
+    println(config)
+    # %{"debug": true, "port": 8080, "host": "localhost"}
+}
+
+# Building a set
+main() = {
+    var seen = #{}
+
+    seen = seen.insert("apple")
+    seen = seen.insert("banana")
+    seen = seen.insert("apple")  # Duplicate - no effect
+
+    println(seen)  # #{"apple", "banana"}
+}</code></pre>
+                </div>
+
+                <!-- Loop Building -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Building Collections in Loops</h2>
+                <p class="text-slate-400 mb-4">
+                    This pattern shines in loops where you accumulate results:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Collect squares of numbers
+main() = {
+    var squares = []
+
+    for i = 1 to 5 {
+        squares = squares ++ [i * i]
+    }
+
+    println(squares)  # [1, 4, 9, 16, 25]
+}
+
+# Count word frequencies
+count_words(words) = {
+    var counts = %{}
+
+    words.each(word => {
+        current = counts.get(word).unwrapOr(0)
+        counts = counts.insert(word, current + 1)
+    })
+
+    counts
+}
+
+main() = {
+    words = ["apple", "banana", "apple", "cherry", "banana", "apple"]
+    println(count_words(words))
+    # %{"apple": 3, "banana": 2, "cherry": 1}
+}</code></pre>
+                </div>
+
+                <!-- Comparison with Functional Style -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Comparison: Imperative vs Functional</h2>
+                <p class="text-slate-400 mb-4">
+                    Both styles are valid. Use whichever fits your situation:
+                </p>
+                <div class="grid md:grid-cols-2 gap-4 mb-8">
+                    <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
+                        <h4 class="text-sm font-semibold text-slate-300 mb-2">Mutable var + loop</h4>
+<pre class="text-sm text-slate-300"><code class="language-nostos">var result = []
+for i = 1 to 5 {
+    result = result ++ [i * i]
+}
+result  # [1, 4, 9, 16, 25]</code></pre>
+                    </div>
+                    <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
+                        <h4 class="text-sm font-semibold text-slate-300 mb-2">Functional with map</h4>
+<pre class="text-sm text-slate-300"><code class="language-nostos">[1, 2, 3, 4, 5].map(i => i * i)
+# [1, 4, 9, 16, 25]</code></pre>
+                    </div>
+                </div>
+
+                <div class="grid md:grid-cols-2 gap-4 mb-8">
+                    <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
+                        <h4 class="text-sm font-semibold text-slate-300 mb-2">Mutable var accumulation</h4>
+<pre class="text-sm text-slate-300"><code class="language-nostos">var total = 0
+for x in [1, 2, 3, 4, 5] {
+    total = total + x
+}
+total  # 15</code></pre>
+                    </div>
+                    <div class="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
+                        <h4 class="text-sm font-semibold text-slate-300 mb-2">Functional with fold</h4>
+<pre class="text-sm text-slate-300"><code class="language-nostos">[1, 2, 3, 4, 5].fold(0, (acc, x) => acc + x)
+# 15</code></pre>
+                    </div>
+                </div>
+
+                <!-- When to Use Each -->
+                <h2 class="text-2xl font-semibold text-white mb-4">When to Use Each Approach</h2>
+                <div class="bg-gradient-to-r from-blue-900/20 to-emerald-900/20 rounded-lg p-6 mb-8 border border-blue-800/30">
+                    <h3 class="text-lg font-semibold text-white mb-3">Guidelines</h3>
+                    <ul class="list-disc list-inside text-slate-400 space-y-2">
+                        <li><strong>Use mutable vars</strong> when building collections incrementally over complex logic, or when translating imperative algorithms</li>
+                        <li><strong>Use functional style</strong> (map, filter, fold) for simple transformations - it's often more concise</li>
+                        <li><strong>Mix both</strong> freely - Nostos doesn't force you into one paradigm</li>
+                        <li><strong>For shared state</strong> between processes, use <code>mvar</code> instead (see Concurrency chapter)</li>
+                    </ul>
+                </div>
+
+                <!-- Thread Safety Note -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Note on Thread Safety</h2>
+                <p class="text-slate-400 mb-4">
+                    Mutable vars (<code>var</code>) are local to a single process and are <strong>not</strong> shared between processes. For shared mutable state across processes, use <code>mvar</code> (module-level mutable variables) which have automatic locking.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Local mutable var - only visible to this process
+main() = {
+    var local_count = 0
+    local_count = local_count + 1  # OK, single-process access
+}
+
+# Shared mvar - safe for concurrent access
+mvar shared_count: Int = 0
+
+increment() = {
+    shared_count = shared_count + 1  # Automatically locked
+}
+
+main() = {
+    # Spawn 100 processes all incrementing
+    for i = 1 to 100 {
+        spawn { increment() }
+    }
+    sleep(100)
+    println(shared_count)  # 100 - no race conditions!
+}</code></pre>
+                </div>
+
+            </div>
+
+            <!-- Navigation Buttons -->
+            <div class="flex justify-between border-t border-slate-800 pt-8">
+                <a href="20_html_templating.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
+                    Previous: HTML Templating
+                </a>
+                <a href="01_basics.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    Back to Start
+                    <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m0 0h18"></path></svg>
+                </a>
+            </div>
+        </main>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>
+</html>

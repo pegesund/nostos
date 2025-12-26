@@ -292,10 +292,10 @@
 <pre><code class="language-nostos">main() = {
     # Get environment variable (returns Option)
     home = Env.get("HOME")
-    match home
+    match home {
         Some(path) -> println("Home: " ++ path)
         None -> println("HOME not set")
-    end
+    }
 
     # Get with default using unwrapOr
     editor = Env.get("EDITOR").unwrapOr("nano")
@@ -327,10 +327,10 @@
     println(Regex.matches(text, "slow"))     # false
 
     # Find first match: find(text, pattern)
-    match Regex.find(text, "[a-z]+")
+    match Regex.find(text, "[a-z]+") {
         Some(m) -> println("Found: " ++ m)   # "he"
         None -> println("No match")
-    end
+    }
 
     # Find all matches: findAll(text, pattern)
     matches = Regex.findAll(text, "[a-zA-Z]+")
@@ -425,9 +425,9 @@
     try {
         data = File.readAll("/nonexistent.txt")
         println(data)
-    } catch e ->
+    } catch { e ->
         println("File error: " ++ e)
-    end
+    }
 
     # File handles for streaming access
     handle = File.open("/tmp/data.txt", "w")  # modes: "r", "w", "a", "rw"
@@ -464,9 +464,9 @@
     # Error handling
     try {
         Dir.create("/root/forbidden")
-    } catch e ->
+    } catch { e ->
         println("Permission denied: " ++ e)
-    end
+    }
 }</code></pre>
                 </div>
 

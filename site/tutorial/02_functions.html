@@ -79,6 +79,7 @@
                     <li><a href="18_reflection.html" class="block text-slate-400 hover:text-white transition">18. Reflection & Eval</a></li>
                     <li><a href="19_debugging_profiling.html" class="block text-slate-400 hover:text-white transition">19. Debugging & Profiling</a></li>
                     <li><a href="20_html_templating.html" class="block text-slate-400 hover:text-white transition">20. HTML Templating</a></li>
+                    <li><a href="21_mutability.html" class="block text-slate-400 hover:text-white transition">21. Mutability</a></li>
                 </ul>
             </div>
         </aside>
@@ -189,6 +190,64 @@ main() = {
     # even_numbers is [2, 4]
 }
 </code></pre>
+                </div>
+
+                <!-- Method Chaining -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Method-Style Chaining</h2>
+                <p class="text-slate-400 mb-4">
+                    Nostos supports calling functions using dot notation, which enables fluent method-style chaining. When you write <code>x.f(y)</code>, it's equivalent to <code>f(x, y)</code>. This makes data transformation pipelines much more readable.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># These are equivalent:
+result1 = double(5)
+result2 = 5.double()
+
+# Chaining multiple operations
+numbers = [1, 2, 3, 4, 5]
+
+# Without chaining (nested calls, read inside-out)
+result = sum(filter(x => x > 2, map(x => x * 2, numbers)))
+
+# With chaining (read left-to-right)
+result = numbers
+    .map(x => x * 2)
+    .filter(x => x > 2)
+    .sum()
+# result is 24 (4 + 6 + 8 + 10)
+</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">
+                    This works with any function - the value before the dot becomes the first argument:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># String operations
+message = "hello world"
+    .split(" ")
+    .map(s => s.capitalize())
+    .join(" ")
+# message is "Hello World"
+
+# Numeric operations
+calculate(n) = n
+    .abs()
+    .sqrt()
+    .floor()
+
+main() = {
+    println(calculate(-16))  # 4
+}
+</code></pre>
+                </div>
+
+                <div class="bg-gradient-to-r from-blue-900/20 to-emerald-900/20 rounded-lg p-6 mb-8 border border-blue-800/30">
+                    <h3 class="text-lg font-semibold text-white mb-3">Chaining Best Practices</h3>
+                    <ul class="list-disc list-inside text-slate-400 space-y-2">
+                        <li>Use chaining for data transformation pipelines</li>
+                        <li>Break long chains across multiple lines for readability</li>
+                        <li>Prefer chaining when operations flow naturally left-to-right</li>
+                        <li>Use traditional function calls when order doesn't matter or for single operations</li>
+                    </ul>
                 </div>
             </div>
 

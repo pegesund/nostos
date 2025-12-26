@@ -98,9 +98,9 @@ fetch_ip() = {
     try {
         resp = Http.get("https://httpbin.org/ip")
         println("Your IP: " ++ resp.body)
-    } catch e ->
+    } catch { e ->
         println("Error fetching IP: " ++ e)
-    end
+    }
 }
 
 main() = {
@@ -173,9 +173,9 @@ server_worker(server_socket) = {
         request = Server.accept(server_socket)
         handle_request(request)
         server_worker(server_socket)  # Loop to accept next request
-    } catch e ->
+    } catch { e ->
         ()  # Exit when server is closed or on error
-    end
+    }
     result
 }
 
@@ -189,10 +189,10 @@ main() = {
             spawn { server_worker(server) }
         }
         # Keep the main process alive (e.g., waiting for a shutdown signal)
-        receive _ -> ()
-    } catch e ->
+        receive { _ -> () }
+    } catch { e ->
         println("Failed to bind server: " ++ e)
-    end
+    }
 }
 </code></pre>
                 </div>

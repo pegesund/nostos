@@ -105,16 +105,16 @@ main() = {
     not_found = find_item(my_list, 4)
 
     # Handle Option using pattern matching
-    result1 = match found
+    result1 = match found {
         Some(val) -> "Found: " ++ val.show()
         None -> "Not found"
-    end
+    }
     println(result1) # "Found: 2"
 
-    result2 = match not_found
+    result2 = match not_found {
         Some(val) -> "Found: " ++ val.show()
         None -> "Not found"
-    end
+    }
     println(result2) # "Not found"
 }
 </code></pre>
@@ -139,16 +139,16 @@ main() = {
     division_ok = safe_divide(10, 2)
     division_err = safe_divide(10, 0)
 
-    result_ok = match division_ok
+    result_ok = match division_ok {
         Ok(val) -> "Result: " ++ val.show()
         Err(err) -> "Error: " ++ err.message
-    end
+    }
     println(result_ok) # "Result: 5"
 
-    result_err = match division_err
+    result_err = match division_err {
         Ok(val) -> "Result: " ++ val.show()
         Err(err) -> "Error: " ++ err.message
-    end
+    }
     println(result_err) # "Error: Cannot divide by zero"
 }
 </code></pre>
@@ -243,18 +243,18 @@ risky_operation(should_panic) =
 end
 
 main() = {
-    result1 = try
+    result1 = try {
         risky_operation(false)
-    catch err ->
+    } catch { err ->
         "Caught error: " ++ err.show()
-    end
+    }
     println(result1) # "Operation successful"
 
-    result2 = try
+    result2 = try {
         risky_operation(true)
-    catch err ->
+    } catch { err ->
         "Caught error: " ++ err.show()
-    end
+    }
     println(result2) # "Caught error: Something went really wrong!"
 }
 </code></pre>
@@ -271,10 +271,10 @@ read_config(path) = {
         content = File.readAll(path)
         println("Config loaded: " ++ content)
         Some(content)
-    } catch e -> {
+    } catch { e ->
         println("Failed to read config: " ++ e)
         None
-    } end
+    }
 }
 
 # HTTP requests with error handling
@@ -285,10 +285,10 @@ fetch_data(url) = {
             Some(response.body)
         else
             None
-    } catch e -> {
+    } catch { e ->
         println("Network error: " ++ e)
         None
-    } end
+    }
 }
 
 # Combining multiple I/O operations
@@ -299,10 +299,10 @@ process_file(input_path, output_path) = {
         File.writeAll(output_path, processed)
         println("Processing complete!")
         true
-    } catch e -> {
+    } catch { e ->
         println("Error: " ++ e)
         false
-    } end
+    }
 }
 
 main() = {

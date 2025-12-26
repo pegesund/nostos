@@ -79,6 +79,7 @@
                     <li><a href="18_reflection.html" class="block text-slate-400 hover:text-white transition">18. Reflection & Eval</a></li>
                     <li><a href="19_debugging_profiling.html" class="block text-slate-400 hover:text-white transition">19. Debugging & Profiling</a></li>
                     <li><a href="20_html_templating.html" class="block text-slate-400 hover:text-white transition">20. HTML Templating</a></li>
+                    <li><a href="21_mutability.html" class="block text-slate-400 hover:text-white transition">21. Mutability</a></li>
                 </ul>
             </div>
         </aside>
@@ -108,6 +109,22 @@ rows.each((id, name, email) => {
                     </div>
                     <p class="text-slate-300 mt-4 text-sm">
                         No index lookups. No parsing. The structure of your data becomes the structure of your code.
+                    </p>
+
+                    <p class="text-slate-400 mt-6 mb-4">
+                        Even better - match on the entire row, including country:
+                    </p>
+                    <div class="bg-nostos-code rounded-lg p-4 overflow-x-auto">
+<pre><code class="language-nostos"># Pattern match on the whole tuple, branching on country
+rows = Pg.query(conn, "SELECT id, amount, country FROM orders", [])
+
+rows.each(row => match row {
+    (id, amount, "NO") -> println("Order #" ++ show(id) ++ ": " ++ show(amount * 1.25) ++ " (incl. 25% Norwegian VAT)")
+    (id, amount, _) -> println("Order #" ++ show(id) ++ ": " ++ show(amount))
+})</code></pre>
+                    </div>
+                    <p class="text-slate-300 mt-4 text-sm">
+                        The country is matched as part of the tuple pattern - Norwegian orders get special handling, others fall through to the default branch. Note that the <code>match</code> now uses brackets <code>{ }</code> instead of <code>end</code>.
                     </p>
                 </div>
 
@@ -217,11 +234,11 @@ main() = {
                 <p class="text-slate-400 mb-4">For more complex pattern matching or when matching against a single value, the <code>match</code> expression is invaluable.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">
-describe(n) = match n
+describe(n) = match n {
     0 -> "zero"
     1 -> "one"
     _ -> "many" # Wildcard pattern for any other value
-end
+}
 
 main() = {
     println(describe(0)) # "zero"
@@ -236,11 +253,11 @@ main() = {
                 <p class="text-slate-400 mb-4">Guards allow you to add conditional logic to patterns, making them even more powerful.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">
-classify(n) = match n
+classify(n) = match n {
     x when x > 0 -> "positive"
     0 -> "zero"
     _ -> "negative"
-end
+}
 
 main() = {
     println(classify(10)) # "positive"
@@ -258,12 +275,12 @@ main() = {
                 </p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">
-size_category(n) = match n
+size_category(n) = match n {
     x when x > 100 -> "huge"
     x when x > 10 -> "big"
     x when x > 0 -> "small"
     _ -> "zero or negative"
-end
+}
 
 main() = {
     println(size_category(50))   # "big" - first guard fails, second matches
@@ -286,16 +303,16 @@ main() = {
     expected = 5
 
     # x acts as a constraint - must equal 5
-    result1 = match (5, 10)
+    result1 = match (5, 10) {
         (expected, y) -> y * 2   # Matches! expected == 5
-    end
+    }
     println(result1)  # 20
 
     # This won't match the first arm
-    result2 = match (3, 10)
+    result2 = match (3, 10) {
         (expected, y) -> y * 2   # Doesn't match! 3 != expected
         (_, y) -> y + 1          # Falls through to this
-    end
+    }
     println(result2)  # 11
 }
 </code></pre>
@@ -309,11 +326,11 @@ main() = {
 handle_response(status, body) = {
     ok_status = 200
 
-    match status
+    match status {
         ok_status -> "Success: " ++ body    # Only if status == 200
         404 -> "Not found"
         s -> "Error: " ++ show(s)
-    end
+    }
 }
 </code></pre>
                 </div>
@@ -337,10 +354,10 @@ main() = {
     unwrapped = unwrap_option(opt_val) # unwrapped is "hello"
 
     # Using match for comprehensive handling
-    description = match opt_val
+    description = match opt_val {
         Some(s) -> "Contains: " ++ s
         None -> "Is empty"
-    end
+    }
     println(description) # "Contains: hello"
 }
 </code></pre>
@@ -354,23 +371,23 @@ main() = {
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">
 # Matching on a Map
-check_config(config) = match config
+check_config(config) = match config {
     # Matches if key "debug" is true. Binds "level" value to `lvl`.
     # Ignores other keys.
     %{"debug": true, "level": lvl} -> "Debug mode level " ++ show(lvl)
     %{"debug": false} -> "Production mode"
     _ -> "Unknown config"
-end
+}
 
 # Matching on a Set
-check_access(roles) = match roles
+check_access(roles) = match roles {
     # Matches if set contains "admin"
     # Set patterns match if *all* specified elements are present.
     # Other elements in the set are ignored.
     #{"admin"} -> "Access granted"
     #{"editor", "viewer"} -> "Partial access"
     _ -> "Access denied"
-end
+}
 
 main() = {
     conf = %{"debug": true, "level": 3, "other": "ignored"}
@@ -389,10 +406,10 @@ main() = {
 <pre><code class="language-nostos">
 expected_status = 200
 
-handle_response(response) = match response
+handle_response(response) = match response {
     { status: ^expected_status, body: data } -> "Success: " ++ data
     { status: s, body: data } -> "Error " ++ show(s) ++ ": " ++ data
-end
+}
 
 main() = {
     response1 = { status: 200, body: "Data received" }
@@ -509,11 +526,11 @@ main() = {
     })
 
     # Pattern match on the result list
-    match rows
+    match rows {
         [] -> println("No players yet!")
         [(_, winner, _)] -> println("Only player: " ++ winner)
         [(_, first, _), (_, second, _) | _] -> println("Top 2: " ++ first ++ ", " ++ second)
-    end
+    }
 
     Pg.close(conn)
 }</code></pre>
