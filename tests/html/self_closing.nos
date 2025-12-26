@@ -1,0 +1,9 @@
+# expect: <div><br /></div>
+# Self-closing tags render correctly
+
+use stdlib.html.{Html, render, div, br}
+
+main() = {
+    page = Html(div([br()]))
+    render(page)
+}

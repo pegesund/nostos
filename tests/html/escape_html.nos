@@ -1,0 +1,9 @@
+# expect: <p>&lt;script&gt;</p>
+# HTML escaping works correctly
+
+use stdlib.html.{Html, render, p_}
+
+main() = {
+    page = Html(p_("<script>"))
+    render(page)
+}
