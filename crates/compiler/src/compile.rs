@@ -1859,6 +1859,85 @@ impl Compiler {
         }
     }
 
+    /// Get the specific sized integer type of an expression (Int8, Int16, Int32, UInt8, etc.)
+    /// Returns None for plain Int/Int64 or non-integer types.
+    fn get_sized_int_type(&self, expr: &Expr) -> Option<&'static str> {
+        match expr {
+            Expr::Int8(_, _) => Some("Int8"),
+            Expr::Int16(_, _) => Some("Int16"),
+            Expr::Int32(_, _) => Some("Int32"),
+            Expr::UInt8(_, _) => Some("UInt8"),
+            Expr::UInt16(_, _) => Some("UInt16"),
+            Expr::UInt32(_, _) => Some("UInt32"),
+            Expr::UInt64(_, _) => Some("UInt64"),
+            // Plain Int is Int64 - not a "sized" type for coercion purposes
+            Expr::Int(_, _) => None,
+            Expr::Var(ident) => {
+                if let Some(ty) = self.local_types.get(&ident.node) {
+                    return Self::sized_int_type_name(ty);
+                }
+                if let Some(ty) = self.param_types.get(&ident.node) {
+                    return Self::sized_int_type_name(ty);
+                }
+                None
+            }
+            Expr::FieldAccess(obj, field, _) => {
+                if let Some(obj_type) = self.expr_type_name(obj) {
+                    if let Some(type_info) = self.types.get(&obj_type) {
+                        if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
+                            for (fname, ftype) in fields {
+                                if fname == &field.node {
+                                    return Self::sized_int_type_name(ftype);
+                                }
+                            }
+                        }
+                    }
+                }
+                None
+            }
+            Expr::BinOp(left, op, right, _) => {
+                match op {
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                        // If both sides have the same sized type, result is that type
+                        let lt = self.get_sized_int_type(left);
+                        let rt = self.get_sized_int_type(right);
+                        if lt == rt { lt } else { None }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Convert a type name to a sized int type if applicable
+    fn sized_int_type_name(ty: &str) -> Option<&'static str> {
+        match ty {
+            "Int8" => Some("Int8"),
+            "Int16" => Some("Int16"),
+            "Int32" => Some("Int32"),
+            "UInt8" => Some("UInt8"),
+            "UInt16" => Some("UInt16"),
+            "UInt32" => Some("UInt32"),
+            "UInt64" => Some("UInt64"),
+            _ => None, // Int, Int64, Float, etc. are not "sized" for coercion
+        }
+    }
+
+    /// Get the conversion instruction for a sized int type
+    fn sized_int_conversion_instruction(ty: &str, dst: Reg, src: Reg) -> Option<Instruction> {
+        match ty {
+            "Int8" => Some(Instruction::ToInt8(dst, src)),
+            "Int16" => Some(Instruction::ToInt16(dst, src)),
+            "Int32" => Some(Instruction::ToInt32(dst, src)),
+            "UInt8" => Some(Instruction::ToUInt8(dst, src)),
+            "UInt16" => Some(Instruction::ToUInt16(dst, src)),
+            "UInt32" => Some(Instruction::ToUInt32(dst, src)),
+            "UInt64" => Some(Instruction::ToUInt64(dst, src)),
+            _ => None,
+        }
+    }
+
     /// Compile a top-level item.
     pub fn compile_item(&mut self, item: &Item) -> Result<(), CompileError> {
         match item {
@@ -6047,6 +6126,33 @@ impl Compiler {
             }
         }
 
+        // Sized integer coercion: if one side is a sized int (Int8, Int16, Int32, etc.)
+        // and the other side is a plain Int literal, coerce the literal to match
+        if !is_float && !is_bigint {
+            let left_sized = self.get_sized_int_type(left);
+            let right_sized = self.get_sized_int_type(right);
+            let left_is_plain_int = matches!(left, Expr::Int(_, _));
+            let right_is_plain_int = matches!(right, Expr::Int(_, _));
+
+            // If left is sized and right is plain int literal, coerce right
+            if let Some(sized_type) = left_sized {
+                if right_is_plain_int {
+                    if let Some(instr) = Self::sized_int_conversion_instruction(sized_type, right_reg, right_reg) {
+                        // Emit in-place conversion (reuse register)
+                        self.chunk.emit(instr, self.span_line(right.span()));
+                    }
+                }
+            }
+            // If right is sized and left is plain int literal, coerce left
+            else if let Some(sized_type) = right_sized {
+                if left_is_plain_int {
+                    if let Some(instr) = Self::sized_int_conversion_instruction(sized_type, left_reg, left_reg) {
+                        self.chunk.emit(instr, self.span_line(left.span()));
+                    }
+                }
+            }
+        }
+
         let dst = self.alloc_reg();
 
         let instr = match op {
@@ -7107,7 +7213,17 @@ impl Compiler {
             Expr::List(_, _, _) => Some("List".to_string()),
             // Literals
             Expr::Int(_, _) => Some("Int".to_string()),
+            Expr::Int8(_, _) => Some("Int8".to_string()),
+            Expr::Int16(_, _) => Some("Int16".to_string()),
+            Expr::Int32(_, _) => Some("Int32".to_string()),
+            Expr::UInt8(_, _) => Some("UInt8".to_string()),
+            Expr::UInt16(_, _) => Some("UInt16".to_string()),
+            Expr::UInt32(_, _) => Some("UInt32".to_string()),
+            Expr::UInt64(_, _) => Some("UInt64".to_string()),
+            Expr::BigInt(_, _) => Some("BigInt".to_string()),
             Expr::Float(_, _) => Some("Float".to_string()),
+            Expr::Float32(_, _) => Some("Float32".to_string()),
+            Expr::Decimal(_, _) => Some("Decimal".to_string()),
             Expr::String(_, _) => Some("String".to_string()),
             Expr::Char(_, _) => Some("Char".to_string()),
             Expr::Bool(_, _) => Some("Bool".to_string()),
@@ -7407,6 +7523,18 @@ impl Compiler {
                             return Some(obj_type);
                         }
                     }
+                    // Type conversion methods (as<Type>)
+                    "asInt8" | "toInt8" => return Some("Int8".to_string()),
+                    "asInt16" | "toInt16" => return Some("Int16".to_string()),
+                    "asInt32" | "toInt32" => return Some("Int32".to_string()),
+                    "asInt64" | "asInt" | "toInt" | "toInt64" => return Some("Int".to_string()),
+                    "asUInt8" | "toUInt8" => return Some("UInt8".to_string()),
+                    "asUInt16" | "toUInt16" => return Some("UInt16".to_string()),
+                    "asUInt32" | "toUInt32" => return Some("UInt32".to_string()),
+                    "asUInt64" | "toUInt64" => return Some("UInt64".to_string()),
+                    "asFloat32" | "toFloat32" => return Some("Float32".to_string()),
+                    "asFloat64" | "asFloat" | "toFloat" | "toFloat64" => return Some("Float".to_string()),
+                    "asBigInt" | "toBigInt" => return Some("BigInt".to_string()),
                     _ => {}
                 }
 
