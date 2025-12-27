@@ -1,0 +1,33 @@
+# expect: 0
+# Test POST form params parsing
+
+handle(req) = {
+    fLen = length(req.formParams)
+    Server.respond(req.id, 200, [], show(fLen))
+}
+
+main() = {
+    server = Server.bind(18084)
+
+    # Spawn worker to handle one request
+    spawn {
+        req = Server.accept(server)
+        handle(req)
+    }
+
+    # Wait a bit then test
+    sleep(100)
+    resp = Http.request(
+        "POST",
+        "http://localhost:18084/",
+        [("Content-Type", "application/x-www-form-urlencoded")],
+        "name=john&age=30&city=NYC"
+    )
+    Server.close(server)
+
+    # Should have 3 form params
+    if resp.body == "3" then 0 else {
+        println("Expected 3, got: " ++ resp.body)
+        1
+    }
+}

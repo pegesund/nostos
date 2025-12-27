@@ -1,0 +1,28 @@
+# expect: 0
+# Minimal test for query params
+
+handle(req) = {
+    qLen = length(req.queryParams)
+    Server.respond(req.id, 200, [], show(qLen))
+}
+
+main() = {
+    server = Server.bind(18082)
+
+    # Spawn worker to handle one request
+    spawn {
+        req = Server.accept(server)
+        handle(req)
+    }
+
+    # Wait a bit then test
+    sleep(100)
+    resp = Http.get("http://localhost:18082/?a=1&b=2")
+    Server.close(server)
+
+    # Should have 2 query params
+    if resp.body == "2" then 0 else {
+        println("Expected 2, got: " ++ resp.body)
+        1
+    }
+}

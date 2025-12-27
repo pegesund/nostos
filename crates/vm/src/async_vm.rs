@@ -6700,7 +6700,7 @@ impl AsyncProcess {
                 }
             }
             IoResponseValue::ServerHandle(handle_id) => GcValue::Int64(handle_id as i64),
-            IoResponseValue::ServerRequest { request_id, method, path, headers, body } => {
+            IoResponseValue::ServerRequest { request_id, method, path, headers, body, query_params, cookies, form_params } => {
                 let header_tuples: Vec<GcValue> = headers
                     .into_iter()
                     .map(|(k, v)| {
@@ -6719,14 +6719,47 @@ impl AsyncProcess {
                     }
                 };
 
+                // Convert query params to list of tuples
+                let query_param_tuples: Vec<GcValue> = query_params
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let key = GcValue::String(self.heap.alloc_string(k));
+                        let val = GcValue::String(self.heap.alloc_string(v));
+                        GcValue::Tuple(self.heap.alloc_tuple(vec![key, val]))
+                    })
+                    .collect();
+                let query_params_list = GcValue::List(GcList::from_vec(query_param_tuples));
+
+                // Convert cookies to list of tuples
+                let cookie_tuples: Vec<GcValue> = cookies
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let key = GcValue::String(self.heap.alloc_string(k));
+                        let val = GcValue::String(self.heap.alloc_string(v));
+                        GcValue::Tuple(self.heap.alloc_tuple(vec![key, val]))
+                    })
+                    .collect();
+                let cookies_list = GcValue::List(GcList::from_vec(cookie_tuples));
+
+                // Convert form params to list of tuples
+                let form_param_tuples: Vec<GcValue> = form_params
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let key = GcValue::String(self.heap.alloc_string(k));
+                        let val = GcValue::String(self.heap.alloc_string(v));
+                        GcValue::Tuple(self.heap.alloc_tuple(vec![key, val]))
+                    })
+                    .collect();
+                let form_params_list = GcValue::List(GcList::from_vec(form_param_tuples));
+
                 let method_str = GcValue::String(self.heap.alloc_string(method));
                 let path_str = GcValue::String(self.heap.alloc_string(path));
 
                 GcValue::Record(self.heap.alloc_record(
                     "HttpRequest".to_string(),
-                    vec!["id".to_string(), "method".to_string(), "path".to_string(), "headers".to_string(), "body".to_string()],
-                    vec![GcValue::Int64(request_id as i64), method_str, path_str, headers_list, body_value],
-                    vec![false, false, false, false, false],
+                    vec!["id".to_string(), "method".to_string(), "path".to_string(), "headers".to_string(), "body".to_string(), "queryParams".to_string(), "cookies".to_string(), "formParams".to_string()],
+                    vec![GcValue::Int64(request_id as i64), method_str, path_str, headers_list, body_value, query_params_list, cookies_list, form_params_list],
+                    vec![false, false, false, false, false, false, false, false],
                 ))
             }
             IoResponseValue::ExecResult { exit_code, stdout, stderr } => {
@@ -11572,6 +11605,57 @@ impl AsyncVM {
                 #[cfg(not(target_os = "linux"))]
                 {
                     Ok(GcValue::Int64(0))
+                }
+            }),
+        }));
+
+        // Server.matchPath(path, pattern) -> [(String, String)]
+        // Matches a path against a pattern with :params, returns extracted params or empty list if no match
+        // e.g., matchPath("/users/123/posts/456", "/users/:id/posts/:postId") -> [("id", "123"), ("postId", "456")]
+        self.register_native("Server.matchPath", Arc::new(GcNativeFn {
+            name: "Server.matchPath".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let path = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let pattern = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+
+                match (path, pattern) {
+                    (Some(path), Some(pattern)) => {
+                        // Split both path and pattern into segments
+                        let path_segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+                        let pattern_segs: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
+
+                        // Must have same number of segments
+                        if path_segs.len() != pattern_segs.len() {
+                            return Ok(GcValue::List(GcList::from_vec(vec![])));
+                        }
+
+                        // Match and extract params
+                        let mut params: Vec<GcValue> = vec![];
+                        for (path_seg, pattern_seg) in path_segs.iter().zip(pattern_segs.iter()) {
+                            if pattern_seg.starts_with(':') {
+                                // This is a param - extract the name (without the colon)
+                                let param_name = &pattern_seg[1..];
+                                // Create tuple (param_name, path_seg)
+                                let key = GcValue::String(heap.alloc_string(param_name.to_string()));
+                                let val = GcValue::String(heap.alloc_string(path_seg.to_string()));
+                                params.push(GcValue::Tuple(heap.alloc_tuple(vec![key, val])));
+                            } else if pattern_seg != path_seg {
+                                // Literal segment doesn't match
+                                return Ok(GcValue::List(GcList::from_vec(vec![])));
+                            }
+                            // Literal matches - continue
+                        }
+
+                        Ok(GcValue::List(GcList::from_vec(params)))
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
                 }
             }),
         }));

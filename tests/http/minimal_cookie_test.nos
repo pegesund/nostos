@@ -1,0 +1,28 @@
+# expect: 0
+# Minimal test for cookie parsing
+
+handle(req) = {
+    cLen = length(req.cookies)
+    Server.respond(req.id, 200, [], show(cLen))
+}
+
+main() = {
+    server = Server.bind(18083)
+
+    # Spawn worker to handle one request
+    spawn {
+        req = Server.accept(server)
+        handle(req)
+    }
+
+    # Wait a bit then test
+    sleep(100)
+    resp = Http.request("GET", "http://localhost:18083/", [("Cookie", "a=1; b=2; c=3")], "")
+    Server.close(server)
+
+    # Should have 3 cookies
+    if resp.body == "3" then 0 else {
+        println("Expected 3, got: " ++ resp.body)
+        1
+    }
+}
