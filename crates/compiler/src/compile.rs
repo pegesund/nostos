@@ -5219,6 +5219,53 @@ impl Compiler {
                             "isEmpty" => Some("String.isEmpty"),
                             _ => None,
                         }
+                    } else if type_name == "Buffer" {
+                        // Buffer uses special bytecode instructions, handle directly
+                        match method.node.as_str() {
+                            "append" => {
+                                if args.len() == 1 {
+                                    let buf_reg = self.compile_expr_tail(obj, false)?;
+                                    let str_reg = self.compile_expr_tail(&args[0], false)?;
+                                    self.chunk.emit(Instruction::BufferAppend(buf_reg, str_reg), line);
+                                    return Ok(buf_reg);
+                                }
+                                None
+                            }
+                            "toString" => {
+                                if args.is_empty() {
+                                    let buf_reg = self.compile_expr_tail(obj, false)?;
+                                    let dst = self.alloc_reg();
+                                    self.chunk.emit(Instruction::BufferToString(dst, buf_reg), line);
+                                    return Ok(dst);
+                                }
+                                None
+                            }
+                            _ => None,
+                        }
+                    } else if type_name == "Float64Array" {
+                        match method.node.as_str() {
+                            "length" => Some("Float64Array.length"),
+                            "get" => Some("Float64Array.get"),
+                            "set" => Some("Float64Array.set"),
+                            "toList" => Some("Float64Array.toList"),
+                            _ => None,
+                        }
+                    } else if type_name == "Int64Array" {
+                        match method.node.as_str() {
+                            "length" => Some("Int64Array.length"),
+                            "get" => Some("Int64Array.get"),
+                            "set" => Some("Int64Array.set"),
+                            "toList" => Some("Int64Array.toList"),
+                            _ => None,
+                        }
+                    } else if type_name == "Float32Array" {
+                        match method.node.as_str() {
+                            "length" => Some("Float32Array.length"),
+                            "get" => Some("Float32Array.get"),
+                            "set" => Some("Float32Array.set"),
+                            "toList" => Some("Float32Array.toList"),
+                            _ => None,
+                        }
                     } else {
                         None
                     };

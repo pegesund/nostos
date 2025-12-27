@@ -1319,11 +1319,14 @@ impl Repl {
         // Sync VM
         self.sync_vm();
 
+        // Infer type from expression pattern for known builtins
+        let type_annotation = Self::infer_type_from_expr(expr);
+
         // Store the binding
         self.var_bindings.insert(name.to_string(), VarBinding {
             thunk_name,
             mutable,
-            type_annotation: None,
+            type_annotation,
         });
 
         // Report the binding
@@ -1334,6 +1337,28 @@ impl Repl {
         self.update_completion_state();
 
         true
+    }
+
+    /// Infer type from expression pattern for known builtins
+    /// This handles cases where type inference returns generic types
+    fn infer_type_from_expr(expr: &str) -> Option<String> {
+        let trimmed = expr.trim();
+
+        // Check for static module function calls
+        if trimmed.starts_with("Buffer.new") {
+            return Some("Buffer".to_string());
+        }
+        if trimmed.starts_with("Float64Array.fromList") || trimmed.starts_with("Float64Array.make") {
+            return Some("Float64Array".to_string());
+        }
+        if trimmed.starts_with("Int64Array.fromList") || trimmed.starts_with("Int64Array.make") {
+            return Some("Int64Array".to_string());
+        }
+        if trimmed.starts_with("Float32Array.fromList") || trimmed.starts_with("Float32Array.make") {
+            return Some("Float32Array".to_string());
+        }
+
+        None
     }
 
     /// Check if module has function or type definitions

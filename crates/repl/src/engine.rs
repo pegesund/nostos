@@ -2308,6 +2308,20 @@ impl ReplEngine {
         // Parse the expression to look for method calls
         let trimmed = expr.trim();
 
+        // Check for static module function calls like "Buffer.new()", "Float64Array.fromList(...)"
+        if trimmed.starts_with("Buffer.new") {
+            return Some("Buffer".to_string());
+        }
+        if trimmed.starts_with("Float64Array.fromList") || trimmed.starts_with("Float64Array.make") {
+            return Some("Float64Array".to_string());
+        }
+        if trimmed.starts_with("Int64Array.fromList") || trimmed.starts_with("Int64Array.make") {
+            return Some("Int64Array".to_string());
+        }
+        if trimmed.starts_with("Float32Array.fromList") || trimmed.starts_with("Float32Array.make") {
+            return Some("Float32Array".to_string());
+        }
+
         // Look for method call patterns like "x.method(...)"
         // We check if the method is a known Map, Set, List, or String method
         if let Some(dot_pos) = trimmed.rfind('.') {
@@ -5157,6 +5171,13 @@ impl ReplEngine {
         }
 
         let wrapper_module = wrapper_module_opt.ok_or("Failed to parse expression")?;
+
+        // Set local variable types for UFCS method dispatch
+        for (name, binding) in &self.var_bindings {
+            if let Some(ref type_ann) = binding.type_annotation {
+                self.compiler.set_local_type(name.clone(), type_ann.clone());
+            }
+        }
 
         self.compiler.add_module(&wrapper_module, vec![], Arc::new(wrapper.clone()), "<repl>".to_string())
             .map_err(|e| format!("Error: {}", e))?;
@@ -10935,5 +10956,41 @@ mod postgres_module_tests {
 
         let result_str = result.unwrap();
         assert_eq!(result_str.trim(), "3", "Result should be 3: {}", result_str);
+    }
+
+    #[test]
+    fn test_get_variable_type_for_buffer() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Buffer binding
+        let result = engine.eval("buf = Buffer.new()");
+        assert!(result.is_ok(), "Should define buf: {:?}", result);
+
+        let buf_type = engine.get_variable_type("buf");
+        println!("buf type: {:?}", buf_type);
+        assert!(buf_type.is_some(), "Should have type for buf");
+        let type_str = buf_type.unwrap();
+        assert!(type_str.contains("Buffer"), "buf should be Buffer, got: {}", type_str);
+    }
+
+    #[test]
+    fn test_buffer_method_call() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Buffer binding - using 'a' exactly like user's REPL session
+        let result = engine.eval("a = Buffer.new()");
+        println!("a = Buffer.new() result: {:?}", result);
+        assert!(result.is_ok(), "Should define a: {:?}", result);
+
+        // Check the type is correctly set
+        let a_type = engine.get_variable_type("a");
+        println!("a type after definition: {:?}", a_type);
+
+        // Try calling append method via UFCS - separate eval call like in REPL
+        let result = engine.eval("a.append(\"aa\")");
+        println!("a.append(\"aa\") result: {:?}", result);
+        assert!(result.is_ok(), "Should call a.append(): {:?}", result);
     }
 }
