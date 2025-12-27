@@ -1063,6 +1063,9 @@ impl Autocomplete {
         } else if let Some(literal_type) = Self::detect_literal_type(receiver) {
             // Literal expression like [1,2,3], "hello", %{...}, #{...}
             literal_type.to_string()
+        } else if let Some(chain_type) = self.infer_method_chain_type(receiver, source) {
+            // Method chain like aa.append("ss") - infer return type
+            chain_type
         } else {
             // Lowercase - try to look up the variable's type
             if let Some(var_type) = source.get_variable_type(receiver) {
@@ -1127,6 +1130,141 @@ impl Autocomplete {
 
         items.sort_by(|a, b| a.text.cmp(&b.text));
         items
+    }
+
+    /// Infer the return type of a method chain like "aa.append(\"ss\")"
+    fn infer_method_chain_type(&self, receiver: &str, source: &dyn CompletionSource) -> Option<String> {
+        // Look for method call pattern: base.method(...)
+        // Find the last method call by looking for .method( pattern
+        let mut depth: i32 = 0;
+        let mut last_dot_before_paren = None;
+
+        for (i, c) in receiver.chars().enumerate() {
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth = (depth - 1).max(0),
+                '.' if depth == 0 => last_dot_before_paren = Some(i),
+                _ => {}
+            }
+        }
+
+        let dot_pos = last_dot_before_paren?;
+        let base = &receiver[..dot_pos];
+        let method_part = &receiver[dot_pos + 1..];
+
+        // Extract just the method name (before parentheses)
+        let method_name = method_part.split('(').next()?.trim();
+
+        // Get the type of the base expression
+        let base_type = if let Some(var_type) = source.get_variable_type(base) {
+            var_type
+        } else if let Some(chain_type) = self.infer_method_chain_type(base, source) {
+            // Recursive: base is also a chain
+            chain_type
+        } else {
+            return None;
+        };
+
+        // Look up the return type of base_type.method_name
+        Self::get_method_return_type(&base_type, method_name)
+    }
+
+    /// Get the return type of a method on a type
+    fn get_method_return_type(type_name: &str, method_name: &str) -> Option<String> {
+        // Buffer methods
+        if type_name == "Buffer" {
+            return match method_name {
+                "append" => Some("Buffer".to_string()),
+                "toString" => Some("String".to_string()),
+                _ => None,
+            };
+        }
+
+        // Float64Array methods
+        if type_name == "Float64Array" {
+            return match method_name {
+                "length" => Some("Int".to_string()),
+                "get" => Some("Float".to_string()),
+                "set" | "slice" | "map" | "fill" => Some("Float64Array".to_string()),
+                "toList" => Some("List".to_string()),
+                "sum" | "min" | "max" | "mean" => Some("Float".to_string()),
+                _ => None,
+            };
+        }
+
+        // Int64Array methods
+        if type_name == "Int64Array" {
+            return match method_name {
+                "length" | "sum" | "min" | "max" => Some("Int".to_string()),
+                "get" => Some("Int".to_string()),
+                "set" | "slice" | "map" | "fill" => Some("Int64Array".to_string()),
+                "toList" => Some("List".to_string()),
+                _ => None,
+            };
+        }
+
+        // Float32Array methods
+        if type_name == "Float32Array" {
+            return match method_name {
+                "length" => Some("Int".to_string()),
+                "get" => Some("Float".to_string()),
+                "set" | "slice" | "map" | "fill" => Some("Float32Array".to_string()),
+                "toList" => Some("List".to_string()),
+                "sum" | "min" | "max" | "mean" => Some("Float".to_string()),
+                _ => None,
+            };
+        }
+
+        // String methods
+        if type_name == "String" {
+            return match method_name {
+                "length" => Some("Int".to_string()),
+                "toUpper" | "toLower" | "trim" | "trimStart" | "trimEnd" |
+                "replace" | "replaceAll" | "substring" | "repeat" |
+                "padStart" | "padEnd" | "reverse" => Some("String".to_string()),
+                "contains" | "startsWith" | "endsWith" | "isEmpty" => Some("Bool".to_string()),
+                "split" | "chars" | "lines" | "words" => Some("List".to_string()),
+                "indexOf" | "lastIndexOf" | "toInt" => Some("Int".to_string()),
+                "toFloat" => Some("Float".to_string()),
+                _ => None,
+            };
+        }
+
+        // List methods
+        if type_name == "List" || type_name.starts_with("List[") || type_name.starts_with("[") {
+            return match method_name {
+                "length" | "count" => Some("Int".to_string()),
+                "isEmpty" => Some("Bool".to_string()),
+                "map" | "filter" | "take" | "drop" | "reverse" | "sort" |
+                "append" | "concat" | "flatten" => Some(type_name.to_string()),
+                _ => None,
+            };
+        }
+
+        // Map methods
+        if type_name == "Map" || type_name.starts_with("Map[") {
+            return match method_name {
+                "size" => Some("Int".to_string()),
+                "isEmpty" | "contains" => Some("Bool".to_string()),
+                "insert" | "remove" | "merge" | "union" | "intersection" | "difference" => Some(type_name.to_string()),
+                "keys" | "values" | "toList" => Some("List".to_string()),
+                _ => None,
+            };
+        }
+
+        // Set methods
+        if type_name == "Set" || type_name.starts_with("Set[") {
+            return match method_name {
+                "size" => Some("Int".to_string()),
+                "isEmpty" | "contains" | "isSubset" | "isProperSubset" => Some("Bool".to_string()),
+                "insert" | "remove" | "union" | "intersection" | "difference" |
+                "symmetricDifference" => Some(type_name.to_string()),
+                "toList" => Some("List".to_string()),
+                _ => None,
+            };
+        }
+
+        None
     }
 
     /// Extract field names from an anonymous record type like "{ exitCode: Int, stdout: String }"
