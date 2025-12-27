@@ -16,9 +16,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use chrono::Timelike;
+use std::future::poll_fn;
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
-use tokio_postgres::{Client as PgClient, NoTls, Statement};
+use tokio_postgres::{AsyncMessage, Client as PgClient, NoTls, Statement};
 use postgres_native_tls::MakeTlsConnector;
 use native_tls::TlsConnector;
 use deadpool_postgres::{Manager as PgPoolManager, Pool as PgPool, Runtime as DeadpoolRuntime, ManagerConfig, RecyclingMethod};
@@ -107,6 +108,13 @@ impl PgConnection {
 
 /// Connection pools keyed by connection string
 type PgPools = Arc<TokioMutex<HashMap<String, PgPool>>>;
+
+/// Listener connection for LISTEN/NOTIFY
+/// Uses a dedicated non-pooled connection with a notification channel
+struct PgListenerConnection {
+    client: PgClient,
+    notification_rx: TokioMutex<mpsc::UnboundedReceiver<(String, String)>>,
+}
 
 /// Create a TLS connector for PostgreSQL
 fn create_tls_connector() -> Result<MakeTlsConnector, native_tls::Error> {
@@ -482,6 +490,36 @@ pub enum IoRequest {
         name: String,
         response: IoResponse,
     },
+    /// Create a dedicated listener connection for LISTEN/NOTIFY
+    PgListenConnect {
+        connection_string: String,
+        response: IoResponse,
+    },
+    /// Start listening on a channel (LISTEN)
+    PgListen {
+        handle: u64,
+        channel: String,
+        response: IoResponse,
+    },
+    /// Stop listening on a channel (UNLISTEN)
+    PgUnlisten {
+        handle: u64,
+        channel: String,
+        response: IoResponse,
+    },
+    /// Wait for a notification with timeout
+    PgAwaitNotification {
+        handle: u64,
+        timeout_ms: u64,
+        response: IoResponse,
+    },
+    /// Send a notification (NOTIFY)
+    PgNotify {
+        handle: u64,
+        channel: String,
+        payload: String,
+        response: IoResponse,
+    },
 
     // Shutdown
     Shutdown,
@@ -598,6 +636,10 @@ impl IoRuntime {
 
         // PostgreSQL connection pools (keyed by connection string)
         let pg_pools: PgPools = Arc::new(TokioMutex::new(HashMap::new()));
+
+        // PostgreSQL listener connections (for LISTEN/NOTIFY)
+        let pg_listeners: Arc<TokioMutex<HashMap<u64, PgListenerConnection>>> = Arc::new(TokioMutex::new(HashMap::new()));
+        let mut next_listener_handle: u64 = 1;
 
         while let Some(request) = request_rx.recv().await {
             match request {
@@ -1523,8 +1565,226 @@ impl IoRuntime {
                         }
                     });
                 }
+
+                // LISTEN/NOTIFY operations
+                IoRequest::PgListenConnect { connection_string, response } => {
+                    let listeners = pg_listeners.clone();
+                    let handle = next_listener_handle;
+                    next_listener_handle += 1;
+
+                    tokio::spawn(async move {
+                        let use_tls = requires_tls(&connection_string);
+
+                        // Create channel for notifications
+                        let (tx, rx) = mpsc::unbounded_channel();
+
+                        // Create a direct (non-pooled) connection for listening
+                        // Handle TLS and non-TLS separately due to different types
+                        let client_result = if use_tls {
+                            match create_tls_connector() {
+                                Ok(tls) => {
+                                    match tokio_postgres::connect(&connection_string, tls).await {
+                                        Ok((client, mut connection)) => {
+                                            let tx = tx.clone();
+                                            // Spawn connection handler using poll_message
+                                            tokio::spawn(async move {
+                                                loop {
+                                                    let message = poll_fn(|cx| connection.poll_message(cx)).await;
+                                                    match message {
+                                                        Some(Ok(AsyncMessage::Notification(n))) => {
+                                                            let _ = tx.send((
+                                                                n.channel().to_string(),
+                                                                n.payload().to_string(),
+                                                            ));
+                                                        }
+                                                        Some(Ok(_)) => {}
+                                                        Some(Err(_)) | None => break,
+                                                    }
+                                                }
+                                            });
+                                            Ok(client)
+                                        }
+                                        Err(e) => Err(IoError::PgError(format!("Connection error: {}", e))),
+                                    }
+                                }
+                                Err(e) => Err(IoError::PgError(format!("TLS error: {}", e))),
+                            }
+                        } else {
+                            match tokio_postgres::connect(&connection_string, NoTls).await {
+                                Ok((client, mut connection)) => {
+                                    let tx = tx.clone();
+                                    // Spawn connection handler using poll_message
+                                    tokio::spawn(async move {
+                                        loop {
+                                            let message = poll_fn(|cx| connection.poll_message(cx)).await;
+                                            match message {
+                                                Some(Ok(AsyncMessage::Notification(n))) => {
+                                                    let _ = tx.send((
+                                                        n.channel().to_string(),
+                                                        n.payload().to_string(),
+                                                    ));
+                                                }
+                                                Some(Ok(_)) => {}
+                                                Some(Err(_)) | None => break,
+                                            }
+                                        }
+                                    });
+                                    Ok(client)
+                                }
+                                Err(e) => Err(IoError::PgError(format!("Connection error: {}", e))),
+                            }
+                        };
+
+                        match client_result {
+                            Ok(client) => {
+                                let listener_conn = PgListenerConnection {
+                                    client,
+                                    notification_rx: TokioMutex::new(rx),
+                                };
+                                listeners.lock().await.insert(handle, listener_conn);
+                                let _ = response.send(Ok(IoResponseValue::PgHandle(handle)));
+                            }
+                            Err(e) => {
+                                let _ = response.send(Err(e));
+                            }
+                        }
+                    });
+                }
+
+                IoRequest::PgListen { handle, channel, response } => {
+                    let listeners = pg_listeners.clone();
+
+                    tokio::spawn(async move {
+                        let listeners_guard = listeners.lock().await;
+                        if let Some(conn) = listeners_guard.get(&handle) {
+                            // Send LISTEN command
+                            let query = format!("LISTEN {}", Self::quote_identifier(&channel));
+                            match conn.client.execute(&query, &[]).await {
+                                Ok(_) => {
+                                    let _ = response.send(Ok(IoResponseValue::Unit));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::PgError(format!("LISTEN error: {}", e))));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::PgUnlisten { handle, channel, response } => {
+                    let listeners = pg_listeners.clone();
+
+                    tokio::spawn(async move {
+                        let listeners_guard = listeners.lock().await;
+                        if let Some(conn) = listeners_guard.get(&handle) {
+                            // Send UNLISTEN command
+                            let query = format!("UNLISTEN {}", Self::quote_identifier(&channel));
+                            match conn.client.execute(&query, &[]).await {
+                                Ok(_) => {
+                                    let _ = response.send(Ok(IoResponseValue::Unit));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::PgError(format!("UNLISTEN error: {}", e))));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::PgAwaitNotification { handle, timeout_ms, response } => {
+                    let listeners = pg_listeners.clone();
+
+                    tokio::spawn(async move {
+                        // Wait for notification with timeout
+                        // We hold the listeners lock for the entire operation to keep the reference valid
+                        let listeners_guard = listeners.lock().await;
+                        if let Some(conn) = listeners_guard.get(&handle) {
+                            let mut rx = conn.notification_rx.lock().await;
+
+                            let timeout = tokio::time::Duration::from_millis(timeout_ms);
+                            match tokio::time::timeout(timeout, rx.recv()).await {
+                                Ok(Some((channel, payload))) => {
+                                    let _ = response.send(Ok(IoResponseValue::PgNotificationOption(
+                                        Some((channel, payload))
+                                    )));
+                                }
+                                Ok(None) => {
+                                    // Channel closed (connection dropped)
+                                    let _ = response.send(Ok(IoResponseValue::PgNotificationOption(None)));
+                                }
+                                Err(_) => {
+                                    // Timeout
+                                    let _ = response.send(Ok(IoResponseValue::PgNotificationOption(None)));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::PgNotify { handle, channel, payload, response } => {
+                    let pg_conns = pg_connections.clone();
+                    let listeners = pg_listeners.clone();
+
+                    tokio::spawn(async move {
+                        // First try regular connections, then listener connections
+                        let conns = pg_conns.lock().await;
+                        if let Some(conn) = conns.get(&handle) {
+                            let query = format!(
+                                "NOTIFY {}, {}",
+                                Self::quote_identifier(&channel),
+                                Self::quote_string(&payload)
+                            );
+                            match conn.client().execute(&query, &[]).await {
+                                Ok(_) => {
+                                    let _ = response.send(Ok(IoResponseValue::Unit));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::PgError(format!("NOTIFY error: {}", e))));
+                                }
+                            }
+                            return;
+                        }
+                        drop(conns);
+
+                        // Try listener connections
+                        let listeners_guard = listeners.lock().await;
+                        if let Some(conn) = listeners_guard.get(&handle) {
+                            let query = format!(
+                                "NOTIFY {}, {}",
+                                Self::quote_identifier(&channel),
+                                Self::quote_string(&payload)
+                            );
+                            match conn.client.execute(&query, &[]).await {
+                                Ok(_) => {
+                                    let _ = response.send(Ok(IoResponseValue::Unit));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::PgError(format!("NOTIFY error: {}", e))));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
             }
         }
+    }
+
+    /// Quote a PostgreSQL identifier (for LISTEN/UNLISTEN channel names)
+    fn quote_identifier(s: &str) -> String {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    }
+
+    /// Quote a PostgreSQL string literal (for NOTIFY payload)
+    fn quote_string(s: &str) -> String {
+        format!("'{}'", s.replace('\'', "''"))
     }
 
     /// Convert a row column value to PgValue

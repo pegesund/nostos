@@ -228,6 +228,13 @@ pub enum IoResponseValue {
     PgRows(Vec<Vec<PgValue>>),
     /// PostgreSQL execute result - number of affected rows
     PgAffected(u64),
+    /// PostgreSQL notification (from LISTEN/NOTIFY)
+    PgNotification {
+        channel: String,
+        payload: String,
+    },
+    /// Optional PostgreSQL notification (None on timeout)
+    PgNotificationOption(Option<(String, String)>),
 }
 
 /// PostgreSQL column value (from a query result)
