@@ -1,0 +1,135 @@
+# URL parsing utilities for web servers
+#
+# Functions for parsing query strings and matching URL patterns.
+#
+# Usage:
+#   params = parseUrlQuery("/users?name=john&age=30")
+#   name = Map.get(params, "name")  # "john"
+#
+#   match matchUrlPath("/users/:id", "/users/123") {
+#       Some(params) -> Map.get(params, "id")  # "123"
+#       None -> "no match"
+#   }
+
+# Parse a query string into a Map
+# Input can be full URL path or just query string
+# If input starts with "/" and has no "?", returns empty map
+# If input has "?", parses everything after it
+# Otherwise treats input as raw query string (e.g., "foo=bar&baz=qux")
+pub parseUrlQuery(pathOrQuery) = {
+    emptyMap: Map[String, String] = %{}
+    qIdx = String.indexOf(pathOrQuery, "?")
+
+    if qIdx >= 0 then {
+        # Has query string after ?
+        queryStr = String.substring(pathOrQuery, qIdx + 1, String.length(pathOrQuery))
+        if String.isEmpty(queryStr) then emptyMap
+        else {
+            pairs = Regex.split(queryStr, "&")
+            parseQueryPairs(pairs, emptyMap)
+        }
+    } else if String.startsWith(pathOrQuery, "/") then {
+        # Path without query string
+        emptyMap
+    } else {
+        # Raw query string like "foo=bar&baz=qux"
+        if String.isEmpty(pathOrQuery) then emptyMap
+        else {
+            pairs = Regex.split(pathOrQuery, "&")
+            parseQueryPairs(pairs, emptyMap)
+        }
+    }
+}
+
+# Helper: extract decoded string from Url.decode result
+urlDecodeValue(s) = {
+    (_, decoded) = Url.decode(s)
+    decoded
+}
+
+# Helper: parse list of "key=value" pairs into Map
+parseQueryPairs(pairs, acc) = {
+    match pairs {
+        [] -> acc
+        [pair | rest] -> {
+            eqIdx = String.indexOf(pair, "=")
+            if eqIdx < 0 then {
+                key = urlDecodeValue(pair)
+                parseQueryPairs(rest, Map.insert(acc, key, ""))
+            } else {
+                key = urlDecodeValue(String.substring(pair, 0, eqIdx))
+                value = urlDecodeValue(String.substring(pair, eqIdx + 1, String.length(pair)))
+                parseQueryPairs(rest, Map.insert(acc, key, value))
+            }
+        }
+    }
+}
+
+# Get just the path part of a URL (before query string)
+pub urlPath(url) = {
+    qIdx = String.indexOf(url, "?")
+    if qIdx >= 0
+        then String.substring(url, 0, qIdx)
+        else url
+}
+
+# Get just the query string part of a URL (after ?)
+pub urlQueryString(url) = {
+    qIdx = String.indexOf(url, "?")
+    if qIdx >= 0
+        then String.substring(url, qIdx + 1, String.length(url))
+        else ""
+}
+
+# Match a path against a pattern with parameters
+# Pattern uses :name for parameters
+pub matchUrlPath(pattern, reqPath) = {
+    cleanPath = urlPath(reqPath)
+    patternParts = urlSplitPath(pattern)
+    pathParts = urlSplitPath(cleanPath)
+
+    emptyMap: Map[String, String] = %{}
+    if length(patternParts) != length(pathParts)
+        then None
+        else matchPathParts(patternParts, pathParts, emptyMap)
+}
+
+# Helper: split path into segments
+urlSplitPath(p) = {
+    parts = Regex.split(p, "/")
+    parts.filter(s => String.isEmpty(s) == false)
+}
+
+# Helper: match pattern parts against path parts
+matchPathParts(pattern, pathSegs, params) = {
+    match (pattern, pathSegs) {
+        ([], []) -> Some(params)
+        ([pPart | pRest], [pathPart | pathRest]) -> {
+            if String.startsWith(pPart, ":") then {
+                paramName = String.substring(pPart, 1, String.length(pPart))
+                newParams = Map.insert(params, paramName, pathPart)
+                matchPathParts(pRest, pathRest, newParams)
+            } else if pPart == pathPart then {
+                matchPathParts(pRest, pathRest, params)
+            } else {
+                None
+            }
+        }
+        _ -> None
+    }
+}
+
+# Build a query string from a Map
+pub buildUrlQuery(params) -> String = {
+    pairs = Map.toList(params)
+    buildQueryPairs(pairs)
+}
+
+# Helper: build query string from list of pairs
+buildQueryPairs(pairs) -> String = {
+    match pairs {
+        [] -> ""
+        [(k, v)] -> Url.encode(k) ++ "=" ++ Url.encode(v)
+        [(k, v) | rest] -> Url.encode(k) ++ "=" ++ Url.encode(v) ++ "&" ++ buildQueryPairs(rest)
+    }
+}

@@ -7309,12 +7309,25 @@ impl Compiler {
                         }
                     }
 
-                    // Try to get return type from function signature
+                    // Try to get return type from function
                     // This is needed for REPL variable thunks like __repl_var_a_1()
-                    if let Some(sig) = self.get_function_signature(&ident.node) {
+                    // First try the raw name, then try the resolved name (for imported functions)
+                    let resolved_name = self.resolve_name(&ident.node);
+
+                    // First try direct return_type field (more reliable)
+                    if let Some(ret_type) = self.get_function_return_type(&ident.node)
+                        .or_else(|| self.get_function_return_type(&resolved_name)) {
+                        if !ret_type.is_empty() {
+                            return Some(ret_type);
+                        }
+                    }
+
+                    // Fall back to parsing signature if return_type not set
+                    if let Some(sig) = self.get_function_signature(&ident.node)
+                        .or_else(|| self.get_function_signature(&resolved_name)) {
                         // For 0-arity functions, the signature IS the return type
                         // For others, extract after "-> "
-                        let return_type = if let Some(arrow_pos) = sig.find("-> ") {
+                        let return_type = if let Some(arrow_pos) = sig.rfind("-> ") {
                             sig[arrow_pos + 3..].trim().to_string()
                         } else {
                             sig.trim().to_string()
@@ -7326,7 +7339,12 @@ impl Compiler {
                             } else {
                                 return_type
                             };
-                            return Some(stripped);
+                            // Only use if it's a concrete type (not a single-letter type variable)
+                            // Type variables are single lowercase letters like "a", "b", "c"
+                            let is_type_var = stripped.len() == 1 && stripped.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false);
+                            if !is_type_var {
+                                return Some(stripped);
+                            }
                         }
                     }
                 }
@@ -10139,6 +10157,11 @@ impl Compiler {
     /// Get a function's signature as a displayable string.
     pub fn get_function_signature(&self, name: &str) -> Option<String> {
         self.find_function(name).and_then(|f| f.signature.clone())
+    }
+
+    /// Get a function's return type directly.
+    pub fn get_function_return_type(&self, name: &str) -> Option<String> {
+        self.find_function(name).and_then(|f| f.return_type.clone())
     }
 
     /// Get a function's doc comment.

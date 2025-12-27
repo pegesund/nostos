@@ -1,0 +1,73 @@
+# PostgreSQL Connection Pool
+#
+# Automatic connection management - get, use, release handled for you.
+#
+# Usage:
+#   use stdlib.pool.{init, query, execute, withConn}
+#
+#   main() = {
+#       init("host=localhost user=postgres password=postgres")
+#       rows = query("SELECT * FROM users", [])
+#       execute("INSERT INTO users (name) VALUES ($1)", ["Alice"])
+#   }
+
+mvar connections: List[Int] = []
+mvar connectionString: String = ""
+
+# Initialize the pool with a connection string
+init(connStr) = {
+    connectionString = connStr
+}
+
+# Get a connection from the pool (internal)
+getConn() = match connections {
+    [] -> Pg.connect(connectionString)
+    [conn | rest] -> {
+        connections = rest
+        conn
+    }
+}
+
+# Return a connection to the pool (internal)
+releaseConn(conn) = {
+    connections = conn :: connections
+}
+
+# Execute a query and return rows - connection handled automatically
+query(sql, params) = {
+    conn = getConn()
+    try { Pg.query(conn, sql, params) } catch { e -> throw(e) } finally { releaseConn(conn) }
+}
+
+# Execute a statement and return affected count - connection handled automatically
+execute(sql, params) = {
+    conn = getConn()
+    try { Pg.execute(conn, sql, params) } catch { e -> throw(e) } finally { releaseConn(conn) }
+}
+
+# Run a function with a connection (for transactions or multiple operations)
+# The connection is automatically released after the function completes.
+#
+# Usage:
+#   withConn(conn => {
+#       Pg.begin(conn)
+#       Pg.execute(conn, "INSERT ...", [...])
+#       Pg.execute(conn, "UPDATE ...", [...])
+#       Pg.commit(conn)
+#   })
+withConn(action) = {
+    conn = getConn()
+    try { action(conn) } catch { e -> throw(e) } finally { releaseConn(conn) }
+}
+
+# Run a function in a transaction - auto rollback on error, auto commit on success
+#
+# Usage:
+#   transaction(conn => {
+#       Pg.execute(conn, "INSERT ...", [...])
+#       Pg.execute(conn, "UPDATE ...", [...])
+#   })
+transaction(action) = {
+    conn = getConn()
+    try { Pg.begin(conn); result = action(conn); Pg.commit(conn); result } catch { e -> { Pg.rollback(conn); throw(e) } } finally { releaseConn(conn) }
+}
