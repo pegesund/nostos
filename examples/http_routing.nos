@@ -14,6 +14,12 @@
 #   curl http://localhost:8080/users/42/posts/7
 #   curl http://localhost:8080/api/health
 
+# Helper function to extract parameter value from match result
+getParam(params) = {
+    (_, v) = head(params)
+    v
+}
+
 # Route handlers
 
 handleUserDetail(req, userId) = {
@@ -101,9 +107,9 @@ route(req, mainPid) = {
     else {
         userPostParams = Server.matchPath(path, "/users/:userId/posts/:postId")
         if length(userPostParams) == 2 then {
-            # Inline deconstruction (workaround for type inference limitation)
-            (_, userId) = head(userPostParams)
-            (_, postId) = head(tail(userPostParams))
+            # Use helper function to extract values
+            userId = getParam(userPostParams)
+            postId = getParam(tail(userPostParams))
             handleUserPost(req, userId, postId)
         }
 
@@ -111,7 +117,7 @@ route(req, mainPid) = {
         else {
             userPostsParams = Server.matchPath(path, "/users/:userId/posts")
             if length(userPostsParams) == 1 then {
-                (_, userId) = head(userPostsParams)
+                userId = getParam(userPostsParams)
                 handleUserPosts(req, userId)
             }
 
@@ -119,7 +125,7 @@ route(req, mainPid) = {
             else {
                 userParams = Server.matchPath(path, "/users/:userId")
                 if length(userParams) == 1 then {
-                    (_, userId) = head(userParams)
+                    userId = getParam(userParams)
                     handleUserDetail(req, userId)
                 }
 

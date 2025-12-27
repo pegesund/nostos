@@ -469,6 +469,26 @@ impl<'a> InferCtx<'a> {
                 Ok(())
             }
 
+            // TypeParam on the left - treat like a type variable
+            // This allows generic functions to be called with concrete types
+            (Type::TypeParam(_name), _) => {
+                // Allocate a fresh type variable and substitute it
+                let fresh_id = self.env.next_var;
+                self.env.next_var += 1;
+                // Map the type param name to this variable if we want to track it
+                // For now, just unify the fresh variable with t2
+                self.env.substitution.insert(fresh_id, t2);
+                Ok(())
+            }
+
+            // TypeParam on the right - treat like a type variable
+            (_, Type::TypeParam(_name)) => {
+                let fresh_id = self.env.next_var;
+                self.env.next_var += 1;
+                self.env.substitution.insert(fresh_id, t1);
+                Ok(())
+            }
+
             // Tuples
             (Type::Tuple(elems1), Type::Tuple(elems2)) => {
                 if elems1.len() != elems2.len() {

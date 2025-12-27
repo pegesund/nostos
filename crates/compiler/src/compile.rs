@@ -11165,7 +11165,7 @@ impl Compiler {
         }
     }
 
-    /// Parse comma-separated type arguments, handling nested brackets.
+    /// Parse comma-separated type arguments, handling nested brackets and parentheses.
     fn parse_type_args(&self, args_str: &str) -> Vec<nostos_types::Type> {
         let mut args = Vec::new();
         let mut current = String::new();
@@ -11173,11 +11173,11 @@ impl Compiler {
 
         for ch in args_str.chars() {
             match ch {
-                '[' => {
+                '[' | '(' => {
                     depth += 1;
                     current.push(ch);
                 }
-                ']' => {
+                ']' | ')' => {
                     depth -= 1;
                     current.push(ch);
                 }
