@@ -1,0 +1,14 @@
+# expect: 0
+# Finally executes when no exception occurs
+
+main() = {
+    # Test that finally runs on normal completion
+    # We use a nested try to catch any exception from finally
+    result = try {
+        try { 42 } catch { _ -> -1 } finally { throw("finally ran") }
+    } catch {
+        msg -> msg
+    }
+    assert_eq("finally ran", result)
+    0
+}

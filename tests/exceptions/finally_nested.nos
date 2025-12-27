@@ -1,0 +1,24 @@
+# expect: 0
+# Nested try/finally blocks - all finally blocks execute in order
+
+main() = {
+    # Outer finally and inner finally should both run
+    # Inner rethrows, outer catches
+    result = try {
+        try {
+            try { throw("deep") } catch { "wrong" -> "nope" } finally { throw("inner finally") }
+        } catch {
+            e -> e ++ " caught"
+        } finally {
+            throw("outer finally")
+        }
+    } catch {
+        msg -> msg
+    }
+    # Inner finally throws "inner finally"
+    # That gets caught as "inner finally caught"
+    # Outer finally throws "outer finally"
+    # Outer outer catch catches "outer finally"
+    assert_eq("outer finally", result)
+    0
+}

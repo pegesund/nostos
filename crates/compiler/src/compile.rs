@@ -7895,6 +7895,18 @@ impl Compiler {
     ) -> Result<Reg, CompileError> {
         let dst = self.alloc_reg();
 
+        // For finally blocks, we need a flag to track if we should rethrow after finally
+        // This only adds overhead when finally exists
+        let rethrow_flag = if finally_expr.is_some() {
+            let flag = self.alloc_reg();
+            // Initialize to false - no rethrow pending
+            let false_idx = self.chunk.add_constant(Value::Bool(false));
+            self.chunk.emit(Instruction::LoadConst(flag, false_idx), 0);
+            Some(flag)
+        } else {
+            None
+        };
+
         // 1. Push exception handler - offset will be patched later
         let handler_idx = self.chunk.emit(Instruction::PushHandler(0), 0);
 
@@ -7964,13 +7976,21 @@ impl Compiler {
             }
         }
 
-        // 7.5 Re-throw block: if no pattern matched, re-throw the exception
+        // 7.5 Re-throw block: if no pattern matched, handle rethrow
         let rethrow_start = self.chunk.code.len();
         for jump in rethrow_jumps {
             self.chunk.patch_jump(jump, rethrow_start);
         }
-        // Re-throw the exception (exc_reg still holds it)
-        self.chunk.emit(Instruction::Throw(exc_reg), 0);
+
+        if let Some(flag) = rethrow_flag {
+            // With finally: set flag to true and jump to finally, then rethrow after
+            let true_idx = self.chunk.add_constant(Value::Bool(true));
+            self.chunk.emit(Instruction::LoadConst(flag, true_idx), 0);
+            // Fall through to after_catch where finally is compiled
+        } else {
+            // No finally: rethrow immediately
+            self.chunk.emit(Instruction::Throw(exc_reg), 0);
+        }
 
         // 8. Patch all end jumps from catch arms
         let after_catch = self.chunk.code.len();
@@ -7986,6 +8006,16 @@ impl Compiler {
             // Finally is executed for both success and exception paths
             // Its result is discarded; the try/catch result is preserved in dst
             self.compile_expr_tail(finally, false)?;
+
+            // After finally, check if we need to rethrow
+            if let Some(flag) = rethrow_flag {
+                let done_jump = self.chunk.emit(Instruction::JumpIfFalse(flag, 0), 0);
+                // Rethrow the preserved exception
+                self.chunk.emit(Instruction::Throw(exc_reg), 0);
+                // Patch done_jump to here (normal exit)
+                let done_target = self.chunk.code.len();
+                self.chunk.patch_jump(done_jump, done_target);
+            }
         }
 
         Ok(dst)
