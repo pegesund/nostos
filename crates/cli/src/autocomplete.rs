@@ -1127,6 +1127,34 @@ impl Autocomplete {
             return Some("Tuple");
         }
 
+        // Numeric literals - check for typed suffixes first
+        // Handle negative numbers by stripping the minus sign
+        let num_part = trimmed.strip_prefix('-').unwrap_or(trimmed);
+        if !num_part.is_empty() && (num_part.chars().next().unwrap().is_ascii_digit() || num_part.starts_with('.')) {
+            // Check for typed integer suffixes
+            if num_part.ends_with("i8") { return Some("Int8"); }
+            if num_part.ends_with("i16") { return Some("Int16"); }
+            if num_part.ends_with("i32") { return Some("Int32"); }
+            if num_part.ends_with("i64") { return Some("Int64"); }
+            if num_part.ends_with("u8") { return Some("UInt8"); }
+            if num_part.ends_with("u16") { return Some("UInt16"); }
+            if num_part.ends_with("u32") { return Some("UInt32"); }
+            if num_part.ends_with("u64") { return Some("UInt64"); }
+            if num_part.ends_with("f32") { return Some("Float32"); }
+            if num_part.ends_with("f64") { return Some("Float64"); }
+            if num_part.ends_with('n') { return Some("BigInt"); }
+
+            // Check if it looks like a float (contains decimal point)
+            if num_part.contains('.') {
+                return Some("Float");
+            }
+
+            // Plain integer literal
+            if num_part.chars().all(|c| c.is_ascii_digit() || c == '_') {
+                return Some("Int");
+            }
+        }
+
         None
     }
 
@@ -2649,6 +2677,55 @@ mod tests {
         // Other literals should still work
         assert_eq!(Autocomplete::detect_literal_type("[1, 2]"), Some("List"));
         assert_eq!(Autocomplete::detect_literal_type("\"hello\""), Some("String"));
+    }
+
+    #[test]
+    fn test_numeric_literal_detection() {
+        // Plain integers
+        assert_eq!(Autocomplete::detect_literal_type("42"), Some("Int"));
+        assert_eq!(Autocomplete::detect_literal_type("0"), Some("Int"));
+        assert_eq!(Autocomplete::detect_literal_type("-5"), Some("Int"));
+        assert_eq!(Autocomplete::detect_literal_type("1_000_000"), Some("Int"));
+
+        // Floats
+        assert_eq!(Autocomplete::detect_literal_type("3.14"), Some("Float"));
+        assert_eq!(Autocomplete::detect_literal_type("-2.5"), Some("Float"));
+        assert_eq!(Autocomplete::detect_literal_type("0.0"), Some("Float"));
+
+        // Typed integers
+        assert_eq!(Autocomplete::detect_literal_type("42i8"), Some("Int8"));
+        assert_eq!(Autocomplete::detect_literal_type("42i16"), Some("Int16"));
+        assert_eq!(Autocomplete::detect_literal_type("42i32"), Some("Int32"));
+        assert_eq!(Autocomplete::detect_literal_type("42i64"), Some("Int64"));
+        assert_eq!(Autocomplete::detect_literal_type("42u8"), Some("UInt8"));
+        assert_eq!(Autocomplete::detect_literal_type("42u16"), Some("UInt16"));
+        assert_eq!(Autocomplete::detect_literal_type("42u32"), Some("UInt32"));
+        assert_eq!(Autocomplete::detect_literal_type("42u64"), Some("UInt64"));
+
+        // Typed floats
+        assert_eq!(Autocomplete::detect_literal_type("3.14f32"), Some("Float32"));
+        assert_eq!(Autocomplete::detect_literal_type("3.14f64"), Some("Float64"));
+
+        // BigInt
+        assert_eq!(Autocomplete::detect_literal_type("1000000n"), Some("BigInt"));
+    }
+
+    #[test]
+    fn test_numeric_literal_autocomplete() {
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        // 42.as should suggest asInt8, asInt16, etc.
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "42".to_string(),
+            prefix: "as".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        // Should have all as* conversion methods
+        assert!(items.iter().any(|i| i.text == "asInt8"), "Should suggest asInt8");
+        assert!(items.iter().any(|i| i.text == "asInt32"), "Should suggest asInt32");
+        assert!(items.iter().any(|i| i.text == "asFloat64"), "Should suggest asFloat64");
     }
 
     #[test]
