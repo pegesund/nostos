@@ -1,0 +1,275 @@
+# Complete Web Application Example
+#
+# A full web application demonstrating:
+# - HTTP server with spawn-per-request pattern
+# - PostgreSQL database integration
+# - Server.matchPath for dynamic routing
+# - Html(...) templating with reusable components
+#
+# Requirements:
+#   PostgreSQL running at localhost with user/password: postgres/postgres
+#
+# Test:
+#   curl http://localhost:8080/
+#   curl http://localhost:8080/users
+#   curl http://localhost:8080/users/1
+#   curl -X POST http://localhost:8080/users -d "name=David&email=david@example.com"
+
+use stdlib.html.{Html, render}
+
+# --- Database Setup ---
+
+setupDatabase(conn) = {
+    # Create users table if not exists
+    Pg.execute(conn, "
+        CREATE TABLE IF NOT EXISTS web_users (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    ", [])
+
+    # Insert sample data if empty
+    rows = Pg.query(conn, "SELECT COUNT(*) FROM web_users", [])
+    count = head(rows).0
+
+    if count == 0 then {
+        Pg.execute(conn, "INSERT INTO web_users (name, email) VALUES ($1, $2)", ["Alice", "alice@example.com"])
+        Pg.execute(conn, "INSERT INTO web_users (name, email) VALUES ($1, $2)", ["Bob", "bob@example.com"])
+        Pg.execute(conn, "INSERT INTO web_users (name, email) VALUES ($1, $2)", ["Charlie", "charlie@example.com"])
+        println("Inserted sample users")
+    } else ()
+}
+
+# --- HTML Components ---
+
+# Page layout
+pageLayout(pageTitle: String, content: Html) = Html(
+    el("html", [], [
+        head([
+            meta([("charset", "UTF-8")]),
+            title(pageTitle ++ " - Nostos App"),
+            el("style", [], [raw("
+                body { font-family: -apple-system, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
+                .container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+                h1 { color: #333; margin-top: 0; }
+                nav { margin-bottom: 30px; padding: 15px; background: #333; border-radius: 8px; }
+                nav a { color: white; text-decoration: none; margin-right: 20px; }
+                nav a:hover { text-decoration: underline; }
+                .user-card { background: #f9f9f9; padding: 20px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #0066cc; }
+                .user-card h3 { margin: 0 0 10px 0; color: #333; }
+                .user-card p { margin: 5px 0; color: #666; }
+                .btn { display: inline-block; padding: 10px 20px; background: #0066cc; color: white; text-decoration: none; border-radius: 4px; }
+                .btn:hover { background: #0052a3; }
+                form input { padding: 10px; margin: 5px 0; width: 100%; box-sizing: border-box; }
+                form button { padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; }
+            ")])
+        ]),
+        body([
+            el("div", [("class", "container")], [
+                nav([
+                    a([("href", "/")], "Home"),
+                    a([("href", "/users")], "Users")
+                ]),
+                content
+            ])
+        ])
+    ])
+)
+
+# User card component
+userCardHtml(userId: Int, name: String, email: String) = Html(
+    el("div", [("class", "user-card")], [
+        h3(name),
+        p("Email: " ++ email),
+        p([a([("href", "/users/" ++ show(userId)), ("class", "btn")], "View Details")])
+    ])
+)
+
+# --- Route Handlers ---
+
+handleHome(req, conn) = {
+    # Get user count from database
+    rows = Pg.query(conn, "SELECT COUNT(*) FROM web_users", [])
+    userCount = head(rows).0
+
+    content = Html(div([
+        h1("Welcome to Nostos Web App"),
+        p("This is a complete web application example featuring:"),
+        ul([
+            li("PostgreSQL database integration"),
+            li("Html(...) templating"),
+            li("Server.matchPath routing"),
+            li("Spawn-per-request concurrency")
+        ]),
+        p("Currently " ++ show(userCount) ++ " users in database."),
+        p([a([("href", "/users"), ("class", "btn")], "View All Users")])
+    ]))
+
+    html = render(pageLayout("Home", content))
+    Server.respond(req.id, 200, [("Content-Type", "text/html")], html)
+}
+
+# Convert user row to card
+rowToCard(row) = {
+    userId = row.0
+    name = row.1
+    email = row.2
+    userCardHtml(userId, name, email)
+}
+
+handleUsers(req, conn) = {
+    # Fetch all users from database
+    rows = Pg.query(conn, "SELECT id, name, email FROM web_users ORDER BY id", [])
+    cards = map(rows, rowToCard)
+
+    content = Html(div([
+        h1("All Users"),
+        div(cards),
+        hr(),
+        h2("Add New User"),
+        el("form", [("method", "POST"), ("action", "/users")], [
+            input([("type", "text"), ("name", "name"), ("placeholder", "Name"), ("required", "true")]),
+            input([("type", "email"), ("name", "email"), ("placeholder", "Email"), ("required", "true")]),
+            el("button", [("type", "submit")], [text("Add User")])
+        ])
+    ]))
+
+    html = render(pageLayout("Users", content))
+    Server.respond(req.id, 200, [("Content-Type", "text/html")], html)
+}
+
+handleUserDetail(req, conn, userId: String) = {
+    userIdInt = match String.toInt(userId) {
+        Some(n) -> n
+        None -> 0
+    }
+
+    rows = Pg.query(conn, "SELECT id, name, email, created_at FROM web_users WHERE id = $1", [userIdInt])
+
+    content = match rows {
+        [] -> Html(div([
+            h1("User Not Found"),
+            p("No user with ID " ++ userId),
+            p([a([("href", "/users"), ("class", "btn")], "Back to Users")])
+        ]))
+
+        [row | _] -> {
+            name = row.1
+            email = row.2
+            Html(div([
+                h1("User: " ++ name),
+                el("div", [("class", "user-card")], [
+                    p("ID: " ++ show(row.0)),
+                    p("Name: " ++ name),
+                    p("Email: " ++ email),
+                    p("Created: " ++ show(row.3))
+                ]),
+                p([a([("href", "/users"), ("class", "btn")], "Back to Users")])
+            ]))
+        }
+    }
+
+    html = render(pageLayout("User " ++ userId, content))
+    Server.respond(req.id, 200, [("Content-Type", "text/html")], html)
+}
+
+# Helper to find form parameter
+findParam(params, key: String) = {
+    match params {
+        [] -> ""
+        [(k, v) | rest] -> if k == key then v else findParam(rest, key)
+    }
+}
+
+handleCreateUser(req, conn) = {
+    if req.method != "POST" then {
+        Server.respond(req.id, 405, [], "Method not allowed")
+    } else {
+        name = findParam(req.formParams, "name")
+        email = findParam(req.formParams, "email")
+
+        if name == "" then {
+            Server.respond(req.id, 400, [], "Name is required")
+        } else if email == "" then {
+            Server.respond(req.id, 400, [], "Email is required")
+        } else {
+            Pg.execute(conn, "INSERT INTO web_users (name, email) VALUES ($1, $2)", [name, email])
+            # Redirect to users list
+            Server.respond(req.id, 302, [("Location", "/users")], "")
+        }
+    }
+}
+
+handle404(req) = {
+    content = Html(div([
+        h1("404 - Not Found"),
+        p("The page " ++ req.path ++ " was not found."),
+        p([a([("href", "/"), ("class", "btn")], "Go Home")])
+    ]))
+    html = render(pageLayout("Not Found", content))
+    Server.respond(req.id, 404, [("Content-Type", "text/html")], html)
+}
+
+# --- Router ---
+
+route(req) = {
+    # Get database connection for this request
+    conn = Pg.connect("host=localhost user=postgres password=postgres")
+
+    path = req.path
+
+    # Static routes
+    if path == "/" then handleHome(req, conn)
+    else if path == "/users" then {
+        if req.method == "POST" then handleCreateUser(req, conn)
+        else handleUsers(req, conn)
+    }
+
+    # Dynamic routes
+    else {
+        params = Server.matchPath(path, "/users/:id")
+        if length(params) > 0 then {
+            (_, userId) = head(params)
+            handleUserDetail(req, conn, userId)
+        }
+        else handle404(req)
+    }
+
+    # Close connection
+    Pg.close(conn)
+}
+
+# --- Server ---
+
+acceptLoop(server) = {
+    ok = try {
+        req = Server.accept(server)
+        spawn { route(req) }
+        true
+    } catch { _ -> false }
+
+    if ok then acceptLoop(server) else ()
+}
+
+main() = {
+    # Setup database
+    setupConn = Pg.connect("host=localhost user=postgres password=postgres")
+    setupDatabase(setupConn)
+    Pg.close(setupConn)
+
+    # Start server
+    server = Server.bind(8080)
+    println("Complete Web App running on http://localhost:8080")
+    println("")
+    println("Routes:")
+    println("  GET  /           - Home page")
+    println("  GET  /users      - List all users")
+    println("  POST /users      - Create new user")
+    println("  GET  /users/:id  - User details")
+    println("")
+    println("Try: curl http://localhost:8080/users")
+
+    acceptLoop(server)
+}
