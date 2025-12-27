@@ -203,6 +203,223 @@ main() = {
                 </div>
 
 
+                <!-- Query Parameters -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Query Parameters</h2>
+                <p class="text-slate-400 mb-4">URL query parameters are automatically parsed and available via <code>req.queryParams</code>. This is a list of <code>(key, value)</code> tuples, where values are automatically URL-decoded.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# Helper to find a parameter by name
+findParam(params, key) = {
+    if length(params) == 0 then ""
+    else {
+        (k, v) = head(params)
+        if k == key then v else findParam(tail(params), key)
+    }
+}
+
+handle_search(req) = {
+    # GET /search?q=hello&limit=10
+    query = findParam(req.queryParams, "q")
+    limitStr = findParam(req.queryParams, "limit")
+    limit = if limitStr == "" then "10" else limitStr
+
+    if query == "" then {
+        Server.respond(req.id, 400, [], "Missing 'q' parameter")
+    } else {
+        response = "Searching for: " ++ query ++ " (limit: " ++ limit ++ ")"
+        Server.respond(req.id, 200, [("Content-Type", "text/plain")], response)
+    }
+}
+</code></pre>
+                </div>
+
+                <!-- Cookies -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Cookies</h2>
+                <p class="text-slate-400 mb-4">Read cookies from incoming requests via <code>req.cookies</code>, and set cookies in responses using the <code>Set-Cookie</code> header.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+handle_login(req) = {
+    user = findParam(req.queryParams, "user")
+    if user == "" then {
+        Server.respond(req.id, 400, [], "Missing 'user' parameter")
+    } else {
+        # Set a session cookie
+        cookieHeader = "session=user_" ++ user ++ "; Path=/; HttpOnly; Max-Age=3600"
+        Server.respond(req.id, 200,
+            [("Content-Type", "text/plain"), ("Set-Cookie", cookieHeader)],
+            "Welcome " ++ user ++ "!")
+    }
+}
+
+handle_profile(req) = {
+    # Read session cookie
+    session = findParam(req.cookies, "session")
+    if session == "" then {
+        Server.respond(req.id, 401, [], "Not logged in")
+    } else {
+        Server.respond(req.id, 200, [], "Profile page. Session: " ++ session)
+    }
+}
+</code></pre>
+                </div>
+
+                <!-- Form Parameters -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Form Parameters (POST Data)</h2>
+                <p class="text-slate-400 mb-4">For <code>application/x-www-form-urlencoded</code> POST requests, form data is automatically parsed into <code>req.formParams</code>. Values are URL-decoded automatically.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+handle_form_submit(req) = {
+    if req.method != "POST" then {
+        Server.respond(req.id, 405, [], "Use POST method")
+    } else {
+        name = findParam(req.formParams, "name")
+        email = findParam(req.formParams, "email")
+        message = findParam(req.formParams, "message")
+
+        if name == "" then {
+            Server.respond(req.id, 400, [], "Name is required")
+        } else if email == "" then {
+            Server.respond(req.id, 400, [], "Email is required")
+        } else {
+            # Process the form data...
+            println("Received message from " ++ name ++ " (" ++ email ++ ")")
+            Server.respond(req.id, 200, [],
+                "Thank you for your message, " ++ name ++ "!")
+        }
+    }
+}
+</code></pre>
+                </div>
+
+                <!-- URL Routing -->
+                <h2 class="text-2xl font-semibold text-white mb-4">URL Routing with Path Parameters</h2>
+                <p class="text-slate-400 mb-4">Use <code>Server.matchPath</code> to match URL patterns with path parameters (like <code>:id</code>). It returns a list of <code>(paramName, value)</code> tuples if the path matches, or an empty list if it doesn't.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+route(req) = {
+    path = req.path
+
+    # Static routes
+    if path == "/" then handleHome(req)
+    else if path == "/api/health" then handleHealth(req)
+
+    # Dynamic routes - try most specific patterns first
+    else {
+        # Check /users/:userId/posts/:postId (2 params)
+        userPostParams = Server.matchPath(path, "/users/:userId/posts/:postId")
+        if length(userPostParams) == 2 then {
+            # Deconstruct params (returned in order of appearance)
+            (_, userId) = head(userPostParams)
+            (_, postId) = head(tail(userPostParams))
+            handleUserPost(req, userId, postId)
+        }
+
+        # Check /users/:userId (1 param)
+        else {
+            userParams = Server.matchPath(path, "/users/:userId")
+            if length(userParams) == 1 then {
+                (_, userId) = head(userParams)
+                handleUser(req, userId)
+            }
+
+            # 404 for anything else
+            else {
+                Server.respond(req.id, 404, [], "Not Found: " ++ path)
+            }
+        }
+    }
+}
+</code></pre>
+                </div>
+
+                <!-- WebSockets -->
+                <h2 class="text-2xl font-semibold text-white mb-4">WebSockets</h2>
+                <p class="text-slate-400 mb-4">Nostos supports WebSocket connections for real-time bidirectional communication. Check if a request is a WebSocket upgrade with <code>req.isWebSocket</code>, then use the WebSocket functions to communicate.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">
+# Handle WebSocket echo - echoes back every message
+handleWebSocketEcho(ws) = {
+    result = try {
+        msg = WebSocket.recv(ws)
+        if msg == "quit" then {
+            WebSocket.send(ws, "Goodbye!")
+            WebSocket.close(ws)
+        } else {
+            WebSocket.send(ws, "Echo: " ++ msg)
+            handleWebSocketEcho(ws)  # Continue receiving
+        }
+    } catch { e ->
+        WebSocket.close(ws)
+    }
+    result
+}
+
+handleRequest(req, mainPid) = {
+    path = req.path
+
+    # Check if this is a WebSocket upgrade request
+    if req.isWebSocket then {
+        # Accept the WebSocket connection (sends 101 response)
+        ws = WebSocket.accept(req.id)
+
+        # Route to appropriate WebSocket handler
+        if path == "/echo" then handleWebSocketEcho(ws)
+        else {
+            WebSocket.send(ws, "Unknown endpoint")
+            WebSocket.close(ws)
+        }
+    }
+
+    # Regular HTTP requests
+    else if path == "/" then handleHome(req)
+    else {
+        Server.respond(req.id, 404, [], "Not Found")
+    }
+}
+
+# Worker handles each request in a separate process (important for WebSocket blocking calls)
+serverWorker(server, mainPid) = {
+    result = try {
+        req = Server.accept(server)
+        spawn { handleRequest(req, mainPid) }  # Handle in separate process
+        serverWorker(server, mainPid)
+    } catch { e -> () }
+    result
+}
+
+main() = {
+    mainPid = self()
+    result = try {
+        server = Server.bind(8080)
+        println("Server running on http://localhost:8080")
+        println("WebSocket echo at ws://localhost:8080/echo")
+
+        for i = 1 to 4 { spawn { serverWorker(server, mainPid) } }
+
+        receive {
+            ("shutdown", _) -> {
+                Server.close(server)
+                println("Server stopped.")
+            }
+        }
+    } catch { e ->
+        println("Error starting server")
+    }
+    result
+}
+</code></pre>
+                </div>
+                <div class="bg-blue-900/30 border border-blue-500/30 rounded-lg p-4 mb-8">
+                    <p class="text-blue-200"><strong>WebSocket API:</strong></p>
+                    <ul class="list-disc list-inside text-blue-200 mt-2 space-y-1">
+                        <li><code>req.isWebSocket</code> - Check if request is a WebSocket upgrade</li>
+                        <li><code>WebSocket.accept(reqId)</code> - Accept upgrade, returns WebSocket handle</li>
+                        <li><code>WebSocket.send(ws, message)</code> - Send a text message</li>
+                        <li><code>WebSocket.recv(ws)</code> - Receive a message (blocks until available)</li>
+                        <li><code>WebSocket.close(ws)</code> - Close the connection</li>
+                    </ul>
+                </div>
+
             </div>
 
                         <!-- Navigation Buttons -->

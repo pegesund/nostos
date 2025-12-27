@@ -385,6 +385,11 @@ pub enum IoRequest {
     },
 
     // WebSocket operations
+    /// Accept a WebSocket upgrade (sends 101 response and waits for connection)
+    WebSocketAccept {
+        request_id: u64,
+        response: IoResponse,
+    },
     /// Send a message on a WebSocket connection
     WebSocketSend {
         request_id: u64,
@@ -1259,6 +1264,35 @@ impl IoRuntime {
                 }
 
                 // WebSocket operations
+                IoRequest::WebSocketAccept { request_id, response } => {
+                    // Send 101 response to trigger WebSocket upgrade
+                    let mut pending = pending_responses.lock().await;
+                    match pending.remove(&request_id) {
+                        Some(resp_tx) => {
+                            // Send empty 101 response - the axum handler will add WebSocket headers
+                            let _ = resp_tx.send((101, vec![], vec![]));
+                            drop(pending);
+
+                            // Wait for WebSocket connection to be established
+                            let ws_conns = ws_connections.clone();
+                            tokio::spawn(async move {
+                                // Poll for connection with timeout
+                                for _ in 0..100 {
+                                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                                    if ws_conns.lock().await.contains_key(&request_id) {
+                                        let _ = response.send(Ok(IoResponseValue::Int(request_id as i64)));
+                                        return;
+                                    }
+                                }
+                                let _ = response.send(Err(IoError::IoError("WebSocket upgrade timeout".to_string())));
+                            });
+                        }
+                        None => {
+                            let _ = response.send(Err(IoError::Other("Request not found or not a WebSocket request".to_string())));
+                        }
+                    }
+                }
+
                 IoRequest::WebSocketSend { request_id, message, response } => {
                     let ws_conns = ws_connections.clone();
                     tokio::spawn(async move {

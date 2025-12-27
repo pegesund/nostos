@@ -1,0 +1,172 @@
+# WebSocket Example
+#
+# Demonstrates WebSocket support in Nostos:
+# - Detecting WebSocket upgrade requests (req.isWebSocket)
+# - Accepting WebSocket connections (WebSocket.accept)
+# - Sending and receiving messages (WebSocket.send, WebSocket.recv)
+# - Closing connections (WebSocket.close)
+#
+# Test with websocat or wscat:
+#   websocat ws://localhost:8080/echo
+#   wscat -c ws://localhost:8080/echo
+#
+# Or test with curl for the HTTP endpoints:
+#   curl http://localhost:8080/
+#   curl http://localhost:8080/shutdown
+
+# Handle WebSocket echo - echoes back every message
+handleWebSocketEcho(ws) = {
+    result = try {
+        # Receive loop - keep receiving and echoing until client disconnects
+        msg = WebSocket.recv(ws)
+        if msg == "quit" then {
+            WebSocket.send(ws, "Goodbye!")
+            WebSocket.close(ws)
+        } else {
+            WebSocket.send(ws, "Echo: " ++ msg)
+            handleWebSocketEcho(ws)  # Continue receiving
+        }
+    } catch { e ->
+        # Client disconnected or error
+        WebSocket.close(ws)
+    }
+    result
+}
+
+# Handle WebSocket chat - broadcasts to demonstrate state
+handleWebSocketChat(ws, name) = {
+    result = try {
+        WebSocket.send(ws, "Welcome, " ++ name ++ "! Type messages to chat.")
+        chatLoop(ws, name)
+    } catch { e ->
+        WebSocket.close(ws)
+    }
+    result
+}
+
+chatLoop(ws, name) = {
+    result = try {
+        msg = WebSocket.recv(ws)
+        if msg == "quit" then {
+            WebSocket.send(ws, "Goodbye, " ++ name ++ "!")
+            WebSocket.close(ws)
+        } else {
+            WebSocket.send(ws, name ++ " says: " ++ msg)
+            chatLoop(ws, name)
+        }
+    } catch { e ->
+        WebSocket.close(ws)
+    }
+    result
+}
+
+# Serve HTTP home page with WebSocket info
+handleHome(req) = {
+    html = "<html><head><title>WebSocket Demo</title></head><body>" ++
+           "<h1>WebSocket Demo Server</h1>" ++
+           "<h2>Endpoints:</h2>" ++
+           "<ul>" ++
+           "<li><code>ws://localhost:8080/echo</code> - Echo server (echoes back messages)</li>" ++
+           "<li><code>ws://localhost:8080/chat?name=YourName</code> - Chat demo</li>" ++
+           "</ul>" ++
+           "<h2>Test with:</h2>" ++
+           "<pre>websocat ws://localhost:8080/echo</pre>" ++
+           "<pre>wscat -c ws://localhost:8080/echo</pre>" ++
+           "<h2>JavaScript Example:</h2>" ++
+           "<pre>" ++
+           "const ws = new WebSocket('ws://localhost:8080/echo');\n" ++
+           "ws.onmessage = (e) => console.log(e.data);\n" ++
+           "ws.onopen = () => ws.send('Hello!');" ++
+           "</pre>" ++
+           "</body></html>"
+
+    Server.respond(req.id, 200,
+        [("Content-Type", "text/html")],
+        html)
+}
+
+# Helper to find query param
+findQueryParam(params, key) = {
+    if length(params) == 0 then ""
+    else {
+        (k, v) = head(params)
+        if k == key then v else findQueryParam(tail(params), key)
+    }
+}
+
+# Main request router
+handleRequest(req, mainPid) = {
+    path = req.path
+
+    # Check if this is a WebSocket upgrade request
+    if req.isWebSocket then {
+        # Accept the WebSocket connection
+        ws = WebSocket.accept(req.id)
+
+        # Route to appropriate WebSocket handler
+        if path == "/echo" then {
+            handleWebSocketEcho(ws)
+        } else if path == "/chat" then {
+            name = findQueryParam(req.queryParams, "name")
+            displayName = if name == "" then "Anonymous" else name
+            handleWebSocketChat(ws, displayName)
+        } else {
+            # Unknown WebSocket endpoint
+            WebSocket.send(ws, "Unknown endpoint: " ++ path)
+            WebSocket.close(ws)
+        }
+    }
+
+    # Regular HTTP requests
+    else if path == "/" then handleHome(req)
+    else if path == "/shutdown" then {
+        mainPid <- ("shutdown", ())
+        Server.respond(req.id, 200, [], "Shutting down...")
+    }
+    else {
+        Server.respond(req.id, 404,
+            [("Content-Type", "text/plain")],
+            "Not Found: " ++ path ++ "\nFor WebSocket, connect with ws:// protocol")
+    }
+}
+
+# Worker process
+serverWorker(server, mainPid) = {
+    result = try {
+        req = Server.accept(server)
+        spawn { handleRequest(req, mainPid) }  # Handle in separate process
+        serverWorker(server, mainPid)
+    } catch { e -> () }
+    result
+}
+
+main() = {
+    mainPid = self()
+
+    result = try {
+        server = Server.bind(8080)
+        println("WebSocket Demo Server running on http://localhost:8080")
+        println("")
+        println("WebSocket endpoints:")
+        println("  ws://localhost:8080/echo      - Echo server")
+        println("  ws://localhost:8080/chat?name=X - Chat demo")
+        println("")
+        println("Test with: websocat ws://localhost:8080/echo")
+        println("Or open http://localhost:8080 in browser for more info")
+        println("")
+
+        # Spawn workers
+        for i = 1 to 4 { spawn { serverWorker(server, mainPid) } }
+
+        # Wait for shutdown
+        receive {
+            ("shutdown", _) -> {
+                Server.close(server)
+                println("Server stopped.")
+            }
+        }
+    } catch { e ->
+        println("Error starting server")
+    }
+    result
+}

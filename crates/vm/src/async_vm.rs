@@ -5542,6 +5542,37 @@ impl AsyncProcess {
             }
 
             // WebSocket operations
+            WebSocketAccept(dst, request_id_reg) => {
+                let request_id = match reg!(request_id_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::WebSocketAccept { request_id, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(IoResponseValue::Int(ws_handle)) => {
+                            set_reg!(dst, GcValue::Int64(ws_handle));
+                        }
+                        Ok(_) => {
+                            return Err(RuntimeError::IOError("Unexpected response type".to_string()));
+                        }
+                        Err(e) => {
+                            self.throw_exception("websocket_error", format!("{}", e))?;
+                        }
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
             WebSocketSend(dst, request_id_reg, message_reg) => {
                 let request_id = match reg!(request_id_reg) {
                     GcValue::Int64(n) => n as u64,

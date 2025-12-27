@@ -177,7 +177,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "WebSocket.isUpgrade", signature: "HttpRequest -> Bool", doc: "Check if request is a WebSocket upgrade request" },
     BuiltinInfo { name: "WebSocket.accept", signature: "Int -> Int", doc: "Accept WebSocket upgrade for request ID, returns WebSocket handle" },
     BuiltinInfo { name: "WebSocket.send", signature: "Int -> String -> ()", doc: "Send message on WebSocket handle" },
-    BuiltinInfo { name: "WebSocket.receive", signature: "Int -> String", doc: "Receive message from WebSocket handle (blocks until message arrives)" },
+    BuiltinInfo { name: "WebSocket.recv", signature: "Int -> String", doc: "Receive message from WebSocket handle (blocks until message arrives)" },
     BuiltinInfo { name: "WebSocket.close", signature: "Int -> ()", doc: "Close WebSocket connection" },
 
     // === Process Introspection ===
@@ -867,7 +867,7 @@ impl Compiler {
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
             "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array", "Buffer",
-            "Runtime",
+            "Runtime", "WebSocket",
         ].iter().map(|s| s.to_string()).collect();
 
         let mut this = Self {
@@ -1326,7 +1326,7 @@ impl Compiler {
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
             "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array", "Buffer",
-            "Runtime",
+            "Runtime", "WebSocket",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -3867,6 +3867,12 @@ impl Compiler {
                             return Ok(dst);
                         }
                         // WebSocket functions
+                        "WebSocket.accept" if args.len() == 1 => {
+                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::WebSocketAccept(dst, request_id_reg), line);
+                            return Ok(dst);
+                        }
                         "WebSocket.send" if args.len() == 2 => {
                             let request_id_reg = self.compile_expr_tail(&args[0], false)?;
                             let message_reg = self.compile_expr_tail(&args[1], false)?;
@@ -3874,7 +3880,7 @@ impl Compiler {
                             self.chunk.emit(Instruction::WebSocketSend(dst, request_id_reg, message_reg), line);
                             return Ok(dst);
                         }
-                        "WebSocket.receive" if args.len() == 1 => {
+                        "WebSocket.recv" if args.len() == 1 => {
                             let request_id_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::WebSocketReceive(dst, request_id_reg), line);
@@ -4681,6 +4687,12 @@ impl Compiler {
                             return Ok(dst);
                         }
                         // === WebSocket operations ===
+                        "WebSocket.accept" if args.len() == 1 => {
+                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::WebSocketAccept(dst, request_id_reg), line);
+                            return Ok(dst);
+                        }
                         "WebSocket.send" if args.len() == 2 => {
                             let request_id_reg = self.compile_expr_tail(&args[0], false)?;
                             let message_reg = self.compile_expr_tail(&args[1], false)?;
@@ -4688,7 +4700,7 @@ impl Compiler {
                             self.chunk.emit(Instruction::WebSocketSend(dst, request_id_reg, message_reg), line);
                             return Ok(dst);
                         }
-                        "WebSocket.receive" if args.len() == 1 => {
+                        "WebSocket.recv" if args.len() == 1 => {
                             let request_id_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::WebSocketReceive(dst, request_id_reg), line);

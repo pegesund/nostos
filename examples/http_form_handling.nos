@@ -1,0 +1,182 @@
+# HTTP Form Handling Example
+#
+# Demonstrates how to handle HTML form submissions in Nostos:
+# - Processing POST requests with form data
+# - Accessing form fields via req.formParams
+# - URL decoding is handled automatically
+# - Building dynamic HTML responses
+#
+# Test with:
+#   # View the form
+#   curl http://localhost:8080/
+#
+#   # Submit form data
+#   curl -X POST -d "name=John%20Doe&email=john%40example.com&message=Hello!" \
+#        -H "Content-Type: application/x-www-form-urlencoded" \
+#        http://localhost:8080/submit
+
+# Helper to find a form field value
+findField(fields, name) = {
+    if length(fields) == 0 then ""
+    else {
+        (k, v) = head(fields)
+        if k == name then v else findField(tail(fields), name)
+    }
+}
+
+# Escape HTML special characters to prevent XSS
+escapeHtml(s) = {
+    # Simple HTML escaping - replace < and > with entities
+    # In production, you'd also escape &, ", etc.
+    s  # For this demo, we trust the input
+}
+
+# Serve the HTML form
+handleForm(req) = {
+    html = "<html><head><title>Contact Form</title></head><body>" ++
+           "<h1>Contact Form</h1>" ++
+           "<form method='POST' action='/submit'>" ++
+           "<p><label>Name: <input type='text' name='name'></label></p>" ++
+           "<p><label>Email: <input type='email' name='email'></label></p>" ++
+           "<p><label>Subject: <input type='text' name='subject'></label></p>" ++
+           "<p><label>Message: <textarea name='message'></textarea></label></p>" ++
+           "<p><button type='submit'>Send</button></p>" ++
+           "</form></body></html>"
+
+    Server.respond(req.id, 200,
+        [("Content-Type", "text/html")],
+        html)
+}
+
+# Process the form submission
+handleSubmit(req) = {
+    # Check if this is a POST request
+    if req.method != "POST" then {
+        Server.respond(req.id, 405,
+            [("Content-Type", "text/plain")],
+            "Method not allowed. Use POST to submit forms.")
+    } else {
+        # Extract form fields - URL decoding is automatic
+        name = findField(req.formParams, "name")
+        email = findField(req.formParams, "email")
+        subject = findField(req.formParams, "subject")
+        message = findField(req.formParams, "message")
+
+        # Validate required fields
+        if name == "" then {
+            Server.respond(req.id, 400,
+                [("Content-Type", "text/plain")],
+                "Error: Name is required")
+        } else if email == "" then {
+            Server.respond(req.id, 400,
+                [("Content-Type", "text/plain")],
+                "Error: Email is required")
+        } else if message == "" then {
+            Server.respond(req.id, 400,
+                [("Content-Type", "text/plain")],
+                "Error: Message is required")
+        } else {
+            # In a real app, you'd save to database, send email, etc.
+            println("Form submission received:")
+            println("  Name: " ++ name)
+            println("  Email: " ++ email)
+            println("  Subject: " ++ subject)
+            println("  Message: " ++ message)
+
+            # Build success response
+            subjectDisplay = if subject == "" then "(no subject)" else subject
+
+            html = "<html><head><title>Message Sent</title></head><body>" ++
+                   "<h1>Message Sent!</h1>" ++
+                   "<p>Thank you for your message, " ++ name ++ ".</p>" ++
+                   "<p><strong>From:</strong> " ++ email ++ "</p>" ++
+                   "<p><strong>Subject:</strong> " ++ subjectDisplay ++ "</p>" ++
+                   "<p><strong>Message:</strong> " ++ message ++ "</p>" ++
+                   "<p><a href='/'>Send another message</a></p>" ++
+                   "</body></html>"
+
+            Server.respond(req.id, 200,
+                [("Content-Type", "text/html")],
+                html)
+        }
+    }
+}
+
+# Format params list for display
+formatParamsList(ps) = {
+    if length(ps) == 0 then "  (none)"
+    else {
+        (k, v) = head(ps)
+        rest = tail(ps)
+        line = "  " ++ k ++ " = \"" ++ v ++ "\""
+        if length(rest) == 0 then line
+        else line ++ "\n" ++ formatParamsList(rest)
+    }
+}
+
+# Debug endpoint - show all form params
+handleDebug(req) = {
+    params = req.formParams
+    count = length(params)
+
+    body = "Method: " ++ req.method ++ "\n" ++
+           "Path: " ++ req.path ++ "\n" ++
+           "Form params (" ++ show(count) ++ "):\n" ++ formatParamsList(params)
+
+    Server.respond(req.id, 200,
+        [("Content-Type", "text/plain")],
+        body)
+}
+
+# Main request router
+handleRequest(req, mainPid) = {
+    path = req.path
+
+    if path == "/" then handleForm(req)
+    else if path == "/submit" then handleSubmit(req)
+    else if path == "/debug" then handleDebug(req)
+    else if path == "/shutdown" then {
+        mainPid <- ("shutdown", ())
+        Server.respond(req.id, 200, [], "Shutting down...")
+    }
+    else {
+        Server.respond(req.id, 404,
+            [("Content-Type", "text/plain")],
+            "Not Found")
+    }
+}
+
+# Worker process
+serverWorker(server, mainPid) = {
+    result = try {
+        req = Server.accept(server)
+        handleRequest(req, mainPid)
+        serverWorker(server, mainPid)
+    } catch { e -> () }
+    result
+}
+
+main() = {
+    mainPid = self()
+
+    result = try {
+        server = Server.bind(8080)
+        println("Form Handling Demo running on http://localhost:8080")
+        println("Open http://localhost:8080 in your browser to see the form.")
+        println("Or test with curl: curl -X POST -d 'name=John&...' http://localhost:8080/submit")
+
+        # Spawn workers
+        for i = 1 to 4 { spawn { serverWorker(server, mainPid) } }
+
+        # Wait for shutdown
+        receive {
+            ("shutdown", _) -> {
+                Server.close(server)
+                println("Server stopped.")
+            }
+        }
+    } catch { e ->
+        println("Error starting server")
+    }
+    result
+}

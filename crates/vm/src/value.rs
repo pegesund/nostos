@@ -1007,6 +1007,8 @@ pub enum Instruction {
     ServerClose(Reg, Reg),
 
     // === WebSocket Operations ===
+    /// Accept WebSocket upgrade: dst = WebSocket.accept(request_id)
+    WebSocketAccept(Reg, Reg),
     /// Send message on WebSocket: dst = WebSocket.send(request_id, message)
     WebSocketSend(Reg, Reg, Reg),
     /// Receive message from WebSocket: dst = WebSocket.receive(request_id)

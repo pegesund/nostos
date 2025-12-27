@@ -1,0 +1,175 @@
+# HTTP Routing Example
+#
+# Demonstrates how to use Server.matchPath for URL routing with path parameters.
+# This is the foundation for building REST APIs with clean URLs like:
+#   /users/123
+#   /posts/456/comments/789
+#
+# Server.matchPath(path, pattern) returns:
+#   - List of (paramName, paramValue) tuples if the path matches
+#   - Empty list if no match
+#
+# Test with:
+#   curl http://localhost:8080/users/42
+#   curl http://localhost:8080/users/42/posts/7
+#   curl http://localhost:8080/api/health
+
+# Route handlers
+
+handleUserDetail(req, userId) = {
+    # In a real app, you'd fetch from database
+    body = "User Details\n" ++
+           "============\n" ++
+           "User ID: " ++ userId ++ "\n" ++
+           "Name: User " ++ userId ++ "\n" ++
+           "Email: user" ++ userId ++ "@example.com"
+
+    Server.respond(req.id, 200,
+        [("Content-Type", "text/plain")],
+        body)
+}
+
+handleUserPosts(req, userId) = {
+    body = "Posts by User " ++ userId ++ "\n" ++
+           "==================\n" ++
+           "1. First post by user " ++ userId ++ "\n" ++
+           "2. Second post by user " ++ userId ++ "\n" ++
+           "3. Third post by user " ++ userId
+
+    Server.respond(req.id, 200,
+        [("Content-Type", "text/plain")],
+        body)
+}
+
+handleUserPost(req, userId, postId) = {
+    body = "Post Details\n" ++
+           "============\n" ++
+           "Post ID: " ++ postId ++ "\n" ++
+           "Author: User " ++ userId ++ "\n" ++
+           "Title: Post " ++ postId ++ " by User " ++ userId ++ "\n" ++
+           "Content: This is the content of post " ++ postId
+
+    Server.respond(req.id, 200,
+        [("Content-Type", "text/plain")],
+        body)
+}
+
+handleHealth(req) = {
+    Server.respond(req.id, 200,
+        [("Content-Type", "application/json")],
+        "{\"status\": \"healthy\"}")
+}
+
+handleHome(req) = {
+    body = "Routing Demo API\n" ++
+           "================\n\n" ++
+           "Available endpoints:\n" ++
+           "  GET /api/health           - Health check\n" ++
+           "  GET /users/:id            - Get user details\n" ++
+           "  GET /users/:id/posts      - Get all posts by user\n" ++
+           "  GET /users/:id/posts/:pid - Get specific post\n" ++
+           "  GET /shutdown             - Stop server\n\n" ++
+           "Examples:\n" ++
+           "  curl http://localhost:8080/users/42\n" ++
+           "  curl http://localhost:8080/users/42/posts\n" ++
+           "  curl http://localhost:8080/users/42/posts/7"
+
+    Server.respond(req.id, 200,
+        [("Content-Type", "text/plain")],
+        body)
+}
+
+# The main router - tries patterns in order
+route(req, mainPid) = {
+    path = req.path
+
+    # For static routes (no params), use simple string comparison
+    # For dynamic routes with params, use Server.matchPath
+
+    # Static routes first
+    if path == "/" then handleHome(req)
+    else if path == "/api/health" then handleHealth(req)
+    else if path == "/shutdown" then {
+        mainPid <- ("shutdown", ())
+        Server.respond(req.id, 200, [], "Shutting down...")
+    }
+
+    # Dynamic routes - try most specific patterns first
+    # Server.matchPath returns list of (paramName, paramValue) tuples if match
+
+    # Check /users/:id/posts/:postId (2 params)
+    else {
+        userPostParams = Server.matchPath(path, "/users/:userId/posts/:postId")
+        if length(userPostParams) == 2 then {
+            # Inline deconstruction (workaround for type inference limitation)
+            (_, userId) = head(userPostParams)
+            (_, postId) = head(tail(userPostParams))
+            handleUserPost(req, userId, postId)
+        }
+
+        # Check /users/:id/posts (1 param)
+        else {
+            userPostsParams = Server.matchPath(path, "/users/:userId/posts")
+            if length(userPostsParams) == 1 then {
+                (_, userId) = head(userPostsParams)
+                handleUserPosts(req, userId)
+            }
+
+            # Check /users/:id (1 param)
+            else {
+                userParams = Server.matchPath(path, "/users/:userId")
+                if length(userParams) == 1 then {
+                    (_, userId) = head(userParams)
+                    handleUserDetail(req, userId)
+                }
+
+                # 404 for anything else
+                else {
+                    Server.respond(req.id, 404,
+                        [("Content-Type", "text/plain")],
+                        "Not Found: " ++ path)
+                }
+            }
+        }
+    }
+}
+
+# Worker process
+serverWorker(server, mainPid) = {
+    result = try {
+        req = Server.accept(server)
+        route(req, mainPid)
+        serverWorker(server, mainPid)
+    } catch { e -> () }
+    result
+}
+
+main() = {
+    mainPid = self()
+
+    result = try {
+        server = Server.bind(8080)
+        println("Routing Demo API running on http://localhost:8080")
+        println("")
+        println("Try these URLs:")
+        println("  /users/42           - Get user 42")
+        println("  /users/42/posts     - Get posts by user 42")
+        println("  /users/42/posts/7   - Get post 7 by user 42")
+        println("  /api/health         - Health check")
+        println("")
+
+        # Spawn workers
+        for i = 1 to 4 { spawn { serverWorker(server, mainPid) } }
+
+        # Wait for shutdown
+        receive {
+            ("shutdown", _) -> {
+                Server.close(server)
+                println("Server stopped.")
+            }
+        }
+    } catch { e ->
+        println("Error starting server")
+    }
+    result
+}
