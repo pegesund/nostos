@@ -855,6 +855,17 @@ impl Autocomplete {
         items
     }
 
+    /// Check if a type name is a numeric type
+    fn is_numeric_type(type_name: &str) -> bool {
+        matches!(
+            type_name,
+            "Int" | "Int8" | "Int16" | "Int32" | "Int64"
+                | "UInt8" | "UInt16" | "UInt32" | "UInt64"
+                | "Float" | "Float32" | "Float64"
+                | "BigInt"
+        )
+    }
+
     /// Get available methods for a builtin type
     /// Returns (method_name, signature, docstring)
     fn get_builtin_methods(type_name: &str) -> Vec<(&'static str, &'static str, &'static str)> {
@@ -1049,12 +1060,7 @@ impl Autocomplete {
                 ("tokioWorkers", "() -> Int", "Get number of tokio worker threads"),
                 ("blockingThreads", "() -> Int", "Get number of tokio blocking threads"),
             ]
-        } else if base_type == "Int" || base_type == "Int8" || base_type == "Int16"
-               || base_type == "Int32" || base_type == "Int64"
-               || base_type == "UInt8" || base_type == "UInt16"
-               || base_type == "UInt32" || base_type == "UInt64"
-               || base_type == "Float" || base_type == "Float32" || base_type == "Float64"
-               || base_type == "BigInt" {
+        } else if Self::is_numeric_type(base_type) {
             // Type conversion methods available on all numeric types
             vec![
                 ("asInt8", "() -> Int8", "Convert to Int8"),
@@ -3651,6 +3657,55 @@ mod tests {
             "range(1,10). should suggest map for List");
         assert!(items.iter().any(|i| i.text == "filter"),
             "range(1,10). should suggest filter for List");
+    }
+
+    #[test]
+    fn test_variable_with_numeric_type_autocomplete() {
+        // Test that a variable with a numeric type (Int32) gets autocomplete suggestions
+        let source = MockSource::new()
+            .with_variables(&["a"])
+            .with_variable_type("a", "Int32");
+
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "a".to_string(),
+            prefix: "as".to_string(),
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        println!("Items for a.as: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+
+        // Should have type conversion methods
+        assert!(!items.is_empty(), "a.as should have completions when a is Int32");
+        assert!(items.iter().any(|i| i.text == "asInt64"),
+            "Int32 variable should have asInt64 method");
+        assert!(items.iter().any(|i| i.text == "asFloat"),
+            "Int32 variable should have asFloat method");
+    }
+
+    #[test]
+    fn test_is_numeric_type() {
+        // Test the is_numeric_type helper function
+        assert!(Autocomplete::is_numeric_type("Int"));
+        assert!(Autocomplete::is_numeric_type("Int8"));
+        assert!(Autocomplete::is_numeric_type("Int16"));
+        assert!(Autocomplete::is_numeric_type("Int32"));
+        assert!(Autocomplete::is_numeric_type("Int64"));
+        assert!(Autocomplete::is_numeric_type("UInt8"));
+        assert!(Autocomplete::is_numeric_type("UInt16"));
+        assert!(Autocomplete::is_numeric_type("UInt32"));
+        assert!(Autocomplete::is_numeric_type("UInt64"));
+        assert!(Autocomplete::is_numeric_type("Float"));
+        assert!(Autocomplete::is_numeric_type("Float32"));
+        assert!(Autocomplete::is_numeric_type("Float64"));
+        assert!(Autocomplete::is_numeric_type("BigInt"));
+
+        // Non-numeric types
+        assert!(!Autocomplete::is_numeric_type("String"));
+        assert!(!Autocomplete::is_numeric_type("Bool"));
+        assert!(!Autocomplete::is_numeric_type("List"));
+        assert!(!Autocomplete::is_numeric_type("Map"));
     }
 
 }
