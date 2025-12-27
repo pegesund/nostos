@@ -6530,6 +6530,34 @@ mod tests {
             assert!(result.is_ok(), "compile_all failed: {:?}", result);
         }
     }
+
+    #[test]
+    fn test_repl_error_does_not_corrupt_state() {
+        // Test that a failed eval doesn't corrupt REPL state
+        // Regression test for: range(10) error causing subsequent range(1,10) to also fail
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        // First, verify range(1,10) works
+        let result = engine.eval("range(1,5)");
+        assert!(result.is_ok(), "First range(1,5) should work: {:?}", result);
+        assert!(result.unwrap().contains("[1, 2, 3, 4]"), "Should return list");
+
+        // Now cause an error with wrong arity
+        let result = engine.eval("range(10)");
+        assert!(result.is_err(), "range(10) should fail (wrong arity)");
+
+        // After the error, valid code should still work
+        let result = engine.eval("range(1,5)");
+        assert!(result.is_ok(), "range(1,5) after error should still work: {:?}", result);
+        assert!(result.unwrap().contains("[1, 2, 3, 4]"), "Should return list");
+
+        // More complex expression should also work
+        let result = engine.eval("range(1,4).map(x => x * 2)");
+        assert!(result.is_ok(), "Chained call after error should work: {:?}", result);
+        assert!(result.unwrap().contains("[2, 4, 6]"), "Should return doubled list");
+    }
 }
 
 /// Comprehensive test suite for call graph and compile status tracking.

@@ -916,7 +916,7 @@ impl Autocomplete {
                 ("words", "() -> List", "Split into words"),
                 ("isEmpty", "() -> Bool", "Check if the string is empty"),
             ]
-        } else if base_type.starts_with("List") || base_type == "List" {
+        } else if base_type.starts_with("List") || base_type == "List" || base_type.starts_with('[') {
             vec![
                 ("map", "(f) -> List", "Apply a function to each element"),
                 ("filter", "(pred) -> List", "Keep elements that satisfy the predicate"),
@@ -3488,6 +3488,30 @@ mod tests {
         println!("copy(\"hello\").: {:?}", items4.iter().map(|i| &i.text).collect::<Vec<_>>());
         assert!(items4.iter().any(|i| i.text == "toUpper"),
             "copy(\"hello\"). should suggest String methods");
+    }
+
+    #[test]
+    fn test_builtin_function_return_type_autocomplete() {
+        // Test that builtin functions like range(1,10) show correct return type
+        let mut source = MockSource::new();
+        // Register range with its signature from BUILTINS
+        source.function_signatures.insert("range".to_string(), "Int -> Int -> [Int]".to_string());
+
+        let ac = Autocomplete::new();
+
+        // range(1,10). should suggest List methods
+        let line = "range(1,10).";
+        let ctx = ac.parse_context(line, line.len());
+        println!("Context: {:?}", ctx);
+
+        let items = ac.get_completions(&ctx, &source);
+        println!("range(1,10).: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+
+        assert!(!items.is_empty(), "range(1,10). should have completions");
+        assert!(items.iter().any(|i| i.text == "map"),
+            "range(1,10). should suggest map for List");
+        assert!(items.iter().any(|i| i.text == "filter"),
+            "range(1,10). should suggest filter for List");
     }
 
 }

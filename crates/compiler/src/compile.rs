@@ -1182,6 +1182,12 @@ impl Compiler {
                 continue;
             }
 
+            // Skip REPL eval wrappers - these are temporary functions that may contain errors
+            // from previous REPL inputs. We don't want old errors to affect new inputs.
+            if fn_name.starts_with("__repl_eval_") {
+                continue;
+            }
+
             // Check if this function has untyped parameters and is recursive
             let has_untyped_params = fn_ast.clauses.first()
                 .map(|c| c.params.iter().any(|p| p.ty.is_none()))
