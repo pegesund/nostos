@@ -3309,4 +3309,80 @@ mod tests {
             "Should suggest String method 'length' for greet() return type");
     }
 
+    #[test]
+    fn test_string_literal_method_chain() {
+        // "aa".length() should infer that "aa" is a String
+        // and length() returns Int
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        // First test: "aa".length(). should give Int methods
+        let line = "\"aa\".length().";
+        let ctx = ac.parse_context(line, line.len());
+        println!("Context for string.length(): {:?}", ctx);
+
+        let items = ac.get_completions(&ctx, &source);
+        println!("Completions for \"aa\".length().: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+        // Int doesn't have many builtin methods, but we should get something or at least not crash
+    }
+
+    #[test]
+    fn test_show_builtin_returns_string() {
+        // show() is a builtin that returns String for any type
+        // "aa".length().show(). should give String methods
+        use nostos_repl::{ReplEngine, ReplConfig};
+
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Verify show signature
+        let show_sig = engine.get_function_signature("show");
+        println!("show signature: {:?}", show_sig);
+        assert!(show_sig.is_some(), "show should have a signature");
+        assert!(show_sig.as_ref().unwrap().contains("String"), "show should return String");
+
+        let source = ReplEngineSource { engine: &engine };
+        let ac = Autocomplete::new();
+
+        let line = "\"aa\".length().show().";
+        let ctx = ac.parse_context(line, line.len());
+        println!("Context for show(): {:?}", ctx);
+
+        let items = ac.get_completions(&ctx, &source);
+        println!("Completions for \"aa\".length().show().: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+
+        assert!(items.iter().any(|i| i.text == "toUpper"),
+            "Should suggest String method 'toUpper' after show()");
+    }
+
+    #[test]
+    fn test_ufcs_user_function_autocomplete() {
+        // p.greet() should work via UFCS and autocomplete should show String methods
+        use nostos_repl::{ReplEngine, ReplConfig};
+
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Define a type and function
+        engine.eval("type Person = { name: String }").expect("Failed to define Person type");
+        engine.eval("greet(p: Person) -> String = \"Hello \" ++ p.name").expect("Failed to define greet");
+
+        // Create a variable of type Person
+        engine.eval("p = Person(\"Alice\")").expect("Failed to create p");
+
+        let source = ReplEngineSource { engine: &engine };
+        let ac = Autocomplete::new();
+
+        // Test: p.greet(). should show String methods
+        let line = "p.greet().";
+        let ctx = ac.parse_context(line, line.len());
+        println!("Context for p.greet(): {:?}", ctx);
+
+        let items = ac.get_completions(&ctx, &source);
+        println!("Completions for p.greet().: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+
+        assert!(items.iter().any(|i| i.text == "toUpper"),
+            "Should suggest String method 'toUpper' for p.greet() UFCS call");
+    }
+
 }

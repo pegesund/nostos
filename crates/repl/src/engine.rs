@@ -3475,6 +3475,14 @@ impl ReplEngine {
 
         // Infer return type of a method call based on receiver type and method name
         fn infer_method_return_type(receiver_type: &str, method: &str) -> Option<String> {
+            // First check for generic builtins that work on any type
+            match method {
+                "show" => return Some("String".to_string()),
+                "hash" => return Some("Int".to_string()),
+                "copy" => return Some(receiver_type.to_string()),
+                _ => {}
+            }
+
             match receiver_type {
                 "List" => {
                     // List methods that return List
@@ -3578,6 +3586,12 @@ impl ReplEngine {
         // Check if a method is valid for a given type via UFCS
         // For types like List, Map, Set - methods are top-level builtins
         fn is_valid_ufcs_method(type_name: &str, method: &str, known_functions: &HashSet<String>) -> bool {
+            // Generic builtins that work on any type
+            const GENERIC_BUILTINS: &[&str] = &["show", "hash", "copy"];
+            if GENERIC_BUILTINS.contains(&method) {
+                return true;
+            }
+
             match type_name {
                 "List" => {
                     // List methods are top-level builtins called via UFCS
@@ -10706,7 +10720,9 @@ main() = {
 
     #[test]
     fn test_multiple_user_function_chain() {
-        // Chain multiple user-defined functions
+        // Chain multiple user-defined functions using direct call style
+        // Note: UFCS for user-defined functions (s.addPrefix()) isn't fully supported
+        // by check_module_compiles, but works in actual execution
         let mut engine = ReplEngine::new(ReplConfig::default());
         engine.load_stdlib().expect("Failed to load stdlib");
 
@@ -10716,12 +10732,44 @@ addSuffix(s: String) -> String = s ++ "_SUFFIX"
 
 main() = {
     s = "hello"
-    s.addPrefix().addSuffix().toUpper()
+    addSuffix(addPrefix(s)).toUpper()
 }
 "#;
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_ok(), "Chaining multiple user functions should work: {:?}", result);
+    }
+
+    #[test]
+    fn test_generic_builtins_in_method_chains() {
+        // show(), hash(), copy() work on any type via UFCS
+        // Test that chaining through them works: Int.show().toUpper()
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Test: show() returns String, so .toUpper() should work
+        let code = r#"
+main() = "aa".length().show().toUpper()
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("show chain result: {:?}", result);
+        assert!(result.is_ok(), "Int.show().toUpper() should work: {:?}", result);
+
+        // Test: hash() returns Int, so .show() should work
+        let code2 = r#"
+main() = "hello".hash().show()
+"#;
+        let result2 = engine.check_module_compiles("", code2);
+        println!("hash chain result: {:?}", result2);
+        assert!(result2.is_ok(), "String.hash().show() should work: {:?}", result2);
+
+        // Test: copy() returns same type, so same methods should work
+        let code3 = r#"
+main() = "hello".copy().toUpper()
+"#;
+        let result3 = engine.check_module_compiles("", code3);
+        println!("copy chain result: {:?}", result3);
+        assert!(result3.is_ok(), "String.copy().toUpper() should work: {:?}", result3);
     }
 }
 

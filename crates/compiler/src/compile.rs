@@ -7214,6 +7214,20 @@ impl Compiler {
                     // Fall through to user-defined function lookup below
                 }
 
+                // Check for generic builtins that work on any type (UFCS style)
+                // These have signatures like "a -> ReturnType" where 'a' is any type
+                match method.node.as_str() {
+                    "show" => return Some("String".to_string()),
+                    "hash" => return Some("Int".to_string()),
+                    "copy" => {
+                        // copy returns the same type as input
+                        if let Some(obj_type) = self.expr_type_name(obj) {
+                            return Some(obj_type);
+                        }
+                    }
+                    _ => {}
+                }
+
                 // Try to find a user-defined function that matches this method call
                 // This handles UFCS calls like person.greet() -> greet(person)
                 let method_name = &method.node;
