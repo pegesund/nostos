@@ -567,6 +567,90 @@ results = Pg.query(conn, "SELECT id, 1 - (embedding <=> $1) as similarity FROM i
 Pg.close(conn)</code></pre>
                 </div>
 
+                <!-- LISTEN/NOTIFY -->
+                <div class="bg-gradient-to-r from-purple-900/20 to-blue-900/20 rounded-lg p-6 mb-8 border border-purple-800/30">
+                    <h3 class="text-lg font-semibold text-white mb-3">Real-Time Notifications with LISTEN/NOTIFY</h3>
+                    <p class="text-slate-400 mb-4">
+                        PostgreSQL LISTEN/NOTIFY provides lightweight pub/sub messaging for real-time updates. Use it for job queues, live data updates, cache invalidation, and more.
+                    </p>
+                    <div class="bg-nostos-code rounded-lg p-4 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Create a dedicated listener connection (not pooled)
+listener = Pg.listenConnect("host=localhost user=postgres")
+
+# Regular connection for sending notifications
+sender = Pg.connect("host=localhost user=postgres")
+
+# Subscribe to a channel
+Pg.listen(listener, "my_channel")
+
+# Send a notification (from any connection)
+Pg.notify(sender, "my_channel", "Hello, World!")
+
+# Wait for notification (with timeout in ms)
+result = Pg.awaitNotification(listener, 5000)
+match result {
+    Some((channel, payload)) -> {
+        println("Received on " ++ channel ++ ": " ++ payload)
+    }
+    None -> println("Timeout - no notification received")
+}
+
+# Listen to multiple channels
+Pg.listen(listener, "updates")
+Pg.listen(listener, "alerts")
+
+# Unsubscribe from a channel
+Pg.unlisten(listener, "my_channel")
+
+# Close connections
+Pg.close(sender)</code></pre>
+                    </div>
+                    <p class="text-slate-400 mt-4 text-sm">
+                        <strong>Note:</strong> Use <code>Pg.listenConnect()</code> for listener connections - they're dedicated and not pooled. Regular <code>Pg.connect()</code> connections are pooled and better for queries/notifications.
+                    </p>
+                </div>
+
+                <!-- Job Queue Example -->
+                <div class="bg-gradient-to-r from-emerald-900/20 to-teal-900/20 rounded-lg p-6 mb-8 border border-emerald-800/30">
+                    <h3 class="text-lg font-semibold text-white mb-3">Example: Job Queue with Database Triggers</h3>
+                    <p class="text-slate-400 mb-4">
+                        Combine LISTEN/NOTIFY with database triggers for automatic job processing:
+                    </p>
+                    <div class="bg-nostos-code rounded-lg p-4 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Setup: Create trigger in PostgreSQL that notifies on INSERT
+# CREATE TRIGGER job_notify AFTER INSERT ON jobs
+# FOR EACH ROW EXECUTE FUNCTION pg_notify('new_job', NEW.id::text);
+
+processJobs(listener, processor) = {
+    result = Pg.awaitNotification(listener, 5000)
+    match result {
+        Some((_, jobId)) -> {
+            # Process the job
+            rows = Pg.query(processor, "SELECT * FROM jobs WHERE id = $1", [jobId])
+            println("Processing job: " ++ jobId)
+            # Mark as done
+            _ = Pg.execute(processor, "UPDATE jobs SET status = 'done' WHERE id = $1", [jobId])
+            processJobs(listener, processor)  # Continue listening
+        }
+        None -> processJobs(listener, processor)  # Timeout, retry
+    }
+}
+
+main() = {
+    listener = Pg.listenConnect("host=localhost user=postgres")
+    processor = Pg.connect("host=localhost user=postgres")
+
+    Pg.listen(listener, "new_job")
+    println("Waiting for jobs...")
+
+    processJobs(listener, processor)
+}</code></pre>
+                    </div>
+                    <p class="text-slate-400 mt-4 text-sm">
+                        See <code>examples/pg_job_queue.nos</code> for a complete working example.
+                    </p>
+                </div>
+
                 <!-- Connection Pooling -->
                 <div class="bg-gradient-to-r from-blue-900/20 to-emerald-900/20 rounded-lg p-6 mb-8 border border-blue-800/30">
                     <h3 class="text-lg font-semibold text-white mb-3">Connection Pooling</h3>

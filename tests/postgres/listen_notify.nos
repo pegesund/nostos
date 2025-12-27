@@ -94,6 +94,98 @@ test_empty_payload(listener, sender) = {
     Pg.unlisten(listener, "empty_channel")
 }
 
+# Test that UNLISTEN actually stops receiving notifications
+test_unlisten(listener, sender) = {
+    Pg.listen(listener, "unlisten_test")
+
+    # First notification should work
+    Pg.notify(sender, "unlisten_test", "before")
+    r1 = Pg.awaitNotification(listener, 5000)
+    match r1 {
+        Some((_, payload)) -> assert_eq(payload, "before")
+        None -> assert(false)
+    }
+
+    # Unlisten
+    Pg.unlisten(listener, "unlisten_test")
+
+    # Send another notification - it should NOT be received
+    Pg.notify(sender, "unlisten_test", "after")
+
+    # Should timeout since we unlistened
+    r2 = Pg.awaitNotification(listener, 200)
+    match r2 {
+        None -> assert(true)  # Expected - no notification
+        Some(_) -> assert(false)  # Should not receive
+    }
+}
+
+# Test listening on multiple channels simultaneously
+test_multiple_channels(listener, sender) = {
+    Pg.listen(listener, "channel_a")
+    Pg.listen(listener, "channel_b")
+    Pg.listen(listener, "channel_c")
+
+    # Send to each channel
+    Pg.notify(sender, "channel_b", "msg_b")
+    Pg.notify(sender, "channel_a", "msg_a")
+    Pg.notify(sender, "channel_c", "msg_c")
+
+    # Receive all three (order matches send order)
+    r1 = Pg.awaitNotification(listener, 5000)
+    r2 = Pg.awaitNotification(listener, 5000)
+    r3 = Pg.awaitNotification(listener, 5000)
+
+    match r1 {
+        Some((ch, payload)) -> {
+            assert_eq(ch, "channel_b")
+            assert_eq(payload, "msg_b")
+        }
+        None -> assert(false)
+    }
+
+    match r2 {
+        Some((ch, payload)) -> {
+            assert_eq(ch, "channel_a")
+            assert_eq(payload, "msg_a")
+        }
+        None -> assert(false)
+    }
+
+    match r3 {
+        Some((ch, payload)) -> {
+            assert_eq(ch, "channel_c")
+            assert_eq(payload, "msg_c")
+        }
+        None -> assert(false)
+    }
+
+    Pg.unlisten(listener, "channel_a")
+    Pg.unlisten(listener, "channel_b")
+    Pg.unlisten(listener, "channel_c")
+}
+
+# Test payload with special characters
+test_special_payload(listener, sender) = {
+    Pg.listen(listener, "special_channel")
+
+    # Test various special characters
+    payload = "Hello, World! Special chars: åäö €£¥ 日本語 emoji: 🎉"
+    Pg.notify(sender, "special_channel", payload)
+
+    result = Pg.awaitNotification(listener, 5000)
+
+    match result {
+        Some((ch, p)) -> {
+            assert_eq(ch, "special_channel")
+            assert_eq(p, payload)
+        }
+        None -> assert(false)
+    }
+
+    Pg.unlisten(listener, "special_channel")
+}
+
 main() = {
     # Create two connections: listener and sender
     connStr = "host=localhost user=postgres password=postgres"
@@ -105,6 +197,9 @@ main() = {
     test_timeout(listener)
     test_multiple_notifications(listener, sender)
     test_empty_payload(listener, sender)
+    test_unlisten(listener, sender)
+    test_multiple_channels(listener, sender)
+    test_special_payload(listener, sender)
 
     Pg.close(sender)
     # Note: listener connection will be closed when process exits

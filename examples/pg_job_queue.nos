@@ -1,0 +1,159 @@
+# PostgreSQL Job Queue with LISTEN/NOTIFY
+#
+# This example demonstrates a practical use of LISTEN/NOTIFY for a job queue:
+# - Jobs are inserted into a table
+# - A trigger sends a notification when a new job is added
+# - A worker listens for notifications and processes jobs
+#
+# Run with: ./target/release/nostos examples/pg_job_queue.nos
+
+# Setup: Create job table and notification trigger
+setup(conn) = {
+    # Create jobs table
+    Pg.execute(conn, "
+        CREATE TABLE IF NOT EXISTS job_queue (
+            id SERIAL PRIMARY KEY,
+            job_type TEXT NOT NULL,
+            payload TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    ", [])
+
+    # Create function to notify on new jobs
+    Pg.execute(conn, "
+        CREATE OR REPLACE FUNCTION notify_new_job()
+        RETURNS TRIGGER AS $$
+        BEGIN
+            PERFORM pg_notify('new_job', NEW.id::text);
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+    ", [])
+
+    # Create trigger (drop first if exists)
+    Pg.execute(conn, "DROP TRIGGER IF EXISTS job_notify ON job_queue", [])
+    Pg.execute(conn, "
+        CREATE TRIGGER job_notify
+        AFTER INSERT ON job_queue
+        FOR EACH ROW EXECUTE FUNCTION notify_new_job()
+    ", [])
+
+    print("Setup complete: job_queue table and trigger created")
+}
+
+# Add a job to the queue
+addJob(conn, jobType, payload) = {
+    Pg.execute(conn, "INSERT INTO job_queue (job_type, payload) VALUES ($1, $2)", [jobType, payload])
+    print("Added job: " ++ jobType ++ " - " ++ payload)
+}
+
+# Process a single job
+processJob(conn, jobId) = {
+    # Mark as processing
+    _ = Pg.execute(conn, "UPDATE job_queue SET status = 'processing' WHERE id = $1", [jobId])
+
+    # Get job details
+    rows = Pg.query(conn, "SELECT job_type, payload FROM job_queue WHERE id = $1", [jobId])
+
+    match rows {
+        [row | _] -> {
+            jobType = row.0
+            payload = row.1
+            print("Processing job #" ++ show(jobId) ++ ": " ++ jobType ++ " - " ++ payload)
+
+            # Simulate work (just print for demo)
+            result = match jobType {
+                "email" -> "Email sent to: " ++ payload
+                "report" -> "Report generated: " ++ payload
+                "cleanup" -> "Cleanup completed for: " ++ payload
+                _ -> "Unknown job type: " ++ jobType
+            }
+            print("  Result: " ++ result)
+
+            # Mark as completed
+            _ = Pg.execute(conn, "UPDATE job_queue SET status = 'completed' WHERE id = $1", [jobId])
+            ()
+        }
+        [] -> print("Job not found: " ++ show(jobId))
+    }
+}
+
+# Parse notification payload (just the job ID as string)
+parseJobId(payload) = match String.toInt(payload) {
+    Some(n) -> n
+    None -> 0
+}
+
+# Simple loop to process N jobs
+processJobsLoop(listener, processor, n) = {
+    if n <= 0 then ()
+    else {
+        result = Pg.awaitNotification(listener, 5000)
+        match result {
+            Some((_, payload)) -> {
+                jobId = parseJobId(payload)
+                if jobId > 0 then processJob(processor, jobId) else ()
+                processJobsLoop(listener, processor, n - 1)
+            }
+            None -> processJobsLoop(listener, processor, n)
+        }
+    }
+}
+
+# Helper to print job rows
+printRows(rows) = match rows {
+    [] -> ()
+    [row | rest] -> {
+        print("Job #" ++ show(row.0) ++ ": " ++ row.1 ++ " - " ++ row.2)
+        printRows(rest)
+    }
+}
+
+# Demo: run producer and consumer
+main() = {
+    connStr = "host=localhost user=postgres password=postgres"
+
+    # Setup connection
+    setupConn = Pg.connect(connStr)
+    setup(setupConn)
+
+    # Clean any old jobs
+    Pg.execute(setupConn, "DELETE FROM job_queue", [])
+
+    # Create listener and processor connections
+    listener = Pg.listenConnect(connStr)
+    processor = Pg.connect(connStr)
+    producer = Pg.connect(connStr)
+
+    # Start listening before adding jobs
+    Pg.listen(listener, "new_job")
+    print("\n--- Starting job queue demo ---\n")
+
+    # Add some jobs (in real app, these would come from different processes/requests)
+    addJob(producer, "email", "user@example.com")
+    addJob(producer, "report", "monthly-sales")
+    addJob(producer, "cleanup", "temp-files")
+    addJob(producer, "email", "admin@example.com")
+
+    print("\n--- Processing jobs ---\n")
+
+    # Process all 4 jobs
+    processJobsLoop(listener, processor, 4)
+
+    # Show final status
+    print("\n--- Final job status ---")
+    rows = Pg.query(setupConn, "SELECT id, job_type, status FROM job_queue ORDER BY id", [])
+    printRows(rows)
+
+    # Cleanup
+    Pg.execute(setupConn, "DROP TABLE job_queue", [])
+    Pg.execute(setupConn, "DROP FUNCTION IF EXISTS notify_new_job()", [])
+
+    Pg.close(setupConn)
+    Pg.close(processor)
+    Pg.close(producer)
+
+    print("\nDemo complete!")
+    0
+}
