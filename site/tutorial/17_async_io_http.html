@@ -155,51 +155,45 @@ main() = {
 
                 <!-- HTTP Server -->
                 <h2 class="text-2xl font-semibold text-white mb-4">HTTP Server</h2>
-                <p class="text-slate-400 mb-4">Build scalable web services with Nostos's non-blocking HTTP server. Spawn multiple worker processes to handle incoming requests concurrently on the same port.</p>
+                <p class="text-slate-400 mb-4">Build scalable web services with Nostos's non-blocking HTTP server. The <strong>spawn-per-request</strong> pattern spawns a lightweight process for each incoming request, enabling high concurrency.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">
-# Simple request handler
-handle_request(req) = {
-    path = req.path
-    if path == "/" then {
-        Server.respond(req.id, 200, [("Content-Type", "text/plain")], "Hello from Nostos!")
-    } else if path == "/echo" then {
-        Server.respond(req.id, 200, [("Content-Type", "text/plain")], req.body)
-    } else {
-        Server.respond(req.id, 404, [("Content-Type", "text/plain")], "Not Found")
+handle(req) = {
+    match req.path {
+        "/" -> Server.respond(req.id, 200, [("Content-Type", "text/plain")],
+            "Hello from Nostos!")
+        "/echo" -> Server.respond(req.id, 200, [("Content-Type", "text/plain")],
+            req.body)
+        _ -> Server.respond(req.id, 404, [("Content-Type", "text/plain")],
+            "Not Found: " ++ req.path)
     }
 }
 
-# Worker process continuously accepts and handles requests
-server_worker(server_socket) = {
-    # Server.accept yields if no connection is available, allowing other processes to run
-    # Throws exception when server is closed
-    result = try {
-        request = Server.accept(server_socket)
-        handle_request(request)
-        server_worker(server_socket)  # Loop to accept next request
-    } catch { e ->
-        ()  # Exit when server is closed or on error
-    }
-    result
+acceptLoop(server) = {
+    ok = try {
+        req = Server.accept(server)
+        spawn { handle(req) }
+        true
+    } catch { _ -> false }
+
+    if ok then acceptLoop(server) else ()
 }
 
 main() = {
-    # Bind to port 8080 - throws on error
-    try {
-        server = Server.bind(8080)
-        println("HTTP Server listening on port 8080. Spawning workers...")
-        # Spawn multiple worker processes to handle incoming connections
-        for i = 1 to 4 {
-            spawn { server_worker(server) }
-        }
-        # Keep the main process alive (e.g., waiting for a shutdown signal)
-        receive { _ -> () }
-    } catch { e ->
-        println("Failed to bind server: " ++ e)
-    }
+    server = Server.bind(8080)
+    println("Server running on http://localhost:8080")
+    acceptLoop(server)
 }
 </code></pre>
+                </div>
+                <div class="bg-yellow-900/30 border border-yellow-500/30 rounded-lg p-4 mb-8">
+                    <p class="text-yellow-200"><strong>Why spawn-per-request?</strong></p>
+                    <ul class="list-disc list-inside text-yellow-200 mt-2 space-y-1">
+                        <li>Each request runs in its own lightweight process</li>
+                        <li>Blocking operations (database, file I/O) only block that request</li>
+                        <li>Tail recursion OUTSIDE try enables proper optimization</li>
+                        <li>Memory-efficient: no stack growth over time</li>
+                    </ul>
                 </div>
 
 
@@ -337,75 +331,53 @@ route(req) = {
                 <p class="text-slate-400 mb-4">Nostos supports WebSocket connections for real-time bidirectional communication. Check if a request is a WebSocket upgrade with <code>req.isWebSocket</code>, then use the WebSocket functions to communicate.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">
-# Handle WebSocket echo - echoes back every message
-handleWebSocketEcho(ws) = {
-    result = try {
+wsEchoLoop(ws) = {
+    ok = try {
         msg = WebSocket.recv(ws)
         if msg == "quit" then {
             WebSocket.send(ws, "Goodbye!")
             WebSocket.close(ws)
+            false
         } else {
             WebSocket.send(ws, "Echo: " ++ msg)
-            handleWebSocketEcho(ws)  # Continue receiving
+            true
         }
-    } catch { e ->
+    } catch { _ ->
         WebSocket.close(ws)
+        false
     }
-    result
+    if ok then wsEchoLoop(ws) else ()
 }
 
-handleRequest(req, mainPid) = {
-    path = req.path
-
-    # Check if this is a WebSocket upgrade request
+route(req) = {
     if req.isWebSocket then {
-        # Accept the WebSocket connection (sends 101 response)
         ws = WebSocket.accept(req.id)
-
-        # Route to appropriate WebSocket handler
-        if path == "/echo" then handleWebSocketEcho(ws)
+        if req.path == "/echo" then wsEchoLoop(ws)
         else {
             WebSocket.send(ws, "Unknown endpoint")
             WebSocket.close(ws)
         }
-    }
-
-    # Regular HTTP requests
-    else if path == "/" then handleHome(req)
-    else {
+    } else if req.path == "/" then {
+        Server.respond(req.id, 200, [], "WebSocket server. Connect to /echo")
+    } else {
         Server.respond(req.id, 404, [], "Not Found")
     }
 }
 
-# Worker handles each request in a separate process (important for WebSocket blocking calls)
-serverWorker(server, mainPid) = {
-    result = try {
+acceptLoop(server) = {
+    ok = try {
         req = Server.accept(server)
-        spawn { handleRequest(req, mainPid) }  # Handle in separate process
-        serverWorker(server, mainPid)
-    } catch { e -> () }
-    result
+        spawn { route(req) }
+        true
+    } catch { _ -> false }
+    if ok then acceptLoop(server) else ()
 }
 
 main() = {
-    mainPid = self()
-    result = try {
-        server = Server.bind(8080)
-        println("Server running on http://localhost:8080")
-        println("WebSocket echo at ws://localhost:8080/echo")
-
-        for i = 1 to 4 { spawn { serverWorker(server, mainPid) } }
-
-        receive {
-            ("shutdown", _) -> {
-                Server.close(server)
-                println("Server stopped.")
-            }
-        }
-    } catch { e ->
-        println("Error starting server")
-    }
-    result
+    server = Server.bind(8080)
+    println("Server running on http://localhost:8080")
+    println("WebSocket echo at ws://localhost:8080/echo")
+    acceptLoop(server)
 }
 </code></pre>
                 </div>
