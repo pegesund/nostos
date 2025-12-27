@@ -1,0 +1,43 @@
+# expect: 0
+# Test query params parsing with value validation
+
+findParam(params, key) = {
+    if length(params) == 0 then ""
+    else {
+        (k, v) = head(params)
+        if k == key then v else findParam(tail(params), key)
+    }
+}
+
+handle(req) = {
+    # Extract specific params
+    name = findParam(req.queryParams, "name")
+    age = findParam(req.queryParams, "age")
+    city = findParam(req.queryParams, "city")
+
+    # Return all values concatenated
+    Server.respond(req.id, 200, [], name ++ "|" ++ age ++ "|" ++ city)
+}
+
+main() = {
+    server = Server.bind(18100)
+
+    spawn {
+        req = Server.accept(server)
+        handle(req)
+    }
+
+    sleep(100)
+
+    # Test with URL-encoded values
+    resp = Http.get("http://localhost:18100/?name=John%20Doe&age=25&city=New%20York")
+    Server.close(server)
+
+    # Values should be URL-decoded
+    expected = "John Doe|25|New York"
+    if resp.body == expected then 0 else {
+        println("Expected: " ++ expected)
+        println("Got: " ++ resp.body)
+        1
+    }
+}
