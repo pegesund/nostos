@@ -179,11 +179,9 @@ cargo test --release -p nostos-repl check_module_tests -- --nocapture
 
 **Key function:** `ReplEngine::check_module_compiles(&self, module_name: &str, content: &str) -> Result<(), String>`
 
-## BUILTINS Array Warning
+## BUILTINS Array Notes
 
-**DO NOT add Buffer methods to the BUILTINS array in compile.rs**
-
-Buffer is used by stdlib/html.nos and adding Buffer.* to BUILTINS causes type conflicts:
-- `Cannot unify types: stdlib.html.Html and Html`
-
-Float64Array, Int64Array, Float32Array methods ARE safe to add to BUILTINS since they don't conflict with stdlib.
+- Float64Array, Int64Array, Float32Array methods are in BUILTINS for type inference
+- Buffer methods are NOT in BUILTINS (causes type conflicts with html.nos) but are handled via:
+  - Direct UFCS dispatch in compile.rs (Buffer.append, Buffer.toString)
+  - Expression pattern detection in engine.rs/repl.rs for type inference
