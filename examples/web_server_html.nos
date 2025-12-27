@@ -1,0 +1,166 @@
+# Web Server with HTML Templating
+#
+# Demonstrates combining the HTTP server with Html(...) templating.
+# Uses spawn-per-request pattern for concurrent handling.
+#
+# Test:
+#   curl http://localhost:8080/
+#   curl http://localhost:8080/users
+#   curl http://localhost:8080/users/42
+
+use stdlib.html.{Html, render}
+
+# --- HTML Components ---
+
+# Page layout wraps content in a full HTML page
+layout(pageTitle: String, contentHtml: Html) = Html(
+    el("html", [], [
+        head([
+            meta([("charset", "UTF-8")]),
+            title(pageTitle),
+            el("style", [], [raw("
+                body { font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+                h1 { color: #333; }
+                a { color: #0066cc; }
+                .card { background: #f5f5f5; padding: 20px; margin: 10px 0; border-radius: 8px; }
+            ")])
+        ]),
+        body([contentHtml])
+    ])
+)
+
+# Navigation bar
+navBar() = Html(
+    nav([
+        a([("href", "/")], "Home"), raw(" | "),
+        a([("href", "/users")], "Users"), raw(" | "),
+        a([("href", "/about")], "About")
+    ])
+)
+
+# User card component
+userCard(id: String, name: String, email: String) = Html(
+    el("div", [("class", "card")], [
+        h3("User #" ++ id),
+        p("Name: " ++ name),
+        p("Email: " ++ email)
+    ])
+)
+
+# Helper for mapping over user tuples
+makeUserCard(user: (String, String, String)) = {
+    (id, name, email) = user
+    userCard(id, name, email)
+}
+
+# --- Route Handlers ---
+
+handleHome(req) = {
+    content = Html(div([
+        navBar(),
+        h1("Welcome to Nostos Web Server"),
+        p("This is a simple web application using Html(...) templating."),
+        p([a([("href", "/users")], "View all users")])
+    ]))
+    html = render(layout("Home", content))
+    Server.respond(req.id, 200, [("Content-Type", "text/html")], html)
+}
+
+handleUsers(req) = {
+    # Sample user data (in real app, from database)
+    users = [
+        ("1", "Alice", "alice@example.com"),
+        ("2", "Bob", "bob@example.com"),
+        ("3", "Charlie", "charlie@example.com")
+    ]
+
+    cards = map(users, makeUserCard)
+
+    content = Html(div([
+        navBar(),
+        h1("All Users"),
+        div(cards)
+    ]))
+    html = render(layout("Users", content))
+    Server.respond(req.id, 200, [("Content-Type", "text/html")], html)
+}
+
+handleUserDetail(req, userId: String) = {
+    content = Html(div([
+        navBar(),
+        h1("User Details"),
+        userCard(userId, "User " ++ userId, "user" ++ userId ++ "@example.com"),
+        p([a([("href", "/users")], "Back to users")])
+    ]))
+    html = render(layout("User " ++ userId, content))
+    Server.respond(req.id, 200, [("Content-Type", "text/html")], html)
+}
+
+handleAbout(req) = {
+    content = Html(div([
+        navBar(),
+        h1("About"),
+        p("This example demonstrates:"),
+        ul([
+            li("Spawn-per-request server pattern"),
+            li("Html(...) templating with components"),
+            li("Server.matchPath for dynamic routes")
+        ])
+    ]))
+    html = render(layout("About", content))
+    Server.respond(req.id, 200, [("Content-Type", "text/html")], html)
+}
+
+handle404(req) = {
+    content = Html(div([
+        navBar(),
+        h1("404 - Not Found"),
+        p("The page " ++ req.path ++ " was not found."),
+        p([a([("href", "/")], "Go home")])
+    ]))
+    html = render(layout("Not Found", content))
+    Server.respond(req.id, 404, [("Content-Type", "text/html")], html)
+}
+
+# --- Router ---
+
+route(req) = {
+    path = req.path
+
+    # Static routes
+    if path == "/" then handleHome(req)
+    else if path == "/users" then handleUsers(req)
+    else if path == "/about" then handleAbout(req)
+
+    # Dynamic routes with Server.matchPath
+    else {
+        params = Server.matchPath(path, "/users/:id")
+        if length(params) > 0 then {
+            (_, userId) = head(params)
+            handleUserDetail(req, userId)
+        }
+        else handle404(req)
+    }
+}
+
+# --- Server ---
+
+acceptLoop(server) = {
+    ok = try {
+        req = Server.accept(server)
+        spawn { route(req) }
+        true
+    } catch { _ -> false }
+
+    if ok then acceptLoop(server) else ()
+}
+
+main() = {
+    server = Server.bind(8080)
+    println("HTML Server running on http://localhost:8080")
+    println("  /         - Home page")
+    println("  /users    - User list")
+    println("  /users/42 - User detail")
+    println("  /about    - About page")
+    acceptLoop(server)
+}
