@@ -1066,6 +1066,9 @@ impl Autocomplete {
         } else if let Some(chain_type) = self.infer_method_chain_type(receiver, source) {
             // Method chain like aa.append("ss") - infer return type
             chain_type
+        } else if let Some(call_type) = self.infer_function_call_type(receiver, source) {
+            // Direct function call like greet(Person("petter")) - infer return type
+            call_type
         } else {
             // Lowercase - try to look up the variable's type
             if let Some(var_type) = source.get_variable_type(receiver) {
@@ -1174,6 +1177,61 @@ impl Autocomplete {
         // Then try user-defined functions (UFCS)
         // Look for a function named method_name that could take base_type as first arg
         if let Some(sig) = source.get_function_signature(method_name) {
+            // Signature format: "Type1 -> Type2 -> ReturnType" or "ReturnType" (for 0-arg)
+            // Extract the return type (last part after ->)
+            if let Some(arrow_pos) = sig.rfind("->") {
+                let ret_type = sig[arrow_pos + 2..].trim();
+                if !ret_type.is_empty() {
+                    return Some(ret_type.to_string());
+                }
+            } else if !sig.contains("->") {
+                // No arrows means it's just the return type
+                return Some(sig.trim().to_string());
+            }
+        }
+
+        None
+    }
+
+    /// Infer the return type of a direct function call like "greet(Person(\"petter\"))"
+    fn infer_function_call_type(&self, receiver: &str, source: &dyn CompletionSource) -> Option<String> {
+        // Check if receiver matches pattern: identifier(...)
+        // The identifier should start the string and be followed by (
+        let receiver = receiver.trim();
+
+        // Find the first (
+        let paren_pos = receiver.find('(')?;
+        if paren_pos == 0 {
+            return None; // Starts with ( - not a function call
+        }
+
+        // Extract potential function name
+        let func_name = &receiver[..paren_pos];
+
+        // Function name should be a valid identifier (letters, digits, underscores, starting with letter)
+        if func_name.is_empty() || !func_name.chars().next()?.is_alphabetic() {
+            return None;
+        }
+        if !func_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return None;
+        }
+
+        // Verify the parentheses are balanced (i.e., this is a complete function call)
+        let after_func = &receiver[paren_pos..];
+        let mut depth = 0;
+        for c in after_func.chars() {
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth -= 1,
+                _ => {}
+            }
+        }
+        if depth != 0 {
+            return None; // Unbalanced - not a complete function call
+        }
+
+        // Look up the function signature
+        if let Some(sig) = source.get_function_signature(func_name) {
             // Signature format: "Type1 -> Type2 -> ReturnType" or "ReturnType" (for 0-arg)
             // Extract the return type (last part after ->)
             if let Some(arrow_pos) = sig.rfind("->") {
@@ -1377,6 +1435,7 @@ mod tests {
         type_fields: HashMap<String, Vec<String>>,
         type_constructors: HashMap<String, Vec<String>>,
         variable_types: HashMap<String, String>,
+        function_signatures: HashMap<String, String>,
     }
 
     impl MockSource {
@@ -1388,6 +1447,7 @@ mod tests {
                 type_fields: HashMap::new(),
                 type_constructors: HashMap::new(),
                 variable_types: HashMap::new(),
+                function_signatures: HashMap::new(),
             }
         }
 
@@ -1426,6 +1486,11 @@ mod tests {
             self.variable_types.insert(var_name.to_string(), var_type.to_string());
             self
         }
+
+        fn with_function_signature(mut self, func_name: &str, signature: &str) -> Self {
+            self.function_signatures.insert(func_name.to_string(), signature.to_string());
+            self
+        }
     }
 
     impl CompletionSource for MockSource {
@@ -1449,9 +1514,8 @@ mod tests {
             self.type_constructors.get(type_name).cloned().unwrap_or_default()
         }
 
-        fn get_function_signature(&self, _name: &str) -> Option<String> {
-            // MockSource doesn't have signatures
-            None
+        fn get_function_signature(&self, name: &str) -> Option<String> {
+            self.function_signatures.get(name).cloned()
         }
 
         fn get_function_doc(&self, _name: &str) -> Option<String> {
@@ -3095,6 +3159,154 @@ mod tests {
             assert!(item.doc.is_some(),
                 "Set method '{}' should have a docstring", item.text);
         }
+    }
+
+    #[test]
+    fn test_function_call_return_type_completions() {
+        // When typing greet(Person("petter"))., should get String methods
+        // because greet returns String
+        let source = MockSource::new()
+            .with_function_signature("greet", "Person -> String");
+        let ac = Autocomplete::new();
+
+        // Test the context parsing
+        let line = "greet(Person(\"petter\")).";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "greet(Person(\"petter\"))".to_string(),
+            prefix: "".to_string()
+        });
+
+        // Should get String methods
+        let items = ac.get_completions(&ctx, &source);
+        println!("Completions for greet(Person(\"petter\")).: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+        assert!(items.iter().any(|i| i.text == "toUpper"),
+            "Should suggest String method 'toUpper' since greet returns String");
+        assert!(items.iter().any(|i| i.text == "length"),
+            "Should suggest String method 'length' since greet returns String");
+    }
+
+    #[test]
+    fn test_function_call_chain_return_type() {
+        // Test chaining: greet(Person("petter")).toUpper().
+        let source = MockSource::new()
+            .with_function_signature("greet", "Person -> String");
+        let ac = Autocomplete::new();
+
+        let line = "greet(Person(\"petter\")).toUpper().";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "greet(Person(\"petter\")).toUpper()".to_string(),
+            prefix: "".to_string()
+        });
+
+        // toUpper returns String, so should still get String methods
+        let items = ac.get_completions(&ctx, &source);
+        println!("Completions for toUpper chain: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+        assert!(items.iter().any(|i| i.text == "length"),
+            "Should suggest String methods after toUpper()");
+    }
+
+    #[test]
+    fn test_function_call_with_prefix_filter() {
+        // Test prefix filtering: greet(Person("petter")).to
+        let source = MockSource::new()
+            .with_function_signature("greet", "Person -> String");
+        let ac = Autocomplete::new();
+
+        let line = "greet(Person(\"petter\")).to";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "greet(Person(\"petter\"))".to_string(),
+            prefix: "to".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        println!("Completions with 'to' prefix: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+        // Should only get methods starting with 'to'
+        assert!(items.iter().any(|i| i.text == "toUpper"));
+        assert!(items.iter().any(|i| i.text == "toLower"));
+        assert!(items.iter().any(|i| i.text == "toInt"));
+        // Should NOT have methods not starting with 'to'
+        assert!(!items.iter().any(|i| i.text == "length"));
+    }
+
+    /// Wrapper to implement CompletionSource for ReplEngine (same as in repl_panel.rs)
+    struct ReplEngineSource<'a> {
+        engine: &'a nostos_repl::ReplEngine,
+    }
+
+    impl<'a> CompletionSource for ReplEngineSource<'a> {
+        fn get_functions(&self) -> Vec<String> {
+            self.engine.get_functions()
+        }
+
+        fn get_types(&self) -> Vec<String> {
+            self.engine.get_types()
+        }
+
+        fn get_variables(&self) -> Vec<String> {
+            self.engine.get_variables()
+        }
+
+        fn get_type_fields(&self, type_name: &str) -> Vec<String> {
+            self.engine.get_type_fields(type_name)
+        }
+
+        fn get_type_constructors(&self, type_name: &str) -> Vec<String> {
+            self.engine.get_type_constructors(type_name)
+        }
+
+        fn get_function_signature(&self, name: &str) -> Option<String> {
+            self.engine.get_function_signature(name)
+        }
+
+        fn get_function_doc(&self, name: &str) -> Option<String> {
+            self.engine.get_function_doc(name)
+        }
+
+        fn get_variable_type(&self, var_name: &str) -> Option<String> {
+            self.engine.get_variable_type(var_name)
+        }
+    }
+
+    #[test]
+    fn test_function_call_with_real_repl_engine() {
+        // Integration test: use real ReplEngine like TUI-REPL does
+        // This tests the exact same path as typing in the TUI-REPL
+        use nostos_repl::{ReplEngine, ReplConfig};
+
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Define a type and function in the REPL
+        engine.eval("type Person = { name: String }").expect("Failed to define Person type");
+        engine.eval("greet(p: Person) -> String = \"Hello \" ++ p.name").expect("Failed to define greet function");
+
+        // Verify the function signature is available
+        let sig = engine.get_function_signature("greet");
+        println!("greet signature: {:?}", sig);
+        assert!(sig.is_some(), "greet should have a signature");
+        assert!(sig.as_ref().unwrap().contains("String"), "greet should return String");
+
+        // Now test autocomplete
+        let source = ReplEngineSource { engine: &engine };
+        let ac = Autocomplete::new();
+
+        let line = "greet(Person(\"petter\")).";
+        let ctx = ac.parse_context(line, line.len());
+        println!("Context: {:?}", ctx);
+
+        let items = ac.get_completions(&ctx, &source);
+        println!("Completions: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+
+        assert!(items.iter().any(|i| i.text == "toUpper"),
+            "Should suggest String method 'toUpper' for greet() return type");
+        assert!(items.iter().any(|i| i.text == "length"),
+            "Should suggest String method 'length' for greet() return type");
     }
 
 }

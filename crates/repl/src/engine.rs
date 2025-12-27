@@ -10621,6 +10621,108 @@ greet(name) = {
         assert!(result.is_err(), "Expected error for undefined variable 'huff'");
         assert!(result.unwrap_err().contains("huff"), "Error should mention 'huff'");
     }
+
+    #[test]
+    fn test_user_defined_function_return_type_chain() {
+        // User-defined function with explicit return type, then chain method on result
+        // greet returns String, so .toUpper() should work
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        let code = r#"
+type Person = { name: String }
+
+greet(p: Person) -> String = "Hello " ++ p.name
+
+main() = {
+    p = Person("Alice")
+    greet(p).toUpper()
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "User-defined function return type chain should work: {:?}", result);
+    }
+
+    #[test]
+    fn test_user_defined_function_chain_invalid_method() {
+        // greet returns String, so .xxx() should fail
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        let code = r#"
+type Person = { name: String }
+
+greet(p: Person) -> String = "Hello " ++ p.name
+
+main() = {
+    p = Person("Alice")
+    greet(p).xxx()
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for String.xxx");
+        assert!(result.unwrap_err().contains("xxx"), "Error should mention xxx");
+    }
+
+    #[test]
+    fn test_user_defined_function_returns_list_chain() {
+        // User function returns List, then .map() should work
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        let code = r#"
+getNumbers() -> List = [1, 2, 3]
+
+main() = {
+    getNumbers().map(x => x * 2).filter(x => x > 2)
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "User function returning List should chain with List methods: {:?}", result);
+    }
+
+    #[test]
+    fn test_user_defined_function_returns_record_field_access() {
+        // User function returns a record type, then field access should work
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        let code = r#"
+type Person = { name: String, age: Int }
+
+makePerson(n: String) -> Person = Person(n, 30)
+
+main() = {
+    makePerson("Bob").name.toUpper()
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Record field access on function result should work: {:?}", result);
+    }
+
+    #[test]
+    fn test_multiple_user_function_chain() {
+        // Chain multiple user-defined functions
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        let code = r#"
+addPrefix(s: String) -> String = "PREFIX_" ++ s
+addSuffix(s: String) -> String = s ++ "_SUFFIX"
+
+main() = {
+    s = "hello"
+    s.addPrefix().addSuffix().toUpper()
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Chaining multiple user functions should work: {:?}", result);
+    }
 }
 
 #[cfg(test)]
