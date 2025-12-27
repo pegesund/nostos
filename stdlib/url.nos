@@ -16,7 +16,7 @@
 # If input starts with "/" and has no "?", returns empty map
 # If input has "?", parses everything after it
 # Otherwise treats input as raw query string (e.g., "foo=bar&baz=qux")
-pub parseUrlQuery(pathOrQuery) = {
+pub parseUrlQuery(pathOrQuery) -> Map[String, String] = {
     emptyMap: Map[String, String] = %{}
     qIdx = String.indexOf(pathOrQuery, "?")
 

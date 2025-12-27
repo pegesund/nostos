@@ -2776,6 +2776,10 @@ impl Compiler {
                         // Parameterized type match: arg_type="List", cand_type="List[Html]"
                         // This is a compatible match but less specific than exact
                         score += 1;
+                    } else if Self::types_are_compatible(arg_type, cand_type) {
+                        // Polymorphic type compatible with concrete type
+                        // e.g., "Map k v" compatible with "Map[String, String]"
+                        score += 1;
                     } else {
                         // Type mismatch
                         valid = false;
@@ -2814,6 +2818,40 @@ impl Compiler {
             }
         }
         count
+    }
+
+    /// Check if two type strings are compatible.
+    /// Returns true if:
+    /// - arg_type is a polymorphic type (e.g., "Map k v", "List a", "Tree t")
+    /// - cand_type is a concrete type with the same base (e.g., "Map[String, String]", "List[Int]", "Tree[Node]")
+    /// This handles both built-in types and user-defined generic types.
+    fn types_are_compatible(arg_type: &str, cand_type: &str) -> bool {
+        // Extract base type name from arg_type (space-separated format: "Map k v" -> "Map")
+        let arg_parts: Vec<&str> = arg_type.split_whitespace().collect();
+        if arg_parts.len() < 2 {
+            // Not a space-separated polymorphic type
+            return false;
+        }
+        let arg_base = arg_parts[0];
+
+        // Check if all remaining parts are type variables (single lowercase letters)
+        let all_type_vars = arg_parts[1..].iter().all(|p| {
+            p.len() == 1 && p.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false)
+        });
+        if !all_type_vars {
+            return false;
+        }
+
+        // Extract base type name from cand_type (bracket format: "Map[String, String]" -> "Map")
+        let cand_base = if let Some(bracket_pos) = cand_type.find('[') {
+            &cand_type[..bracket_pos]
+        } else {
+            // cand_type has no brackets - check if it's just the base name
+            cand_type
+        };
+
+        // Base types must match
+        arg_base == cand_base
     }
 
     /// Split a signature into parameter types, handling nested brackets correctly.
@@ -11347,6 +11385,42 @@ impl Compiler {
             }
         }
 
+        // Handle space-separated parameterized types like "Map k v", "List a", "Set a"
+        // These come from BUILTINS signatures
+        // Must split respecting parentheses, e.g., "Option (String, String)" -> ["Option", "(String, String)"]
+        let parts = self.split_type_args_by_space(ty);
+        if parts.len() >= 2 {
+            let name = parts[0].as_str();
+            let args: Vec<nostos_types::Type> = parts[1..].iter()
+                .map(|arg| self.type_name_to_type(arg))
+                .collect();
+
+            return match name {
+                "List" if args.len() == 1 => {
+                    nostos_types::Type::List(Box::new(args.into_iter().next().unwrap()))
+                }
+                "Array" if args.len() == 1 => {
+                    nostos_types::Type::Array(Box::new(args.into_iter().next().unwrap()))
+                }
+                "Set" if args.len() == 1 => {
+                    nostos_types::Type::Set(Box::new(args.into_iter().next().unwrap()))
+                }
+                "Map" if args.len() == 2 => {
+                    let mut iter = args.into_iter();
+                    let key = iter.next().unwrap();
+                    let val = iter.next().unwrap();
+                    nostos_types::Type::Map(Box::new(key), Box::new(val))
+                }
+                "IO" if args.len() == 1 => {
+                    nostos_types::Type::IO(Box::new(args.into_iter().next().unwrap()))
+                }
+                _ => nostos_types::Type::Named {
+                    name: name.to_string(),
+                    args,
+                },
+            };
+        }
+
         match ty {
             "Int" | "Int64" => nostos_types::Type::Int,
             "Int8" => nostos_types::Type::Int8,
@@ -11414,6 +11488,41 @@ impl Compiler {
         }
 
         args
+    }
+
+    /// Split type string by spaces while respecting parentheses and brackets.
+    /// E.g., "Option (String, String)" -> ["Option", "(String, String)"]
+    /// E.g., "Map k v" -> ["Map", "k", "v"]
+    fn split_type_args_by_space(&self, ty: &str) -> Vec<String> {
+        let mut parts = Vec::new();
+        let mut current = String::new();
+        let mut depth = 0;
+
+        for ch in ty.chars() {
+            match ch {
+                '(' | '[' | '{' => {
+                    depth += 1;
+                    current.push(ch);
+                }
+                ')' | ']' | '}' => {
+                    depth -= 1;
+                    current.push(ch);
+                }
+                ' ' if depth == 0 => {
+                    if !current.is_empty() {
+                        parts.push(current.clone());
+                        current.clear();
+                    }
+                }
+                _ => current.push(ch),
+            }
+        }
+
+        if !current.is_empty() {
+            parts.push(current);
+        }
+
+        parts
     }
 
     /// Parse a signature string like "String -> Int" or "Int -> String -> ()" into a FunctionType.
