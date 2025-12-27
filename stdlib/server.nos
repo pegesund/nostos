@@ -1,0 +1,21 @@
+# HTTP Server utilities
+
+# Run an HTTP server with spawn-per-request pattern.
+# Each incoming request spawns a new lightweight process.
+#
+# Example:
+#   handle(req) = Server.respond(req.id, 200, [], "Hello!")
+#   main() = serve(8080, handle)
+serve(port, handler) = {
+    server = Server.bind(port)
+    acceptLoop(server, handler)
+}
+
+acceptLoop(server, handler) = {
+    ok = try {
+        req = Server.accept(server)
+        spawn { handler(req) }
+        true
+    } catch { _ -> false }
+    if ok then acceptLoop(server, handler) else ()
+}

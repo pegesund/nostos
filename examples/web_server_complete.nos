@@ -1,21 +1,16 @@
-# Complete Web Application Example
+# Complete Web Application
 #
-# A full web application demonstrating:
-# - HTTP server with spawn-per-request pattern
-# - PostgreSQL database integration
-# - Server.matchPath for dynamic routing
-# - Html(...) templating with reusable components
+# PostgreSQL + Html(...) templating + routing
 #
-# Requirements:
-#   PostgreSQL running at localhost with user/password: postgres/postgres
+# Requires: PostgreSQL at localhost (user: postgres, pw: postgres)
 #
 # Test:
 #   curl http://localhost:8080/
 #   curl http://localhost:8080/users
 #   curl http://localhost:8080/users/1
-#   curl -X POST http://localhost:8080/users -d "name=David&email=david@example.com"
 
 use stdlib.html.{Html, render}
+use stdlib.server.{serve}
 
 # --- Database Setup ---
 
@@ -241,35 +236,12 @@ route(req) = {
     Pg.close(conn)
 }
 
-# --- Server ---
-
-acceptLoop(server) = {
-    ok = try {
-        req = Server.accept(server)
-        spawn { route(req) }
-        true
-    } catch { _ -> false }
-
-    if ok then acceptLoop(server) else ()
-}
-
 main() = {
     # Setup database
     setupConn = Pg.connect("host=localhost user=postgres password=postgres")
     setupDatabase(setupConn)
     Pg.close(setupConn)
 
-    # Start server
-    server = Server.bind(8080)
-    println("Complete Web App running on http://localhost:8080")
-    println("")
-    println("Routes:")
-    println("  GET  /           - Home page")
-    println("  GET  /users      - List all users")
-    println("  POST /users      - Create new user")
-    println("  GET  /users/:id  - User details")
-    println("")
-    println("Try: curl http://localhost:8080/users")
-
-    acceptLoop(server)
+    println("Web App running on http://localhost:8080")
+    serve(8080, route)
 }
