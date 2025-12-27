@@ -22,11 +22,28 @@
 - [ ] Multiple pattern matching (can use list of patterns in Nostos)
 
 ### 4. WebSockets
-- [ ] WebSocket upgrade handling
-- [ ] `Server.acceptWebSocket(req)` -> WebSocket handle
-- [ ] `WebSocket.send(ws, message)`
-- [ ] `WebSocket.receive(ws)` -> message (blocking)
-- [ ] `WebSocket.close(ws)`
+- [x] WebSocket upgrade handling (via isWebSocket field and status 101 response)
+- [x] `WebSocket.send(requestId, message)` -> () (uses request ID as handle)
+- [x] `WebSocket.receive(requestId)` -> String (blocking, throws on close)
+- [x] `WebSocket.close(requestId)` -> ()
+
+To accept a WebSocket connection, respond with status 101. The connection is then
+available via the request ID. Example:
+```
+handle(req) = {
+    if req.isWebSocket then {
+        # Accept the WebSocket upgrade
+        Server.respond(req.id, 101, [], "")
+
+        # Now we can send/receive
+        msg = WebSocket.receive(req.id)
+        WebSocket.send(req.id, "Echo: " ++ msg)
+        WebSocket.close(req.id)
+    } else {
+        Server.respond(req.id, 200, [], "Hello!")
+    }
+}
+```
 
 ## Implementation Order
 1. Parameter parsing (foundational, needed for other features)
@@ -45,6 +62,12 @@
 - `Server.accept(server)` -> HttpRequest
 - `Server.respond(reqId, status, headers, body)` -> ()
 - `Server.close(server)` -> ()
+- `Server.matchPath(path, pattern)` -> [(String, String)] # NEW: route matching
+
+## WebSocket Builtins
+- `WebSocket.send(requestId, message)` -> () # Send text message
+- `WebSocket.receive(requestId)` -> String   # Receive message (blocking)
+- `WebSocket.close(requestId)` -> ()         # Close connection
 
 ## HttpRequest Record
 - id: Int
@@ -52,6 +75,10 @@
 - path: String
 - headers: [(String, String)]
 - body: String
+- queryParams: [(String, String)]  # NEW: parsed from URL query string
+- cookies: [(String, String)]      # NEW: parsed from Cookie header
+- formParams: [(String, String)]   # NEW: parsed from form-urlencoded POST body
+- isWebSocket: Bool                # NEW: true if this is a WebSocket upgrade request
 
 ## Notes
 - Implement in Rust for speed

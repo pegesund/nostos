@@ -173,6 +173,13 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Server.close", signature: "Int -> ()", doc: "Close server handle" },
     BuiltinInfo { name: "Server.matchPath", signature: "String -> String -> [(String, String)]", doc: "Match path against pattern with :params, returns params list or empty if no match" },
 
+    // === WebSocket ===
+    BuiltinInfo { name: "WebSocket.isUpgrade", signature: "HttpRequest -> Bool", doc: "Check if request is a WebSocket upgrade request" },
+    BuiltinInfo { name: "WebSocket.accept", signature: "Int -> Int", doc: "Accept WebSocket upgrade for request ID, returns WebSocket handle" },
+    BuiltinInfo { name: "WebSocket.send", signature: "Int -> String -> ()", doc: "Send message on WebSocket handle" },
+    BuiltinInfo { name: "WebSocket.receive", signature: "Int -> String", doc: "Receive message from WebSocket handle (blocks until message arrives)" },
+    BuiltinInfo { name: "WebSocket.close", signature: "Int -> ()", doc: "Close WebSocket connection" },
+
     // === Process Introspection ===
     BuiltinInfo { name: "Process.all", signature: "() -> [Pid]", doc: "Get list of all process IDs on this thread" },
     BuiltinInfo { name: "Process.time", signature: "Pid -> Int", doc: "Get process uptime in milliseconds (-1 if not found)" },
@@ -953,6 +960,7 @@ impl Compiler {
                         ("queryParams".to_string(), "List".to_string()),
                         ("cookies".to_string(), "List".to_string()),
                         ("formParams".to_string(), "List".to_string()),
+                        ("isWebSocket".to_string(), "Bool".to_string()),
                     ],
                     mutable: false,
                 },
@@ -3858,6 +3866,26 @@ impl Compiler {
                             self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![path_reg, pattern_reg].into()), line);
                             return Ok(dst);
                         }
+                        // WebSocket functions
+                        "WebSocket.send" if args.len() == 2 => {
+                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let message_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::WebSocketSend(dst, request_id_reg, message_reg), line);
+                            return Ok(dst);
+                        }
+                        "WebSocket.receive" if args.len() == 1 => {
+                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::WebSocketReceive(dst, request_id_reg), line);
+                            return Ok(dst);
+                        }
+                        "WebSocket.close" if args.len() == 1 => {
+                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::WebSocketClose(dst, request_id_reg), line);
+                            return Ok(dst);
+                        }
                         // PostgreSQL functions
                         "Pg.connect" if args.len() == 1 => {
                             let conn_str_reg = self.compile_expr_tail(&args[0], false)?;
@@ -4650,6 +4678,26 @@ impl Compiler {
                             let dst = self.alloc_reg();
                             let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
                             self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![path_reg, pattern_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // === WebSocket operations ===
+                        "WebSocket.send" if args.len() == 2 => {
+                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let message_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::WebSocketSend(dst, request_id_reg, message_reg), line);
+                            return Ok(dst);
+                        }
+                        "WebSocket.receive" if args.len() == 1 => {
+                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::WebSocketReceive(dst, request_id_reg), line);
+                            return Ok(dst);
+                        }
+                        "WebSocket.close" if args.len() == 1 => {
+                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::WebSocketClose(dst, request_id_reg), line);
                             return Ok(dst);
                         }
                         // === PostgreSQL operations ===

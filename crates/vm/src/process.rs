@@ -214,6 +214,7 @@ pub enum IoResponseValue {
         query_params: Vec<(String, String)>,
         cookies: Vec<(String, String)>,
         form_params: Vec<(String, String)>,
+        is_websocket: bool,
     },
     /// Process execution result (from Exec.run)
     ExecResult {

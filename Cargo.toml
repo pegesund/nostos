@@ -39,7 +39,7 @@ base64 = "0.22"
 percent-encoding = "2.3"
 
 # HTTP Server
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 tower = "0.5"
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["server", "tokio"] }
