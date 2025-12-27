@@ -1,0 +1,45 @@
+# expect: 0
+# Test stdlib.server functions
+
+use stdlib.server.{getParam, setCookie, setCookieWithAge, clearCookie}
+
+testGetParam() = {
+    params = [("name", "alice"), ("age", "30"), ("city", "paris")]
+
+    assert_eq("alice", getParam(params, "name"))
+    assert_eq("30", getParam(params, "age"))
+    assert_eq("paris", getParam(params, "city"))
+    assert_eq("", getParam(params, "unknown"))
+    assert_eq("", getParam([], "name"))
+
+    println("getParam: OK")
+}
+
+testCookieHelpers() = {
+    # Cookie helpers now return header tuples
+    assert_eq(("Set-Cookie", "session=abc123; Path=/; HttpOnly"), setCookie("session", "abc123"))
+    assert_eq(("Set-Cookie", "token=xyz; Path=/; HttpOnly; Max-Age=3600"), setCookieWithAge("token", "xyz", 3600))
+    assert_eq(("Set-Cookie", "session=; Path=/; Max-Age=0"), clearCookie("session"))
+
+    println("cookie helpers: OK")
+}
+
+testCombinedUsage() = {
+    # Simulate combining form params with cookie headers
+    formParams = [("username", "alice"), ("password", "secret")]
+    user = getParam(formParams, "username")
+
+    # Build headers list with cookie
+    headers = [setCookie("session", user)]
+    assert_eq([("Set-Cookie", "session=alice; Path=/; HttpOnly")], headers)
+
+    println("combined usage: OK")
+}
+
+main() = {
+    testGetParam()
+    testCookieHelpers()
+    testCombinedUsage()
+    println("All stdlib.server tests passed!")
+    0
+}

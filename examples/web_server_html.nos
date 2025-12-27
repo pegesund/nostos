@@ -1,16 +1,17 @@
 # Web Server with HTML Templating
 #
+# Demonstrates Html(...) templating with components.
+#
 # Test:
 #   curl http://localhost:8080/
 #   curl http://localhost:8080/users
 #   curl http://localhost:8080/users/42
 
 use stdlib.html.{Html, render}
-use stdlib.server.{serve}
+use stdlib.server.{serve, respondHtml}
 
 # --- HTML Components ---
 
-# Page layout wraps content in a full HTML page
 layout(pageTitle: String, contentHtml: Html) = Html(
     el("html", [], [
         head([
@@ -27,16 +28,12 @@ layout(pageTitle: String, contentHtml: Html) = Html(
     ])
 )
 
-# Navigation bar
-navBar() = Html(
-    nav([
-        a([("href", "/")], "Home"), raw(" | "),
-        a([("href", "/users")], "Users"), raw(" | "),
-        a([("href", "/about")], "About")
-    ])
-)
+navBar() = Html(nav([
+    a([("href", "/")], "Home"), raw(" | "),
+    a([("href", "/users")], "Users"), raw(" | "),
+    a([("href", "/about")], "About")
+]))
 
-# User card component
 userCard(id: String, name: String, email: String) = Html(
     el("div", [("class", "card")], [
         h3("User #" ++ id),
@@ -45,7 +42,6 @@ userCard(id: String, name: String, email: String) = Html(
     ])
 )
 
-# Helper for mapping over user tuples
 makeUserCard(user: (String, String, String)) = {
     (id, name, email) = user
     userCard(id, name, email)
@@ -57,30 +53,22 @@ handleHome(req) = {
     content = Html(div([
         navBar(),
         h1("Welcome to Nostos Web Server"),
-        p("This is a simple web application using Html(...) templating."),
+        p("Using Html(...) templating for type-safe HTML."),
         p([a([("href", "/users")], "View all users")])
     ]))
-    html = render(layout("Home", content))
-    Server.respond(req.id, 200, [("Content-Type", "text/html")], html)
+    respondHtml(req, render(layout("Home", content)))
 }
 
 handleUsers(req) = {
-    # Sample user data (in real app, from database)
     users = [
         ("1", "Alice", "alice@example.com"),
         ("2", "Bob", "bob@example.com"),
         ("3", "Charlie", "charlie@example.com")
     ]
-
     cards = map(users, makeUserCard)
 
-    content = Html(div([
-        navBar(),
-        h1("All Users"),
-        div(cards)
-    ]))
-    html = render(layout("Users", content))
-    Server.respond(req.id, 200, [("Content-Type", "text/html")], html)
+    content = Html(div([navBar(), h1("All Users"), div(cards)]))
+    respondHtml(req, render(layout("Users", content)))
 }
 
 handleUserDetail(req, userId: String) = {
@@ -90,8 +78,7 @@ handleUserDetail(req, userId: String) = {
         userCard(userId, "User " ++ userId, "user" ++ userId ++ "@example.com"),
         p([a([("href", "/users")], "Back to users")])
     ]))
-    html = render(layout("User " ++ userId, content))
-    Server.respond(req.id, 200, [("Content-Type", "text/html")], html)
+    respondHtml(req, render(layout("User " ++ userId, content)))
 }
 
 handleAbout(req) = {
@@ -100,29 +87,25 @@ handleAbout(req) = {
         h1("About"),
         p("This example demonstrates:"),
         ul([
-            li("Spawn-per-request server pattern"),
-            li("Html(...) templating with components"),
+            li("Spawn-per-request pattern with serve()"),
+            li("Html(...) templating with reusable components"),
             li("Server.matchPath for dynamic routes")
         ])
     ]))
-    html = render(layout("About", content))
-    Server.respond(req.id, 200, [("Content-Type", "text/html")], html)
+    respondHtml(req, render(layout("About", content)))
 }
 
 handle404(req) = {
     content = Html(div([
         navBar(),
         h1("404 - Not Found"),
-        p("The page " ++ req.path ++ " was not found."),
-        p([a([("href", "/")], "Go home")])
+        p("The page " ++ req.path ++ " was not found.")
     ]))
-    html = render(layout("Not Found", content))
-    Server.respond(req.id, 404, [("Content-Type", "text/html")], html)
+    Server.respond(req.id, 404, [("Content-Type", "text/html")], render(layout("Not Found", content)))
 }
 
 route(req) = {
     path = req.path
-
     if path == "/" then handleHome(req)
     else if path == "/users" then handleUsers(req)
     else if path == "/about" then handleAbout(req)
@@ -131,12 +114,11 @@ route(req) = {
         if length(params) > 0 then {
             (_, userId) = head(params)
             handleUserDetail(req, userId)
-        }
-        else handle404(req)
+        } else handle404(req)
     }
 }
 
 main() = {
-    println("HTML Server running on http://localhost:8080")
+    println("HTML Server: http://localhost:8080")
     serve(8080, route)
 }

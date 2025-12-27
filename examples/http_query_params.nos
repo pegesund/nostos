@@ -1,142 +1,34 @@
 # HTTP Query Parameters Example
 #
-# Demonstrates how to parse and use URL query parameters in HTTP requests.
-# Query parameters are automatically parsed and available in req.queryParams.
-#
-# Features shown:
-# - Accessing query parameters from GET requests
-# - URL decoding (handled automatically)
-# - Building responses based on query parameters
-#
-# Test with:
+# Test:
 #   curl "http://localhost:8080/search?q=hello&limit=10"
 #   curl "http://localhost:8080/greet?name=John%20Doe"
 
-# Helper function to find a parameter by name
-# Returns empty string if not found
-findParam(params, key) = {
-    if length(params) == 0 then ""
-    else {
-        (k, v) = head(params)
-        if k == key then v else findParam(tail(params), key)
-    }
-}
+use stdlib.server.{serve, getParam, respondText, respond400, respond404}
 
-# Handle search requests with query parameters
 handleSearch(req) = {
-    # Get the 'q' (query) parameter
-    query = findParam(req.queryParams, "q")
+    query = getParam(req.queryParams, "q")
+    limit = getParam(req.queryParams, "limit")
+    limitVal = if limit == "" then "10" else limit
 
-    # Get optional 'limit' parameter, default to "10"
-    limitStr = findParam(req.queryParams, "limit")
-    limit = if limitStr == "" then "10" else limitStr
-
-    # Build response
-    if query == "" then {
-        Server.respond(req.id, 400,
-            [("Content-Type", "application/json")],
-            "{\"error\": \"Missing 'q' parameter\"}")
-    } else {
-        response = "{\"query\": \"" ++ query ++ "\", \"limit\": " ++ limit ++ ", \"results\": []}"
-        Server.respond(req.id, 200,
-            [("Content-Type", "application/json")],
-            response)
-    }
+    if query == "" then respond400(req, "Missing 'q' parameter")
+    else respondText(req, "Searching for: " ++ query ++ " (limit: " ++ limitVal ++ ")")
 }
 
-# Handle greeting requests
 handleGreet(req) = {
-    # Query params are automatically URL-decoded
-    # So "John%20Doe" becomes "John Doe"
-    name = findParam(req.queryParams, "name")
-
-    greeting = if name == ""
-        then "Hello, stranger!"
-        else "Hello, " ++ name ++ "!"
-
-    Server.respond(req.id, 200,
-        [("Content-Type", "text/plain")],
-        greeting)
+    name = getParam(req.queryParams, "name")
+    greeting = if name == "" then "Hello, stranger!" else "Hello, " ++ name ++ "!"
+    respondText(req, greeting)
 }
 
-# Format a list of params for display
-formatParams(ps) = {
-    if length(ps) == 0 then ""
-    else {
-        (k, v) = head(ps)
-        rest = tail(ps)
-        line = "  " ++ k ++ " = " ++ v
-        if length(rest) == 0 then line
-        else line ++ "\n" ++ formatParams(rest)
-    }
-}
-
-# Handle listing all query params (for debugging)
-handleDebug(req) = {
-    # Show all query parameters received
-    params = req.queryParams
-    count = length(params)
-
-    body = "Received " ++ show(count) ++ " query parameters:\n" ++ formatParams(params)
-
-    Server.respond(req.id, 200,
-        [("Content-Type", "text/plain")],
-        body)
-}
-
-# Main request router
-handleRequest(req, mainPid) = {
-    path = req.path
-
-    if path == "/search" then handleSearch(req)
-    else if path == "/greet" then handleGreet(req)
-    else if path == "/debug" then handleDebug(req)
-    else if path == "/shutdown" then {
-        mainPid <- ("shutdown", ())
-        Server.respond(req.id, 200, [], "Shutting down...")
-    }
-    else {
-        Server.respond(req.id, 404,
-            [("Content-Type", "text/plain")],
-            "Not Found. Try /search?q=test or /greet?name=World")
-    }
-}
-
-# Worker process
-serverWorker(server, mainPid) = {
-    try {
-        req = Server.accept(server)
-        handleRequest(req, mainPid)
-        serverWorker(server, mainPid)
-    } catch { e -> () }
+route(req) = match req.path {
+    "/" -> respondText(req, "Query Params Demo\n  /search?q=term\n  /greet?name=Name")
+    "/search" -> handleSearch(req)
+    "/greet" -> handleGreet(req)
+    _ -> respond404(req)
 }
 
 main() = {
-    mainPid = self()
-
-    result = try {
-        server = Server.bind(8080)
-        println("Query Params Demo Server running on http://localhost:8080")
-        println("")
-        println("Try these URLs:")
-        println("  /search?q=hello&limit=5   - Search with parameters")
-        println("  /greet?name=John%20Doe    - Greeting with URL-encoded name")
-        println("  /debug?a=1&b=2&c=3        - Show all query params")
-        println("  /shutdown                 - Stop server")
-        println("")
-
-        # Spawn workers
-        for i = 1 to 4 { spawn { serverWorker(server, mainPid) } }
-
-        # Wait for shutdown signal
-        receive {
-            ("shutdown", _) -> {
-                Server.close(server)
-                println("Server stopped.")
-            }
-        }
-    } catch { e ->
-        println("Error starting server")
-    }
-    result
+    println("Query Params Demo: http://localhost:8080")
+    serve(8080, route)
 }

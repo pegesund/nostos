@@ -5,18 +5,16 @@
 #   curl http://localhost:8080/hello
 #   curl http://localhost:8080/echo -d "test data"
 
-use stdlib.server.{serve}
+use stdlib.server.{serve, respondText, respond404}
 
-handle(req) = {
-    match req.path {
-        "/" -> Server.respond(req.id, 200, [], "Hello from Nostos!")
-        "/hello" -> Server.respond(req.id, 200, [], "Hello, World!")
-        "/echo" -> Server.respond(req.id, 200, [], "You sent: " ++ req.body)
-        _ -> Server.respond(req.id, 404, [], "Not Found: " ++ req.path)
-    }
+handle(req) = match req.path {
+    "/" -> respondText(req, "Hello from Nostos!")
+    "/hello" -> respondText(req, "Hello, World!")
+    "/echo" -> respondText(req, "You sent: " ++ req.body)
+    _ -> respond404(req)
 }
 
 main() = {
-    println("Server running on http://localhost:8080")
+    println("Server: http://localhost:8080")
     serve(8080, handle)
 }

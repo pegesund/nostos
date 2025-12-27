@@ -1,200 +1,47 @@
 # HTTP Cookies Example
 #
-# Demonstrates how to work with HTTP cookies in Nostos:
-# - Reading cookies from incoming requests (via req.cookies)
-# - Setting cookies in responses (via Set-Cookie header)
-# - Cookie-based session management
-#
-# Test with:
+# Test:
 #   curl -v http://localhost:8080/login?user=alice
 #   curl -v --cookie "session=abc123" http://localhost:8080/profile
-#   curl -v --cookie "theme=dark; lang=en" http://localhost:8080/preferences
 
-# Helper to find a value in a list of (key, value) pairs
-findInList(items, key) = {
-    if length(items) == 0 then ""
-    else {
-        (k, v) = head(items)
-        if k == key then v else findInList(tail(items), key)
-    }
-}
+use stdlib.server.{serve, getParam, respondText, respondTextWith, respond400, respond401, respond404, setCookieWithAge, clearCookie}
 
-# Generate a simple session ID (in real apps, use proper random generation)
-generateSessionId(user) = {
-    # Simple hash: combine user with timestamp
-    "session_" ++ user ++ "_" ++ show(Time.now())
-}
-
-# Handle login - sets a session cookie
 handleLogin(req) = {
-    user = findInList(req.queryParams, "user")
-
-    if user == "" then {
-        Server.respond(req.id, 400,
-            [("Content-Type", "text/plain")],
-            "Missing 'user' parameter. Try: /login?user=yourname")
-    } else {
-        sessionId = generateSessionId(user)
-
-        # Set session cookie with various options
-        # Format: name=value; Path=/; HttpOnly; Max-Age=3600
-        cookieHeader = "session=" ++ sessionId ++ "; Path=/; HttpOnly; Max-Age=3600"
-
-        Server.respond(req.id, 200,
-            [("Content-Type", "text/plain"), ("Set-Cookie", cookieHeader)],
-            "Welcome " ++ user ++ "!\nSession cookie set: " ++ sessionId)
+    user = getParam(req.queryParams, "user")
+    if user == "" then respond400(req, "Missing 'user' parameter")
+    else {
+        sessionId = "session_" ++ user ++ "_" ++ show(Time.now())
+        respondTextWith(req, "Welcome " ++ user ++ "!\nSession: " ++ sessionId,
+            [setCookieWithAge("session", sessionId, 3600)])
     }
 }
 
-# Handle profile - requires session cookie
 handleProfile(req) = {
-    session = findInList(req.cookies, "session")
-
-    if session == "" then {
-        Server.respond(req.id, 401,
-            [("Content-Type", "text/plain")],
-            "Not logged in. Please visit /login?user=yourname first.")
-    } else {
-        Server.respond(req.id, 200,
-            [("Content-Type", "text/plain")],
-            "Profile page\n\nYour session: " ++ session)
-    }
+    session = getParam(req.cookies, "session")
+    if session == "" then respond401(req, "Not logged in")
+    else respondText(req, "Profile page\nSession: " ++ session)
 }
 
-# Handle preferences - reads multiple cookies
+handleLogout(req) =
+    respondTextWith(req, "Logged out", [clearCookie("session")])
+
 handlePreferences(req) = {
-    theme = findInList(req.cookies, "theme")
-    lang = findInList(req.cookies, "lang")
-
-    themeDisplay = if theme == "" then "default" else theme
-    langDisplay = if lang == "" then "en" else lang
-
-    body = "Your preferences:\n" ++
-           "  Theme: " ++ themeDisplay ++ "\n" ++
-           "  Language: " ++ langDisplay
-
-    Server.respond(req.id, 200,
-        [("Content-Type", "text/plain")],
-        body)
+    theme = getParam(req.cookies, "theme")
+    lang = getParam(req.cookies, "lang")
+    respondText(req, "Theme: " ++ (if theme == "" then "default" else theme) ++
+                     "\nLanguage: " ++ (if lang == "" then "en" else lang))
 }
 
-# Handle logout - clears the session cookie
-handleLogout(req) = {
-    # Clear cookie by setting Max-Age=0
-    clearCookie = "session=; Path=/; Max-Age=0"
-
-    Server.respond(req.id, 200,
-        [("Content-Type", "text/plain"), ("Set-Cookie", clearCookie)],
-        "Logged out. Session cookie cleared.")
-}
-
-# Set a preference cookie
-handleSetPreference(req) = {
-    name = findInList(req.queryParams, "name")
-    value = findInList(req.queryParams, "value")
-
-    if name == "" then {
-        Server.respond(req.id, 400,
-            [("Content-Type", "text/plain")],
-            "Usage: /set-pref?name=theme&value=dark")
-    } else {
-        cookie = name ++ "=" ++ value ++ "; Path=/; Max-Age=86400"
-        Server.respond(req.id, 200,
-            [("Content-Type", "text/plain"), ("Set-Cookie", cookie)],
-            "Preference set: " ++ name ++ "=" ++ value)
-    }
-}
-
-# Format cookies for display
-formatCookies(cookies) = {
-    if length(cookies) == 0 then "  (no cookies)"
-    else {
-        (k, v) = head(cookies)
-        rest = tail(cookies)
-        line = "  " ++ k ++ " = " ++ v
-        if length(rest) == 0 then line
-        else line ++ "\n" ++ formatCookies(rest)
-    }
-}
-
-# Debug endpoint - show all cookies
-handleDebug(req) = {
-    cookies = req.cookies
-    count = length(cookies)
-
-    body = "Received " ++ show(count) ++ " cookie(s):\n" ++ formatCookies(cookies)
-
-    Server.respond(req.id, 200,
-        [("Content-Type", "text/plain")],
-        body)
-}
-
-# Main request router
-handleRequest(req, mainPid) = {
-    path = req.path
-
-    if path == "/login" then handleLogin(req)
-    else if path == "/logout" then handleLogout(req)
-    else if path == "/profile" then handleProfile(req)
-    else if path == "/preferences" then handlePreferences(req)
-    else if path == "/set-pref" then handleSetPreference(req)
-    else if path == "/debug" then handleDebug(req)
-    else if path == "/shutdown" then {
-        mainPid <- ("shutdown", ())
-        Server.respond(req.id, 200, [], "Shutting down...")
-    }
-    else {
-        body = "Cookie Demo Server\n\n" ++
-               "Endpoints:\n" ++
-               "  /login?user=name     - Log in and set session cookie\n" ++
-               "  /profile             - View profile (requires login)\n" ++
-               "  /logout              - Clear session cookie\n" ++
-               "  /set-pref?name=X&value=Y - Set a preference cookie\n" ++
-               "  /preferences         - View preference cookies\n" ++
-               "  /debug               - Show all cookies\n" ++
-               "  /shutdown            - Stop server"
-
-        Server.respond(req.id, 200,
-            [("Content-Type", "text/plain")],
-            body)
-    }
-}
-
-# Worker process
-serverWorker(server, mainPid) = {
-    result = try {
-        req = Server.accept(server)
-        handleRequest(req, mainPid)
-        serverWorker(server, mainPid)
-    } catch { e -> () }
-    result
+route(req) = match req.path {
+    "/" -> respondText(req, "Cookie Demo\n  /login?user=name\n  /profile\n  /logout\n  /preferences")
+    "/login" -> handleLogin(req)
+    "/profile" -> handleProfile(req)
+    "/logout" -> handleLogout(req)
+    "/preferences" -> handlePreferences(req)
+    _ -> respond404(req)
 }
 
 main() = {
-    mainPid = self()
-
-    result = try {
-        server = Server.bind(8080)
-        println("Cookie Demo Server running on http://localhost:8080")
-        println("")
-        println("Try these commands:")
-        println("  curl http://localhost:8080/login?user=alice")
-        println("  curl --cookie \"session=abc\" http://localhost:8080/profile")
-        println("  curl --cookie \"theme=dark; lang=fr\" http://localhost:8080/preferences")
-        println("")
-
-        # Spawn workers
-        for i = 1 to 4 { spawn { serverWorker(server, mainPid) } }
-
-        # Wait for shutdown
-        receive {
-            ("shutdown", _) -> {
-                Server.close(server)
-                println("Server stopped.")
-            }
-        }
-    } catch { e ->
-        println("Error starting server")
-    }
-    result
+    println("Cookie Demo: http://localhost:8080")
+    serve(8080, route)
 }

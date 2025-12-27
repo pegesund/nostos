@@ -1,0 +1,75 @@
+# PostgreSQL Web Server with Connection Pool
+#
+# Focus: Using a connection pool with Postgres
+#
+# Requires: PostgreSQL at localhost (user: postgres, pw: postgres)
+#
+# Test:
+#   curl http://localhost:8080/users
+#   curl -X POST -d "name=Alice" http://localhost:8080/users
+
+use stdlib.server.{serve, getParam, respondText, respondJson, respond400, respond405}
+
+# --- Connection Pool using mvar ---
+
+mvar pool: List[Int] = []
+
+getConn() = match pool {
+    [] -> Pg.connect("host=localhost user=postgres password=postgres")
+    [conn | rest] -> {
+        pool = rest
+        conn
+    }
+}
+
+releaseConn(conn) = {
+    pool = conn :: pool
+}
+
+# --- Database ---
+
+setupDatabase() = {
+    conn = getConn()
+    Pg.execute(conn, "CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name TEXT)", [])
+    releaseConn(conn)
+}
+
+# --- Handlers ---
+
+formatUsers(rows) = match rows {
+    [] -> "(no users)"
+    [row] -> show(row.0) ++ ": " ++ row.1
+    [row | rest] -> show(row.0) ++ ": " ++ row.1 ++ "\n" ++ formatUsers(rest)
+}
+
+listUsers(req) = {
+    conn = getConn()
+    rows = Pg.query(conn, "SELECT id, name FROM users ORDER BY id", [])
+    releaseConn(conn)
+    respondText(req, formatUsers(rows))
+}
+
+createUser(req) = {
+    if req.method != "POST" then respond405(req)
+    else {
+        name = getParam(req.formParams, "name")
+        if name == "" then respond400(req, "name required")
+        else {
+            conn = getConn()
+            Pg.execute(conn, "INSERT INTO users (name) VALUES ($1)", [name])
+            releaseConn(conn)
+            respondText(req, "Created: " ++ name)
+        }
+    }
+}
+
+route(req) = match req.path {
+    "/users" -> if req.method == "POST" then createUser(req) else listUsers(req)
+    _ -> respondText(req, "GET/POST /users")
+}
+
+main() = {
+    setupDatabase()
+    println("Postgres server: http://localhost:8080/users")
+    serve(8080, route)
+}

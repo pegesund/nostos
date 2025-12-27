@@ -1,11 +1,98 @@
 # HTTP Server utilities
 
+# --- Parameter Lookup ---
+
+# Look up a value by key in a list of (key, value) pairs.
+# Works for queryParams, cookies, formParams, headers.
+# Returns "" if not found.
+getParam(params, key) = match params {
+    [] -> ""
+    [(k, v) | rest] -> if k == key then v else getParam(rest, key)
+}
+
+# --- Response Helpers ---
+
+# Send a plain text response (200 OK)
+respondText(req, body) =
+    Server.respond(req.id, 200, [("Content-Type", "text/plain")], body)
+
+# Send a plain text response with extra headers (e.g., Set-Cookie)
+respondTextWith(req, body, headers) =
+    Server.respond(req.id, 200, [("Content-Type", "text/plain")] ++ headers, body)
+
+# Send an HTML response (200 OK)
+respondHtml(req, body) =
+    Server.respond(req.id, 200, [("Content-Type", "text/html")], body)
+
+# Send an HTML response with extra headers
+respondHtmlWith(req, body, headers) =
+    Server.respond(req.id, 200, [("Content-Type", "text/html")] ++ headers, body)
+
+# Send a JSON response (200 OK)
+respondJson(req, body) =
+    Server.respond(req.id, 200, [("Content-Type", "application/json")], body)
+
+# Send a JSON response with extra headers
+respondJsonWith(req, body, headers) =
+    Server.respond(req.id, 200, [("Content-Type", "application/json")] ++ headers, body)
+
+# Send a 400 Bad Request
+respond400(req, msg) =
+    Server.respond(req.id, 400, [("Content-Type", "text/plain")], msg)
+
+# Send a 401 Unauthorized
+respond401(req, msg) =
+    Server.respond(req.id, 401, [("Content-Type", "text/plain")], msg)
+
+# Send a 404 Not Found
+respond404(req) =
+    Server.respond(req.id, 404, [("Content-Type", "text/plain")], "Not Found: " ++ req.path)
+
+# Send a 405 Method Not Allowed
+respond405(req) =
+    Server.respond(req.id, 405, [("Content-Type", "text/plain")], "Method Not Allowed")
+
+# Send a redirect (302 Found)
+redirect(req, url) =
+    Server.respond(req.id, 302, [("Location", url)], "")
+
+# Send a redirect with extra headers (e.g., Set-Cookie)
+redirectWith(req, url, headers) =
+    Server.respond(req.id, 302, [("Location", url)] ++ headers, "")
+
+# --- Cookie Helpers ---
+
+# Build a Set-Cookie header tuple
+setCookie(name, value) =
+    ("Set-Cookie", name ++ "=" ++ value ++ "; Path=/; HttpOnly")
+
+# Build a Set-Cookie header with max age (seconds)
+setCookieWithAge(name, value, maxAge) =
+    ("Set-Cookie", name ++ "=" ++ value ++ "; Path=/; HttpOnly; Max-Age=" ++ show(maxAge))
+
+# Build a cookie deletion header
+clearCookie(name) =
+    ("Set-Cookie", name ++ "=; Path=/; Max-Age=0")
+
+# --- WebSocket Loop ---
+
+# Run a WebSocket message loop. Handler receives (ws, msg) and returns:
+#   true  -> continue receiving
+#   false -> close connection
+wsLoop(ws, handler) = {
+    ok = try {
+        msg = WebSocket.recv(ws)
+        handler(ws, msg)
+    } catch { _ -> {
+        WebSocket.close(ws)
+        false
+    } }
+    if ok then wsLoop(ws, handler) else ()
+}
+
+# --- Server Loop ---
+
 # Run an HTTP server with spawn-per-request pattern.
-# Each incoming request spawns a new lightweight process.
-#
-# Example:
-#   handle(req) = Server.respond(req.id, 200, [], "Hello!")
-#   main() = serve(8080, handle)
 serve(port, handler) = {
     server = Server.bind(port)
     acceptLoop(server, handler)

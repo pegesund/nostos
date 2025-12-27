@@ -1,0 +1,153 @@
+# expect: 0
+# URL parsing tests
+
+# Test parseUrlQuery with full URL
+test_parseQuery_full_url() = {
+    params = parseUrlQuery("/users?name=john&age=30")
+    assert_eq(params.get("name"), "john")
+    assert_eq(params.get("age"), "30")
+}
+
+# Test parseUrlQuery with just query string
+test_parseQuery_query_only() = {
+    params = parseUrlQuery("foo=bar&baz=qux")
+    assert_eq(params.get("foo"), "bar")
+    assert_eq(params.get("baz"), "qux")
+}
+
+# Test parseUrlQuery with URL-encoded values
+test_parseQuery_encoded() = {
+    params = parseUrlQuery("name=John%20Doe&city=New%20York")
+    assert_eq(params.get("name"), "John Doe")
+    assert_eq(params.get("city"), "New York")
+}
+
+# Test parseUrlQuery with empty query
+test_parseQuery_empty() = {
+    params = parseUrlQuery("/users")
+    assert(params.isEmpty())
+}
+
+# Test parseUrlQuery with key only (no value)
+test_parseQuery_key_only() = {
+    params = parseUrlQuery("debug&verbose")
+    assert_eq(params.get("debug"), "")
+    assert_eq(params.get("verbose"), "")
+}
+
+# Test urlPath
+test_urlPath() = {
+    assert_eq(urlPath("/users/123?foo=bar"), "/users/123")
+    assert_eq(urlPath("/users/123"), "/users/123")
+    assert_eq(urlPath("/?x=1"), "/")
+}
+
+# Test urlQueryString
+test_urlQueryString() = {
+    assert_eq(urlQueryString("/users/123?foo=bar"), "foo=bar")
+    assert_eq(urlQueryString("/users/123"), "")
+    assert_eq(urlQueryString("/?x=1&y=2"), "x=1&y=2")
+}
+
+# Test matchUrlPath - simple match
+test_matchPath_simple() = {
+    result = matchUrlPath("/users/:id", "/users/123")
+    match result {
+        Some(params) -> assert_eq(params.get("id"), "123")
+        None -> assert(false)
+    }
+}
+
+# Test matchUrlPath - multiple params
+test_matchPath_multiple_params() = {
+    result = matchUrlPath("/users/:userId/posts/:postId", "/users/42/posts/99")
+    match result {
+        Some(params) -> {
+            assert_eq(params.get("userId"), "42")
+            assert_eq(params.get("postId"), "99")
+        }
+        None -> assert(false)
+    }
+}
+
+# Test matchUrlPath - with literal segments
+test_matchPath_with_literals() = {
+    result = matchUrlPath("/api/v1/users/:id", "/api/v1/users/abc")
+    match result {
+        Some(params) -> assert_eq(params.get("id"), "abc")
+        None -> assert(false)
+    }
+}
+
+# Test matchUrlPath - no params
+test_matchPath_no_params() = {
+    result = matchUrlPath("/health", "/health")
+    match result {
+        Some(params) -> assert(params.isEmpty())
+        None -> assert(false)
+    }
+}
+
+# Test matchUrlPath - mismatch (different path)
+test_matchPath_mismatch_path() = {
+    result = matchUrlPath("/users/:id", "/posts/123")
+    match result {
+        Some(_) -> assert(false)
+        None -> assert(true)
+    }
+}
+
+# Test matchUrlPath - mismatch (different length)
+test_matchPath_mismatch_length() = {
+    result = matchUrlPath("/users/:id", "/users")
+    match result {
+        Some(_) -> assert(false)
+        None -> assert(true)
+    }
+}
+
+# Test matchUrlPath - with query string (should ignore query)
+test_matchPath_with_query() = {
+    result = matchUrlPath("/users/:id", "/users/123?foo=bar")
+    match result {
+        Some(params) -> assert_eq(params.get("id"), "123")
+        None -> assert(false)
+    }
+}
+
+# Test buildUrlQuery
+test_buildQuery() = {
+    params = %{"name": "john", "age": "30"}
+    query = buildUrlQuery(params)
+    # Order may vary, so check both params are present
+    assert(query.contains("name=john"))
+    assert(query.contains("age=30"))
+    assert(query.contains("&"))
+}
+
+# Test buildUrlQuery with encoding
+test_buildQuery_encoded() = {
+    params = %{"name": "John Doe"}
+    query = buildUrlQuery(params)
+    assert(query.contains("John%20Doe") || query.contains("John+Doe"))
+}
+
+main() = {
+    test_parseQuery_full_url()
+    test_parseQuery_query_only()
+    test_parseQuery_encoded()
+    test_parseQuery_empty()
+    test_parseQuery_key_only()
+    test_urlPath()
+    test_urlQueryString()
+    test_matchPath_simple()
+    test_matchPath_multiple_params()
+    test_matchPath_with_literals()
+    test_matchPath_no_params()
+    test_matchPath_mismatch_path()
+    test_matchPath_mismatch_length()
+    test_matchPath_with_query()
+    test_buildQuery()
+    test_buildQuery_encoded()
+    0
+}

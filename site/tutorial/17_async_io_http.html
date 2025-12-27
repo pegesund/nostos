@@ -6,12 +6,8 @@
     <title>Async I/O & HTTP - Nostos Tutorial</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <style>
-        .hljs-operator {
-            color: #e06c75; /* A distinct red/orange for operators */
-        }
-        .hljs-function {
-            color: #e5c07b; /* A distinct yellow/gold for functions */
-        }
+        .hljs-operator { color: #e06c75; }
+        .hljs-function { color: #e5c07b; }
     </style>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -19,16 +15,9 @@
             theme: {
                 extend: {
                     colors: {
-                        nostos: {
-                            dark: '#0f172a',
-                            primary: '#3b82f6',
-                            accent: '#10b981',
-                            code: '#1e293b'
-                        }
+                        nostos: { dark: '#0f172a', primary: '#3b82f6', accent: '#10b981', code: '#1e293b' }
                     },
-                    fontFamily: {
-                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
-                    }
+                    fontFamily: { mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'] }
                 }
             }
         }
@@ -36,7 +25,6 @@
 </head>
 <body class="bg-slate-900 text-slate-200 font-sans antialiased">
 
-    <!-- Navbar -->
     <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex justify-between h-16 items-center">
@@ -44,21 +32,16 @@
                     <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
                     <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
                 </div>
-                <div class="flex space-x-6">
-                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
-                    <a href="https://github.com/yourusername/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
-                </div>
             </div>
         </div>
     </nav>
 
     <div class="pt-16 flex min-h-screen">
-        
-        <!-- Sidebar -->
+
         <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
             <div class="p-6">
                 <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
-                                <ul class="space-y-3">
+                <ul class="space-y-3">
                     <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
                     <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
                     <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
@@ -84,288 +67,234 @@
             </div>
         </aside>
 
-        <!-- Main Content -->
         <main class="flex-1 md:ml-64 p-8 max-w-4xl">
             <div class="mb-12">
                 <h1 class="text-4xl font-bold text-white mb-6">Asynchronous I/O & HTTP</h1>
                 <p class="text-lg text-slate-400 leading-relaxed mb-8">
-                    Nostos provides fully asynchronous I/O operations for network and file access. You write code as if it were synchronous and blocking, but the runtime transparently handles scheduling other processes while I/O is in progress, ensuring high concurrency and responsiveness.
+                    Nostos provides fully asynchronous I/O for network and file access. Write synchronous-looking code while the runtime handles concurrency transparently.
                 </p>
 
                 <!-- HTTP Client -->
                 <h2 class="text-2xl font-semibold text-white mb-4">HTTP Client</h2>
-                <p class="text-slate-400 mb-4">The built-in <code>Http</code> module allows making various web requests. These are non-blocking, meaning your program won't freeze while waiting for a response.</p>
+                <p class="text-slate-400 mb-4">Make HTTP requests with the built-in <code>Http</code> module. Operations are non-blocking.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">
-fetch_ip() = {
-    # Perform a GET request to get public IP
-    # I/O operations throw exceptions on error - use try/catch to handle
+<pre><code class="language-nostos">main() = {
     try {
         resp = Http.get("https://httpbin.org/ip")
         println("Your IP: " ++ resp.body)
     } catch { e ->
-        println("Error fetching IP: " ++ e)
+        println("Error: " ++ e)
     }
-}
-
-main() = {
-    fetch_ip()
-    println("Client operations are non-blocking!")
-}
-</code></pre>
-                </div>
-
-                <!-- Parallel HTTP Requests -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Parallel HTTP Requests</h2>
-                <p class="text-slate-400 mb-4">Leverage Nostos's lightweight processes to perform many HTTP requests concurrently. The runtime ensures efficient use of resources without complex async/await keywords.</p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">
-timed_request_worker(parent, id) = {
-    println("Worker " ++ show(id) ++ " starting request...")
-    # This HTTP call yields the process, allowing others to run
-    # Exceptions are caught and reported
-    try {
-        data = Http.get("https://httpbin.org/delay/1")
-        println("Worker " ++ show(id) ++ " done: status " ++ show(data.status))
-        parent <- ("done", id)
-    } catch { e ->
-        println("Worker " ++ show(id) ++ " error: " ++ e)
-        parent <- ("done", id)
-    }
-}
-
-main() = {
-    me = self()
-    println("Spawning 5 HTTP requests with 1-second server-side delay each.")
-    println("Total time will be ~1-2 seconds, not 5 seconds, due to parallelism.")
-
-    # Spawn 5 workers; all requests are initiated almost simultaneously
-    for i = 1 to 5 {
-        spawn { timed_request_worker(me, i) }
-    }
-
-    # Collect results from all workers
-    for i = 1 to 5 {
-        receive ("done", id) -> println("Request from worker " ++ show(id) ++ " completed.")
-    }
-    println("All parallel requests finished!")
-}
-</code></pre>
+}</code></pre>
                 </div>
 
                 <!-- HTTP Server -->
                 <h2 class="text-2xl font-semibold text-white mb-4">HTTP Server</h2>
-                <p class="text-slate-400 mb-4">Build scalable web services with Nostos's non-blocking HTTP server. The <strong>spawn-per-request</strong> pattern spawns a lightweight process for each incoming request, enabling high concurrency.</p>
+                <p class="text-slate-400 mb-4">Build web servers with <code>stdlib.server</code>. The <code>serve()</code> function spawns a lightweight process per request.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">
-use stdlib.server.{serve}
+<pre><code class="language-nostos">use stdlib.server.{serve, respondText, respond404}
 
-handle(req) = {
-    match req.path {
-        "/" -> Server.respond(req.id, 200, [], "Hello from Nostos!")
-        "/echo" -> Server.respond(req.id, 200, [], req.body)
-        _ -> Server.respond(req.id, 404, [], "Not Found: " ++ req.path)
-    }
+handle(req) = match req.path {
+    "/" -> respondText(req, "Hello from Nostos!")
+    "/echo" -> respondText(req, req.body)
+    _ -> respond404(req)
 }
 
 main() = {
-    println("Server running on http://localhost:8080")
+    println("Server: http://localhost:8080")
     serve(8080, handle)
-}
-</code></pre>
+}</code></pre>
                 </div>
-                <p class="text-slate-400 mb-4">The <code>serve(port, handler)</code> function handles the accept loop internally, spawning a new lightweight process for each request.</p>
-
 
                 <!-- Query Parameters -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Query Parameters</h2>
-                <p class="text-slate-400 mb-4">URL query parameters are automatically parsed and available via <code>req.queryParams</code>. This is a list of <code>(key, value)</code> tuples, where values are automatically URL-decoded.</p>
+                <p class="text-slate-400 mb-4">Use <code>getParam()</code> to look up values in query params, cookies, form params, or headers.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">
-# Helper to find a parameter by name
-findParam(params, key) = {
-    if length(params) == 0 then ""
+<pre><code class="language-nostos">use stdlib.server.{serve, getParam, respondText, respond400}
+
+handleSearch(req) = {
+    query = getParam(req.queryParams, "q")
+    limit = getParam(req.queryParams, "limit")
+
+    if query == "" then respond400(req, "Missing 'q' parameter")
+    else respondText(req, "Searching: " ++ query)
+}
+
+main() = serve(8080, handleSearch)</code></pre>
+                </div>
+
+                <!-- Form Handling -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Form Handling</h2>
+                <p class="text-slate-400 mb-4">Process POST data with <code>req.formParams</code>. URL decoding is automatic.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.server.{serve, getParam, respondText, respond400, respond405}
+
+handleSubmit(req) = {
+    if req.method != "POST" then respond405(req)
     else {
-        (k, v) = head(params)
-        if k == key then v else findParam(tail(params), key)
-    }
-}
+        name = getParam(req.formParams, "name")
+        email = getParam(req.formParams, "email")
 
-handle_search(req) = {
-    # GET /search?q=hello&limit=10
-    query = findParam(req.queryParams, "q")
-    limitStr = findParam(req.queryParams, "limit")
-    limit = if limitStr == "" then "10" else limitStr
-
-    if query == "" then {
-        Server.respond(req.id, 400, [], "Missing 'q' parameter")
-    } else {
-        response = "Searching for: " ++ query ++ " (limit: " ++ limit ++ ")"
-        Server.respond(req.id, 200, [("Content-Type", "text/plain")], response)
+        if name == "" then respond400(req, "Name required")
+        else respondText(req, "Thanks, " ++ name ++ "!")
     }
-}
-</code></pre>
+}</code></pre>
                 </div>
 
                 <!-- Cookies -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Cookies</h2>
-                <p class="text-slate-400 mb-4">Read cookies from incoming requests via <code>req.cookies</code>, and set cookies in responses using the <code>Set-Cookie</code> header.</p>
+                <p class="text-slate-400 mb-4">Read cookies with <code>getParam(req.cookies, name)</code>. Set cookies with helper functions.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">
-handle_login(req) = {
-    user = findParam(req.queryParams, "user")
-    if user == "" then {
-        Server.respond(req.id, 400, [], "Missing 'user' parameter")
-    } else {
-        # Set a session cookie
-        cookieHeader = "session=user_" ++ user ++ "; Path=/; HttpOnly; Max-Age=3600"
-        Server.respond(req.id, 200,
-            [("Content-Type", "text/plain"), ("Set-Cookie", cookieHeader)],
-            "Welcome " ++ user ++ "!")
-    }
+<pre><code class="language-nostos">use stdlib.server.{serve, getParam, respondText, respondTextWith, setCookieWithAge, clearCookie}
+
+handleLogin(req) = {
+    user = getParam(req.queryParams, "user")
+    respondTextWith(req, "Welcome " ++ user, [setCookieWithAge("session", user, 3600)])
 }
 
-handle_profile(req) = {
-    # Read session cookie
-    session = findParam(req.cookies, "session")
-    if session == "" then {
-        Server.respond(req.id, 401, [], "Not logged in")
-    } else {
-        Server.respond(req.id, 200, [], "Profile page. Session: " ++ session)
-    }
-}
-</code></pre>
+handleLogout(req) = respondTextWith(req, "Logged out", [clearCookie("session")])
+
+handleProfile(req) = {
+    session = getParam(req.cookies, "session")
+    if session == "" then respondText(req, "Not logged in")
+    else respondText(req, "Session: " ++ session)
+}</code></pre>
                 </div>
 
-                <!-- Form Parameters -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Form Parameters (POST Data)</h2>
-                <p class="text-slate-400 mb-4">For <code>application/x-www-form-urlencoded</code> POST requests, form data is automatically parsed into <code>req.formParams</code>. Values are URL-decoded automatically.</p>
+                <!-- HTML Templating -->
+                <h2 class="text-2xl font-semibold text-white mb-4">HTML Templating</h2>
+                <p class="text-slate-400 mb-4">Build type-safe HTML with <code>Html(...)</code>. Tags are scoped functions inside the constructor.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">
-handle_form_submit(req) = {
-    if req.method != "POST" then {
-        Server.respond(req.id, 405, [], "Use POST method")
-    } else {
-        name = findParam(req.formParams, "name")
-        email = findParam(req.formParams, "email")
-        message = findParam(req.formParams, "message")
+<pre><code class="language-nostos">use stdlib.html.{Html, render}
+use stdlib.server.{serve, respondHtml}
 
-        if name == "" then {
-            Server.respond(req.id, 400, [], "Name is required")
-        } else if email == "" then {
-            Server.respond(req.id, 400, [], "Email is required")
-        } else {
-            # Process the form data...
-            println("Received message from " ++ name ++ " (" ++ email ++ ")")
-            Server.respond(req.id, 200, [],
-                "Thank you for your message, " ++ name ++ "!")
-        }
-    }
+userCard(name: String, email: String) = Html(
+    el("div", [("class", "card")], [
+        h3(name),
+        p("Email: " ++ email)
+    ])
+)
+
+handleHome(req) = {
+    content = Html(div([
+        h1("Welcome"),
+        userCard("Alice", "alice@example.com"),
+        userCard("Bob", "bob@example.com")
+    ]))
+    respondHtml(req, render(content))
 }
-</code></pre>
+
+main() = serve(8080, handleHome)</code></pre>
                 </div>
 
                 <!-- URL Routing -->
-                <h2 class="text-2xl font-semibold text-white mb-4">URL Routing with Path Parameters</h2>
-                <p class="text-slate-400 mb-4">Use <code>Server.matchPath</code> to match URL patterns with path parameters (like <code>:id</code>). It returns a list of <code>(paramName, value)</code> tuples if the path matches, or an empty list if it doesn't.</p>
+                <h2 class="text-2xl font-semibold text-white mb-4">URL Routing</h2>
+                <p class="text-slate-400 mb-4">Use <code>Server.matchPath</code> to extract path parameters like <code>:id</code>.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">
+<pre><code class="language-nostos">use stdlib.server.{serve, respondText, respond404}
+
 route(req) = {
     path = req.path
 
-    # Static routes
-    if path == "/" then handleHome(req)
-    else if path == "/api/health" then handleHealth(req)
-
-    # Dynamic routes - try most specific patterns first
+    if path == "/" then respondText(req, "Home")
     else {
-        # Check /users/:userId/posts/:postId (2 params)
-        userPostParams = Server.matchPath(path, "/users/:userId/posts/:postId")
-        if length(userPostParams) == 2 then {
-            # Deconstruct params (returned in order of appearance)
-            (_, userId) = head(userPostParams)
-            (_, postId) = head(tail(userPostParams))
-            handleUserPost(req, userId, postId)
-        }
-
-        # Check /users/:userId (1 param)
-        else {
-            userParams = Server.matchPath(path, "/users/:userId")
-            if length(userParams) == 1 then {
-                (_, userId) = head(userParams)
-                handleUser(req, userId)
-            }
-
-            # 404 for anything else
-            else {
-                Server.respond(req.id, 404, [], "Not Found: " ++ path)
-            }
-        }
+        params = Server.matchPath(path, "/users/:id")
+        if length(params) == 1 then {
+            (_, userId) = head(params)
+            respondText(req, "User: " ++ userId)
+        } else respond404(req)
     }
 }
-</code></pre>
+
+main() = serve(8080, route)</code></pre>
                 </div>
 
                 <!-- WebSockets -->
                 <h2 class="text-2xl font-semibold text-white mb-4">WebSockets</h2>
-                <p class="text-slate-400 mb-4">Nostos supports WebSocket connections for real-time bidirectional communication. Check if a request is a WebSocket upgrade with <code>req.isWebSocket</code>, then use the WebSocket functions to communicate.</p>
+                <p class="text-slate-400 mb-4">Handle WebSocket connections with <code>req.isWebSocket</code> and the WebSocket module.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">
-use stdlib.server.{serve}
+<pre><code class="language-nostos">use stdlib.server.{serve, respondText}
 
-wsEchoLoop(ws) = {
+echoLoop(ws) = {
     ok = try {
         msg = WebSocket.recv(ws)
-        if msg == "quit" then {
-            WebSocket.send(ws, "Goodbye!")
-            WebSocket.close(ws)
-            false
-        } else {
-            WebSocket.send(ws, "Echo: " ++ msg)
-            true
-        }
-    } catch { _ ->
-        WebSocket.close(ws)
-        false
-    }
-    if ok then wsEchoLoop(ws) else ()
+        WebSocket.send(ws, "Echo: " ++ msg)
+        true
+    } catch { _ -> false }
+    if ok then echoLoop(ws) else WebSocket.close(ws)
 }
 
 route(req) = {
     if req.isWebSocket then {
         ws = WebSocket.accept(req.id)
-        if req.path == "/echo" then wsEchoLoop(ws)
-        else {
-            WebSocket.send(ws, "Unknown endpoint")
-            WebSocket.close(ws)
-        }
-    } else if req.path == "/" then {
-        Server.respond(req.id, 200, [], "WebSocket server. Connect to /echo")
-    } else {
-        Server.respond(req.id, 404, [], "Not Found")
+        echoLoop(ws)
+    } else respondText(req, "WebSocket server at ws://localhost:8080/")
+}
+
+main() = serve(8080, route)</code></pre>
+                </div>
+
+                <!-- PostgreSQL with Connection Pool -->
+                <h2 class="text-2xl font-semibold text-white mb-4">PostgreSQL with Connection Pool</h2>
+                <p class="text-slate-400 mb-4">Use an mvar to create a simple connection pool. Get a connection for each request, return it when done.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.server.{serve, getParam, respondText, respond400}
+
+# Connection pool using mvar
+mvar pool: List[Int] = []
+
+getConn() = match pool {
+    [] -> Pg.connect("host=localhost user=postgres password=postgres")
+    [conn | rest] -> { pool = rest; conn }
+}
+
+releaseConn(conn) = { pool = conn :: pool }
+
+# Handlers
+listUsers(req) = {
+    conn = getConn()
+    rows = Pg.query(conn, "SELECT id, name FROM users", [])
+    releaseConn(conn)
+    respondText(req, show(rows))
+}
+
+createUser(req) = {
+    name = getParam(req.formParams, "name")
+    if name == "" then respond400(req, "name required")
+    else {
+        conn = getConn()
+        Pg.execute(conn, "INSERT INTO users (name) VALUES ($1)", [name])
+        releaseConn(conn)
+        respondText(req, "Created: " ++ name)
     }
 }
 
-main() = {
-    println("WebSocket echo at ws://localhost:8080/echo")
-    serve(8080, route)
+route(req) = match req.path {
+    "/users" -> if req.method == "POST" then createUser(req) else listUsers(req)
+    _ -> respondText(req, "GET/POST /users")
 }
-</code></pre>
+
+main() = serve(8080, route)</code></pre>
                 </div>
+
                 <div class="bg-blue-900/30 border border-blue-500/30 rounded-lg p-4 mb-8">
-                    <p class="text-blue-200"><strong>WebSocket API:</strong></p>
+                    <p class="text-blue-200"><strong>stdlib.server API:</strong></p>
                     <ul class="list-disc list-inside text-blue-200 mt-2 space-y-1">
-                        <li><code>req.isWebSocket</code> - Check if request is a WebSocket upgrade</li>
-                        <li><code>WebSocket.accept(reqId)</code> - Accept upgrade, returns WebSocket handle</li>
-                        <li><code>WebSocket.send(ws, message)</code> - Send a text message</li>
-                        <li><code>WebSocket.recv(ws)</code> - Receive a message (blocks until available)</li>
-                        <li><code>WebSocket.close(ws)</code> - Close the connection</li>
+                        <li><code>serve(port, handler)</code> - Start server with spawn-per-request</li>
+                        <li><code>getParam(params, key)</code> - Look up key in param list</li>
+                        <li><code>respondText(req, body)</code> - Send text response</li>
+                        <li><code>respondHtml(req, body)</code> - Send HTML response</li>
+                        <li><code>respondJson(req, body)</code> - Send JSON response</li>
+                        <li><code>respond400(req, msg)</code> - Bad Request</li>
+                        <li><code>respond404(req)</code> - Not Found</li>
+                        <li><code>redirect(req, url)</code> - 302 redirect</li>
+                        <li><code>setCookieWithAge(name, value, seconds)</code> - Cookie header tuple</li>
+                        <li><code>wsLoop(ws, handler)</code> - WebSocket message loop</li>
                     </ul>
                 </div>
 
             </div>
 
-                        <!-- Navigation Buttons -->
             <div class="flex justify-between border-t border-slate-800 pt-8">
                 <a href="16_async_runtime.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
                     <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
@@ -382,3 +311,4 @@ main() = {
     <script src="../js/nostos-highlight.js"></script>
     <script>hljs.highlightAll();</script>
 </body>
+</html>
