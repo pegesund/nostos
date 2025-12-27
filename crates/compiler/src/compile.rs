@@ -1906,6 +1906,48 @@ impl Compiler {
                     _ => None,
                 }
             }
+            Expr::Call(func, args, _, _) => {
+                // Check if this is a function call whose return type is a sized int
+                // This handles REPL variable thunks like __repl_var_a__()
+                if let Expr::Var(ident) = func.as_ref() {
+                    if let Some(func_info) = self.functions.get(&ident.node) {
+                        // First try explicit return_type
+                        if let Some(ret_type) = &func_info.return_type {
+                            if let Some(sized) = Self::sized_int_type_name(ret_type) {
+                                return Some(sized);
+                            }
+                        }
+                        // For 0-arity functions, the signature IS the return type
+                        if args.is_empty() {
+                            if let Some(sig) = &func_info.signature {
+                                // Signature for 0-arity function is just the return type
+                                // e.g., "Int32" not "Something -> Int32"
+                                if !sig.contains("->") {
+                                    return Self::sized_int_type_name(sig.trim());
+                                }
+                            }
+                        }
+                    }
+                }
+                None
+            }
+            Expr::MethodCall(receiver, method, _, _) => {
+                // Check for type conversion methods like .asInt32()
+                let method_name = &method.node;
+                match method_name.as_str() {
+                    "asInt8" => Some("Int8"),
+                    "asInt16" => Some("Int16"),
+                    "asInt32" => Some("Int32"),
+                    "asUInt8" => Some("UInt8"),
+                    "asUInt16" => Some("UInt16"),
+                    "asUInt32" => Some("UInt32"),
+                    "asUInt64" => Some("UInt64"),
+                    _ => {
+                        // Recursive: check the receiver's type
+                        self.get_sized_int_type(receiver)
+                    }
+                }
+            }
             _ => None,
         }
     }

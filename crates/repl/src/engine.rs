@@ -2308,6 +2308,30 @@ impl ReplEngine {
         // Parse the expression to look for method calls
         let trimmed = expr.trim();
 
+        // Check for type conversion methods like .asInt32()
+        // These have well-known return types based on the method name
+        let conversion_methods = [
+            (".asInt8()", "Int8"),
+            (".asInt16()", "Int16"),
+            (".asInt32()", "Int32"),
+            (".asInt64()", "Int64"),
+            (".asInt()", "Int"),
+            (".asUInt8()", "UInt8"),
+            (".asUInt16()", "UInt16"),
+            (".asUInt32()", "UInt32"),
+            (".asUInt64()", "UInt64"),
+            (".asFloat32()", "Float32"),
+            (".asFloat64()", "Float64"),
+            (".asFloat()", "Float"),
+            (".asBigInt()", "BigInt"),
+        ];
+
+        for (suffix, return_type) in conversion_methods {
+            if trimmed.ends_with(suffix) {
+                return Some(return_type.to_string());
+            }
+        }
+
         // Check for static module function calls like "Buffer.new()", "Float64Array.fromList(...)"
         if trimmed.starts_with("Buffer.new") {
             return Some("Buffer".to_string());
@@ -5792,6 +5816,34 @@ mod tests {
         // The result should be [2, 4, 6]
         let result_str = result.unwrap();
         assert!(result_str.contains("[2, 4, 6]"), "Result should be [2, 4, 6]: {}", result_str);
+    }
+
+    #[test]
+    fn test_int32_variable_plus_literal() {
+        // Test that a = 1.asInt32(); a + 1 works (literal should be coerced)
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        // Define Int32 variable
+        let result = engine.eval("a = 1.asInt32()");
+        assert!(result.is_ok(), "Should define a: {:?}", result);
+
+        // Check that the type annotation is Int32
+        if let Some(binding) = engine.var_bindings.get("a") {
+            assert_eq!(binding.type_annotation, Some("Int32".to_string()),
+                "Variable 'a' should have type annotation Int32");
+        }
+
+        // Check the value
+        let result = engine.eval("a");
+        assert!(result.is_ok(), "Should evaluate a: {:?}", result);
+        assert!(result.unwrap().contains("1"), "a should be 1");
+
+        // Now try a + 1 - this should work with literal coercion
+        let result = engine.eval("a + 1");
+        assert!(result.is_ok(), "a + 1 should work with Int32 + literal: {:?}", result);
+        assert!(result.unwrap().contains("2"), "a + 1 should be 2");
     }
 
     #[test]
