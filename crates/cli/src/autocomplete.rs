@@ -1166,7 +1166,28 @@ impl Autocomplete {
         };
 
         // Look up the return type of base_type.method_name
-        Self::get_method_return_type(&base_type, method_name)
+        // First try builtin types
+        if let Some(ret_type) = Self::get_method_return_type(&base_type, method_name) {
+            return Some(ret_type);
+        }
+
+        // Then try user-defined functions (UFCS)
+        // Look for a function named method_name that could take base_type as first arg
+        if let Some(sig) = source.get_function_signature(method_name) {
+            // Signature format: "Type1 -> Type2 -> ReturnType" or "ReturnType" (for 0-arg)
+            // Extract the return type (last part after ->)
+            if let Some(arrow_pos) = sig.rfind("->") {
+                let ret_type = sig[arrow_pos + 2..].trim();
+                if !ret_type.is_empty() {
+                    return Some(ret_type.to_string());
+                }
+            } else if !sig.contains("->") {
+                // No arrows means it's just the return type
+                return Some(sig.trim().to_string());
+            }
+        }
+
+        None
     }
 
     /// Get the return type of a method on a type
