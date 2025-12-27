@@ -2,4 +2,4 @@
 # expect: 42
 
 # Convert Int64 to Int32 and back to Int64
-main() = toInt32(42) |> toInt64
+main() = 42.asInt32().asInt64()

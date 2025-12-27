@@ -133,6 +133,22 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Float32Array.toList", signature: "Float32Array -> [Float]", doc: "Convert to a list of floats" },
     BuiltinInfo { name: "Float32Array.make", signature: "Int -> Float -> Float32Array", doc: "Create array of size with default value" },
 
+    // === Type Conversions (as<Type> methods) ===
+    // Available on all numeric types: Int, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float, Float32, Float64, BigInt
+    BuiltinInfo { name: "asInt8", signature: "a -> Int8", doc: "Convert numeric value to Int8" },
+    BuiltinInfo { name: "asInt16", signature: "a -> Int16", doc: "Convert numeric value to Int16" },
+    BuiltinInfo { name: "asInt32", signature: "a -> Int32", doc: "Convert numeric value to Int32" },
+    BuiltinInfo { name: "asInt64", signature: "a -> Int64", doc: "Convert numeric value to Int64" },
+    BuiltinInfo { name: "asInt", signature: "a -> Int", doc: "Convert numeric value to Int (alias for asInt64)" },
+    BuiltinInfo { name: "asUInt8", signature: "a -> UInt8", doc: "Convert numeric value to UInt8" },
+    BuiltinInfo { name: "asUInt16", signature: "a -> UInt16", doc: "Convert numeric value to UInt16" },
+    BuiltinInfo { name: "asUInt32", signature: "a -> UInt32", doc: "Convert numeric value to UInt32" },
+    BuiltinInfo { name: "asUInt64", signature: "a -> UInt64", doc: "Convert numeric value to UInt64" },
+    BuiltinInfo { name: "asFloat32", signature: "a -> Float32", doc: "Convert numeric value to Float32" },
+    BuiltinInfo { name: "asFloat64", signature: "a -> Float64", doc: "Convert numeric value to Float64" },
+    BuiltinInfo { name: "asFloat", signature: "a -> Float", doc: "Convert numeric value to Float (alias for asFloat64)" },
+    BuiltinInfo { name: "asBigInt", signature: "a -> BigInt", doc: "Convert integer value to BigInt" },
+
     // === File I/O ===
     // All File functions throw exceptions on error
     BuiltinInfo { name: "File.readAll", signature: "String -> String", doc: "Read entire file contents, throws on error" },
@@ -6607,57 +6623,59 @@ impl Compiler {
                         }
                         return Ok(dst);
                     }
-                    "toFloat" | "toFloat64" if arg_regs.len() == 1 => {
+                    // === Numeric type conversions ===
+                    // New standardized naming: as<Type>() with legacy aliases
+                    "asFloat64" | "asFloat" | "toFloat" | "toFloat64" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::IntToFloat(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "toInt" | "toInt64" if arg_regs.len() == 1 => {
+                    "asInt64" | "asInt" | "toInt" | "toInt64" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::FloatToInt(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "toInt8" if arg_regs.len() == 1 => {
+                    "asInt8" | "toInt8" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToInt8(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "toInt16" if arg_regs.len() == 1 => {
+                    "asInt16" | "toInt16" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToInt16(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "toInt32" if arg_regs.len() == 1 => {
+                    "asInt32" | "toInt32" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToInt32(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "toUInt8" if arg_regs.len() == 1 => {
+                    "asUInt8" | "toUInt8" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToUInt8(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "toUInt16" if arg_regs.len() == 1 => {
+                    "asUInt16" | "toUInt16" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToUInt16(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "toUInt32" if arg_regs.len() == 1 => {
+                    "asUInt32" | "toUInt32" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToUInt32(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "toUInt64" if arg_regs.len() == 1 => {
+                    "asUInt64" | "toUInt64" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToUInt64(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "toFloat32" if arg_regs.len() == 1 => {
+                    "asFloat32" | "toFloat32" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToFloat32(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "toBigInt" if arg_regs.len() == 1 => {
+                    "asBigInt" | "toBigInt" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToBigInt(dst, arg_regs[0]), line);
                         return Ok(dst);

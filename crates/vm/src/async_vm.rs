@@ -1619,6 +1619,142 @@ impl AsyncProcess {
                 };
                 set_reg!(dst, result);
             }
+            ToInt8(dst, src) => {
+                let val = reg!(src);
+                let result = match &val {
+                    GcValue::Int8(v) => GcValue::Int8(*v),
+                    GcValue::Int16(v) => GcValue::Int8(*v as i8),
+                    GcValue::Int32(v) => GcValue::Int8(*v as i8),
+                    GcValue::Int64(v) => GcValue::Int8(*v as i8),
+                    GcValue::UInt8(v) => GcValue::Int8(*v as i8),
+                    GcValue::UInt16(v) => GcValue::Int8(*v as i8),
+                    GcValue::UInt32(v) => GcValue::Int8(*v as i8),
+                    GcValue::UInt64(v) => GcValue::Int8(*v as i8),
+                    GcValue::Float32(v) => GcValue::Int8(*v as i8),
+                    GcValue::Float64(v) => GcValue::Int8(*v as i8),
+                    _ => return Err(RuntimeError::Panic("asInt8: expected numeric".into())),
+                };
+                set_reg!(dst, result);
+            }
+            ToInt16(dst, src) => {
+                let val = reg!(src);
+                let result = match &val {
+                    GcValue::Int8(v) => GcValue::Int16(*v as i16),
+                    GcValue::Int16(v) => GcValue::Int16(*v),
+                    GcValue::Int32(v) => GcValue::Int16(*v as i16),
+                    GcValue::Int64(v) => GcValue::Int16(*v as i16),
+                    GcValue::UInt8(v) => GcValue::Int16(*v as i16),
+                    GcValue::UInt16(v) => GcValue::Int16(*v as i16),
+                    GcValue::UInt32(v) => GcValue::Int16(*v as i16),
+                    GcValue::UInt64(v) => GcValue::Int16(*v as i16),
+                    GcValue::Float32(v) => GcValue::Int16(*v as i16),
+                    GcValue::Float64(v) => GcValue::Int16(*v as i16),
+                    _ => return Err(RuntimeError::Panic("asInt16: expected numeric".into())),
+                };
+                set_reg!(dst, result);
+            }
+            ToInt32(dst, src) => {
+                let val = reg!(src);
+                let result = match &val {
+                    GcValue::Int8(v) => GcValue::Int32(*v as i32),
+                    GcValue::Int16(v) => GcValue::Int32(*v as i32),
+                    GcValue::Int32(v) => GcValue::Int32(*v),
+                    GcValue::Int64(v) => GcValue::Int32(*v as i32),
+                    GcValue::UInt8(v) => GcValue::Int32(*v as i32),
+                    GcValue::UInt16(v) => GcValue::Int32(*v as i32),
+                    GcValue::UInt32(v) => GcValue::Int32(*v as i32),
+                    GcValue::UInt64(v) => GcValue::Int32(*v as i32),
+                    GcValue::Float32(v) => GcValue::Int32(*v as i32),
+                    GcValue::Float64(v) => GcValue::Int32(*v as i32),
+                    _ => return Err(RuntimeError::Panic("asInt32: expected numeric".into())),
+                };
+                set_reg!(dst, result);
+            }
+            ToUInt8(dst, src) => {
+                let val = reg!(src);
+                let result = match &val {
+                    GcValue::Int8(v) => GcValue::UInt8(*v as u8),
+                    GcValue::Int16(v) => GcValue::UInt8(*v as u8),
+                    GcValue::Int32(v) => GcValue::UInt8(*v as u8),
+                    GcValue::Int64(v) => GcValue::UInt8(*v as u8),
+                    GcValue::UInt8(v) => GcValue::UInt8(*v),
+                    GcValue::UInt16(v) => GcValue::UInt8(*v as u8),
+                    GcValue::UInt32(v) => GcValue::UInt8(*v as u8),
+                    GcValue::UInt64(v) => GcValue::UInt8(*v as u8),
+                    GcValue::Float32(v) => GcValue::UInt8(*v as u8),
+                    GcValue::Float64(v) => GcValue::UInt8(*v as u8),
+                    _ => return Err(RuntimeError::Panic("asUInt8: expected numeric".into())),
+                };
+                set_reg!(dst, result);
+            }
+            ToUInt16(dst, src) => {
+                let val = reg!(src);
+                let result = match &val {
+                    GcValue::Int8(v) => GcValue::UInt16(*v as u16),
+                    GcValue::Int16(v) => GcValue::UInt16(*v as u16),
+                    GcValue::Int32(v) => GcValue::UInt16(*v as u16),
+                    GcValue::Int64(v) => GcValue::UInt16(*v as u16),
+                    GcValue::UInt8(v) => GcValue::UInt16(*v as u16),
+                    GcValue::UInt16(v) => GcValue::UInt16(*v),
+                    GcValue::UInt32(v) => GcValue::UInt16(*v as u16),
+                    GcValue::UInt64(v) => GcValue::UInt16(*v as u16),
+                    GcValue::Float32(v) => GcValue::UInt16(*v as u16),
+                    GcValue::Float64(v) => GcValue::UInt16(*v as u16),
+                    _ => return Err(RuntimeError::Panic("asUInt16: expected numeric".into())),
+                };
+                set_reg!(dst, result);
+            }
+            ToUInt32(dst, src) => {
+                let val = reg!(src);
+                let result = match &val {
+                    GcValue::Int8(v) => GcValue::UInt32(*v as u32),
+                    GcValue::Int16(v) => GcValue::UInt32(*v as u32),
+                    GcValue::Int32(v) => GcValue::UInt32(*v as u32),
+                    GcValue::Int64(v) => GcValue::UInt32(*v as u32),
+                    GcValue::UInt8(v) => GcValue::UInt32(*v as u32),
+                    GcValue::UInt16(v) => GcValue::UInt32(*v as u32),
+                    GcValue::UInt32(v) => GcValue::UInt32(*v),
+                    GcValue::UInt64(v) => GcValue::UInt32(*v as u32),
+                    GcValue::Float32(v) => GcValue::UInt32(*v as u32),
+                    GcValue::Float64(v) => GcValue::UInt32(*v as u32),
+                    _ => return Err(RuntimeError::Panic("asUInt32: expected numeric".into())),
+                };
+                set_reg!(dst, result);
+            }
+            ToUInt64(dst, src) => {
+                let val = reg!(src);
+                let result = match &val {
+                    GcValue::Int8(v) => GcValue::UInt64(*v as u64),
+                    GcValue::Int16(v) => GcValue::UInt64(*v as u64),
+                    GcValue::Int32(v) => GcValue::UInt64(*v as u64),
+                    GcValue::Int64(v) => GcValue::UInt64(*v as u64),
+                    GcValue::UInt8(v) => GcValue::UInt64(*v as u64),
+                    GcValue::UInt16(v) => GcValue::UInt64(*v as u64),
+                    GcValue::UInt32(v) => GcValue::UInt64(*v as u64),
+                    GcValue::UInt64(v) => GcValue::UInt64(*v),
+                    GcValue::Float32(v) => GcValue::UInt64(*v as u64),
+                    GcValue::Float64(v) => GcValue::UInt64(*v as u64),
+                    _ => return Err(RuntimeError::Panic("asUInt64: expected numeric".into())),
+                };
+                set_reg!(dst, result);
+            }
+            ToFloat32(dst, src) => {
+                let val = reg!(src);
+                let result = match &val {
+                    GcValue::Int8(v) => GcValue::Float32(*v as f32),
+                    GcValue::Int16(v) => GcValue::Float32(*v as f32),
+                    GcValue::Int32(v) => GcValue::Float32(*v as f32),
+                    GcValue::Int64(v) => GcValue::Float32(*v as f32),
+                    GcValue::UInt8(v) => GcValue::Float32(*v as f32),
+                    GcValue::UInt16(v) => GcValue::Float32(*v as f32),
+                    GcValue::UInt32(v) => GcValue::Float32(*v as f32),
+                    GcValue::UInt64(v) => GcValue::Float32(*v as f32),
+                    GcValue::Float32(v) => GcValue::Float32(*v),
+                    GcValue::Float64(v) => GcValue::Float32(*v as f32),
+                    _ => return Err(RuntimeError::Panic("asFloat32: expected numeric".into())),
+                };
+                set_reg!(dst, result);
+            }
 
             // === Comparisons ===
             EqInt(dst, a, b) => {
@@ -3992,21 +4128,6 @@ impl AsyncProcess {
                         found: format!("{:?}", func_val),
                     }),
                 }
-            }
-
-            // === Type conversions ===
-            ToInt32(dst, src) => {
-                let val = reg!(src);
-                let result = match val {
-                    GcValue::Int64(v) => GcValue::Int32(v as i32),
-                    GcValue::Int32(v) => GcValue::Int32(v),
-                    GcValue::Float64(v) => GcValue::Int32(v as i32),
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "numeric".to_string(),
-                        found: format!("{:?}", val),
-                    }),
-                };
-                set_reg!(dst, result);
             }
 
             // === Map operations ===
