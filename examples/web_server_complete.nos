@@ -14,6 +14,7 @@
 #   curl http://localhost:8080/
 #   curl http://localhost:8080/users
 #   curl -X POST -d "name=Alice&email=alice@example.com" http://localhost:8080/users
+#   curl -X POST -d "from=1&to=2&amount=50" http://localhost:8080/transfer
 
 use stdlib.html.{Html, render}
 use stdlib.server.{serve, getParam, respondHtml, redirect, redirectWith, respond400, respond405, setCookieWithAge}
@@ -27,6 +28,7 @@ setupDatabase() = {
             id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
             email TEXT NOT NULL,
+            credits INT DEFAULT 100,
             created_at TIMESTAMP DEFAULT NOW()
         )
     ", [])
@@ -35,8 +37,8 @@ setupDatabase() = {
     count = head(rows).0
 
     if count == 0 then {
-        execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", ["Alice", "alice@example.com"])
-        execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", ["Bob", "bob@example.com"])
+        execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", ("Alice", "alice@example.com"))
+        execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", ("Bob", "bob@example.com"))
         println("Inserted sample users")
     } else ()
 }
@@ -67,10 +69,11 @@ layout(pageTitle: String, content: Html) = Html(
     ])
 )
 
-userCard(userId: Int, name: String, email: String) = Html(
+userCard(userId: Int, name: String, email: String, credits: Int) = Html(
     el("div", [("class", "card")], [
         h3(name),
         p("Email: " ++ email),
+        p("Credits: " ++ show(credits)),
         p([a([("href", "/users/" ++ show(userId))], "View Details")])
     ])
 )
@@ -90,8 +93,8 @@ handleHome(req) = {
 }
 
 handleUsers(req) = {
-    rows = query("SELECT id, name, email FROM web_users ORDER BY id", [])
-    cards = map(rows, row => userCard(row.0, row.1, row.2))
+    rows = query("SELECT id, name, email, credits FROM web_users ORDER BY id", [])
+    cards = map(rows, row => userCard(row.0, row.1, row.2, row.3))
 
     content = Html(div([
         h1("All Users"),
@@ -102,6 +105,14 @@ handleUsers(req) = {
             input([("type", "text"), ("name", "name"), ("placeholder", "Name")]),
             input([("type", "email"), ("name", "email"), ("placeholder", "Email")]),
             el("button", [("type", "submit")], [text("Add User")])
+        ]),
+        hr(),
+        h2("Transfer Credits"),
+        el("form", [("method", "POST"), ("action", "/transfer")], [
+            input([("type", "number"), ("name", "from"), ("placeholder", "From User ID")]),
+            input([("type", "number"), ("name", "to"), ("placeholder", "To User ID")]),
+            input([("type", "number"), ("name", "amount"), ("placeholder", "Amount")]),
+            el("button", [("type", "submit")], [text("Transfer")])
         ])
     ]))
     respondHtml(req, render(layout("Users", content)))
@@ -113,7 +124,7 @@ handleUserDetail(req, userId: String) = {
         None -> 0
     }
 
-    rows = query("SELECT id, name, email FROM web_users WHERE id = $1", [userIdInt])
+    rows = query("SELECT id, name, email, credits FROM web_users WHERE id = $1", (userIdInt))
 
     content = match rows {
         [] -> Html(div([
@@ -125,7 +136,8 @@ handleUserDetail(req, userId: String) = {
             el("div", [("class", "card")], [
                 p("ID: " ++ show(row.0)),
                 p("Name: " ++ row.1),
-                p("Email: " ++ row.2)
+                p("Email: " ++ row.2),
+                p("Credits: " ++ show(row.3))
             ]),
             p([a([("href", "/users")], "Back to Users")])
         ]))
@@ -142,8 +154,48 @@ handleCreateUser(req) = {
         if name == "" then respond400(req, "Name is required")
         else if email == "" then respond400(req, "Email is required")
         else {
-            execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", [name, email])
+            execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", (name, email))
             redirect(req, "/users")
+        }
+    }
+}
+
+# Transfer credits between users - uses transaction for atomicity
+# Both updates succeed or both fail (no partial transfers)
+handleTransfer(req) = {
+    if req.method != "POST" then respond405(req)
+    else {
+        fromId = getParam(req.formParams, "from")
+        toId = getParam(req.formParams, "to")
+        amountStr = getParam(req.formParams, "amount")
+
+        if fromId == "" then respond400(req, "From user ID is required")
+        else if toId == "" then respond400(req, "To user ID is required")
+        else if amountStr == "" then respond400(req, "Amount is required")
+        else {
+            amount = match String.toInt(amountStr) {
+                Some(n) -> n
+                None -> 0
+            }
+            fromIdInt = match String.toInt(fromId) {
+                Some(n) -> n
+                None -> 0
+            }
+            toIdInt = match String.toInt(toId) {
+                Some(n) -> n
+                None -> 0
+            }
+
+            if amount <= 0 then respond400(req, "Amount must be positive")
+            else {
+                # Transaction ensures both updates happen atomically
+                # If either fails, both are rolled back
+                transaction(conn => {
+                    Pg.execute(conn, "UPDATE web_users SET credits = credits - $1 WHERE id = $2", (amount, fromIdInt))
+                    Pg.execute(conn, "UPDATE web_users SET credits = credits + $1 WHERE id = $2", (amount, toIdInt))
+                })
+                redirect(req, "/users")
+            }
         }
     }
 }
@@ -166,6 +218,7 @@ route(req) = {
         if req.method == "POST" then handleCreateUser(req)
         else handleUsers(req)
     }
+    else if path == "/transfer" then handleTransfer(req)
     else {
         params = Server.matchPath(path, "/users/:id")
         if length(params) > 0 then {
