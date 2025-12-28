@@ -1398,6 +1398,62 @@ impl Repl {
         Some((names, expr.to_string()))
     }
 
+    /// Check if input looks like a list destructuring attempt: `[a, b, c] = expr`
+    fn is_list_binding_attempt(input: &str) -> bool {
+        let input = input.trim();
+
+        // Must start with '[' for list pattern
+        if !input.starts_with('[') {
+            return false;
+        }
+
+        // Find the matching closing bracket
+        let mut depth = 0;
+        let mut close_bracket_pos = None;
+        for (i, c) in input.char_indices() {
+            match c {
+                '[' => depth += 1,
+                ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close_bracket_pos = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let close_bracket_pos = match close_bracket_pos {
+            Some(pos) => pos,
+            None => return false,
+        };
+
+        // After the closing bracket, we need `= expr`
+        let after_bracket = input[close_bracket_pos + 1..].trim();
+        if !after_bracket.starts_with('=') {
+            return false;
+        }
+
+        // Make sure it's not == or =>
+        let after_eq = after_bracket.chars().nth(1);
+        if matches!(after_eq, Some('=') | Some('>')) {
+            return false;
+        }
+
+        // Check that the pattern contains identifiers (not just a list expression)
+        let pattern = &input[1..close_bracket_pos];
+        let has_identifiers = pattern.split(',')
+            .any(|part| {
+                let trimmed = part.trim();
+                trimmed.chars().next()
+                    .map(|c| c.is_lowercase() || c == '_')
+                    .unwrap_or(false)
+            });
+
+        has_identifiers
+    }
+
     /// Define a tuple destructuring binding like `(a, b) = expr`
     fn define_tuple_binding(&mut self, names: &[String], expr: &str) -> bool {
         self.var_counter += 1;
@@ -1699,6 +1755,13 @@ impl Repl {
             return;
         }
 
+        // Check for list destructuring attempt and give helpful error
+        if Self::is_list_binding_attempt(input) {
+            eprintln!("Error: List destructuring is not supported at top level.");
+            eprintln!("Hint: Use tuple destructuring instead: (a, b, c) = ...");
+            return;
+        }
+
         // Check for variable binding (e.g., "x = 5" or "var y = 10")
         if let Some((name, mutable, expr)) = Self::is_var_binding(input) {
             self.define_var(&name, mutable, &expr);
@@ -1933,6 +1996,11 @@ impl Repl {
                 return Some(format!("({}) = <bound>", names.join(", ")));
             }
             return None;
+        }
+
+        // Check for list destructuring attempt and give helpful error
+        if Self::is_list_binding_attempt(input) {
+            return None; // Error already printed in process_input version
         }
 
         // Check for variable binding (e.g., "x = 5" or "var y = 10")
