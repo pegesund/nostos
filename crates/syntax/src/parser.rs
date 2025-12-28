@@ -1558,7 +1558,7 @@ fn trait_impl() -> impl Parser<Token, TraitImpl, Error = Simple<Token>> + Clone 
 /// Supports three syntaxes:
 /// 1. `use module.path.*` - import all public functions
 /// 2. `use module.path.{name1, name2}` - import multiple names
-/// 3. `use module.path.name` - import single name (without braces)
+/// 3. `use module.path.name` or `use module.path.name as alias` - import single name
 fn use_stmt() -> impl Parser<Token, UseStmt, Error = Simple<Token>> + Clone {
     let use_item = any_ident()
         .then(
@@ -1587,14 +1587,19 @@ fn use_stmt() -> impl Parser<Token, UseStmt, Error = Simple<Token>> + Clone {
             span: to_span(span),
         });
 
-    // Option 2: use module.path.name (single import, at least 2 parts needed)
+    // Option 2: use module.path.name or use module.path.name as alias
     let single_import = just(Token::Use)
         .ignore_then(any_ident().separated_by(just(Token::Dot)).at_least(2))
-        .map_with_span(|mut path, span| {
+        .then(
+            just(Token::LowerIdent("as".to_string()))
+                .ignore_then(any_ident())
+                .or_not()
+        )
+        .map_with_span(|(mut path, alias), span| {
             let name = path.pop().unwrap();
             UseStmt {
                 path,
-                imports: UseImports::Named(vec![UseItem { name, alias: None }]),
+                imports: UseImports::Named(vec![UseItem { name, alias }]),
                 span: to_span(span),
             }
         });
