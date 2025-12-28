@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Complete Web Application - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator { color: #e06c75; }
+        .hljs-function { color: #e5c07b; }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: { dark: '#0f172a', primary: '#3b82f6', accent: '#10b981', code: '#1e293b' }
+                    },
+                    fontFamily: { mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'] }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+
+        <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_type_system.html" class="block text-slate-400 hover:text-white transition">7. Type System</a></li>
+                    <li><a href="08_traits.html" class="block text-slate-400 hover:text-white transition">8. Traits</a></li>
+                    <li><a href="09_builtin_traits.html" class="block text-slate-400 hover:text-white transition">9. Builtin Traits</a></li>
+                    <li><a href="10_trait_bounds.html" class="block text-slate-400 hover:text-white transition">10. Trait Bounds</a></li>
+                    <li><a href="11_error_handling.html" class="block text-slate-400 hover:text-white transition">11. Error Handling</a></li>
+                    <li><a href="12_modules.html" class="block text-slate-400 hover:text-white transition">12. Modules & Imports</a></li>
+                    <li><a href="13_stdlib.html" class="block text-slate-400 hover:text-white transition">13. Standard Library</a></li>
+                    <li><a href="14_json.html" class="block text-slate-400 hover:text-white transition">14. JSON</a></li>
+                    <li><a href="15_concurrency.html" class="block text-slate-400 hover:text-white transition">15. Concurrency</a></li>
+                    <li><a href="16_async_runtime.html" class="block text-slate-400 hover:text-white transition">16. Async Runtime</a></li>
+                    <li><a href="17_async_io_http.html" class="block text-slate-400 hover:text-white transition">17. Async I/O & HTTP</a></li>
+                    <li><a href="18_reflection.html" class="block text-slate-400 hover:text-white transition">18. Reflection & Eval</a></li>
+                    <li><a href="19_debugging_profiling.html" class="block text-slate-400 hover:text-white transition">19. Debugging & Profiling</a></li>
+                    <li><a href="20_html_templating.html" class="block text-slate-400 hover:text-white transition">20. HTML Templating</a></li>
+                    <li><a href="21_mutability.html" class="block text-slate-400 hover:text-white transition">21. Mutability</a></li>
+                    <li><a href="22_complete_web_app.html" class="block text-blue-400 font-medium">22. Complete Web App</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Complete Web Application</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    This chapter presents a complete, production-style web application using PostgreSQL, HTML templating,
+                    connection pooling, routing, forms, and database transactions. All techniques from previous chapters
+                    come together here.
+                </p>
+
+                <!-- Features -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Features</h2>
+                <div class="bg-blue-900/30 border border-blue-500/30 rounded-lg p-4 mb-8">
+                    <ul class="list-disc list-inside text-blue-200 space-y-2">
+                        <li><strong>Connection Pooling</strong> - Efficient database access via <code>stdlib.pool</code></li>
+                        <li><strong>HTML Templating</strong> - Type-safe templates with <code>Html(...)</code></li>
+                        <li><strong>Routing</strong> - Path matching with <code>Server.matchPath</code></li>
+                        <li><strong>Form Handling</strong> - POST data with validation</li>
+                        <li><strong>Transactions</strong> - Atomic multi-statement updates</li>
+                        <li><strong>Spawn-per-request</strong> - Scalable request handling</li>
+                    </ul>
+                </div>
+
+                <!-- Prerequisites -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Prerequisites</h2>
+                <p class="text-slate-400 mb-4">This example requires PostgreSQL running at localhost with user/password: <code>postgres/postgres</code>.</p>
+
+                <!-- Test Commands -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Testing the Application</h2>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-bash"># Start the server
+./nostos examples/web_server_complete.nos
+
+# Test endpoints
+curl http://localhost:8080/
+curl http://localhost:8080/users
+curl -X POST -d "name=Alice&email=alice@example.com" http://localhost:8080/users
+curl -X POST -d "from=1&to=2&amount=50" http://localhost:8080/transfer</code></pre>
+                </div>
+
+                <!-- stdlib.pool -->
+                <h2 class="text-2xl font-semibold text-white mb-4">stdlib.pool - Connection Pool</h2>
+                <p class="text-slate-400 mb-4">
+                    The <code>stdlib.pool</code> module manages a pool of PostgreSQL connections. Instead of connecting
+                    per-request, connections are reused for better performance.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.pool.{init, query, execute, transaction}
+
+# Initialize pool at startup
+init("host=localhost user=postgres password=postgres")
+
+# Query returns List of tuples
+rows = query("SELECT id, name FROM users", [])
+
+# Execute for INSERT/UPDATE/DELETE
+execute("INSERT INTO users (name) VALUES ($1)", ("Alice"))
+
+# Transaction for atomic operations
+transaction(conn => {
+    Pg.execute(conn, "UPDATE accounts SET balance = balance - $1 WHERE id = $2", (100, fromId))
+    Pg.execute(conn, "UPDATE accounts SET balance = balance + $1 WHERE id = $2", (100, toId))
+})</code></pre>
+                </div>
+
+                <!-- Query Parameters -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Query Parameters with Tuples</h2>
+                <p class="text-slate-400 mb-4">
+                    Use <strong>tuples</strong> for database parameters. Tuples allow mixed types (String, Int, etc.)
+                    while lists require homogeneous types.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Single parameter - use tuple with one element
+query("SELECT * FROM users WHERE id = $1", (userId))
+
+# Multiple parameters - tuple with mixed types
+execute("INSERT INTO users (name, email) VALUES ($1, $2)", ("Alice", "alice@example.com"))
+
+# Mixed types in tuple
+execute("INSERT INTO data (id, name, score) VALUES ($1, $2, $3)", (1, "Bob", 95.5))</code></pre>
+                </div>
+
+                <!-- Local Lambda Pattern -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Local Lambda Pattern (DRY)</h2>
+                <p class="text-slate-400 mb-4">
+                    Use local lambdas to avoid repeating code. Match expressions now support comma separators
+                    for single-line style.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Local helper lambda with inline match
+handleForm(req) = {
+    intOr = s => match String.toInt(s) { Some(n) -> n, None -> 0 }
+
+    amount = intOr(getParam(req.formParams, "amount"))
+    userId = intOr(getParam(req.formParams, "user_id"))
+
+    # Use the parsed values...
+}</code></pre>
+                </div>
+
+                <!-- Complete Application -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Complete Application Code</h2>
+                <p class="text-slate-400 mb-4">
+                    Here is the full web application with all features integrated:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Complete Web Application
+#
+# PostgreSQL + Html(...) templating + routing + forms + connection pooling
+#
+# Requires: PostgreSQL at localhost (user: postgres, pw: postgres)
+
+use stdlib.html.{Html, render}
+use stdlib.server.{serve, getParam, respondHtml, redirect, respond400, respond405}
+use stdlib.pool.{init, query, execute, transaction}
+
+# --- Database Setup ---
+
+setupDatabase() = {
+    execute("
+        CREATE TABLE IF NOT EXISTS web_users (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            credits INT DEFAULT 100,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    ", [])
+
+    rows = query("SELECT COUNT(*) FROM web_users", [])
+    count = head(rows).0
+
+    if count == 0 then {
+        execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", ("Alice", "alice@example.com"))
+        execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", ("Bob", "bob@example.com"))
+        println("Inserted sample users")
+    } else ()
+}
+
+# --- HTML Components ---
+
+layout(pageTitle: String, content: Html) = Html(
+    el("html", [], [
+        headEl([
+            meta([("charset", "UTF-8")]),
+            title(pageTitle ++ " - Nostos App"),
+            el("style", [], [raw("
+                body { font-family: sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; }
+                .container { background: white; padding: 30px; border-radius: 8px; }
+                nav a { margin-right: 15px; }
+                .card { background: #f9f9f9; padding: 15px; margin: 10px 0; border-radius: 4px; }
+                form input { padding: 8px; margin: 5px 0; width: 200px; }
+                form button { padding: 8px 16px; background: #0066cc; color: white; border: none; }
+            ")])
+        ]),
+        body([
+            el("div", [("class", "container")], [
+                nav([a([("href", "/")], "Home"), a([("href", "/users")], "Users")]),
+                content
+            ])
+        ])
+    ])
+)
+
+userCard(userId: Int, name: String, email: String, credits: Int) = Html(
+    el("div", [("class", "card")], [
+        h3(name),
+        p("Email: " ++ email),
+        p("Credits: " ++ show(credits)),
+        p([a([("href", "/users/" ++ show(userId))], "View Details")])
+    ])
+)
+
+# --- Route Handlers ---
+
+handleHome(req) = {
+    rows = query("SELECT COUNT(*) FROM web_users", [])
+    userCount = head(rows).0
+
+    content = Html(div([
+        h1("Nostos Web App"),
+        p("Users in database: " ++ show(userCount)),
+        p([a([("href", "/users")], "View All Users")])
+    ]))
+    respondHtml(req, render(layout("Home", content)))
+}
+
+handleUsers(req) = {
+    rows = query("SELECT id, name, email, credits FROM web_users ORDER BY id", [])
+    cards = map(rows, row => userCard(row.0, row.1, row.2, row.3))
+
+    content = Html(div([
+        h1("All Users"),
+        div(cards),
+        hr(),
+        h2("Add New User"),
+        el("form", [("method", "POST"), ("action", "/users")], [
+            input([("type", "text"), ("name", "name"), ("placeholder", "Name")]),
+            input([("type", "email"), ("name", "email"), ("placeholder", "Email")]),
+            el("button", [("type", "submit")], [text("Add User")])
+        ]),
+        hr(),
+        h2("Transfer Credits"),
+        el("form", [("method", "POST"), ("action", "/transfer")], [
+            input([("type", "number"), ("name", "from"), ("placeholder", "From User ID")]),
+            input([("type", "number"), ("name", "to"), ("placeholder", "To User ID")]),
+            input([("type", "number"), ("name", "amount"), ("placeholder", "Amount")]),
+            el("button", [("type", "submit")], [text("Transfer")])
+        ])
+    ]))
+    respondHtml(req, render(layout("Users", content)))
+}
+
+handleUserDetail(req, userId: String) = {
+    intOr = s => match String.toInt(s) { Some(n) -> n, None -> 0 }
+    rows = query("SELECT id, name, email, credits FROM web_users WHERE id = $1", (intOr(userId)))
+
+    content = match rows {
+        [] -> Html(div([h1("User Not Found"), p([a([("href", "/users")], "Back")])]))
+        [row | _] -> Html(div([
+            h1("User: " ++ row.1),
+            el("div", [("class", "card")], [
+                p("ID: " ++ show(row.0)),
+                p("Name: " ++ row.1),
+                p("Email: " ++ row.2),
+                p("Credits: " ++ show(row.3))
+            ]),
+            p([a([("href", "/users")], "Back to Users")])
+        ]))
+    }
+    respondHtml(req, render(layout("User " ++ userId, content)))
+}
+
+handleCreateUser(req) = {
+    if req.method != "POST" then respond405(req)
+    else {
+        name = getParam(req.formParams, "name")
+        email = getParam(req.formParams, "email")
+
+        if name == "" then respond400(req, "Name is required")
+        else if email == "" then respond400(req, "Email is required")
+        else {
+            execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", (name, email))
+            redirect(req, "/users")
+        }
+    }
+}
+
+# Transfer credits - uses transaction for atomicity
+handleTransfer(req) = {
+    if req.method != "POST" then respond405(req)
+    else {
+        fromId = getParam(req.formParams, "from")
+        toId = getParam(req.formParams, "to")
+        amountStr = getParam(req.formParams, "amount")
+
+        if fromId == "" then respond400(req, "From user ID is required")
+        else if toId == "" then respond400(req, "To user ID is required")
+        else if amountStr == "" then respond400(req, "Amount is required")
+        else {
+            intOr = s => match String.toInt(s) { Some(n) -> n, None -> 0 }
+            amount = intOr(amountStr)
+            fromIdInt = intOr(fromId)
+            toIdInt = intOr(toId)
+
+            if amount <= 0 then respond400(req, "Amount must be positive")
+            else {
+                # Atomic transaction - both succeed or both fail
+                transaction(conn => {
+                    Pg.execute(conn, "UPDATE web_users SET credits = credits - $1 WHERE id = $2", (amount, fromIdInt))
+                    Pg.execute(conn, "UPDATE web_users SET credits = credits + $1 WHERE id = $2", (amount, toIdInt))
+                })
+                redirect(req, "/users")
+            }
+        }
+    }
+}
+
+handle404(req) = {
+    content = Html(div([h1("404 - Not Found"), p([a([("href", "/")], "Go Home")])]))
+    Server.respond(req.id, 404, [("Content-Type", "text/html")], render(layout("Not Found", content)))
+}
+
+# --- Router ---
+
+route(req) = {
+    path = req.path
+
+    if path == "/" then handleHome(req)
+    else if path == "/users" then {
+        if req.method == "POST" then handleCreateUser(req)
+        else handleUsers(req)
+    }
+    else if path == "/transfer" then handleTransfer(req)
+    else {
+        params = Server.matchPath(path, "/users/:id")
+        if length(params) > 0 then {
+            (_, userId) = head(params)
+            handleUserDetail(req, userId)
+        } else handle404(req)
+    }
+}
+
+main() = {
+    init("host=localhost user=postgres password=postgres")
+    setupDatabase()
+
+    println("Web App: http://localhost:8080")
+    println("Using connection pooling via stdlib.pool")
+    serve(8080, route)
+}</code></pre>
+                </div>
+
+                <!-- Key Takeaways -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Key Takeaways</h2>
+                <div class="bg-emerald-900/30 border border-emerald-500/30 rounded-lg p-4 mb-8">
+                    <ul class="list-disc list-inside text-emerald-200 space-y-2">
+                        <li><strong>Initialize pool once</strong> at startup with <code>init(connString)</code></li>
+                        <li><strong>Use tuples</strong> for query parameters: <code>("Alice", 25)</code> not <code>["Alice", 25]</code></li>
+                        <li><strong>Wrap atomic operations</strong> in <code>transaction(conn => { ... })</code></li>
+                        <li><strong>Local lambdas</strong> with inline match: <code>f = x => match x { A -> 1, B -> 2 }</code></li>
+                        <li><strong>Html components</strong> are functions that return <code>Html(...)</code></li>
+                        <li><strong>spawn-per-request</strong> happens automatically via <code>serve()</code></li>
+                    </ul>
+                </div>
+
+            </div>
+
+            <div class="flex justify-between border-t border-slate-800 pt-8">
+                <a href="21_mutability.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
+                    Previous: Mutability
+                </a>
+                <span class="text-slate-500">End of Tutorial</span>
+            </div>
+        </main>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>
+</html>
