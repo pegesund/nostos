@@ -1401,6 +1401,12 @@ impl View for CodeEditor {
                 self.cursor.0 = 0;
                 EventResult::Consumed(None)
             }
+            // Ctrl+E to go to end of line (common readline behavior)
+            Event::CtrlChar('e') => {
+                self.ac_state.reset();
+                self.cursor.0 = self.line_char_count(self.cursor.1);
+                EventResult::Consumed(None)
+            }
             // Ctrl+K to delete current line
             Event::CtrlChar('k') => {
                 self.ac_state.reset();
