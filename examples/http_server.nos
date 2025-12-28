@@ -1,27 +1,28 @@
 # HTTP Server
 #
-# Multi-worker HTTP server with routing:
+# HTTP server with spawn-per-request pattern:
 # - /       : Hello message
 # - /health : Health check
 # - /echo   : Echo request body
 # - /work   : CPU-bound work (fib(25))
 # - /shutdown: Gracefully shuts down the server
 #
-# Spawns 8 worker processes for parallel request handling.
+# Uses spawn-per-request pattern for scalability and proper memory management.
+# Each request is handled in its own spawned process.
 
 # Simulate CPU work - compute fib(n)
 fib(0) = 0
 fib(1) = 1
 fib(n) = fib(n - 1) + fib(n - 2)
 
-handleRequest(server, req, main_pid) = {
+# Handle a single request
+handleRequest(req, mainPid) = {
   path = req.path
 
   # Shutdown route
   if path == "/shutdown" then {
-    main_pid <- ("shutdown", ()) # Signal main process to shut down
     Server.respond(req.id, 200, [("Content-Type", "text/plain")], "Shutting down...")
-    ("shutdown_signal", ()) # Signal worker to exit
+    mainPid <- "shutdown"
   }
   else {
     (body, status) = if path == "/" then
@@ -38,33 +39,18 @@ handleRequest(server, req, main_pid) = {
 
     headers = [("Content-Type", "text/plain")]
     Server.respond(req.id, status, headers, body)
-    ("continue", ()) # Signal worker to continue
   }
 }
 
-acceptLoop(server, main_pid) = {
-  result = try {
+# Server loop with spawn-per-request pattern (proper tail recursion)
+serverLoop(server, mainPid) = {
+  ok = try {
     req = Server.accept(server)
-    (signal, _) = handleRequest(server, req, main_pid)
-
-    if signal == "shutdown_signal" then {
-      # Exit worker process
-    } else {
-      acceptLoop(server, main_pid) # Continue accepting requests
-    }
-    ()
-  } catch { e ->
-    # Exit if Server.accept returns error (e.g., server closed)
-    ()
-  }
-  result
-}
-
-# Spawn N worker processes all accepting from same server
-spawnWorkers(server, main_pid, 0) = ()
-spawnWorkers(server, main_pid, n) = {
-  spawn { acceptLoop(server, main_pid) }
-  spawnWorkers(server, main_pid, n - 1)
+    spawn { handleRequest(req, mainPid) }
+    true
+  } catch { _ -> false }
+  # Tail call is OUTSIDE try-catch - this is important for memory!
+  if ok then serverLoop(server, mainPid) else ()
 }
 
 # Send shutdown request to terminate the server
@@ -77,21 +63,28 @@ sendShutdown() = {
 }
 
 main() = {
-  main_pid = self()
+  mainPid = self()
 
   result = try {
     server = Server.bind(8080)
-    # Spawn 8 workers for parallel request handling
-    spawnWorkers(server, main_pid, 8)
+    println("Server started on http://localhost:8080")
+
+    # Spawn server loop
+    spawn { serverLoop(server, mainPid) }
 
     # Spawn a client to test and then shutdown
     spawn { sendShutdown() }
 
-    # Keep main alive, listening for shutdown signal
+    # Wait for shutdown signal
     receive {
-      ("shutdown", _) -> {
+      "shutdown" -> {
+        sleep(100)  # Let response complete
         Server.close(server)
         println("Server shutdown complete.")
+      }
+      after 10000 -> {
+        Server.close(server)
+        println("Timeout - shutting down.")
       }
     }
   } catch { e ->
