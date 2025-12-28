@@ -46,3 +46,5 @@ nostos.toml
 bench/list_iterate_hs
 bench/*.hi
 bench/*.o
+heaptrack.*.zst
+todo/
