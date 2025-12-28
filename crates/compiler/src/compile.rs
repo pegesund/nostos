@@ -125,6 +125,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Int64Array.set", signature: "Int64Array -> Int -> Int -> Int64Array", doc: "Set element at index, returns new array" },
     BuiltinInfo { name: "Int64Array.toList", signature: "Int64Array -> [Int]", doc: "Convert to a list of integers" },
     BuiltinInfo { name: "Int64Array.make", signature: "Int -> Int -> Int64Array", doc: "Create array of size with default value" },
+    BuiltinInfo { name: "sumInt64Array", signature: "Int64Array -> Int", doc: "Fast native SIMD-optimized sum of array elements" },
 
     // Float32Array methods
     BuiltinInfo { name: "Float32Array.fromList", signature: "[Float] -> Float32Array", doc: "Create Float32Array from a list of floats" },
@@ -6696,6 +6697,13 @@ impl Compiler {
                     "length" | "len" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::Length(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    "sumInt64Array" if arg_regs.len() == 1 => {
+                        // Fast native SIMD-optimized sum for Int64Array
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("sumInt64Array".to_string())));
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_regs[0]].into()), line);
                         return Ok(dst);
                     }
                     "panic" if arg_regs.len() == 1 => {

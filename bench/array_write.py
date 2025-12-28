@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-# Array write benchmark - heavy writing to array
+# Array write benchmark - heavy writing to typed array
 # Fills an array with computed values and sums them
+# Uses array.array('q') for int64 typed array (fair comparison with Nostos Int64Array)
+
+import array
 
 def fill_array(arr, size):
     for i in range(size):
@@ -13,7 +16,7 @@ def sum_array(arr, size):
     return total
 
 def run_iteration(size):
-    arr = [0] * size
+    arr = array.array('q', [0] * size)  # 'q' = signed int64
     fill_array(arr, size)
     return sum_array(arr, size)
 

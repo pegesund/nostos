@@ -236,7 +236,7 @@ impl JitCompiler {
         flag_builder.set("opt_level", match config.opt_level {
             0 => "none",
             1 => "speed",
-            _ => "speed_and_size",
+            _ => "speed",  // Use pure speed optimization, not speed_and_size
         }).map_err(|e| JitError::Cranelift(e.to_string()))?;
 
         // Enable frame pointers (required for tail calls)

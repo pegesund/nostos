@@ -11682,6 +11682,32 @@ impl AsyncVM {
             }),
         }));
 
+        // sumInt64Array(arr) -> Int - Fast native SIMD-optimized sum
+        self.register_native("sumInt64Array", Arc::new(GcNativeFn {
+            name: "sumInt64Array".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::Int64Array(ptr) => {
+                        let arr = heap.get_int64_array(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid Int64Array pointer".to_string()))?;
+                        // Native sum - LLVM will auto-vectorize this
+                        let sum: i64 = arr.items.iter().sum();
+                        Ok(GcValue::Int64(sum))
+                    }
+                    GcValue::Int64List(list) => {
+                        // Also support Int64List
+                        let sum: i64 = list.sum();
+                        Ok(GcValue::Int64(sum))
+                    }
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "Int64Array".to_string(),
+                        found: args[0].type_name(heap).to_string(),
+                    }),
+                }
+            }),
+        }));
+
         // Int64Array.get(arr, index) -> Int
         self.register_native("Int64Array.get", Arc::new(GcNativeFn {
             name: "Int64Array.get".to_string(),
