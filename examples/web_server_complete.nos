@@ -198,17 +198,12 @@ handle404(req) = {
 
 # --- Router ---
 
-route(req) = {
-    path = req.path
-
-    if path == "/" then handleHome(req)
-    else if path == "/users" then {
-        if req.method == "POST" then handleCreateUser(req)
-        else handleUsers(req)
-    }
-    else if path == "/transfer" then handleTransfer(req)
-    else {
-        params = Server.matchPath(path, "/users/:id")
+route(req) = match req.path {
+    "/" -> handleHome(req)
+    "/users" -> if req.method == "POST" then handleCreateUser(req) else handleUsers(req)
+    "/transfer" -> handleTransfer(req)
+    _ -> {
+        params = Server.matchPath(req.path, "/users/:id")
         if length(params) > 0 then {
             (_, userId) = head(params)
             handleUserDetail(req, userId)
