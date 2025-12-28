@@ -1638,6 +1638,46 @@ impl SourceManager {
         self.modules.keys().cloned().collect()
     }
 
+    /// Create a new empty module
+    /// The module_path is a dot-separated path like "utils.math"
+    /// If parent_path is provided, the new module will be a submodule
+    pub fn create_module(&mut self, module_name: &str, parent_path: &[String]) -> Result<(), String> {
+        // Build full module path
+        let mut full_path: ModulePath = parent_path.to_vec();
+        full_path.push(module_name.to_string());
+
+        let module_key = module_path_to_string(&full_path);
+
+        // Check if module already exists
+        if self.modules.contains_key(&module_key) {
+            return Err(format!("Module '{}' already exists", module_key));
+        }
+
+        // Create the module's .nos file path
+        let file_path = full_path.iter().fold(
+            self.project_root.clone(),
+            |p, s| p.join(s),
+        );
+        let file_path = file_path.with_extension("nos");
+
+        // Create parent directories if needed
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create directory: {}", e))?;
+        }
+
+        // Create an empty .nos file with a comment
+        let content = format!("# Module: {}\n", module_key);
+        fs::write(&file_path, &content)
+            .map_err(|e| format!("Failed to create module file: {}", e))?;
+
+        // Add the module to our internal map
+        let module = Module::new(full_path);
+        self.modules.insert(module_key.clone(), module);
+
+        Ok(())
+    }
+
     /// Get all definition names
     pub fn definition_names(&self) -> Vec<String> {
         self.def_index.keys().cloned().collect()

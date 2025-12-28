@@ -3266,6 +3266,17 @@ impl ReplEngine {
         Ok(())
     }
 
+    /// Create a new empty module
+    /// If parent_path is provided, the new module will be a submodule
+    pub fn create_module(&mut self, module_name: &str, parent_path: &[String]) -> Result<(), String> {
+        if let Some(ref mut sm) = self.source_manager {
+            sm.create_module(module_name, parent_path)?;
+            Ok(())
+        } else {
+            Err("No project loaded".to_string())
+        }
+    }
+
     /// Rename a definition in the project
     /// Returns the new qualified name and the set of affected callers (functions that were updated)
     pub fn rename_definition(&mut self, old_name: &str, new_name: &str) -> Result<(String, HashSet<String>), String> {
