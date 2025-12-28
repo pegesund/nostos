@@ -235,13 +235,13 @@ mod expressions {
 
     #[test]
     fn test_match_expr() {
-        parse_expr_ok("match x 0 -> zero 1 -> one _ -> many end");
-        parse_expr_ok("match opt Some(v) -> v None -> default end");
+        parse_expr_ok("match x { 0 -> zero, 1 -> one, _ -> many }");
+        parse_expr_ok("match opt { Some(v) -> v, None -> default }");
     }
 
     #[test]
     fn test_match_with_guard() {
-        parse_expr_ok("match n n when n > 0 -> positive _ -> non_positive end");
+        parse_expr_ok("match n { n when n > 0 -> positive, _ -> non_positive }");
     }
 
     #[test]
@@ -290,17 +290,18 @@ mod control_flow {
 
     #[test]
     fn test_try_catch() {
-        parse_expr_ok("try riskyOp() catch Error(e) -> handleError(e) end");
+        parse_expr_ok("try { riskyOp() } catch { Error(e) -> handleError(e) }");
     }
 
     #[test]
     fn test_try_catch_finally() {
-        parse_expr_ok("try openFile() catch Error(e) -> logError(e) finally cleanup() end");
+        parse_expr_ok("try { openFile() } catch { Error(e) -> logError(e) } finally { cleanup() }");
     }
 
     #[test]
     fn test_do_block() {
-        parse_expr_ok("do x = getLine() print(x) end");
+        // do-blocks use brace syntax now
+        parse_expr_ok("{ x = getLine(); print(x) }");
     }
 }
 
@@ -340,17 +341,18 @@ mod concurrency {
 
     #[test]
     fn test_receive_simple() {
-        parse_expr_ok("receive msg -> handle(msg) end");
+        parse_expr_ok("receive { msg -> handle(msg) }");
     }
 
     #[test]
     fn test_receive_patterns() {
-        parse_expr_ok("receive Inc(sender) -> incr() Dec(sender) -> decr() end");
+        parse_expr_ok("receive { Inc(sender) -> incr(), Dec(sender) -> decr() }");
     }
 
     #[test]
     fn test_receive_with_timeout() {
-        parse_expr_ok("receive msg -> handle(msg) after 5000 -> timeout() end");
+        // Receive with timeout inside braces
+        parse_expr_ok("receive { msg -> handle(msg), after 5000 -> timeout() }");
     }
 }
 
@@ -434,7 +436,7 @@ mod patterns {
 
     #[test]
     fn test_or_pattern() {
-        parse_expr_ok("match x 0 | 1 | 2 -> small _ -> large end");
+        parse_expr_ok("match x { 0 | 1 | 2 -> small, _ -> large }");
     }
 
     #[test]
@@ -646,10 +648,10 @@ mod integration {
     fn test_counter_server() {
         let src = r#"
             counter() = loop(0)
-            loop(state) = receive
-                Inc(sender) -> { sender <- Value(state + 1), loop(state + 1) }
-                Get(sender) -> { sender <- Value(state), loop(state) }
-            end
+            loop(state) = receive {
+                Inc(sender) -> { sender <- Value(state + 1); loop(state + 1) }
+                Get(sender) -> { sender <- Value(state); loop(state) }
+            }
         "#;
         parse_ok(src);
     }
@@ -687,7 +689,7 @@ mod integration {
     #[test]
     fn test_error_handling() {
         let src = r#"
-            safeRead(path) = try readFile(path)? catch NotFound(p) -> handleNotFound(p) end
+            safeRead(path) = try { readFile(path)? } catch { NotFound(p) -> handleNotFound(p) }
         "#;
         parse_ok(src);
     }
