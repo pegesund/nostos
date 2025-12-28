@@ -5269,6 +5269,14 @@ impl ReplEngine {
             return Err("Use eval() for definitions".to_string());
         }
 
+        // Check for use statements - they should use sync eval
+        let has_use_stmt = module_opt.as_ref().map(|m| {
+            m.items.iter().any(|item| matches!(item, Item::Use(_)))
+        }).unwrap_or(false);
+        if has_use_stmt {
+            return Err("Use eval() for definitions".to_string());
+        }
+
         // Also check for variable bindings - they should use sync eval
         if Self::is_var_binding(input).is_some() {
             return Err("Use eval() for definitions".to_string());
@@ -11361,5 +11369,43 @@ mod postgres_module_tests {
         assert!(result.is_ok(), "htmlParse should work: {:?}", result);
         let output = result.unwrap();
         assert!(output.contains("Element") || output.contains("div"), "Should return parsed HTML: {}", output);
+    }
+
+    #[test]
+    fn test_use_statement_via_start_eval_async() {
+        // This test mimics exactly what the TUI repl_panel does
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        let input = "use stdlib.html_parser.{htmlParse, htmlPrettyPrint}";
+
+        // TUI calls start_eval_async first
+        let async_result = engine.start_eval_async(input);
+
+        // Check the exact error message
+        match &async_result {
+            Err(e) => println!("start_eval_async error: '{}'", e),
+            Ok(_) => println!("start_eval_async: Ok"),
+        }
+
+        // Should return error telling us to use eval() for definitions
+        // The TUI checks for EXACT match, so we need to return exact string
+        match async_result {
+            Err(e) if e == "Use eval() for commands" || e == "Use eval() for definitions" => {
+                // Good - now fall back to sync eval like TUI does
+                let result = engine.eval(input);
+                println!("eval result: {:?}", result);
+                assert!(result.is_ok(), "use statement should work via eval: {:?}", result);
+                let output = result.unwrap();
+                assert!(output.contains("imported"), "Should say imported: {}", output);
+            }
+            Err(e) => {
+                panic!("start_eval_async should return exact 'Use eval() for definitions' error, got: '{}'", e);
+            }
+            Ok(_) => {
+                panic!("start_eval_async should not succeed for use statements");
+            }
+        }
     }
 }

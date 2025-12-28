@@ -1,6 +1,5 @@
 //! Nostos CLI - Command-line interface for running Nostos programs.
 
-mod repl;
 mod tui;
 mod editor;
 mod custom_views;
@@ -22,8 +21,6 @@ use std::env;
 use std::fs;
 use std::process::ExitCode;
 use std::sync::atomic::Ordering;
-
-use repl::{Repl, ReplConfig};
 
 /// Recursively visit directories and find .nos files
 fn visit_dirs(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
@@ -202,57 +199,10 @@ fn json_string(s: &str) -> String {
     result
 }
 
-/// Run the REPL with optional initial files
+/// Run the REPL - now just launches the TUI
 fn run_repl(args: &[String]) -> ExitCode {
-    let mut config = ReplConfig::default();
-    let mut files_to_load = Vec::new();
-
-    // Parse repl-specific options
-    let mut i = 0;
-    while i < args.len() {
-        let arg = &args[i];
-        if arg == "--no-jit" {
-            config.enable_jit = false;
-            i += 1;
-        } else if arg == "--threads" && i + 1 < args.len() {
-            if let Ok(n) = args[i + 1].parse::<usize>() {
-                config.num_threads = n;
-            }
-            i += 2;
-        } else if arg.starts_with("-") {
-            eprintln!("Unknown option: {}", arg);
-            i += 1;
-        } else {
-            // Treat as file to load
-            files_to_load.push(arg.clone());
-            i += 1;
-        }
-    }
-
-    let mut repl = Repl::new(config);
-
-    // Load stdlib
-    if let Err(e) = repl.load_stdlib() {
-        eprintln!("Warning: Failed to load stdlib: {}", e);
-    }
-
-    // Load any specified files
-    for file in files_to_load {
-        if let Err(e) = repl.load_file(&file) {
-            eprintln!("Error loading {}: {}", file, e);
-            return ExitCode::FAILURE;
-        }
-        println!("Loaded {}", file);
-    }
-
-    // Run the REPL
-    match repl.run() {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("REPL error: {}", e);
-            ExitCode::FAILURE
-        }
-    }
+    // The REPL command now just launches the TUI
+    tui::run_tui(args)
 }
 
 /// Convert MvarInitValue to ThreadSafeValue for VM registration
