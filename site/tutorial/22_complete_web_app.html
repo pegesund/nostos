@@ -114,10 +114,13 @@ curl -X POST -d "from=1&to=2&amount=50" http://localhost:8080/transfer</code></p
                     per-request, connections are reused for better performance.
                 </p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.pool.{init, query, execute, transaction}
+<pre><code class="language-nostos">use stdlib.pool.{init, initWithMax, query, execute, transaction, stats}
 
-# Initialize pool at startup
+# Initialize pool at startup (default max: 25 connections)
 init("host=localhost user=postgres password=postgres")
+
+# Or initialize with custom pool size for high-load applications
+initWithMax("host=localhost user=postgres password=postgres", 50)
 
 # Query returns List of tuples
 rows = query("SELECT id, name FROM users", [])
@@ -125,10 +128,35 @@ rows = query("SELECT id, name FROM users", [])
 # Execute for INSERT/UPDATE/DELETE
 execute("INSERT INTO users (name) VALUES ($1)", ("Alice"))
 
-# Transaction for atomic operations
+# Check pool statistics: (active, pooled, total, max)
+(active, pooled, total, max) = stats()
+println("Active: " ++ show(active) ++ " Pooled: " ++ show(pooled))</code></pre>
+                </div>
+
+                <!-- Transactions -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Database Transactions</h2>
+                <p class="text-slate-400 mb-4">
+                    Use <code>transaction</code> for atomic operations where multiple statements must succeed or fail together.
+                    The connection is automatically committed on success or rolled back on error.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Transaction ensures atomicity - both updates succeed or both fail
+# If any statement throws an error, the entire transaction is rolled back
+
 transaction(conn => {
-    Pg.execute(conn, "UPDATE accounts SET balance = balance - $1 WHERE id = $2", (100, fromId))
-    Pg.execute(conn, "UPDATE accounts SET balance = balance + $1 WHERE id = $2", (100, toId))
+    # Debit from source account
+    Pg.execute(conn, "UPDATE accounts SET balance = balance - $1 WHERE id = $2", (amount, fromId))
+
+    # Credit to destination account
+    Pg.execute(conn, "UPDATE accounts SET balance = balance + $1 WHERE id = $2", (amount, toId))
+
+    # Both statements committed together
+})
+
+# Use withConn for read-only operations that need a dedicated connection
+withConn(conn => {
+    rows = Pg.query(conn, "SELECT * FROM large_table WHERE status = $1", ("active"))
+    # Process rows...
 })</code></pre>
                 </div>
 
@@ -181,7 +209,7 @@ handleForm(req) = {
 
 use stdlib.html.{Html, render}
 use stdlib.server.{serve, getParam, respondHtml, redirect, respond400, respond405}
-use stdlib.pool.{init, query, execute, transaction}
+use stdlib.pool.{init, initWithMax, query, execute, transaction, stats}
 
 # --- Database Setup ---
 
@@ -285,7 +313,10 @@ handleUserDetail(req, userId: String) = {
     rows = query("SELECT id, name, email, credits FROM web_users WHERE id = $1", (intOr(userId)))
 
     content = match rows {
-        [] -> Html(div([h1("User Not Found"), p([a([("href", "/users")], "Back")])]))
+        [] -> Html(div([
+            h1("User Not Found"),
+            p([a([("href", "/users")], "Back to Users")])
+        ]))
         [(id, name, email, credits) | _] -> Html(div([
             h1("User: " ++ name),
             el("div", [("class", "card")], [
@@ -382,9 +413,10 @@ main() = {
                 <h2 class="text-2xl font-semibold text-white mb-4">Key Takeaways</h2>
                 <div class="bg-emerald-900/30 border border-emerald-500/30 rounded-lg p-4 mb-8">
                     <ul class="list-disc list-inside text-emerald-200 space-y-2">
-                        <li><strong>Initialize pool once</strong> at startup with <code>init(connString)</code></li>
+                        <li><strong>Initialize pool once</strong> at startup with <code>init(connString)</code> or <code>initWithMax(connString, 50)</code> for custom size</li>
+                        <li><strong>Monitor pool</strong> with <code>stats()</code> returning <code>(active, pooled, total, max)</code></li>
                         <li><strong>Use tuples</strong> for query parameters: <code>("Alice", 25)</code> not <code>["Alice", 25]</code></li>
-                        <li><strong>Wrap atomic operations</strong> in <code>transaction(conn => { ... })</code></li>
+                        <li><strong>Wrap atomic operations</strong> in <code>transaction(conn => { ... })</code> - auto commits/rollbacks</li>
                         <li><strong>Local lambdas</strong> with inline match: <code>f = x => match x { A -> 1, B -> 2 }</code></li>
                         <li><strong>Html components</strong> are functions that return <code>Html(...)</code></li>
                         <li><strong>spawn-per-request</strong> happens automatically via <code>serve()</code></li>
