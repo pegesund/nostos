@@ -8542,7 +8542,6 @@ mod call_graph_tests {
     }
 
     #[test]
-    #[ignore] // TODO: Staleness tracking doesn't propagate to dependents when a dependency has an error
     fn test_tui_workflow_multiple_error_fix_cycles() {
         use std::io::Write;
 
@@ -8554,9 +8553,9 @@ mod call_graph_tests {
 
         let main_path = temp_dir.join("main.nos");
         let mut f = fs::File::create(&main_path).unwrap();
-        writeln!(f, "a() = 1").unwrap();
-        writeln!(f, "b() = a() + 1").unwrap();
-        writeln!(f, "c() = b() + 1").unwrap();
+        writeln!(f, "baseVal() = 1").unwrap();
+        writeln!(f, "midVal() = baseVal() + 1").unwrap();
+        writeln!(f, "topVal() = midVal() + 1").unwrap();
 
         let config = ReplConfig { enable_jit: false, num_threads: 1 };
         let mut engine = ReplEngine::new(config);
@@ -8565,23 +8564,21 @@ mod call_graph_tests {
 
         // Run 5 error/fix cycles
         for i in 0..5 {
-            println!("\n=== Cycle {} ===", i);
-
             // Introduce error
-            let result = engine.eval_in_module("a() = broken()", Some("main.a"));
+            let result = engine.eval_in_module("baseVal() = broken()", Some("main.baseVal"));
             assert!(result.is_err());
-            assert!(matches!(engine.get_compile_status("main.a"), Some(CompileStatus::CompileError(_))));
-            assert!(matches!(engine.get_compile_status("main.b"), Some(CompileStatus::Stale { .. })));
-            assert!(matches!(engine.get_compile_status("main.c"), Some(CompileStatus::Stale { .. })));
+            assert!(matches!(engine.get_compile_status("main.baseVal"), Some(CompileStatus::CompileError(_))));
+            assert!(matches!(engine.get_compile_status("main.midVal"), Some(CompileStatus::Stale { .. })));
+            assert!(matches!(engine.get_compile_status("main.topVal"), Some(CompileStatus::Stale { .. })));
 
             // Fix
-            let result = engine.eval_in_module(&format!("a() = {}", i * 10), Some("main.a"));
+            let result = engine.eval_in_module(&format!("baseVal() = {}", i * 10), Some("main.baseVal"));
             assert!(result.is_ok());
-            assert!(matches!(engine.get_compile_status("main.a"), Some(CompileStatus::Compiled)));
-            assert!(matches!(engine.get_compile_status("main.b"), Some(CompileStatus::Compiled)),
-                    "b should be Compiled after fix in cycle {}", i);
-            assert!(matches!(engine.get_compile_status("main.c"), Some(CompileStatus::Compiled)),
-                    "c should be Compiled after fix in cycle {}", i);
+            assert!(matches!(engine.get_compile_status("main.baseVal"), Some(CompileStatus::Compiled)));
+            assert!(matches!(engine.get_compile_status("main.midVal"), Some(CompileStatus::Compiled)),
+                    "midVal should be Compiled after fix in cycle {}", i);
+            assert!(matches!(engine.get_compile_status("main.topVal"), Some(CompileStatus::Compiled)),
+                    "topVal should be Compiled after fix in cycle {}", i);
         }
 
         fs::remove_dir_all(&temp_dir).ok();
@@ -8637,7 +8634,6 @@ mod call_graph_tests {
     }
 
     #[test]
-    #[ignore] // TODO: Staleness tracking doesn't propagate to dependents when a dependency has an error
     fn test_tui_workflow_diamond_dependency() {
         use std::io::Write;
 
@@ -8647,38 +8643,38 @@ mod call_graph_tests {
         let mut config_file = fs::File::create(temp_dir.join("nostos.toml")).unwrap();
         writeln!(config_file, "[project]\nname = \"test\"").unwrap();
 
-        // Diamond: a -> b, a -> c, b -> d, c -> d
+        // Diamond: baseFunc -> funcB, baseFunc -> funcC, funcB -> funcD, funcC -> funcD
         let main_path = temp_dir.join("main.nos");
         let mut f = fs::File::create(&main_path).unwrap();
-        writeln!(f, "a() = 1").unwrap();
-        writeln!(f, "b() = a() + 10").unwrap();
-        writeln!(f, "c() = a() + 100").unwrap();
-        writeln!(f, "d() = b() + c()").unwrap();
+        writeln!(f, "baseFunc() = 1").unwrap();
+        writeln!(f, "funcB() = baseFunc() + 10").unwrap();
+        writeln!(f, "funcC() = baseFunc() + 100").unwrap();
+        writeln!(f, "funcD() = funcB() + funcC()").unwrap();
 
         let config = ReplConfig { enable_jit: false, num_threads: 1 };
         let mut engine = ReplEngine::new(config);
         engine.load_stdlib().ok();
         assert!(engine.load_directory(temp_dir.to_str().unwrap()).is_ok());
 
-        // Error in a
-        assert!(engine.eval_in_module("a() = broken()", Some("main.a")).is_err());
+        // Error in baseFunc
+        assert!(engine.eval_in_module("baseFunc() = broken()", Some("main.baseFunc")).is_err());
 
-        // b, c, d should all be stale
-        assert!(matches!(engine.get_compile_status("main.b"), Some(CompileStatus::Stale { .. })));
-        assert!(matches!(engine.get_compile_status("main.c"), Some(CompileStatus::Stale { .. })));
-        assert!(matches!(engine.get_compile_status("main.d"), Some(CompileStatus::Stale { .. })));
+        // funcB, funcC, funcD should all be stale
+        assert!(matches!(engine.get_compile_status("main.funcB"), Some(CompileStatus::Stale { .. })));
+        assert!(matches!(engine.get_compile_status("main.funcC"), Some(CompileStatus::Stale { .. })));
+        assert!(matches!(engine.get_compile_status("main.funcD"), Some(CompileStatus::Stale { .. })));
 
-        // Fix a
-        assert!(engine.eval_in_module("a() = 1", Some("main.a")).is_ok());
+        // Fix baseFunc
+        assert!(engine.eval_in_module("baseFunc() = 1", Some("main.baseFunc")).is_ok());
 
         // All should be Compiled
-        assert!(matches!(engine.get_compile_status("main.a"), Some(CompileStatus::Compiled)));
-        assert!(matches!(engine.get_compile_status("main.b"), Some(CompileStatus::Compiled)),
-                "b should be Compiled after fix");
-        assert!(matches!(engine.get_compile_status("main.c"), Some(CompileStatus::Compiled)),
-                "c should be Compiled after fix");
-        assert!(matches!(engine.get_compile_status("main.d"), Some(CompileStatus::Compiled)),
-                "d should be Compiled after fix");
+        assert!(matches!(engine.get_compile_status("main.baseFunc"), Some(CompileStatus::Compiled)));
+        assert!(matches!(engine.get_compile_status("main.funcB"), Some(CompileStatus::Compiled)),
+                "funcB should be Compiled after fix");
+        assert!(matches!(engine.get_compile_status("main.funcC"), Some(CompileStatus::Compiled)),
+                "funcC should be Compiled after fix");
+        assert!(matches!(engine.get_compile_status("main.funcD"), Some(CompileStatus::Compiled)),
+                "funcD should be Compiled after fix");
 
         fs::remove_dir_all(&temp_dir).ok();
     }
