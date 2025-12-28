@@ -1576,18 +1576,35 @@ Pooling benefits:
 - **Per-URL pools**: Each unique connection string gets its own pool
 - **TLS support**: Works with both local (non-TLS) and cloud (TLS) databases
 
+### Query Parameters
+
+Use **tuples** for parameters (supports mixed types):
+
+```nos
+# Tuple with mixed types (Int, String, Float)
+Pg.execute(conn, "INSERT INTO users VALUES ($1, $2, $3)", (1, "Alice", 95.5))
+
+# Tuple with single element
+rows = Pg.query(conn, "SELECT * FROM users WHERE id = $1", (42))
+
+# Multiple params of same type
+Pg.execute(conn, "UPDATE users SET credits = credits - $1 WHERE id = $2", (amount, userId))
+```
+
+**Note**: Lists `[a, b]` require homogeneous types. Use tuples `(a, b)` for mixed types.
+
 ### Transactions
 
 ```nos
 Pg.begin(handle)
-Pg.execute(handle, "UPDATE accounts SET balance = balance - 100 WHERE id = $1", [1])
-Pg.execute(handle, "UPDATE accounts SET balance = balance + 100 WHERE id = $1", [2])
+Pg.execute(handle, "UPDATE accounts SET balance = balance - $1 WHERE id = $2", (100, 1))
+Pg.execute(handle, "UPDATE accounts SET balance = balance + $1 WHERE id = $2", (100, 2))
 Pg.commit(handle)  # or Pg.rollback(handle) to cancel
 
 # Or use Pg.transaction for automatic commit/rollback:
 Pg.transaction(handle, () => {
-    Pg.execute(handle, "UPDATE accounts SET balance = balance - 100 WHERE id = $1", [1])
-    Pg.execute(handle, "UPDATE accounts SET balance = balance + 100 WHERE id = $1", [2])
+    Pg.execute(handle, "UPDATE accounts SET balance = balance - $1 WHERE id = $2", (100, 1))
+    Pg.execute(handle, "UPDATE accounts SET balance = balance + $1 WHERE id = $2", (100, 2))
 })
 ```
 
@@ -1657,16 +1674,59 @@ result = try {
 }
 ```
 
+### stdlib.pool - Connection Pool Helper
+
+The `stdlib.pool` module provides automatic connection management:
+
+```nos
+use stdlib.pool.{init, query, execute, withConn, transaction}
+
+main() = {
+    # Initialize pool with connection string
+    init("host=localhost user=postgres password=postgres")
+
+    # Query - connection auto-acquired and released
+    rows = query("SELECT * FROM users", [])
+
+    # Execute - same automatic handling
+    execute("INSERT INTO users (name) VALUES ($1)", ("Alice"))
+
+    # Multiple operations on same connection
+    withConn(conn => {
+        Pg.query(conn, "SELECT 1", [])
+        Pg.execute(conn, "UPDATE ...", (...))
+    })
+
+    # Transaction with auto commit/rollback
+    transaction(conn => {
+        Pg.execute(conn, "UPDATE accounts SET balance = balance - $1 WHERE id = $2", (100, fromId))
+        Pg.execute(conn, "UPDATE accounts SET balance = balance + $1 WHERE id = $2", (100, toId))
+    })
+    # Commits on success, rolls back on error
+}
+```
+
+**How it works:**
+- `init(connStr)` - stores connection string
+- `query/execute` - get connection from pool, use it, release back
+- `withConn(fn)` - run multiple operations on one connection
+- `transaction(fn)` - begin/commit/rollback handled automatically
+
+The pool uses mvars for thread-safe connection sharing across spawned handlers.
+
 ## HTTP Server
 
-Create HTTP servers:
+Create HTTP servers with the low-level `Server` module or high-level `stdlib.server` helpers.
+
+### Low-Level Server API
 
 ```nos
 # Bind server to port
 handle = Server.bind(8080)
 
 # Accept incoming request (blocking)
-# Returns: { id: Int, method: String, path: String, headers: [(String, String)], body: String }
+# Returns: { id: Int, method: String, path: String, headers: [(String, String)],
+#            body: String, formParams: [(String, String)], queryParams: [(String, String)] }
 request = Server.accept(handle)
 
 # Send response
@@ -1677,28 +1737,255 @@ Server.respond(request.id, 200, headers, "Hello, World!")
 Server.close(handle)
 ```
 
-### Simple Web Server Example
+### stdlib.server Helpers
+
+The `stdlib.server` module provides convenient functions:
 
 ```nos
-handleRequest(req) = match req.path {
-    "/" -> (200, "Welcome!")
-    "/api/hello" -> (200, "{\"message\": \"Hello!\"}")
-    _ -> (404, "Not found")
+use stdlib.server.{serve, respondHtml, redirect, respond400, respond405, getParam}
+
+# Simple server with route handler
+main() = serve(8080, req => {
+    if req.path == "/" then respondHtml(req, "<h1>Home</h1>")
+    else if req.path == "/users" then respondHtml(req, "<h1>Users</h1>")
+    else respond404(req)
+})
+```
+
+**Helper functions:**
+- `serve(port, handler)` - start server with spawn-per-request pattern
+- `respondHtml(req, html)` - send HTML response
+- `redirect(req, url)` - HTTP 302 redirect
+- `respond400(req, msg)` - bad request error
+- `respond405(req)` - method not allowed
+- `getParam(params, name)` - get form/query parameter
+
+### Spawn-Per-Request Pattern
+
+For scalable servers, spawn a handler for each request:
+
+```nos
+handleRequest(req) = {
+    # Process request (can be slow, won't block other requests)
+    result = doWork(req)
+    Server.respond(req.id, 200, [], result)
 }
 
 serverLoop(handle) = {
     req = Server.accept(handle)
-    (status, body) = handleRequest(req)
-    Server.respond(req.id, status, [("Content-Type", "text/plain")], body)
-    serverLoop(handle)
+    spawn { handleRequest(req) }  # Handle in new process
+    serverLoop(handle)            # Immediately accept next request
+}
+```
+
+**Important**: Tail recursion must be OUTSIDE try-catch for memory efficiency:
+
+```nos
+# CORRECT - tail recursion outside try-catch
+serverLoop(handle) = {
+    try {
+        req = Server.accept(handle)
+        spawn { handleRequest(req) }
+    } catch { e -> println("Error: " ++ show(e)) }
+    serverLoop(handle)  # Tail call here, not inside try
+}
+
+# WRONG - tail call inside try blocks optimization
+serverLoop(handle) = try {
+    req = Server.accept(handle)
+    spawn { handleRequest(req) }
+    serverLoop(handle)  # Not a tail call!
+} catch { ... }
+```
+
+### HTML Templating
+
+Use `Html(...)` for type-safe HTML generation:
+
+```nos
+use stdlib.html.{Html, render}
+
+page(title: String, content: Html) = Html(
+    el("html", [], [
+        headEl([
+            meta([("charset", "UTF-8")]),
+            title(title)
+        ]),
+        body([
+            div([h1(title), content])
+        ])
+    ])
+)
+
+userCard(name: String) = Html(
+    div([
+        h3(name),
+        p("Welcome, " ++ name)
+    ])
+)
+
+main() = {
+    cards = map(["Alice", "Bob"], n => Html(div([h1(n)])))
+    html = page("Users", Html(div(cards)))
+    println(render(html))
+}
+```
+
+**Tag functions:**
+- Container: `div`, `span`, `p`, `h1`-`h6`, `ul`, `ol`, `li`, `table`, `tr`, `td`, etc.
+- Text: `text("...")`, `raw("...")`
+- Attributes: `el("tag", [("class", "foo")], [children])`
+- Self-closing: `br()`, `hr()`, `img([("src", "...")])`, `input([...])`
+
+**Note**: Use `headEl` instead of `head` to avoid conflict with stdlib list `head()` function.
+
+## Complete Web Application Example
+
+A full web application with PostgreSQL, HTML templating, routing, forms, and transactions:
+
+```nos
+# web_server_complete.nos
+#
+# Features:
+# - Connection pooling via stdlib.pool
+# - spawn-per-request pattern
+# - Html templating with components
+# - Form handling with POST requests
+# - Transactions for atomic updates
+#
+# Test:
+#   curl http://localhost:8080/
+#   curl http://localhost:8080/users
+#   curl -X POST -d "from=1&to=2&amount=50" http://localhost:8080/transfer
+
+use stdlib.html.{Html, render}
+use stdlib.server.{serve, getParam, respondHtml, redirect, respond400, respond405}
+use stdlib.pool.{init, query, execute, transaction}
+
+# --- Database Setup ---
+
+setupDatabase() = {
+    execute("
+        CREATE TABLE IF NOT EXISTS web_users (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            credits INT DEFAULT 100
+        )
+    ", [])
+
+    rows = query("SELECT COUNT(*) FROM web_users", [])
+    if head(rows).0 == 0 then {
+        execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", ("Alice", "alice@example.com"))
+        execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", ("Bob", "bob@example.com"))
+    } else ()
+}
+
+# --- HTML Components ---
+
+layout(pageTitle: String, content: Html) = Html(
+    el("html", [], [
+        headEl([
+            meta([("charset", "UTF-8")]),
+            title(pageTitle ++ " - Nostos App"),
+            el("style", [], [raw("
+                body { font-family: sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; }
+                .card { background: #f9f9f9; padding: 15px; margin: 10px 0; border-radius: 4px; }
+                form input { padding: 8px; margin: 5px; }
+                form button { padding: 8px 16px; background: #0066cc; color: white; border: none; }
+            ")])
+        ]),
+        body([
+            nav([a([("href", "/")], "Home"), text(" | "), a([("href", "/users")], "Users")]),
+            content
+        ])
+    ])
+)
+
+userCard(userId: Int, name: String, credits: Int) = Html(
+    el("div", [("class", "card")], [
+        h3(name),
+        p("Credits: " ++ show(credits)),
+        p([a([("href", "/users/" ++ show(userId))], "View Details")])
+    ])
+)
+
+# --- Route Handlers ---
+
+handleHome(req) = {
+    rows = query("SELECT COUNT(*) FROM web_users", [])
+    content = Html(div([
+        h1("Nostos Web App"),
+        p("Users in database: " ++ show(head(rows).0))
+    ]))
+    respondHtml(req, render(layout("Home", content)))
+}
+
+handleUsers(req) = {
+    rows = query("SELECT id, name, credits FROM web_users ORDER BY id", [])
+    cards = map(rows, row => userCard(row.0, row.1, row.2))
+
+    content = Html(div([
+        h1("All Users"),
+        div(cards),
+        hr(),
+        h2("Transfer Credits"),
+        el("form", [("method", "POST"), ("action", "/transfer")], [
+            input([("type", "number"), ("name", "from"), ("placeholder", "From ID")]),
+            input([("type", "number"), ("name", "to"), ("placeholder", "To ID")]),
+            input([("type", "number"), ("name", "amount"), ("placeholder", "Amount")]),
+            el("button", [("type", "submit")], [text("Transfer")])
+        ])
+    ]))
+    respondHtml(req, render(layout("Users", content)))
+}
+
+# Helper to parse int with default
+intOr(s, default) = match String.toInt(s) { Some(n) -> n, None -> default }
+
+handleTransfer(req) = {
+    if req.method != "POST" then respond405(req)
+    else {
+        fromId = intOr(getParam(req.formParams, "from"), 0)
+        toId = intOr(getParam(req.formParams, "to"), 0)
+        amount = intOr(getParam(req.formParams, "amount"), 0)
+
+        if amount <= 0 then respond400(req, "Amount must be positive")
+        else {
+            # Transaction ensures both updates happen atomically
+            transaction(conn => {
+                Pg.execute(conn, "UPDATE web_users SET credits = credits - $1 WHERE id = $2", (amount, fromId))
+                Pg.execute(conn, "UPDATE web_users SET credits = credits + $1 WHERE id = $2", (amount, toId))
+            })
+            redirect(req, "/users")
+        }
+    }
+}
+
+# --- Router ---
+
+route(req) = {
+    if req.path == "/" then handleHome(req)
+    else if req.path == "/users" then handleUsers(req)
+    else if req.path == "/transfer" then handleTransfer(req)
+    else respondHtml(req, render(layout("404", Html(h1("Not Found")))))
 }
 
 main() = {
-    handle = Server.bind(8080)
-    println("Server running on port 8080")
-    serverLoop(handle)
+    init("host=localhost user=postgres password=postgres")
+    setupDatabase()
+    println("Web App: http://localhost:8080")
+    serve(8080, route)
 }
 ```
+
+**Key patterns demonstrated:**
+- `stdlib.pool` for connection management
+- `transaction()` for atomic multi-statement updates
+- `Html(...)` templating with components
+- `map()` to generate HTML from data
+- Tuples `(a, b)` for mixed-type DB parameters
+- `intOr()` helper for safe parsing
 
 ## Command-Line Interface
 
