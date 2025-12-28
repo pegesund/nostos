@@ -93,7 +93,7 @@ fn ident() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
         Token::Match | Token::When | Token::Trait | Token::Module | Token::End |
         Token::Use | Token::Private | Token::Pub | Token::Try | Token::Catch |
         Token::Finally | Token::Do | Token::While | Token::For | Token::To |
-        Token::Break | Token::Continue | Token::Spawn | Token::SpawnLink |
+        Token::Break | Token::Continue | Token::Return | Token::Spawn | Token::SpawnLink |
         Token::SpawnMonitor | Token::Receive | Token::After | Token::Panic |
         Token::Extern | Token::From | Token::Quote =>
             Err(Simple::custom(span, format!("'{}' is a reserved keyword", tok))),
@@ -918,6 +918,13 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         let continue_expr = just(Token::Continue)
             .map_with_span(|_, span| Expr::Continue(to_span(span)));
 
+        // Return: return or return expr
+        let return_expr = just(Token::Return)
+            .ignore_then(expr.clone().or_not())
+            .map_with_span(|val, span| {
+                Expr::Return(val.map(Box::new), to_span(span))
+            });
+
         // Spawn expressions
         let spawn_kind = choice((
             just(Token::SpawnMonitor).to(SpawnKind::Monitored),
@@ -942,7 +949,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
 
         // Primary expressions - split into groups to reduce type complexity
         // Skip newlines at the start of any primary expression
-        let control_flow = skip_newlines().ignore_then(choice((if_expr, match_expr, try_expr, do_block, receive_expr, while_expr, for_expr, break_expr, continue_expr))).boxed();
+        let control_flow = skip_newlines().ignore_then(choice((if_expr, match_expr, try_expr, do_block, receive_expr, while_expr, for_expr, break_expr, continue_expr, return_expr))).boxed();
         let special = skip_newlines().ignore_then(choice((spawn_expr, quote_expr, lambda))).boxed();
         let lit = skip_newlines().ignore_then(choice((bool_expr, int, float, string, char_expr))).boxed();
         let collections = skip_newlines().ignore_then(choice((map, set, record, unit_variant, tuple, unit, list, block))).boxed();
@@ -1238,6 +1245,7 @@ fn get_span(expr: &Expr) -> Span {
         Expr::For(_, _, _, _, s) => *s,
         Expr::Break(_, s) => *s,
         Expr::Continue(s) => *s,
+        Expr::Return(_, s) => *s,
     }
 }
 

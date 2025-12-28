@@ -1,0 +1,19 @@
+# expect: 1
+# Test that early return skips remaining code
+
+mvar counter: Int = 0
+
+checkAndExit(x: Int) -> Int = {
+    if x > 5 then
+        return 1
+    else
+        ()
+    counter <- counter + 100
+    0
+}
+
+main() = {
+    result = checkAndExit(10)
+    # counter should still be 0 since we returned early
+    if counter == 0 then result else -1
+}

@@ -556,6 +556,11 @@ fn extract_dependencies_from_expr(expr: &Expr, deps: &mut HashSet<String>) {
             }
         }
         Expr::Continue(_) => {}
+        Expr::Return(value, _) => {
+            if let Some(val) = value {
+                extract_dependencies_from_expr(val, deps);
+            }
+        }
         // Literals don't have dependencies
         Expr::Int(_, _)
         | Expr::Int8(_, _)

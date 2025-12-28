@@ -1,0 +1,16 @@
+# expect: 50
+# Test early return from nested conditionals
+
+findValue(x: Int) -> Int = {
+    if x > 100 then
+        return 100
+    else if x > 50 then
+        return 50
+    else if x > 10 then
+        return x
+    else
+        ()
+    0
+}
+
+main() = findValue(75)

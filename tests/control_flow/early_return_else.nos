@@ -1,0 +1,12 @@
+# expect: 0
+# Test early return - else branch
+
+checkValue(x: Int) -> Int = {
+    if x > 5 then
+        return x
+    else
+        ()
+    0
+}
+
+main() = checkValue(3)
