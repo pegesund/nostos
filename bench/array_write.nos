@@ -24,8 +24,8 @@ benchmark(iterations, size, i, total) =
     else benchmark(iterations, size, i + 1, total + runIteration(size))
 
 main() = {
-    size = 10000
-    iterations = 100
+    size = 100000
+    iterations = 1000
     result = benchmark(iterations, size, 0, 0)
     println(result)
     result

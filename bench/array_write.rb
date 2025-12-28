@@ -31,6 +31,6 @@ def benchmark(iterations, size)
 end
 
 size = 100000
-iterations = 100
+iterations = 1000
 result = benchmark(iterations, size)
 puts result
