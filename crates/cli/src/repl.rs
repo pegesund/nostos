@@ -1301,6 +1301,196 @@ impl Repl {
         None
     }
 
+    /// Check if input is a tuple destructuring pattern like `(a, b) = expr`
+    fn is_tuple_binding(input: &str) -> Option<(Vec<String>, String)> {
+        let input = input.trim();
+
+        // Must start with '(' for tuple pattern
+        if !input.starts_with('(') {
+            return None;
+        }
+
+        // Find the matching closing paren
+        let mut depth = 0;
+        let mut close_paren_pos = None;
+        for (i, c) in input.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close_paren_pos = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let close_paren_pos = close_paren_pos?;
+
+        // After the closing paren, we need `= expr`
+        let after_paren = input[close_paren_pos + 1..].trim();
+        if !after_paren.starts_with('=') {
+            return None;
+        }
+
+        // Make sure it's not == or =>
+        let after_eq = after_paren.chars().nth(1);
+        if matches!(after_eq, Some('=') | Some('>')) {
+            return None;
+        }
+
+        let expr = after_paren[1..].trim();
+        if expr.is_empty() {
+            return None;
+        }
+
+        // Parse the tuple pattern - extract variable names
+        let pattern = &input[1..close_paren_pos];
+        let mut names = Vec::new();
+        let mut current = String::new();
+        let mut paren_depth = 0;
+
+        for c in pattern.chars() {
+            match c {
+                '(' => {
+                    paren_depth += 1;
+                    current.push(c);
+                }
+                ')' => {
+                    paren_depth -= 1;
+                    current.push(c);
+                }
+                ',' if paren_depth == 0 => {
+                    let name = current.trim().to_string();
+                    if !name.is_empty() {
+                        names.push(name);
+                    }
+                    current.clear();
+                }
+                _ => current.push(c),
+            }
+        }
+
+        // Don't forget the last element
+        let last = current.trim().to_string();
+        if !last.is_empty() {
+            names.push(last);
+        }
+
+        // Need at least 2 elements for a tuple
+        if names.len() < 2 {
+            return None;
+        }
+
+        // All names must be valid identifiers (lowercase start or underscore)
+        for name in &names {
+            if let Some(first_char) = name.chars().next() {
+                if !first_char.is_lowercase() && first_char != '_' {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        }
+
+        Some((names, expr.to_string()))
+    }
+
+    /// Define a tuple destructuring binding like `(a, b) = expr`
+    fn define_tuple_binding(&mut self, names: &[String], expr: &str) -> bool {
+        self.var_counter += 1;
+        let tuple_thunk = format!("__repl_tuple_{}", self.var_counter);
+
+        // Create the tuple thunk that evaluates the expression once
+        let tuple_wrapper = format!("{}() = {}", tuple_thunk, expr);
+        let (tuple_module_opt, errors) = parse(&tuple_wrapper);
+
+        if !errors.is_empty() {
+            let source_errors = parse_errors_to_source_errors(&errors);
+            eprint_errors(&source_errors, "<repl>", &tuple_wrapper);
+            return false;
+        }
+
+        let tuple_module = match tuple_module_opt {
+            Some(m) => m,
+            None => {
+                eprintln!("Failed to parse tuple expression");
+                return false;
+            }
+        };
+
+        if let Err(e) = self.compiler.add_module(&tuple_module, vec![], Arc::new(tuple_wrapper.clone()), "<repl>".to_string()) {
+            eprintln!("Error: {}", e);
+            return false;
+        }
+
+        // Compile the tuple thunk first
+        if let Err((e, filename, source)) = self.compiler.compile_all() {
+            let source_error = e.to_source_error();
+            source_error.eprint(&filename, &source);
+            return false;
+        }
+
+        // Create accessor thunks for each element
+        for (i, name) in names.iter().enumerate() {
+            // Skip underscore bindings (wildcards)
+            if name == "_" {
+                continue;
+            }
+
+            self.var_counter += 1;
+            let var_thunk = format!("__repl_var_{}_{}", name, self.var_counter);
+
+            // Create accessor: varThunk() = tupleThunk().N
+            let accessor = format!("{}() = {}().{}", var_thunk, tuple_thunk, i);
+            let (accessor_module_opt, errors) = parse(&accessor);
+
+            if !errors.is_empty() {
+                eprintln!("Parse error creating accessor for {}", name);
+                return false;
+            }
+
+            let accessor_module = match accessor_module_opt {
+                Some(m) => m,
+                None => {
+                    eprintln!("Failed to parse accessor");
+                    return false;
+                }
+            };
+
+            if let Err(e) = self.compiler.add_module(&accessor_module, vec![], Arc::new(accessor.clone()), "<repl>".to_string()) {
+                eprintln!("Error: {}", e);
+                return false;
+            }
+
+            self.var_bindings.insert(name.clone(), VarBinding {
+                thunk_name: var_thunk,
+                mutable: false,
+                type_annotation: None,
+            });
+        }
+
+        // Compile accessor thunks
+        if let Err((e, filename, source)) = self.compiler.compile_all() {
+            let source_error = e.to_source_error();
+            source_error.eprint(&filename, &source);
+            return false;
+        }
+
+        self.sync_vm();
+
+        // Report the binding
+        let names_str = names.join(", ");
+        println!("({}) = {}", names_str, expr);
+
+        // Update completion state
+        self.update_completion_state();
+
+        true
+    }
+
     /// Define a variable binding
     fn define_var(&mut self, name: &str, mutable: bool, expr: &str) -> bool {
         self.var_counter += 1;
@@ -1481,7 +1671,13 @@ impl Repl {
         let input = Self::preprocess_input(input);
         let input = input.as_str();
 
-        // Check for variable binding first (e.g., "x = 5" or "var y = 10")
+        // Check for tuple destructuring binding first (e.g., "(a, b) = expr")
+        if let Some((names, expr)) = Self::is_tuple_binding(input) {
+            self.define_tuple_binding(&names, &expr);
+            return;
+        }
+
+        // Check for variable binding (e.g., "x = 5" or "var y = 10")
         if let Some((name, mutable, expr)) = Self::is_var_binding(input) {
             self.define_var(&name, mutable, &expr);
             return;
@@ -1709,7 +1905,15 @@ impl Repl {
         let input = Self::preprocess_input(input);
         let input = input.as_str();
 
-        // Check for variable binding first (e.g., "x = 5" or "var y = 10")
+        // Check for tuple destructuring binding first (e.g., "(a, b) = expr")
+        if let Some((names, expr)) = Self::is_tuple_binding(input) {
+            if self.define_tuple_binding(&names, &expr) {
+                return Some(format!("({}) = <bound>", names.join(", ")));
+            }
+            return None;
+        }
+
+        // Check for variable binding (e.g., "x = 5" or "var y = 10")
         if let Some((name, mutable, expr)) = Self::is_var_binding(input) {
             if self.define_var(&name, mutable, &expr) {
                 return Some(format!("{} = <bound>", name));
