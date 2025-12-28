@@ -4690,7 +4690,7 @@ mod tests {
 
     #[test]
     fn test_gc_values_equal_empty_list() {
-        let heap = Heap::new();
+        let mut heap = Heap::new();
 
         let list1 = heap.make_list(vec![]);
         let list2 = heap.make_list(vec![]);

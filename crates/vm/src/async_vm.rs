@@ -12629,6 +12629,8 @@ mod debug_tests {
             file: Some("test.nos".to_string()),
             line: 1,
             locals: vec!["x".to_string()],
+            source: None,
+            source_start_line: 0,
         };
         assert_eq!(frame.function, "main");
     }

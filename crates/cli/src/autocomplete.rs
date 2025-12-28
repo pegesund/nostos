@@ -2327,7 +2327,7 @@ mod tests {
         let ctx = CompletionContext::Identifier { prefix: "p".to_string() };
         let items = ac.get_completions_with_context(&ctx, &source, Some("utils"), &[]);
 
-        assert_eq!(items.iter().filter(|i| i.kind == CompletionKind::Function).count(), 3);
+        assert_eq!(items.iter().filter(|i| i.kind == CompletionKind::Function || i.kind == CompletionKind::PublicFunction).count(), 3);
         assert!(items.iter().any(|i| i.text == "process"));
         assert!(items.iter().any(|i| i.text == "parse"));
         assert!(items.iter().any(|i| i.text == "print_debug"));
