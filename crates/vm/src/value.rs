@@ -783,6 +783,8 @@ pub enum Instruction {
     ReceiveTimeout(Reg, Reg),
     /// Sleep for N milliseconds (value in register)
     Sleep(Reg),
+    /// Get VM stats: dst = (spawned, exited, active) process counts
+    VmStats(Reg),
 
     // === Process introspection ===
     /// Get all process IDs: dst = Process.all()
