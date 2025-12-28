@@ -2694,8 +2694,11 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
     let name_for_eval = name.to_string();
     let engine_eval = engine.clone();
     let editor_id_eval = editor_id.clone();
+    let name_for_compile = name.to_string();
+    let engine_compile = engine.clone();
+    let editor_id_compile = editor_id.clone();
 
-    // Ctrl+S to save, Ctrl+W to close, Ctrl+Y to copy, Ctrl+G for graph, Ctrl+E to compile, Esc to close
+    // Ctrl+S to save, Ctrl+W to close, Ctrl+Y to copy, Ctrl+G for graph, Ctrl+E/Ctrl+O to compile, Esc to close
     let editor_with_events = OnEventView::new(editor.with_name(&editor_id))
         .on_event(Event::CtrlChar('y'), move |s| {
             // Copy editor content to clipboard (Ctrl+Y)
@@ -3185,6 +3188,181 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                     Ok(Err(compile_error)) => {
                         drop(engine);
                         s.call_on_name(&editor_id_eval, |v: &mut CodeEditor| {
+                            v.set_compile_error(Some(compile_error));
+                        });
+                        log_to_repl(s, &format!("Compile error ({}ms)", elapsed_ms));
+                    }
+                    Err(panic_info) => {
+                        let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            "Unknown panic".to_string()
+                        };
+                        drop(engine);
+                        log_to_repl(s, &format!("Internal error: {}", panic_msg));
+                    }
+                }
+            }
+        })
+        .on_event(Event::CtrlChar('o'), move |s| {
+            // Ctrl+O: Save and compile without closing the editor (same as Ctrl+E)
+            debug_log(&format!("Ctrl+O pressed for: {}", name_for_compile));
+            let content = match s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| v.get_content()) {
+                Some(c) => c,
+                None => {
+                    debug_log(&format!("ERROR: Could not find editor {}", editor_id_compile));
+                    log_to_repl(s, &format!("Error: Could not find editor {}", editor_id_compile));
+                    return;
+                }
+            };
+
+            // Extract actual definition names from the content
+            let actual_names = extract_definition_names(&content);
+            debug_log(&format!("Ctrl+O: definition names: {:?}", actual_names));
+
+            let mut engine = engine_compile.borrow_mut();
+
+            // Check if this is a metadata file
+            if engine.is_metadata(&name_for_compile) {
+                debug_log(&format!("Ctrl+O: Saving metadata: {}", name_for_compile));
+                match engine.save_metadata(&name_for_compile, &content) {
+                    Ok(()) => {
+                        drop(engine);
+                        log_to_repl(s, &format!("Saved {}", name_for_compile));
+                        s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| v.mark_saved());
+                    }
+                    Err(e) => {
+                        drop(engine);
+                        log_to_repl(s, &format!("Error saving {}: {}", name_for_compile, e));
+                    }
+                }
+                return;
+            }
+
+            // Strip together directives before eval
+            let eval_content: String = content
+                .lines()
+                .filter(|line| !line.trim().starts_with("# together "))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            if engine.has_source_manager() {
+                // Time the compilation
+                let start = std::time::Instant::now();
+
+                let compile_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    engine.eval_in_module(&eval_content, Some(&name_for_compile))
+                }));
+
+                let elapsed = start.elapsed();
+                let elapsed_ms = elapsed.as_millis();
+
+                let compile_result = match compile_result {
+                    Ok(r) => r,
+                    Err(panic_info) => {
+                        let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            "Unknown panic".to_string()
+                        };
+                        debug_log(&format!("Ctrl+O eval_in_module PANIC: {}", panic_msg));
+                        Err(format!("Internal error (panic): {}", panic_msg))
+                    }
+                };
+
+                match compile_result {
+                    Ok(_output) => {
+                        // Compilation succeeded - save to disk
+                        debug_log(&format!("Ctrl+O: Compilation OK, saving to disk"));
+                        let save_result = engine.save_group_source(&name_for_compile, &content);
+
+                        match save_result {
+                            Ok(_saved_names) => {
+                                // Mark as compiled
+                                let module_prefix = if let Some(dot_pos) = name_for_compile.rfind('.') {
+                                    format!("{}.", &name_for_compile[..dot_pos])
+                                } else {
+                                    String::new()
+                                };
+
+                                // Build qualified names for logging
+                                let qualified_names: Vec<String> = actual_names.iter()
+                                    .map(|n| format!("{}{}", module_prefix, n))
+                                    .collect();
+
+                                // Update compile status for all definitions
+                                for qualified in &qualified_names {
+                                    engine.set_compile_status(qualified, CompileStatus::Compiled);
+                                }
+
+                                drop(engine);
+
+                                // Update editor compile status
+                                s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| v.mark_saved());
+
+                                // Log with timing info
+                                let names_str = if actual_names.is_empty() {
+                                    name_for_compile.clone()
+                                } else {
+                                    actual_names.join(", ")
+                                };
+                                log_to_repl(s, &format!("Compiled: {} ({}ms)", names_str, elapsed_ms));
+                            }
+                            Err(save_error) => {
+                                drop(engine);
+                                log_to_repl(s, &format!("Save error: {}", save_error));
+                            }
+                        }
+                    }
+                    Err(compile_error) => {
+                        // Compilation failed - show error
+                        let module_prefix = if let Some(dot_pos) = name_for_compile.rfind('.') {
+                            format!("{}.", &name_for_compile[..dot_pos])
+                        } else {
+                            String::new()
+                        };
+
+                        // Update compile status for all definitions
+                        for name in &actual_names {
+                            let qualified = format!("{}{}", module_prefix, name);
+                            engine.set_compile_status(&qualified, CompileStatus::CompileError(compile_error.clone()));
+                        }
+
+                        drop(engine);
+
+                        // Set error in editor for visual feedback
+                        s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
+                            v.set_compile_error(Some(compile_error.clone()));
+                        });
+
+                        log_to_repl(s, &format!("Compile error ({}ms): {}", elapsed_ms, compile_error));
+                    }
+                }
+            } else {
+                // No source manager - direct eval
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    engine.eval(&eval_content)
+                }));
+
+                let elapsed_ms = 0; // Not timing for non-source-manager mode
+
+                match result {
+                    Ok(Ok(_output)) => {
+                        drop(engine);
+                        let names_str = if actual_names.is_empty() {
+                            name_for_compile.clone()
+                        } else {
+                            actual_names.join(", ")
+                        };
+                        log_to_repl(s, &format!("Compiled: {} ({}ms)", names_str, elapsed_ms));
+                    }
+                    Ok(Err(compile_error)) => {
+                        drop(engine);
+                        s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
                             v.set_compile_error(Some(compile_error));
                         });
                         log_to_repl(s, &format!("Compile error ({}ms)", elapsed_ms));

@@ -1422,13 +1422,6 @@ impl View for CodeEditor {
                 }
                 EventResult::Consumed(None)
             }
-            // Ctrl+O to compile and show errors
-            Event::CtrlChar('o') => {
-                // Force a full compile check
-                self.needs_full_compile = true;
-                self.check_compile();
-                EventResult::Consumed(None)
-            }
             _ => EventResult::Ignored,
         };
 
