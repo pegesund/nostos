@@ -459,6 +459,48 @@ impl ReplEngine {
             // First, try to parse as a definition (function, type, etc.)
             let (direct_module_opt, direct_errors) = parse(code);
 
+            // Check if it's a use statement
+            let is_use_stmt = direct_module_opt.as_ref().map(|m| {
+                m.items.iter().any(|item| matches!(item, Item::Use(_)))
+            }).unwrap_or(false);
+
+            if is_use_stmt && direct_errors.is_empty() {
+                // Handle use statement - add imports to prelude_imports
+                use nostos_syntax::ast::UseImports;
+                let module = direct_module_opt.as_ref().unwrap();
+                let mut imported_names = Vec::new();
+
+                for item in &module.items {
+                    if let Item::Use(use_stmt) = item {
+                        // Build the module path
+                        let module_path: String = use_stmt.path.iter()
+                            .map(|ident| ident.node.as_str())
+                            .collect::<Vec<_>>()
+                            .join(".");
+
+                        match &use_stmt.imports {
+                            UseImports::All => {
+                                // Can't easily support `use Foo.*` without module introspection
+                                return Err("use Foo.* is not supported in REPL".to_string());
+                            }
+                            UseImports::Named(items) => {
+                                let mut imports = prelude_imports.write().expect("prelude_imports lock poisoned");
+                                for item in items {
+                                    let local_name = item.alias.as_ref()
+                                        .map(|a| a.node.clone())
+                                        .unwrap_or_else(|| item.name.node.clone());
+                                    let qualified_name = format!("{}.{}", module_path, item.name.node);
+                                    imports.insert(local_name.clone(), qualified_name);
+                                    imported_names.push(local_name);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return Ok(format!("imported: {}", imported_names.join(", ")));
+            }
+
             // Check if it's a definition (has function definitions, type definitions, etc.)
             let is_definition = direct_module_opt.as_ref().map(|m| {
                 m.items.iter().any(|item| matches!(item, Item::FnDef(_) | Item::TypeDef(_) | Item::TraitDef(_) | Item::TraitImpl(_) | Item::MvarDef(_)))
@@ -1522,6 +1564,16 @@ impl ReplEngine {
 
         // Check if this looks like a definition (has definitions parsed)
         let has_definitions = module_opt.as_ref().map(|m| Self::has_definitions(m)).unwrap_or(false);
+
+        // Check if this is a use statement
+        let has_use_stmt = module_opt.as_ref().map(|m| {
+            m.items.iter().any(|item| matches!(item, Item::Use(_)))
+        }).unwrap_or(false);
+
+        // Handle use statements
+        if has_use_stmt && errors.is_empty() {
+            return self.handle_use_statement(module_opt.as_ref().unwrap());
+        }
 
         // No definitions - try as expression first
         // (expression parsing is separate from module parsing)
@@ -4829,6 +4881,51 @@ impl ReplEngine {
 
         // Default: not a project function
         false
+    }
+
+    /// Handle use statements in the REPL
+    fn handle_use_statement(&mut self, module: &nostos_syntax::Module) -> Result<String, String> {
+        use nostos_syntax::ast::{UseImports};
+
+        let mut imported_names = Vec::new();
+
+        for item in &module.items {
+            if let Item::Use(use_stmt) = item {
+                // Build the module path
+                let module_path: String = use_stmt.path.iter()
+                    .map(|ident| ident.node.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
+
+                match &use_stmt.imports {
+                    UseImports::All => {
+                        return Err("use Foo.* is not supported in REPL".to_string());
+                    }
+                    UseImports::Named(items) => {
+                        for item in items {
+                            let local_name = item.alias.as_ref()
+                                .map(|a| a.node.clone())
+                                .unwrap_or_else(|| item.name.node.clone());
+                            let qualified_name = format!("{}.{}", module_path, item.name.node);
+
+                            // Add to compiler's prelude imports
+                            self.compiler.add_prelude_import(local_name.clone(), qualified_name.clone());
+
+                            // Also update the VM's prelude imports
+                            self.vm.set_prelude_imports(
+                                self.compiler.get_prelude_imports().iter()
+                                    .map(|(k, v)| (k.clone(), v.clone()))
+                                    .collect()
+                            );
+
+                            imported_names.push(local_name);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(format!("imported: {}", imported_names.join(", ")))
     }
 
     /// Handle REPL commands (starting with :)
@@ -11242,5 +11339,27 @@ mod postgres_module_tests {
         let result = engine.eval("a.append(\"aa\")");
         println!("a.append(\"aa\") result: {:?}", result);
         assert!(result.is_ok(), "Should call a.append(): {:?}", result);
+    }
+
+    #[test]
+    fn test_use_statement_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        // Test use statement
+        let result = engine.eval("use stdlib.html_parser.{htmlParse, htmlPrettyPrint}");
+        println!("use result: {:?}", result);
+        assert!(result.is_ok(), "use statement should work: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("imported"), "Should say imported: {}", output);
+        assert!(output.contains("htmlParse"), "Should import htmlParse: {}", output);
+
+        // Now use the imported function
+        let result = engine.eval("htmlParse(\"<div>hello</div>\")");
+        println!("htmlParse result: {:?}", result);
+        assert!(result.is_ok(), "htmlParse should work: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("Element") || output.contains("div"), "Should return parsed HTML: {}", output);
     }
 }
