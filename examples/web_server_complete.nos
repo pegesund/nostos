@@ -127,13 +127,13 @@ handleUserDetail(req, userId: String) = {
             h1("User Not Found"),
             p([a([("href", "/users")], "Back to Users")])
         ]))
-        [row | _] -> Html(div([
-            h1("User: " ++ row.1),
+        [(id, name, email, credits) | _] -> Html(div([
+            h1("User: " ++ name),
             el("div", [("class", "card")], [
-                p("ID: " ++ show(row.0)),
-                p("Name: " ++ row.1),
-                p("Email: " ++ row.2),
-                p("Credits: " ++ show(row.3))
+                p("ID: " ++ show(id)),
+                p("Name: " ++ name),
+                p("Email: " ++ email),
+                p("Credits: " ++ show(credits))
             ]),
             p([a([("href", "/users")], "Back to Users")])
         ]))
