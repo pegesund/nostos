@@ -158,34 +158,35 @@ handleCreateUser(req) = {
 
 # Transfer credits between users - uses transaction for atomicity
 # Both updates succeed or both fail (no partial transfers)
-handleTransfer(req) = {
-    if req.method != "POST" then respond405(req)
-    else {
+handleTransfer(req) = match req.method {
+    "POST" -> {
         fromId = getParam(req.formParams, "from")
         toId = getParam(req.formParams, "to")
         amountStr = getParam(req.formParams, "amount")
 
-        if fromId == "" then respond400(req, "From user ID is required")
-        else if toId == "" then respond400(req, "To user ID is required")
-        else if amountStr == "" then respond400(req, "Amount is required")
-        else {
-            intOr = s => match String.toInt(s) { Some(n) -> n, None -> 0 }
-            amount = intOr(amountStr)
-            fromIdInt = intOr(fromId)
-            toIdInt = intOr(toId)
+        match (fromId, toId, amountStr) {
+            ("", _, _) -> respond400(req, "From user ID is required")
+            (_, "", _) -> respond400(req, "To user ID is required")
+            (_, _, "") -> respond400(req, "Amount is required")
+            _ -> {
+                intOr = s => match String.toInt(s) { Some(n) -> n, None -> 0 }
+                amount = intOr(amountStr)
+                fromIdInt = intOr(fromId)
+                toIdInt = intOr(toId)
 
-            if amount <= 0 then respond400(req, "Amount must be positive")
-            else {
-                # Transaction ensures both updates happen atomically
-                # If either fails, both are rolled back
-                transaction(conn => {
-                    Pg.execute(conn, "UPDATE web_users SET credits = credits - $1 WHERE id = $2", (amount, fromIdInt))
-                    Pg.execute(conn, "UPDATE web_users SET credits = credits + $1 WHERE id = $2", (amount, toIdInt))
-                })
-                redirect(req, "/users")
+                if amount <= 0 then respond400(req, "Amount must be positive")
+                else {
+                    # Transaction ensures both updates happen atomically
+                    transaction(conn => {
+                        Pg.execute(conn, "UPDATE web_users SET credits = credits - $1 WHERE id = $2", (amount, fromIdInt))
+                        Pg.execute(conn, "UPDATE web_users SET credits = credits + $1 WHERE id = $2", (amount, toIdInt))
+                    })
+                    redirect(req, "/users")
+                }
             }
         }
     }
+    _ -> respond405(req)
 }
 
 handle404(req) = {
