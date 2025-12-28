@@ -1685,6 +1685,48 @@ impl Repl {
         false
     }
 
+    /// Handle use statements in the REPL
+    fn handle_use_statement(&mut self, module: &nostos_syntax::Module) -> Option<String> {
+        use nostos_syntax::ast::UseImports;
+
+        let mut imported_names = Vec::new();
+
+        for item in &module.items {
+            if let Item::Use(use_stmt) = item {
+                // Build the module path
+                let module_path: String = use_stmt.path.iter()
+                    .map(|ident| ident.node.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
+
+                match &use_stmt.imports {
+                    UseImports::All => {
+                        println!("Error: use Foo.* is not supported in REPL");
+                        return None;
+                    }
+                    UseImports::Named(items) => {
+                        for item in items {
+                            let local_name = item.alias.as_ref()
+                                .map(|a| a.node.clone())
+                                .unwrap_or_else(|| item.name.node.clone());
+                            let qualified_name = format!("{}.{}", module_path, item.name.node);
+
+                            // Add to compiler's prelude imports
+                            self.compiler.add_prelude_import(local_name.clone(), qualified_name.clone());
+
+                            imported_names.push(local_name);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sync the VM with the updated compiler state
+        self.sync_vm();
+
+        Some(format!("imported: {}", imported_names.join(", ")))
+    }
+
     /// Get function definitions from module
     fn get_fn_defs(module: &nostos_syntax::Module) -> Vec<&nostos_syntax::ast::FnDef> {
         module.items.iter().filter_map(|item| {
@@ -2013,6 +2055,18 @@ impl Repl {
 
         // Try to parse as a module (which includes definitions and expressions)
         let (module_opt, errors) = parse(input);
+
+        // Check if this is a use statement
+        let has_use_stmt = module_opt.as_ref().map(|m| {
+            m.items.iter().any(|item| matches!(item, Item::Use(_)))
+        }).unwrap_or(false);
+
+        // Handle use statements
+        if has_use_stmt && errors.is_empty() {
+            if let Some(module) = module_opt.as_ref() {
+                return self.handle_use_statement(module);
+            }
+        }
 
         // If parsing failed or no definitions, try as expression
         if !errors.is_empty() || module_opt.as_ref().map(|m| !Self::has_definitions(m)).unwrap_or(true) {
