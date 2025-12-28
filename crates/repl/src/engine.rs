@@ -20,7 +20,7 @@ use nostos_vm::process::ThreadSafeValue;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BrowserItem {
     Module(String),
-    Function { name: String, signature: String, doc: Option<String>, eval_created: bool },
+    Function { name: String, signature: String, doc: Option<String>, eval_created: bool, is_public: bool },
     Type { name: String, eval_created: bool },
     Trait { name: String, eval_created: bool },
     Variable { name: String, mutable: bool, eval_created: bool, is_mvar: bool, type_name: Option<String> },
@@ -2258,6 +2258,10 @@ impl ReplEngine {
         functions.push("Buffer.new".to_string());
         functions.push("Buffer.append".to_string());
         functions.push("Buffer.toString".to_string());
+        // Add imported function names (local aliases from use statements)
+        for local_name in self.compiler.get_prelude_imports().keys() {
+            functions.push(local_name.clone());
+        }
         functions.sort();
         functions.dedup();
         functions
@@ -2493,16 +2497,49 @@ impl ReplEngine {
 
     /// Get the signature for a function (for autocomplete display)
     pub fn get_function_signature(&self, name: &str) -> Option<String> {
-        // Try user-defined functions first, then builtins
-        self.compiler.get_function_signature(name)
-            .or_else(|| Compiler::get_builtin_signature(name).map(String::from))
+        // Try user-defined functions first
+        if let Some(sig) = self.compiler.get_function_signature(name) {
+            return Some(sig);
+        }
+        // Try imported names (local alias -> qualified name)
+        if let Some(qualified) = self.compiler.get_prelude_imports().get(name) {
+            if let Some(sig) = self.compiler.get_function_signature(qualified) {
+                return Some(sig);
+            }
+        }
+        // Fall back to builtins
+        Compiler::get_builtin_signature(name).map(String::from)
     }
 
     /// Get the doc comment for a function (for autocomplete display)
     pub fn get_function_doc(&self, name: &str) -> Option<String> {
-        // Try user-defined functions first, then builtins
-        self.compiler.get_function_doc(name)
-            .or_else(|| Compiler::get_builtin_doc(name).map(String::from))
+        // Try user-defined functions first
+        if let Some(doc) = self.compiler.get_function_doc(name) {
+            return Some(doc);
+        }
+        // Try imported names (local alias -> qualified name)
+        if let Some(qualified) = self.compiler.get_prelude_imports().get(name) {
+            if let Some(doc) = self.compiler.get_function_doc(qualified) {
+                return Some(doc);
+            }
+        }
+        // Fall back to builtins
+        Compiler::get_builtin_doc(name).map(String::from)
+    }
+
+    /// Check if a function is public (exported)
+    pub fn is_function_public(&self, name: &str) -> bool {
+        // Try direct check
+        if self.compiler.is_function_public(name) {
+            return true;
+        }
+        // Try imported names (local alias -> qualified name)
+        if let Some(qualified) = self.compiler.get_prelude_imports().get(name) {
+            if self.compiler.is_function_public(qualified) {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn browse(&self, module_filter: Option<&str>) -> String {
@@ -4502,8 +4539,8 @@ impl ReplEngine {
         let prefix_len = prefix.len();
 
         let mut modules: BTreeSet<String> = BTreeSet::new();
-        // (name, signature, doc, eval_created)
-        let mut functions: BTreeSet<(String, String, Option<String>, bool)> = BTreeSet::new();
+        // (name, signature, doc, eval_created, is_public)
+        let mut functions: BTreeSet<(String, String, Option<String>, bool, bool)> = BTreeSet::new();
         // (name, eval_created)
         let mut types: BTreeSet<(String, bool)> = BTreeSet::new();
         let mut traits: BTreeSet<(String, bool)> = BTreeSet::new();
@@ -4535,7 +4572,8 @@ impl ReplEngine {
                     // Direct function at root
                     let sig = self.compiler.get_function_signature(name).unwrap_or_default();
                     let doc = self.compiler.get_function_doc(name);
-                    functions.insert((base_name.to_string(), sig, doc, is_eval));
+                    let is_public = self.compiler.is_function_public(name);
+                    functions.insert((base_name.to_string(), sig, doc, is_eval, is_public));
                 }
             } else if base_name.starts_with(&prefix) {
                 // Under our path
@@ -4547,7 +4585,8 @@ impl ReplEngine {
                     // Direct function in this module
                     let sig = self.compiler.get_function_signature(name).unwrap_or_default();
                     let doc = self.compiler.get_function_doc(name);
-                    functions.insert((rest.to_string(), sig, doc, is_eval));
+                    let is_public = self.compiler.is_function_public(name);
+                    functions.insert((rest.to_string(), sig, doc, is_eval, is_public));
                 }
             }
         }
@@ -4685,8 +4724,8 @@ impl ReplEngine {
         }
 
         // Functions last
-        for (name, sig, doc, eval_created) in functions {
-            items.push(BrowserItem::Function { name, signature: sig, doc, eval_created });
+        for (name, sig, doc, eval_created, is_public) in functions {
+            items.push(BrowserItem::Function { name, signature: sig, doc, eval_created, is_public });
         }
 
         items
@@ -4899,7 +4938,21 @@ impl ReplEngine {
 
                 match &use_stmt.imports {
                     UseImports::All => {
-                        return Err("use Foo.* is not supported in REPL".to_string());
+                        // Import all public functions from the module
+                        let public_funcs = self.compiler.get_module_public_functions(&module_path);
+                        if public_funcs.is_empty() {
+                            return Err(format!("No public functions found in module '{}'", module_path));
+                        }
+                        for (local_name, qualified_name) in public_funcs {
+                            self.compiler.add_prelude_import(local_name.clone(), qualified_name.clone());
+                            imported_names.push(local_name);
+                        }
+                        // Update VM's prelude imports
+                        self.vm.set_prelude_imports(
+                            self.compiler.get_prelude_imports().iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect()
+                        );
                     }
                     UseImports::Named(items) => {
                         for item in items {
@@ -11407,5 +11460,78 @@ mod postgres_module_tests {
                 panic!("start_eval_async should not succeed for use statements");
             }
         }
+    }
+
+    #[test]
+    fn test_use_star_in_repl() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        // Test use module.* syntax
+        let result = engine.eval("use stdlib.html_parser.*");
+        println!("use star result: {:?}", result);
+        assert!(result.is_ok(), "use module.* should work: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("imported"), "Should say imported: {}", output);
+        assert!(output.contains("htmlParse"), "Should import htmlParse: {}", output);
+        assert!(output.contains("htmlTokenize"), "Should import htmlTokenize: {}", output);
+        assert!(output.contains("htmlPrettyPrint"), "Should import htmlPrettyPrint: {}", output);
+
+        // Now use the imported function
+        let result = engine.eval("htmlParse(\"<div>hello</div>\")");
+        println!("htmlParse result: {:?}", result);
+        assert!(result.is_ok(), "htmlParse should work: {:?}", result);
+    }
+
+    #[test]
+    fn test_imported_functions_in_autocomplete() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        // Stdlib functions are automatically added to prelude during load_stdlib
+        // This makes them available by their local names (htmlParse, etc.)
+        let functions = engine.get_functions();
+        let has_htmlparse = functions.iter().any(|f| f == "htmlParse");
+        println!("After load_stdlib: htmlParse available = {}", has_htmlparse);
+        assert!(has_htmlparse, "Stdlib functions should be in prelude after load_stdlib");
+
+        // Explicit use statement also works (adds alias if needed)
+        let result = engine.eval("use stdlib.html_parser.{htmlParse as hp}");
+        assert!(result.is_ok());
+
+        // After aliased import, the alias should appear
+        let functions_after = engine.get_functions();
+        let has_alias = functions_after.iter().any(|f| f == "hp");
+        println!("After alias import: hp available = {}", has_alias);
+        assert!(has_alias, "Alias 'hp' should be in functions after import");
+
+        // Should also be able to get signature for the aliased function
+        let sig = engine.get_function_signature("hp");
+        println!("hp signature: {:?}", sig);
+        assert!(sig.is_some(), "Should get signature for aliased function");
+    }
+
+    #[test]
+    fn test_is_function_public() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        // htmlParse is a pub function in stdlib.html_parser
+        let is_pub = engine.is_function_public("htmlParse");
+        println!("htmlParse is_public: {}", is_pub);
+
+        // Also check the qualified name
+        let is_pub_qualified = engine.is_function_public("stdlib.html_parser.htmlParse");
+        println!("stdlib.html_parser.htmlParse is_public: {}", is_pub_qualified);
+
+        // Check a private function (if any exist)
+        // tokenize is private in html_parser
+        let is_priv = engine.is_function_public("stdlib.html_parser.tokenize");
+        println!("stdlib.html_parser.tokenize is_public: {}", is_priv);
+
+        assert!(is_pub || is_pub_qualified, "htmlParse should be public");
     }
 }

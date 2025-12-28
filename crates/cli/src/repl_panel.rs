@@ -62,6 +62,10 @@ impl<'a> CompletionSource for EngineCompletionSource<'a> {
         self.engine.get_type_fields(type_name)
     }
 
+    fn is_function_public(&self, name: &str) -> bool {
+        self.engine.is_function_public(name)
+    }
+
     fn get_type_constructors(&self, type_name: &str) -> Vec<String> {
         self.engine.get_type_constructors(type_name)
     }

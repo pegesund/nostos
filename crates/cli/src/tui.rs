@@ -3410,7 +3410,7 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 }
                 styled
             }
-            BrowserItem::Function { name, signature, doc, eval_created } => {
+            BrowserItem::Function { name, signature, doc, eval_created, is_public } => {
                 // Check compile status for this function
                 let qualified_name = format!("{}{}", module_prefix, name);
                 let status_indicator = match engine_ref.get_compile_status(&qualified_name) {
@@ -3423,16 +3423,23 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 let mut styled = StyledString::new();
                 // Add [eval] prefix for eval-created functions (view-only)
                 let eval_prefix = if *eval_created { "[eval] " } else { "" };
+                // Use "pub" prefix for public functions
+                let pub_prefix = if *is_public { "pub " } else { "" };
                 if signature.is_empty() {
-                    styled.append_plain(format!("ƒ  {}{}{}", eval_prefix, name, status_indicator));
+                    styled.append_plain(format!("ƒ  {}{}{}{}", pub_prefix, eval_prefix, name, status_indicator));
                 } else {
-                    styled.append_plain(format!("ƒ  {}{} :: {}{}", eval_prefix, name, signature, status_indicator));
+                    styled.append_plain(format!("ƒ  {}{}{} :: {}{}", pub_prefix, eval_prefix, name, signature, status_indicator));
                 }
-                // Style eval functions differently (muted cyan)
+                // Style based on visibility and eval status
                 if *eval_created {
                     styled = StyledString::styled(
                         styled.source(),
                         Style::from(Color::Rgb(100, 180, 200))  // Muted cyan for eval
+                    );
+                } else if *is_public {
+                    styled = StyledString::styled(
+                        styled.source(),
+                        Style::from(Color::Rgb(100, 255, 100))  // Green for public functions
                     );
                 }
                 // Add doc comment in a muted green/cyan color
@@ -3701,6 +3708,7 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                          signature: String::new(),
                          doc: None,
                          eval_created: false,
+                         is_public: false,
                      });
                      s.pop_layer(); // Close browser
                      open_git_history_for_definition(s, &full_name);

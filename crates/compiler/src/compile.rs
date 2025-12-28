@@ -10344,6 +10344,47 @@ impl Compiler {
         self.known_modules.iter().map(|s| s.as_str())
     }
 
+    /// Get all public functions from a module (for `use module.*`).
+    /// Returns Vec of (local_name, qualified_name) pairs.
+    pub fn get_module_public_functions(&self, module_path: &str) -> Vec<(String, String)> {
+        let prefix = format!("{}.", module_path);
+        self.function_visibility.iter()
+            .filter(|(name, vis)| {
+                name.starts_with(&prefix) && **vis == Visibility::Public
+            })
+            .map(|(name, _)| {
+                let local_name = name.strip_prefix(&prefix)
+                    .unwrap_or(name)
+                    .to_string();
+                (local_name, name.clone())
+            })
+            .collect()
+    }
+
+    /// Check if a function is public (exported).
+    pub fn is_function_public(&self, name: &str) -> bool {
+        // Check in function_visibility map (exact match)
+        if let Some(vis) = self.function_visibility.get(name) {
+            return *vis == Visibility::Public;
+        }
+        // Strip signature suffix and check
+        let base_name = name.split('/').next().unwrap_or(name);
+        if let Some(vis) = self.function_visibility.get(base_name) {
+            return *vis == Visibility::Public;
+        }
+        // Search for any function with this base name (handles qualified names)
+        // e.g., "htmlParse" should match "stdlib.html_parser.htmlParse/String"
+        // and "stdlib.html_parser.htmlParse" should match "stdlib.html_parser.htmlParse/String"
+        for (key, vis) in &self.function_visibility {
+            let key_base = key.split('/').next().unwrap_or(key);
+            if key_base == base_name || key_base.ends_with(&format!(".{}", base_name)) {
+                return *vis == Visibility::Public;
+            }
+        }
+        // If not found, assume not public (builtins, etc. are handled elsewhere)
+        false
+    }
+
     /// Add an import alias (local name -> qualified name).
     pub fn add_import_alias(&mut self, local_name: &str, qualified_name: &str) {
         self.imports.insert(local_name.to_string(), qualified_name.to_string());
@@ -12739,8 +12780,22 @@ impl Compiler {
 
         match &use_stmt.imports {
             UseImports::All => {
-                // `use Foo.*` - we can't easily support this without module introspection
-                // For now, we'll skip it (would need to know all exports from the module)
+                // `use Foo.*` - import all public functions from the module
+                let prefix = format!("{}.", module_path);
+                let public_functions: Vec<String> = self.function_visibility.iter()
+                    .filter(|(name, vis)| {
+                        name.starts_with(&prefix) && **vis == Visibility::Public
+                    })
+                    .map(|(name, _)| name.clone())
+                    .collect();
+
+                for qualified_name in public_functions {
+                    // Extract local name (function name without module prefix)
+                    let local_name = qualified_name.strip_prefix(&prefix)
+                        .unwrap_or(&qualified_name)
+                        .to_string();
+                    self.imports.insert(local_name, qualified_name);
+                }
             }
             UseImports::Named(items) => {
                 for item in items {

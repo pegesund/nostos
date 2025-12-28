@@ -283,7 +283,7 @@ parseNodes(tokens: List[HtmlToken], stopTag: String) -> (List[HtmlNode], List[Ht
 # === Public API ===
 
 # Parse an HTML string into a list of nodes
-pub htmlParse(input) = {
+pub htmlParse(input: String) -> List[HtmlNode] = {
     chars = String.chars(input)
     tokens = tokenize(chars, [])
     (nodes, _) = parseNodes(tokens, "")
@@ -328,7 +328,7 @@ nodeToStr(node, indent) = match node {
     }
 }
 
-pub htmlPrettyPrint(nodes) = {
+pub htmlPrettyPrint(nodes: List[HtmlNode]) -> String = {
     strs = nodes.map(n => nodeToStr(n, 0))
     joinStrs(strs, "\n")
 }

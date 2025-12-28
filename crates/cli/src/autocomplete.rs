@@ -201,6 +201,7 @@ pub struct CompletionItem {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CompletionKind {
     Function,
+    PublicFunction,  // Public (exported) function - shown in a distinct color
     Type,
     Module,
     Field,
@@ -216,6 +217,7 @@ impl CompletionKind {
     pub fn prefix(&self) -> &'static str {
         match self {
             CompletionKind::Function => "fn",
+            CompletionKind::PublicFunction => "pub",
             CompletionKind::Type => "type",
             CompletionKind::Module => "mod",
             CompletionKind::Field => "field",
@@ -230,7 +232,8 @@ impl CompletionKind {
     /// Color for display (RGB values)
     pub fn color(&self) -> (u8, u8, u8) {
         match self {
-            CompletionKind::Function => (100, 200, 255),   // Light blue
+            CompletionKind::Function => (100, 200, 255),   // Light blue (private fn)
+            CompletionKind::PublicFunction => (100, 255, 100), // Green (public fn)
             CompletionKind::Type => (255, 200, 100),       // Orange
             CompletionKind::Module => (200, 200, 200),     // Gray
             CompletionKind::Field => (150, 255, 150),      // Light green
@@ -256,6 +259,9 @@ pub trait CompletionSource {
 
     /// Get fields for a type (returns field names)
     fn get_type_fields(&self, type_name: &str) -> Vec<String>;
+
+    /// Check if a function is public (exported)
+    fn is_function_public(&self, name: &str) -> bool;
 
     /// Get constructors for a variant type
     fn get_type_constructors(&self, type_name: &str) -> Vec<String>;
@@ -595,10 +601,15 @@ impl Autocomplete {
                 if func_name.to_lowercase().starts_with(&prefix_lower) {
                     let label = Self::format_function_label(func_name, func_name, None, source);
                     let doc = source.get_function_doc(func_name);
+                    let kind = if source.is_function_public(func_name) {
+                        CompletionKind::PublicFunction
+                    } else {
+                        CompletionKind::Function
+                    };
                     items.push(CompletionItem {
                         text: func_name.clone(),
                         label,
-                        kind: CompletionKind::Function,
+                        kind,
                         doc,
                     });
                 }
@@ -708,10 +719,15 @@ impl Autocomplete {
                         if seen.insert(short_name.to_string()) {
                             let label = Self::format_function_label(short_name, func_name, Some("(mod)"), source);
                             let doc = source.get_function_doc(func_name);
+                            let kind = if source.is_function_public(func_name) {
+                                CompletionKind::PublicFunction
+                            } else {
+                                CompletionKind::Function
+                            };
                             items.push(CompletionItem {
                                 text: short_name.to_string(),
                                 label,
-                                kind: CompletionKind::Function,
+                                kind,
                                 doc,
                             });
                         }
@@ -726,10 +742,15 @@ impl Autocomplete {
                 if seen.insert(short_name.clone()) {
                     let label = Self::format_function_label(short_name, full_name, Some("(imp)"), source);
                     let doc = source.get_function_doc(full_name);
+                    let kind = if source.is_function_public(full_name) {
+                        CompletionKind::PublicFunction
+                    } else {
+                        CompletionKind::Function
+                    };
                     items.push(CompletionItem {
                         text: short_name.clone(),
                         label,
-                        kind: CompletionKind::Function,
+                        kind,
                         doc,
                     });
                 }
@@ -743,10 +764,15 @@ impl Autocomplete {
                     if seen.insert(func_name.clone()) {
                         let label = Self::format_function_label(func_name, func_name, None, source);
                         let doc = source.get_function_doc(func_name);
+                        let kind = if source.is_function_public(func_name) {
+                            CompletionKind::PublicFunction
+                        } else {
+                            CompletionKind::Function
+                        };
                         items.push(CompletionItem {
                             text: func_name.clone(),
                             label,
-                            kind: CompletionKind::Function,
+                            kind,
                             doc,
                         });
                     }
@@ -806,10 +832,15 @@ impl Autocomplete {
                 if !member.contains('.') && member.to_lowercase().starts_with(&prefix_lower) {
                     let label = Self::format_function_label(member, func_name, None, source);
                     let doc = source.get_function_doc(func_name);
+                    let kind = if source.is_function_public(func_name) {
+                        CompletionKind::PublicFunction
+                    } else {
+                        CompletionKind::Function
+                    };
                     items.push(CompletionItem {
                         text: member.to_string(),
                         label,
-                        kind: CompletionKind::Function,
+                        kind,
                         doc,
                     });
                 }
@@ -1662,6 +1693,11 @@ mod tests {
 
         fn get_type_fields(&self, type_name: &str) -> Vec<String> {
             self.type_fields.get(type_name).cloned().unwrap_or_default()
+        }
+
+        fn is_function_public(&self, _name: &str) -> bool {
+            // MockSource treats all functions as public by default
+            true
         }
 
         fn get_type_constructors(&self, type_name: &str) -> Vec<String> {
@@ -3459,6 +3495,10 @@ mod tests {
 
         fn get_type_fields(&self, type_name: &str) -> Vec<String> {
             self.engine.get_type_fields(type_name)
+        }
+
+        fn is_function_public(&self, name: &str) -> bool {
+            self.engine.is_function_public(name)
         }
 
         fn get_type_constructors(&self, type_name: &str) -> Vec<String> {
