@@ -1097,6 +1097,9 @@ pub enum Instruction {
     /// Make variant from constructor name and fields: dst = makeVariant[T](ctor_name, fields_map)
     /// fields_map is a Map[String, Json] where keys are field names
     MakeVariantDyn(Reg, Reg, Reg, Reg),
+    /// Parse HTTP request params to typed record: dst = requestToType(request, type_name)
+    /// Returns Result[T, String] - Ok(record) or Err(error_message)
+    RequestToType(Reg, Reg, Reg),
 
     // === IO/Debug builtins ===
     /// Print value, return string representation: dst = print(value)

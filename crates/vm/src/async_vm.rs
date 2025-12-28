@@ -6860,6 +6860,20 @@ impl AsyncProcess {
                 }
             }
 
+            RequestToType(dst, request_reg, type_name_reg) => {
+                let type_name = match reg!(type_name_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr.clone())
+                            .map(|s| s.data.clone())
+                            .unwrap_or_default()
+                    }
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "non-string".to_string() }),
+                };
+                let request = reg!(request_reg).clone();
+                let result = self.request_to_type(&type_name, request);
+                set_reg!(dst, result);
+            }
+
             // === String Buffer (for efficient HTML rendering) ===
             BufferNew(dst) => {
                 let buf_ptr = self.heap.alloc_buffer();
@@ -8208,6 +8222,246 @@ impl AsyncProcess {
             field_values,
         );
         Ok(GcValue::Variant(var_ptr))
+    }
+
+    /// Parse HTTP request params to typed record
+    /// Returns Result[T, String] variant - Ok(record) or Err(error_message)
+    fn request_to_type(&mut self, type_name: &str, request: GcValue) -> GcValue {
+        // Extract params from the HttpRequest record
+        let params = match self.extract_request_params(&request) {
+            Ok(p) => p,
+            Err(e) => return self.make_err_variant(&e),
+        };
+
+        // Look up type info
+        let type_info = self.shared.types.read().unwrap().get(type_name).cloned()
+            .or_else(|| self.shared.dynamic_types.read().unwrap().get(type_name).cloned())
+            .or_else(|| self.shared.stdlib_types.read().unwrap().get(type_name).cloned());
+
+        let type_val = match type_info {
+            Some(t) => t,
+            None => return self.make_err_variant(&format!("Unknown type: {}", type_name)),
+        };
+
+        // Must be a record type
+        if !type_val.constructors.is_empty() {
+            return self.make_err_variant(&format!("requestToType only works with record types, '{}' is a variant", type_name));
+        }
+
+        // Parse each field from params
+        let mut field_values = Vec::new();
+        let mut is_float = Vec::new();
+        let mut errors = Vec::new();
+
+        for field in &type_val.fields {
+            let field_name = &field.name;
+            let field_type = &field.type_name;
+
+            match params.get(field_name) {
+                Some(value_str) => {
+                    match self.parse_string_to_type(value_str, field_type) {
+                        Ok(val) => {
+                            is_float.push(field_type == "Float" || field_type == "Float64" || field_type == "Float32");
+                            field_values.push(val);
+                        }
+                        Err(e) => {
+                            errors.push(format!("field '{}': {}", field_name, e));
+                        }
+                    }
+                }
+                None => {
+                    // Check if field type is Option - if so, use None as default
+                    if field_type.starts_with("Option") {
+                        is_float.push(false);
+                        // Create None variant for Option type
+                        let var_ptr = self.heap.alloc_variant(
+                            Arc::new("Option".to_string()),
+                            Arc::new("None".to_string()),
+                            vec![],
+                        );
+                        field_values.push(GcValue::Variant(var_ptr));
+                    } else {
+                        errors.push(format!("missing required field '{}'", field_name));
+                    }
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            return self.make_err_variant(&errors.join(", "));
+        }
+
+        // Construct the record
+        let rec_ptr = self.heap.alloc_record(
+            type_name.to_string(),
+            type_val.fields.iter().map(|f| f.name.clone()).collect(),
+            field_values,
+            is_float,
+        );
+
+        // Return Ok(record)
+        self.make_ok_variant(GcValue::Record(rec_ptr))
+    }
+
+    /// Extract params from HttpRequest record as HashMap
+    fn extract_request_params(&self, request: &GcValue) -> Result<std::collections::HashMap<String, String>, String> {
+        use std::collections::HashMap;
+
+        let record = match request {
+            GcValue::Record(ptr) => {
+                self.heap.get_record(*ptr)
+                    .ok_or_else(|| "Invalid request record".to_string())?
+            }
+            _ => return Err("Expected HttpRequest record".to_string()),
+        };
+
+        let mut params = HashMap::new();
+
+        // Find queryParams field (index 5 in HttpRequest)
+        // HttpRequest fields: id, method, path, headers, body, queryParams, cookies, formParams, isWebSocket
+        let query_params_idx = record.field_names.iter().position(|n| n == "queryParams");
+        let form_params_idx = record.field_names.iter().position(|n| n == "formParams");
+
+        // Extract query params
+        if let Some(idx) = query_params_idx {
+            if let Some(GcValue::List(list)) = record.fields.get(idx) {
+                for item in list.iter() {
+                    if let GcValue::Tuple(tuple_ptr) = item {
+                        if let Some(tuple) = self.heap.get_tuple(*tuple_ptr) {
+                            if tuple.items.len() >= 2 {
+                                let key = match &tuple.items[0] {
+                                    GcValue::String(ptr) => self.heap.get_string(*ptr)
+                                        .map(|s| s.data.clone())
+                                        .unwrap_or_default(),
+                                    _ => continue,
+                                };
+                                let value = match &tuple.items[1] {
+                                    GcValue::String(ptr) => self.heap.get_string(*ptr)
+                                        .map(|s| s.data.clone())
+                                        .unwrap_or_default(),
+                                    _ => continue,
+                                };
+                                params.insert(key, value);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Extract form params (override query params if same key)
+        if let Some(idx) = form_params_idx {
+            if let Some(GcValue::List(list)) = record.fields.get(idx) {
+                for item in list.iter() {
+                    if let GcValue::Tuple(tuple_ptr) = item {
+                        if let Some(tuple) = self.heap.get_tuple(*tuple_ptr) {
+                            if tuple.items.len() >= 2 {
+                                let key = match &tuple.items[0] {
+                                    GcValue::String(ptr) => self.heap.get_string(*ptr)
+                                        .map(|s| s.data.clone())
+                                        .unwrap_or_default(),
+                                    _ => continue,
+                                };
+                                let value = match &tuple.items[1] {
+                                    GcValue::String(ptr) => self.heap.get_string(*ptr)
+                                        .map(|s| s.data.clone())
+                                        .unwrap_or_default(),
+                                    _ => continue,
+                                };
+                                params.insert(key, value);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(params)
+    }
+
+    /// Parse a string value to the expected type
+    fn parse_string_to_type(&mut self, value: &str, type_name: &str) -> Result<GcValue, String> {
+        match type_name {
+            "String" => {
+                Ok(GcValue::String(self.heap.alloc_string(value.to_string())))
+            }
+            "Int" | "Int64" => {
+                value.parse::<i64>()
+                    .map(GcValue::Int64)
+                    .map_err(|_| format!("expected Int, got '{}'", value))
+            }
+            "Int32" => {
+                value.parse::<i32>()
+                    .map(|n| GcValue::Int64(n as i64))
+                    .map_err(|_| format!("expected Int32, got '{}'", value))
+            }
+            "Int16" => {
+                value.parse::<i16>()
+                    .map(|n| GcValue::Int64(n as i64))
+                    .map_err(|_| format!("expected Int16, got '{}'", value))
+            }
+            "Int8" => {
+                value.parse::<i8>()
+                    .map(|n| GcValue::Int64(n as i64))
+                    .map_err(|_| format!("expected Int8, got '{}'", value))
+            }
+            "Float" | "Float64" => {
+                value.parse::<f64>()
+                    .map(GcValue::Float64)
+                    .map_err(|_| format!("expected Float, got '{}'", value))
+            }
+            "Float32" => {
+                value.parse::<f32>()
+                    .map(|n| GcValue::Float64(n as f64))
+                    .map_err(|_| format!("expected Float32, got '{}'", value))
+            }
+            "Bool" => {
+                match value.to_lowercase().as_str() {
+                    "true" | "1" | "yes" => Ok(GcValue::Bool(true)),
+                    "false" | "0" | "no" => Ok(GcValue::Bool(false)),
+                    _ => Err(format!("expected Bool, got '{}'", value)),
+                }
+            }
+            _ if type_name.starts_with("Option[") => {
+                // Option[T] - parse inner type and wrap in Some
+                let inner_type = &type_name[7..type_name.len()-1]; // Extract T from Option[T]
+                match self.parse_string_to_type(value, inner_type) {
+                    Ok(inner_val) => {
+                        let var_ptr = self.heap.alloc_variant(
+                            Arc::new("Option".to_string()),
+                            Arc::new("Some".to_string()),
+                            vec![inner_val],
+                        );
+                        Ok(GcValue::Variant(var_ptr))
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            _ => {
+                Err(format!("unsupported type '{}' for request parsing", type_name))
+            }
+        }
+    }
+
+    /// Create Ok(value) variant for Result type
+    fn make_ok_variant(&mut self, value: GcValue) -> GcValue {
+        let var_ptr = self.heap.alloc_variant(
+            Arc::new("Result".to_string()),
+            Arc::new("Ok".to_string()),
+            vec![value],
+        );
+        GcValue::Variant(var_ptr)
+    }
+
+    /// Create Err(message) variant for Result type
+    fn make_err_variant(&mut self, message: &str) -> GcValue {
+        let msg_ptr = self.heap.alloc_string(message.to_string());
+        let var_ptr = self.heap.alloc_variant(
+            Arc::new("Result".to_string()),
+            Arc::new("Err".to_string()),
+            vec![GcValue::String(msg_ptr)],
+        );
+        GcValue::Variant(var_ptr)
     }
 }
 

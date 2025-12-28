@@ -397,6 +397,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "makeRecordByName", signature: "String -> Map[String, Json] -> a", doc: "Construct record by type name string: makeRecordByName(\"Person\", fields)" },
     BuiltinInfo { name: "makeVariantByName", signature: "String -> String -> Map[String, Json] -> a", doc: "Construct variant by type name: makeVariantByName(\"Result\", \"Ok\", fields)" },
     BuiltinInfo { name: "jsonToTypeByName", signature: "String -> Json -> a", doc: "Convert Json to typed value by type name: jsonToTypeByName(\"Person\", json)" },
+    BuiltinInfo { name: "requestToType", signature: "HttpRequest -> String -> Result[a, String]", doc: "Parse HTTP request params to typed record: requestToType(req, \"UserParams\")" },
 
     // === Runtime Stats ===
     BuiltinInfo { name: "Runtime.threadCount", signature: "() -> Int", doc: "Get number of available CPU threads" },
@@ -6812,6 +6813,12 @@ impl Compiler {
                         self.chunk.emit(Instruction::Construct(dst, arg_regs[0], arg_regs[1]), line);
                         return Ok(dst);
                     }
+                    "requestToType" if arg_regs.len() == 2 => {
+                        // requestToType(request, type_name)
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::RequestToType(dst, arg_regs[0], arg_regs[1]), line);
+                        return Ok(dst);
+                    }
                     // === Math builtins (type-aware - use typed instruction if we can infer type) ===
                     "abs" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
@@ -7374,6 +7381,68 @@ impl Compiler {
                     } else {
                         None // It's a field access on a value, not a module
                     }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Transform `x: Result[T, E] = obj.toType()` to `x: Result[T, E] = requestToType(obj, "T")`
+    /// This is syntactic sugar for the requestToType builtin.
+    fn try_transform_to_type_call(&self, binding: &Binding) -> Option<Binding> {
+        use nostos_syntax::{TypeExpr, Ident};
+
+        // Check if the value is a method call `obj.toType()` with no arguments
+        let (receiver, method_name, args, span) = match &binding.value {
+            Expr::MethodCall(receiver, method, args, span) => {
+                (receiver.as_ref(), &method.node, args, *span)
+            }
+            _ => return None,
+        };
+
+        // Must be `toType` with no arguments
+        if method_name != "toType" || !args.is_empty() {
+            return None;
+        }
+
+        // Must have an explicit type annotation
+        let type_expr = binding.ty.as_ref()?;
+
+        // Extract the inner type from Result[T, E] or similar wrapper type
+        let inner_type_name = self.extract_result_inner_type(type_expr)?;
+
+        // Create the transformed expression: requestToType(obj, "TypeName")
+        let type_name_expr = Expr::String(nostos_syntax::StringLit::Plain(inner_type_name), span);
+        let new_value = Expr::Call(
+            Box::new(Expr::Var(Ident { node: "requestToType".to_string(), span })),
+            vec![],  // no type args
+            vec![receiver.clone(), type_name_expr],
+            span,
+        );
+
+        Some(Binding {
+            pattern: binding.pattern.clone(),
+            ty: binding.ty.clone(),
+            value: new_value,
+            mutable: binding.mutable,
+            span: binding.span,
+        })
+    }
+
+    /// Extract the first type parameter from Result[T, E] type expressions.
+    /// Returns the type name string for T.
+    fn extract_result_inner_type(&self, type_expr: &nostos_syntax::TypeExpr) -> Option<String> {
+        use nostos_syntax::TypeExpr;
+
+        match type_expr {
+            TypeExpr::Generic(ident, args) => {
+                // Check if it's Result[T, E] pattern
+                let base_name = &ident.node;
+                if (base_name == "Result" || base_name == "MaybeError") && !args.is_empty() {
+                    // Get the first type argument (T in Result[T, E])
+                    Some(self.type_expr_name(&args[0]))
                 } else {
                     None
                 }
@@ -9023,6 +9092,11 @@ impl Compiler {
 
     /// Compile a let binding.
     fn compile_binding(&mut self, binding: &Binding) -> Result<Reg, CompileError> {
+        // Sugar: transform `x: Result[T, E] = obj.toType()` to `x: Result[T, E] = requestToType(obj, "T")`
+        if let Some(transformed) = self.try_transform_to_type_call(binding) {
+            return self.compile_binding(&transformed);
+        }
+
         // Determine type from explicit annotation or infer from value
         let explicit_type = binding.ty.as_ref().map(|t| self.type_expr_name(t));
         let inferred_type = self.expr_type_name(&binding.value);

@@ -1,0 +1,18 @@
+# expect: field 'age': expected Int, got 'not_a_number'
+# Test requestToType builtin - error when value cannot be parsed to expected type
+
+type Result[T, E] = Ok(T) | Err(E)
+
+type UserParams = { name: String, age: Int }
+
+type HttpRequest = { id: Int, method: String, path: String, headers: List[(String, String)], body: String, queryParams: List[(String, String)], cookies: List[(String, String)], formParams: List[(String, String)], isWebSocket: Bool }
+
+main() = {
+    # 'age' is not a valid integer
+    req = HttpRequest(1, "GET", "/test", [], "", [("name", "Alice"), ("age", "not_a_number")], [], [], false)
+    result: Result[UserParams, String] = requestToType(req, "UserParams")
+    match result {
+        Ok(params) -> "unexpected success"
+        Err(msg) -> msg
+    }
+}

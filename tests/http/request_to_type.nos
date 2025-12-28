@@ -1,0 +1,19 @@
+# expect: 42
+# Test requestToType builtin - parses HTTP request params to typed record
+
+type Result[T, E] = Ok(T) | Err(E)
+
+type UserParams = { name: String, age: Int }
+
+# HttpRequest record type matching what the VM creates
+# Fields: id, method, path, headers, body, queryParams, cookies, formParams, isWebSocket
+type HttpRequest = { id: Int, method: String, path: String, headers: List[(String, String)], body: String, queryParams: List[(String, String)], cookies: List[(String, String)], formParams: List[(String, String)], isWebSocket: Bool }
+
+main() = {
+    req = HttpRequest(1, "GET", "/test", [], "", [("name", "Alice"), ("age", "42")], [], [], false)
+    result: Result[UserParams, String] = requestToType(req, "UserParams")
+    match result {
+        Ok(params) -> params.age
+        Err(msg) -> -1
+    }
+}
