@@ -1,0 +1,334 @@
+# Forgiving HTML Parser for Nostos
+#
+# Parses HTML strings into a tree structure, handling malformed HTML gracefully.
+# Similar to how browsers parse HTML - recovers from errors instead of failing.
+#
+# Usage:
+#   nodes = htmlParse("<div><p>Hello</p></div>")
+#   nodes = htmlParse("<div><p>Unclosed")  # Still works!
+
+# === AST Types ===
+
+type HtmlNode =
+    | Text(String)
+    | Element(String, List[(String, String)], List[HtmlNode])
+    | Comment(String)
+
+# === Token Types ===
+
+type HtmlToken =
+    | TokStartTag(String, List[(String, String)], Bool)  # name, attrs, self-closing?
+    | TokEndTag(String)
+    | TokText(String)
+    | TokComment(String)
+    | TokDoctype(String)
+
+# === Character Helpers ===
+
+isWhitespace(c: Char) -> Bool = c == ' ' || c == '\n' || c == '\t' || c == '\r'
+
+isAlpha(c: Char) -> Bool = match c {
+    'a' -> true, 'b' -> true, 'c' -> true, 'd' -> true, 'e' -> true,
+    'f' -> true, 'g' -> true, 'h' -> true, 'i' -> true, 'j' -> true,
+    'k' -> true, 'l' -> true, 'm' -> true, 'n' -> true, 'o' -> true,
+    'p' -> true, 'q' -> true, 'r' -> true, 's' -> true, 't' -> true,
+    'u' -> true, 'v' -> true, 'w' -> true, 'x' -> true, 'y' -> true,
+    'z' -> true,
+    'A' -> true, 'B' -> true, 'C' -> true, 'D' -> true, 'E' -> true,
+    'F' -> true, 'G' -> true, 'H' -> true, 'I' -> true, 'J' -> true,
+    'K' -> true, 'L' -> true, 'M' -> true, 'N' -> true, 'O' -> true,
+    'P' -> true, 'Q' -> true, 'R' -> true, 'S' -> true, 'T' -> true,
+    'U' -> true, 'V' -> true, 'W' -> true, 'X' -> true, 'Y' -> true,
+    'Z' -> true,
+    _ -> false
+}
+
+isAlphaNum(c: Char) -> Bool = isAlpha(c) || match c {
+    '0' -> true, '1' -> true, '2' -> true, '3' -> true, '4' -> true,
+    '5' -> true, '6' -> true, '7' -> true, '8' -> true, '9' -> true,
+    '-' -> true, '_' -> true, ':' -> true,
+    _ -> false
+}
+
+toLower(c: Char) -> Char = match c {
+    'A' -> 'a', 'B' -> 'b', 'C' -> 'c', 'D' -> 'd', 'E' -> 'e',
+    'F' -> 'f', 'G' -> 'g', 'H' -> 'h', 'I' -> 'i', 'J' -> 'j',
+    'K' -> 'k', 'L' -> 'l', 'M' -> 'm', 'N' -> 'n', 'O' -> 'o',
+    'P' -> 'p', 'Q' -> 'q', 'R' -> 'r', 'S' -> 's', 'T' -> 't',
+    'U' -> 'u', 'V' -> 'v', 'W' -> 'w', 'X' -> 'x', 'Y' -> 'y',
+    'Z' -> 'z',
+    _ -> c
+}
+
+toLowerStr(s: String) -> String = String.from_chars(String.chars(s).map(toLower))
+
+# === Whitespace Handling ===
+
+skipWs(chars: List[Char]) -> List[Char] = match chars {
+    [c | rest] -> if isWhitespace(c) then skipWs(rest) else chars
+    [] -> []
+}
+
+# === Tokenizer ===
+
+# Collect characters until we hit a delimiter
+collectUntil(chars: List[Char], delim: Char, acc: List[Char]) -> (List[Char], List[Char]) =
+    match chars {
+        [] -> (acc, [])
+        [c | rest] -> if c == delim
+            then (acc, chars)
+            else collectUntil(rest, delim, acc ++ [c])
+    }
+
+# Collect tag name (alphanumeric)
+collectTagName(chars: List[Char], acc: List[Char]) -> (String, List[Char]) =
+    match chars {
+        [] -> (String.from_chars(acc), [])
+        [c | rest] -> if isAlphaNum(c)
+            then collectTagName(rest, acc ++ [toLower(c)])
+            else (String.from_chars(acc), chars)
+    }
+
+# Collect attribute value (quoted or unquoted)
+collectAttrValue(chars: List[Char]) -> (String, List[Char]) = match chars {
+    ['"' | rest] -> {
+        (val, remaining) = collectUntil(rest, '"', [])
+        match remaining {
+            ['"' | rest2] -> (String.from_chars(val), rest2)
+            _ -> (String.from_chars(val), remaining)
+        }
+    }
+    ['\'' | rest] -> {
+        (val, remaining) = collectUntil(rest, '\'', [])
+        match remaining {
+            ['\'' | rest2] -> (String.from_chars(val), rest2)
+            _ -> (String.from_chars(val), remaining)
+        }
+    }
+    _ -> {
+        # Unquoted value - collect until whitespace or >
+        collectUnquoted(chars, [])
+    }
+}
+
+collectUnquoted(chars: List[Char], acc: List[Char]) -> (String, List[Char]) =
+    match chars {
+        [] -> (String.from_chars(acc), [])
+        [c | rest] -> if isWhitespace(c) || c == '>' || c == '/'
+            then (String.from_chars(acc), chars)
+            else collectUnquoted(rest, acc ++ [c])
+    }
+
+# Parse attributes: name="value" name='value' name=value name
+parseAttrs(chars: List[Char], acc: List[(String, String)]) -> (List[(String, String)], List[Char]) = {
+    trimmed = skipWs(chars)
+    match trimmed {
+        [] -> (acc, [])
+        ['>' | rest] -> (acc, trimmed)
+        ['/' | rest] -> (acc, trimmed)
+        _ -> {
+            (name, afterName) = collectTagName(trimmed, [])
+            if name == "" then (acc, trimmed)
+            else {
+                afterNameWs = skipWs(afterName)
+                match afterNameWs {
+                    ['=' | afterEq] -> {
+                        afterEqWs = skipWs(afterEq)
+                        (val, remaining) = collectAttrValue(afterEqWs)
+                        parseAttrs(remaining, acc ++ [(toLowerStr(name), val)])
+                    }
+                    _ -> {
+                        # Boolean attribute (no value)
+                        parseAttrs(afterNameWs, acc ++ [(toLowerStr(name), "")])
+                    }
+                }
+            }
+        }
+    }
+}
+
+# Parse a start tag: <tagname attr="val">
+parseStartTag(chars: List[Char]) -> (HtmlToken, List[Char]) = {
+    (tagName, afterName) = collectTagName(chars, [])
+    (attrs, afterAttrs) = parseAttrs(afterName, [])
+    trimmed = skipWs(afterAttrs)
+    match trimmed {
+        ['/' , '>' | rest] -> (TokStartTag(tagName, attrs, true), rest)
+        ['>' | rest] -> (TokStartTag(tagName, attrs, false), rest)
+        _ -> (TokStartTag(tagName, attrs, false), trimmed)  # Forgiving: missing >
+    }
+}
+
+# Parse an end tag: </tagname>
+parseEndTag(chars: List[Char]) -> (HtmlToken, List[Char]) = {
+    (tagName, afterName) = collectTagName(chars, [])
+    remaining = skipWs(afterName)
+    match remaining {
+        ['>' | rest] -> (TokEndTag(tagName), rest)
+        _ -> (TokEndTag(tagName), remaining)  # Forgiving: missing >
+    }
+}
+
+# Parse a comment: <!-- ... -->
+parseComment(chars: List[Char], acc: List[Char]) -> (HtmlToken, List[Char]) =
+    match chars {
+        [] -> (TokComment(String.from_chars(acc)), [])
+        ['-', '-', '>' | rest] -> (TokComment(String.from_chars(acc)), rest)
+        [c | rest] -> parseComment(rest, acc ++ [c])
+    }
+
+# Parse DOCTYPE: <!DOCTYPE ...>
+parseDoctype(chars: List[Char], acc: List[Char]) -> (HtmlToken, List[Char]) =
+    match chars {
+        [] -> (TokDoctype(String.from_chars(acc)), [])
+        ['>' | rest] -> (TokDoctype(String.from_chars(acc)), rest)
+        [c | rest] -> parseDoctype(rest, acc ++ [c])
+    }
+
+# Collect text until we hit <
+collectText(chars: List[Char], acc: List[Char]) -> (String, List[Char]) =
+    match chars {
+        [] -> (String.from_chars(acc), [])
+        ['<' | _] -> (String.from_chars(acc), chars)
+        [c | rest] -> collectText(rest, acc ++ [c])
+    }
+
+# Main tokenizer
+tokenize(chars: List[Char], tokens: List[HtmlToken]) -> List[HtmlToken] =
+    match chars {
+        [] -> tokens
+        ['<', '!' , '-', '-' | rest] -> {
+            (tok, remaining) = parseComment(rest, [])
+            tokenize(remaining, tokens ++ [tok])
+        }
+        ['<', '!' | rest] -> {
+            # DOCTYPE or other declaration
+            (tok, remaining) = parseDoctype(rest, [])
+            tokenize(remaining, tokens ++ [tok])
+        }
+        ['<', '/' | rest] -> {
+            (tok, remaining) = parseEndTag(rest)
+            tokenize(remaining, tokens ++ [tok])
+        }
+        ['<' | rest] -> {
+            trimmed = skipWs(rest)
+            match trimmed {
+                [] -> tokens ++ [TokText("<")]
+                [c | _] -> if isAlpha(c) then {
+                    (tok, remaining) = parseStartTag(trimmed)
+                    tokenize(remaining, tokens ++ [tok])
+                } else {
+                    # Stray < - treat as text
+                    tokenize(rest, tokens ++ [TokText("<")])
+                }
+            }
+        }
+        _ -> {
+            (text, remaining) = collectText(chars, [])
+            if text == "" then tokenize(remaining, tokens)
+            else tokenize(remaining, tokens ++ [TokText(text)])
+        }
+    }
+
+# === Parser ===
+
+# Void elements (self-closing by definition)
+isVoidElement(tag: String) -> Bool = match tag {
+    "area" -> true, "base" -> true, "br" -> true, "col" -> true,
+    "embed" -> true, "hr" -> true, "img" -> true, "input" -> true,
+    "link" -> true, "meta" -> true, "param" -> true, "source" -> true,
+    "track" -> true, "wbr" -> true,
+    _ -> false
+}
+
+# Parse tokens into nodes
+# Returns (nodes, remaining tokens)
+parseNodes(tokens: List[HtmlToken], stopTag: String) -> (List[HtmlNode], List[HtmlToken]) =
+    match tokens {
+        [] -> ([], [])
+        [TokEndTag(tag) | rest] ->
+            if tag == stopTag || stopTag == ""
+            then ([], rest)
+            else {
+                # Mismatched end tag - ignore it and continue (forgiving)
+                parseNodes(rest, stopTag)
+            }
+        [TokText(text) | rest] -> {
+            (moreNodes, remaining) = parseNodes(rest, stopTag)
+            # Skip whitespace-only text between tags? For now, keep it.
+            (Text(text) :: moreNodes, remaining)
+        }
+        [TokComment(text) | rest] -> {
+            (moreNodes, remaining) = parseNodes(rest, stopTag)
+            (Comment(text) :: moreNodes, remaining)
+        }
+        [TokDoctype(_) | rest] -> {
+            # Skip DOCTYPE
+            parseNodes(rest, stopTag)
+        }
+        [TokStartTag(tag, attrs, selfClose) | rest] -> {
+            if selfClose || isVoidElement(tag) then {
+                # Self-closing or void element - no children
+                (moreNodes, remaining) = parseNodes(rest, stopTag)
+                (Element(tag, attrs, []) :: moreNodes, remaining)
+            } else {
+                # Parse children until matching end tag
+                (children, afterChildren) = parseNodes(rest, tag)
+                (moreNodes, remaining) = parseNodes(afterChildren, stopTag)
+                (Element(tag, attrs, children) :: moreNodes, remaining)
+            }
+        }
+    }
+
+# === Public API ===
+
+# Parse an HTML string into a list of nodes
+pub htmlParse(input) = {
+    chars = String.chars(input)
+    tokens = tokenize(chars, [])
+    (nodes, _) = parseNodes(tokens, "")
+    nodes
+}
+
+# Parse and return the tokens (for debugging)
+pub htmlTokenize(input) = {
+    chars = String.chars(input)
+    tokenize(chars, [])
+}
+
+# === Pretty Printing ===
+
+# Join a list of strings with a separator
+joinStrs(strs: List[String], sep: String) -> String = match strs {
+    [] -> ""
+    [s] -> s
+    [s | rest] -> s ++ sep ++ joinStrs(rest, sep)
+}
+
+indentStr(n: Int) -> String = if n <= 0 then "" else "  " ++ indentStr(n - 1)
+
+attrsToStr(attrs: List[(String, String)]) -> String = match attrs {
+    [] -> ""
+    [(name, "")] -> " " ++ name
+    [(name, val)] -> " " ++ name ++ "=\"" ++ val ++ "\""
+    [(name, "") | rest] -> " " ++ name ++ attrsToStr(rest)
+    [(name, val) | rest] -> " " ++ name ++ "=\"" ++ val ++ "\"" ++ attrsToStr(rest)
+}
+
+nodeToStr(node, indent) = match node {
+    Text(t) -> indentStr(indent) ++ "TEXT: " ++ show(t)
+    Comment(c) -> indentStr(indent) ++ "COMMENT: " ++ c
+    Element(tag, attrs, children) -> {
+        prefix = indentStr(indent) ++ "<" ++ tag ++ attrsToStr(attrs) ++ ">"
+        if length(children) == 0 then prefix
+        else {
+            childStrs = children.map(c => nodeToStr(c, indent + 1))
+            prefix ++ "\n" ++ joinStrs(childStrs, "\n")
+        }
+    }
+}
+
+pub htmlPrettyPrint(nodes) = {
+    strs = nodes.map(n => nodeToStr(n, 0))
+    joinStrs(strs, "\n")
+}
