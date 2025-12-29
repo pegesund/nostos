@@ -3591,6 +3591,38 @@ impl ReplEngine {
             }
         }
 
+        // Process use statements to add imported function names
+        for item in &module.items {
+            if let Item::Use(use_stmt) = item {
+                use nostos_syntax::ast::UseImports;
+
+                // Build the module path
+                let module_path: String = use_stmt.path.iter()
+                    .map(|ident| ident.node.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
+
+                match &use_stmt.imports {
+                    UseImports::All => {
+                        // Get all public functions from the module and add them
+                        let public_funcs = self.compiler.get_module_public_functions(&module_path);
+                        for (local_name, _qualified_name) in public_funcs {
+                            known_functions.insert(local_name);
+                        }
+                    }
+                    UseImports::Named(items) => {
+                        // Add each named import
+                        for use_item in items {
+                            let local_name = use_item.alias.as_ref()
+                                .map(|a| a.node.clone())
+                                .unwrap_or_else(|| use_item.name.node.clone());
+                            known_functions.insert(local_name);
+                        }
+                    }
+                }
+            }
+        }
+
         // Add builtins
         for name in Compiler::get_builtin_names() {
             known_functions.insert(name.to_string());
