@@ -1453,13 +1453,20 @@ impl ReplEngine {
         // Get the inferred type
         let mut inferred_type = self.get_variable_type_from_thunk(&thunk_name);
 
-        // If the inferred type is a type parameter (single lowercase letter),
-        // try to get a better type from the expression structure
+        // Try to get a better (more qualified) type from the expression structure in these cases:
+        // 1. Type is a type parameter (single lowercase letter)
+        // 2. Type is unqualified and might need module prefix (for extension types)
         if let Some(ref ty) = inferred_type {
-            if ty.len() == 1 && ty.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
+            let is_type_param = ty.len() == 1 && ty.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false);
+            let is_unqualified = !ty.contains('.');
+
+            if is_type_param || is_unqualified {
                 // Try to determine a better type from the expression
                 if let Some(better_type) = self.infer_expr_type_from_structure(expr) {
-                    inferred_type = Some(better_type);
+                    // Only use the better type if it's more qualified
+                    if better_type.contains('.') || is_type_param {
+                        inferred_type = Some(better_type);
+                    }
                 }
             }
         }
@@ -2526,10 +2533,42 @@ impl ReplEngine {
         // Parse the expression to look for method calls
         let trimmed = expr.trim();
 
-        // Check for qualified function calls like "module.func(args)"
-        // This handles extension module calls like "testmath.vec([1,2,3])"
+        // Check for function calls
         if let Some(paren_pos) = trimmed.find('(') {
             let func_part = trimmed[..paren_pos].trim();
+
+            // First check for UNQUALIFIED function calls that might be imports
+            // e.g., "vec([1,2,3])" where vec is imported from testmath
+            if !func_part.contains('.') && !func_part.contains(' ') {
+                // Look up in repl_imports to see if this is an imported function
+                let qualified_name_opt = {
+                    let repl_imports = self.repl_imports.read().expect("repl_imports lock");
+                    repl_imports.get(func_part).cloned()
+                };
+                if let Some(qualified_name) = qualified_name_opt {
+                    // Get return type from qualified function
+                    if let Some(ret_type) = self.compiler.get_function_return_type(&qualified_name) {
+                        if !ret_type.is_empty() {
+                            // If the return type is unqualified, qualify it with the module prefix
+                            if !ret_type.contains('.') {
+                                if let Some(dot_pos) = qualified_name.rfind('.') {
+                                    let module_prefix = &qualified_name[..dot_pos];
+                                    let qualified_type = format!("{}.{}", module_prefix, ret_type);
+                                    // Check if qualified type exists
+                                    let types = self.compiler.get_type_names();
+                                    if types.iter().any(|t| t == &qualified_type) {
+                                        return Some(qualified_type);
+                                    }
+                                }
+                            }
+                            return Some(ret_type);
+                        }
+                    }
+                }
+            }
+
+            // Check for QUALIFIED function calls like "module.func(args)"
+            // This handles extension module calls like "testmath.vec([1,2,3])"
             if func_part.contains('.') && !func_part.contains(' ') {
                 // This looks like a qualified call - try to get the return type
                 if let Some(ret_type) = self.compiler.get_function_return_type(func_part) {
@@ -5463,10 +5502,26 @@ impl ReplEngine {
                         if public_funcs.is_empty() {
                             return Err(format!("No public functions found in module '{}'", module_path));
                         }
-                        for (local_name, qualified_name) in public_funcs {
+                        // Update REPL imports for eval callback
+                        let mut repl_imports = self.repl_imports.write().expect("repl_imports lock");
+                        for (local_name_with_sig, qualified_name_with_sig) in public_funcs {
+                            // Strip signature suffix for local name lookup (e.g., "vec/_" -> "vec")
+                            let local_name = local_name_with_sig.split('/').next()
+                                .unwrap_or(&local_name_with_sig).to_string();
+                            let qualified_name = qualified_name_with_sig.split('/').next()
+                                .unwrap_or(&qualified_name_with_sig).to_string();
+
+                            // Add full name with signature to compiler (for overload resolution)
+                            self.compiler.add_prelude_import(local_name_with_sig.clone(), qualified_name_with_sig.clone());
+                            // Also add base name without signature to compiler (for unqualified lookup)
                             self.compiler.add_prelude_import(local_name.clone(), qualified_name.clone());
-                            imported_names.push(local_name);
+                            // Add base name without signature to repl_imports (for eval callback)
+                            repl_imports.insert(local_name.clone(), qualified_name.clone());
+                            if !imported_names.contains(&local_name) {
+                                imported_names.push(local_name);
+                            }
                         }
+                        drop(repl_imports);
                         // Update VM's prelude imports
                         self.vm.set_prelude_imports(
                             self.compiler.get_prelude_imports().iter()
@@ -5475,6 +5530,7 @@ impl ReplEngine {
                         );
                     }
                     UseImports::Named(items) => {
+                        let mut repl_imports = self.repl_imports.write().expect("repl_imports lock");
                         for item in items {
                             let local_name = item.alias.as_ref()
                                 .map(|a| a.node.clone())
@@ -5483,16 +5539,18 @@ impl ReplEngine {
 
                             // Add to compiler's prelude imports
                             self.compiler.add_prelude_import(local_name.clone(), qualified_name.clone());
-
-                            // Also update the VM's prelude imports
-                            self.vm.set_prelude_imports(
-                                self.compiler.get_prelude_imports().iter()
-                                    .map(|(k, v)| (k.clone(), v.clone()))
-                                    .collect()
-                            );
+                            // Add to REPL imports for eval callback
+                            repl_imports.insert(local_name.clone(), qualified_name.clone());
 
                             imported_names.push(local_name);
                         }
+                        drop(repl_imports);
+                        // Update VM's prelude imports
+                        self.vm.set_prelude_imports(
+                            self.compiler.get_prelude_imports().iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect()
+                        );
                     }
                 }
             }
@@ -11818,8 +11876,8 @@ main() = {
     }
 
     #[test]
-    fn test_repl_operator_dispatch_with_trait() {
-        // Test that operator dispatch works in REPL eval with custom types
+    fn test_repl_operator_dispatch_with_trait_qualified() {
+        // Test that operator dispatch works with QUALIFIED calls (testmath.vec)
         let mut engine = ReplEngine::new(ReplConfig { enable_jit: false, num_threads: 1 });
         engine.load_stdlib().expect("Failed to load stdlib");
 
@@ -11844,7 +11902,7 @@ pub vec(data) -> Vec = Vec(data)
         assert!(!engine.trait_impls.read().unwrap().is_empty(), "Should have trait implementations");
         assert!(engine.module_exports.read().unwrap().contains_key("testmath"), "Should have testmath exports");
 
-        // Create vectors using qualified calls
+        // Create vectors using QUALIFIED calls
         let result = engine.eval("v1 = testmath.vec([1,2,3])");
         assert!(result.is_ok(), "Should create v1: {:?}", result);
 
@@ -11859,6 +11917,69 @@ pub vec(data) -> Vec = Vec(data)
         let result = engine.eval("v1 + v2");
         assert!(result.is_ok(), "Should add vectors: {:?}", result);
         let output = result.unwrap();
+        // Our mock add returns Vec([99])
+        assert!(output.contains("99"), "Should use trait add method: {}", output);
+    }
+
+    #[test]
+    fn test_repl_operator_dispatch_with_use_wildcard() {
+        // This test replicates the EXACT REPL flow:
+        // 1. use nalgebra.*
+        // 2. v1 = vec([1,2,3])  <- UNQUALIFIED call via import
+        // 3. v2 = vec([1,2,3])
+        // 4. v1 + v2
+
+        let mut engine = ReplEngine::new(ReplConfig { enable_jit: false, num_threads: 1 });
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Define a simple type with Num trait implementation
+        let type_def = r#"
+type Vec = { data: List }
+
+trait Num
+    add(self, other: Self) -> Self
+end
+
+Vec: Num
+    add(self, other: Vec) -> Vec = Vec([99])
+end
+
+pub vec(data) -> Vec = Vec(data)
+"#;
+        let result = engine.load_extension_module("testmath", type_def, "<test>");
+        println!("Load extension: {:?}", result);
+        assert!(result.is_ok(), "Should load extension: {:?}", result);
+
+        // Step 1: use testmath.*
+        let result = engine.eval("use testmath.*");
+        println!("use testmath.*: {:?}", result);
+        assert!(result.is_ok(), "Should import: {:?}", result);
+
+        // Debug: Check what imports we have
+        let repl_imports = engine.repl_imports.read().unwrap();
+        println!("REPL imports after use: {:?}", repl_imports);
+        drop(repl_imports);
+
+        // Step 2: v1 = vec([1,2,3]) - UNQUALIFIED call
+        let result = engine.eval("v1 = vec([1,2,3])");
+        println!("v1 = vec([1,2,3]): {:?}", result);
+        assert!(result.is_ok(), "Should create v1: {:?}", result);
+
+        // Check variable type
+        let v1_type = engine.get_variable_type("v1");
+        println!("v1 type: {:?}", v1_type);
+
+        // Step 3: v2 = vec([1,2,3])
+        let result = engine.eval("v2 = vec([1,2,3])");
+        println!("v2 = vec([1,2,3]): {:?}", result);
+        assert!(result.is_ok(), "Should create v2: {:?}", result);
+
+        // Step 4: v1 + v2
+        let result = engine.eval("v1 + v2");
+        println!("v1 + v2: {:?}", result);
+        assert!(result.is_ok(), "Should add vectors: {:?}", result);
+        let output = result.unwrap();
+        println!("Output: {}", output);
         // Our mock add returns Vec([99])
         assert!(output.contains("99"), "Should use trait add method: {}", output);
     }
