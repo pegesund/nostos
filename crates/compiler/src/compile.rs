@@ -1437,6 +1437,17 @@ impl Compiler {
         &self.imports
     }
 
+    /// Clear all imports except stdlib prelude functions.
+    /// This is used after loading a project directory to prevent project
+    /// `use` statements from leaking into the REPL.
+    pub fn clear_non_prelude_imports(&mut self) {
+        // Keep only imports whose qualified name is in prelude_functions
+        // (prelude_functions contains stdlib functions added via add_prelude_import)
+        self.imports.retain(|_local, qualified| {
+            self.prelude_functions.contains(qualified)
+        });
+    }
+
     /// Convert a byte offset to a line number (1-indexed).
     fn offset_to_line(&self, offset: usize) -> usize {
         // Binary search for the line containing this offset

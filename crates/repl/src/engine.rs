@@ -3508,6 +3508,16 @@ impl ReplEngine {
 
         self.sync_vm();
 
+        // Clear project `use` imports so they don't leak into the REPL.
+        // The REPL requires explicit `use` statements to import functions.
+        // Only stdlib prelude functions remain available without prefix.
+        self.compiler.clear_non_prelude_imports();
+        self.vm.set_prelude_imports(
+            self.compiler.get_prelude_imports().iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        );
+
         // Return Ok even if there were errors - the TUI will show them via CompileStatus
         Ok(())
     }
