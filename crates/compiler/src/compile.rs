@@ -2605,7 +2605,10 @@ impl Compiler {
     /// Compile a trait implementation.
     fn compile_trait_impl(&mut self, impl_def: &TraitImpl) -> Result<(), CompileError> {
         // Get the type name from the type expression
-        let type_name = self.type_expr_to_string(&impl_def.ty);
+        // Use unqualified name for method names (compile_fn_def will add module prefix)
+        // Use qualified name for type_traits registration and param_types
+        let unqualified_type_name = self.type_expr_to_string(&impl_def.ty);
+        let qualified_type_name = self.qualify_name(&unqualified_type_name);
         let trait_name = impl_def.trait_name.node.clone();
 
         // Check that the trait exists (unless it's a built-in derivable trait)
@@ -2617,14 +2620,18 @@ impl Compiler {
         }
 
         // Compile each method as a function with a special qualified name: Type.Trait.method
+        // Use unqualified type name here because compile_fn_def will add module prefix
         let mut method_names = Vec::new();
         for method in &impl_def.methods {
             let method_name = method.name.node.clone();
-            let qualified_name = format!("{}.{}.{}", type_name, trait_name, method_name);
+            // Use unqualified type name for method - compile_fn_def adds module prefix
+            let local_method_name = format!("{}.{}.{}", unqualified_type_name, trait_name, method_name);
+            // The fully qualified method name (for registration)
+            let qualified_method_name = self.qualify_name(&local_method_name);
 
-            // Create a modified FnDef with the qualified name and public visibility
+            // Create a modified FnDef with the local name - compile_fn_def adds module prefix
             let mut modified_def = method.clone();
-            modified_def.name = Spanned::new(qualified_name.clone(), method.name.span);
+            modified_def.name = Spanned::new(local_method_name.clone(), method.name.span);
             modified_def.visibility = Visibility::Public; // Trait methods are always callable
 
             // Set up param_types for Self-typed parameters before compiling
@@ -2640,7 +2647,8 @@ impl Compiler {
                     // For "self" parameter (first param in trait methods) or Self-typed params
                     if let Some(name) = self.pattern_binding_name(&param.pattern) {
                         if name == "self" || is_self_typed {
-                            self.param_types.insert(name, type_name.clone());
+                            // Use qualified type name for param_types
+                            self.param_types.insert(name, qualified_type_name.clone());
                         }
                     }
                 }
@@ -2651,20 +2659,20 @@ impl Compiler {
             // Restore param_types
             self.param_types = saved_param_types;
 
-            method_names.push(qualified_name);
+            method_names.push(qualified_method_name);
         }
 
-        // Register the trait implementation
+        // Register the trait implementation with qualified type name
         let impl_info = TraitImplInfo {
-            type_name: type_name.clone(),
+            type_name: qualified_type_name.clone(),
             trait_name: trait_name.clone(),
             method_names,
         };
-        self.trait_impls.insert((type_name.clone(), trait_name.clone()), impl_info);
+        self.trait_impls.insert((qualified_type_name.clone(), trait_name.clone()), impl_info);
 
-        // Track which traits this type implements
+        // Track which traits this type implements (use qualified type name)
         self.type_traits
-            .entry(type_name)
+            .entry(qualified_type_name)
             .or_insert_with(Vec::new)
             .push(trait_name);
 
@@ -2778,8 +2786,14 @@ impl Compiler {
                     // Wildcard or type parameter accepts anything
                     score += 1;
                 } else if let Some(arg_type) = &arg_types[i] {
-                    if cand_type == arg_type {
-                        // Exact type match
+                    // Check for exact match or module-qualified match
+                    // e.g., "Vec" matches "nalgebra.Vec"
+                    let types_match = cand_type == arg_type
+                        || arg_type.ends_with(&format!(".{}", cand_type))
+                        || cand_type.ends_with(&format!(".{}", arg_type));
+
+                    if types_match {
+                        // Exact type match (or module-qualified match)
                         score += 2;
                     } else if cand_type.starts_with(arg_type) && cand_type[arg_type.len()..].starts_with('[') {
                         // Parameterized type match: arg_type="List", cand_type="List[Html]"
@@ -7498,6 +7512,11 @@ impl Compiler {
                 if self.types.contains_key(name) {
                     return Some(name.clone());
                 }
+                // Try resolving the name (handles module-qualified types like nalgebra.Vec)
+                let resolved_name = self.resolve_name(name);
+                if self.types.contains_key(&resolved_name) {
+                    return Some(resolved_name);
+                }
                 // Otherwise check if it's a variant constructor
                 for (ty_name, info) in &self.types {
                     if let TypeInfoKind::Variant { constructors } = &info.kind {
@@ -7556,8 +7575,13 @@ impl Compiler {
 
                     if ident.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
                         // Check if it's a record constructor (type name matches)
+                        // First try direct name, then resolved name (for module-qualified types)
                         if self.types.get(&ident.node).map(|info| matches!(&info.kind, TypeInfoKind::Record { .. })).unwrap_or(false) {
                             return Some(ident.node.clone());
+                        }
+                        let resolved_type = self.resolve_name(&ident.node);
+                        if self.types.get(&resolved_type).map(|info| matches!(&info.kind, TypeInfoKind::Record { .. })).unwrap_or(false) {
+                            return Some(resolved_type);
                         }
                         // Otherwise check if it's a variant constructor
                         for (type_name, info) in &self.types {
@@ -7578,6 +7602,20 @@ impl Compiler {
                     if let Some(ret_type) = self.get_function_return_type(&ident.node)
                         .or_else(|| self.get_function_return_type(&resolved_name)) {
                         if !ret_type.is_empty() {
+                            // If the return type is not already qualified, try to qualify it
+                            // based on the function's module (e.g., nalgebra.vec returns Vec -> nalgebra.Vec)
+                            if !ret_type.contains('.') && self.types.contains_key(&ret_type) {
+                                return Some(ret_type);
+                            }
+                            // Try qualifying with the function's module path
+                            if let Some(dot_pos) = resolved_name.rfind('.') {
+                                let module_prefix = &resolved_name[..dot_pos];
+                                let qualified_type = format!("{}.{}", module_prefix, ret_type);
+                                if self.types.contains_key(&qualified_type) {
+                                    return Some(qualified_type);
+                                }
+                            }
+                            // Fall back to unqualified name
                             return Some(ret_type);
                         }
                     }
@@ -7603,7 +7641,48 @@ impl Compiler {
                             // Type variables are single lowercase letters like "a", "b", "c"
                             let is_type_var = stripped.len() == 1 && stripped.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false);
                             if !is_type_var {
+                                // Try to qualify the return type with the function's module
+                                if !stripped.contains('.') {
+                                    if let Some(dot_pos) = resolved_name.rfind('.') {
+                                        let module_prefix = &resolved_name[..dot_pos];
+                                        let qualified_type = format!("{}.{}", module_prefix, stripped);
+                                        if self.types.contains_key(&qualified_type) {
+                                            return Some(qualified_type);
+                                        }
+                                    }
+                                }
                                 return Some(stripped);
+                            }
+                        }
+                    }
+                }
+                // Handle FieldAccess as function (e.g., module.function())
+                // This handles calls like nalgebra.vec([1, 2, 3])
+                if let Expr::FieldAccess(obj, field, _) = func.as_ref() {
+                    // Build the qualified function name from the field access
+                    if let Expr::Var(module_ident) = obj.as_ref() {
+                        let qualified_name = format!("{}.{}", module_ident.node, field.node);
+                        let resolved_name = self.resolve_name(&qualified_name);
+
+                        // Try to get return type from function
+                        if let Some(ret_type) = self.get_function_return_type(&qualified_name)
+                            .or_else(|| self.get_function_return_type(&resolved_name)) {
+                            if !ret_type.is_empty() {
+                                // If the return type is not already qualified, try to qualify it
+                                // based on the function's module
+                                if !ret_type.contains('.') && self.types.contains_key(&ret_type) {
+                                    return Some(ret_type);
+                                }
+                                // Try qualifying with the function's module path
+                                if let Some(dot_pos) = resolved_name.rfind('.') {
+                                    let module_prefix = &resolved_name[..dot_pos];
+                                    let qualified_type = format!("{}.{}", module_prefix, ret_type);
+                                    if self.types.contains_key(&qualified_type) {
+                                        return Some(qualified_type);
+                                    }
+                                }
+                                // Fall back to unqualified name
+                                return Some(ret_type);
                             }
                         }
                     }
@@ -7703,10 +7782,31 @@ impl Compiler {
             }
             // Method call - determine return type based on receiver type and method
             Expr::MethodCall(obj, method, _args, _) => {
-                // Check if this is a module-qualified builtin call (e.g., Http.get, File.readAll)
+                // Check if this is a module-qualified function call (e.g., nalgebra.vec, Http.get)
                 if let Some(module_path) = self.extract_module_path(obj) {
                     let qualified_name = format!("{}.{}", module_path, method.node);
-                    // Check if it's a builtin with a known return type
+                    let resolved_name = self.resolve_name(&qualified_name);
+
+                    // Try to get return type from user-defined function first
+                    if let Some(ret_type) = self.get_function_return_type(&qualified_name)
+                        .or_else(|| self.get_function_return_type(&resolved_name)) {
+                        if !ret_type.is_empty() {
+                            // If the return type is not already qualified, try to qualify it
+                            // based on the function's module
+                            if !ret_type.contains('.') && self.types.contains_key(&ret_type) {
+                                return Some(ret_type);
+                            }
+                            // Try qualifying with the function's module path
+                            let qualified_type = format!("{}.{}", module_path, ret_type);
+                            if self.types.contains_key(&qualified_type) {
+                                return Some(qualified_type);
+                            }
+                            // Fall back to unqualified name
+                            return Some(ret_type);
+                        }
+                    }
+
+                    // Fall back to builtin signature check
                     if let Some(sig) = Self::get_builtin_signature(&qualified_name) {
                         // Extract return type from signature (after last "->")
                         if let Some(arrow_pos) = sig.rfind("->") {
@@ -9135,7 +9235,7 @@ impl Compiler {
         // Determine type from explicit annotation or infer from value
         let explicit_type = binding.ty.as_ref().map(|t| self.type_expr_name(t));
         let inferred_type = self.expr_type_name(&binding.value);
-        let value_type = explicit_type.clone().or(inferred_type);
+        let value_type = explicit_type.clone().or(inferred_type.clone());
 
         // For simple variable bindings, check if this is an mvar assignment that needs atomic locking
         // BUT skip if we already have a function-level lock on this mvar
