@@ -13,7 +13,7 @@ use crate::session::extract_dependencies_from_fn;
 use nostos_syntax::ast::{Item, Pattern};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::async_vm::{AsyncVM, AsyncConfig, AsyncSharedState};
-use nostos_vm::{InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver};
+use nostos_vm::{InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver, ExtensionManager};
 use nostos_vm::process::ThreadSafeValue;
 
 /// An item in the browser
@@ -207,6 +207,10 @@ pub struct ReplEngine {
     debug_breakpoints: HashSet<String>,
     /// Registered nostlets: module_name -> NostletInfo
     nostlets: HashMap<String, NostletInfo>,
+    /// Extension manager for native extensions
+    extension_manager: Option<Arc<ExtensionManager>>,
+    /// Tokio runtime for extension manager (kept alive for extensions)
+    extension_runtime: Option<tokio::runtime::Runtime>,
 }
 
 impl ReplEngine {
@@ -676,6 +680,8 @@ impl ReplEngine {
             dynamic_var_bindings: dynamic_var_bindings_for_self,
             debug_breakpoints: HashSet::new(),
             nostlets: HashMap::new(),
+            extension_manager: None,
+            extension_runtime: None,
         }
     }
 
@@ -819,6 +825,25 @@ impl ReplEngine {
         self.vm.set_stdlib_function_list(self.compiler.get_function_list_names().to_vec());
 
         Ok(())
+    }
+
+    /// Load a native extension library (.so/.dylib) into the VM.
+    /// This enables __native__ calls to extension functions.
+    pub fn load_extension_library(&mut self, library_path: &std::path::Path) -> Result<String, String> {
+        // Create tokio runtime and extension manager if not already created
+        if self.extension_manager.is_none() {
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
+            let ext_mgr = Arc::new(ExtensionManager::new(rt.handle().clone()));
+            self.vm.set_extension_manager(ext_mgr.clone());
+            self.extension_manager = Some(ext_mgr);
+            self.extension_runtime = Some(rt);
+        }
+
+        // Load the extension library
+        let ext_mgr = self.extension_manager.as_ref().unwrap();
+        ext_mgr.load(library_path)
+            .map_err(|e| format!("Failed to load extension '{}': {}", library_path.display(), e))
     }
 
     /// Discover and register nostlets from ~/.nostos/nostlets/ and ./nostlets/

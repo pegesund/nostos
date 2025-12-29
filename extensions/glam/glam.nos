@@ -1,0 +1,216 @@
+# Glam - Linear Algebra Library for Nostos
+#
+# This module provides vector, matrix, and quaternion operations
+# using the native glam extension.
+#
+# Usage:
+#   import glam
+#
+#   v1 = glam.vec3(1.0, 2.0, 3.0)
+#   v2 = glam.vec3(4.0, 5.0, 6.0)
+#   sum = glam.vec3Add(v1, v2)
+
+# =============================================================================
+# Vec2 - 2D Vector Operations
+# =============================================================================
+
+# Create a 2D vector
+pub vec2(x, y) = __native__("Glam.vec2", x, y)
+
+# Add two Vec2s
+pub vec2Add(a, b) = __native__("Glam.vec2Add", a, b)
+
+# Subtract two Vec2s
+pub vec2Sub(a, b) = __native__("Glam.vec2Sub", a, b)
+
+# Multiply Vec2 by scalar
+pub vec2Mul(v, s) = __native__("Glam.vec2Mul", v, s)
+
+# Dot product of two Vec2s
+pub vec2Dot(a, b) = __native__("Glam.vec2Dot", a, b)
+
+# Length of Vec2
+pub vec2Length(v) = __native__("Glam.vec2Length", v)
+
+# Normalize Vec2 to unit length
+pub vec2Normalize(v) = __native__("Glam.vec2Normalize", v)
+
+# =============================================================================
+# Vec3 - 3D Vector Operations
+# =============================================================================
+
+# Create a 3D vector
+pub vec3(x, y, z) = __native__("Glam.vec3", x, y, z)
+
+# Add two Vec3s
+pub vec3Add(a, b) = __native__("Glam.vec3Add", a, b)
+
+# Subtract two Vec3s
+pub vec3Sub(a, b) = __native__("Glam.vec3Sub", a, b)
+
+# Multiply Vec3 by scalar
+pub vec3Mul(v, s) = __native__("Glam.vec3Mul", v, s)
+
+# Dot product of two Vec3s
+pub vec3Dot(a, b) = __native__("Glam.vec3Dot", a, b)
+
+# Cross product of two Vec3s
+pub vec3Cross(a, b) = __native__("Glam.vec3Cross", a, b)
+
+# Length of Vec3
+pub vec3Length(v) = __native__("Glam.vec3Length", v)
+
+# Normalize Vec3 to unit length
+pub vec3Normalize(v) = __native__("Glam.vec3Normalize", v)
+
+# =============================================================================
+# Vec4 - 4D Vector Operations (also used for homogeneous coordinates)
+# =============================================================================
+
+# Create a 4D vector
+pub vec4(x, y, z, w) = __native__("Glam.vec4", x, y, z, w)
+
+# Add two Vec4s
+pub vec4Add(a, b) = __native__("Glam.vec4Add", a, b)
+
+# Dot product of two Vec4s
+pub vec4Dot(a, b) = __native__("Glam.vec4Dot", a, b)
+
+# =============================================================================
+# Mat4 - 4x4 Matrix Operations
+# =============================================================================
+
+# Create identity matrix
+pub mat4Identity() = __native__("Glam.mat4Identity")
+
+# Create translation matrix
+pub mat4Translate(v) = __native__("Glam.mat4Translate", v)
+
+# Create scale matrix
+pub mat4Scale(v) = __native__("Glam.mat4Scale", v)
+
+# Create rotation matrix around X axis (angle in radians)
+pub mat4RotateX(angle) = __native__("Glam.mat4RotateX", angle)
+
+# Create rotation matrix around Y axis (angle in radians)
+pub mat4RotateY(angle) = __native__("Glam.mat4RotateY", angle)
+
+# Create rotation matrix around Z axis (angle in radians)
+pub mat4RotateZ(angle) = __native__("Glam.mat4RotateZ", angle)
+
+# Multiply two Mat4s
+pub mat4Mul(a, b) = __native__("Glam.mat4Mul", a, b)
+
+# Multiply Mat4 by Vec4
+pub mat4MulVec4(m, v) = __native__("Glam.mat4MulVec4", m, v)
+
+# Create perspective projection matrix
+pub mat4Perspective(fovY, aspect, zNear, zFar) =
+    __native__("Glam.mat4Perspective", fovY, aspect, zNear, zFar)
+
+# Create look-at view matrix
+pub mat4LookAt(eye, center, up) =
+    __native__("Glam.mat4LookAt", eye, center, up)
+
+# =============================================================================
+# Quaternion Operations
+# =============================================================================
+
+# Create quaternion from axis and angle (angle in radians)
+pub quatFromAxisAngle(axis, angle) =
+    __native__("Glam.quatFromAxisAngle", axis, angle)
+
+# Multiply two quaternions
+pub quatMul(a, b) =
+    __native__("Glam.quatMul", a, b)
+
+# Rotate a Vec3 by a quaternion
+pub quatRotateVec3(q, v) =
+    __native__("Glam.quatRotateVec3", q, v)
+
+# =============================================================================
+# Constants (as functions)
+# =============================================================================
+
+pub pi() = 3.14159265358979323846
+pub tau() = 6.28318530717958647692  # 2 * pi()
+
+# Convert degrees to radians
+pub toRadians(degrees) = degrees * pi() / 180.0
+
+# Convert radians to degrees
+pub toDegrees(radians) = radians * 180.0 / pi()
+
+# =============================================================================
+# Array/List Conversion Functions
+# =============================================================================
+
+# Convert a list [x, y] to Vec2
+pub listToVec2(l) = vec2(nth(l, 0), nth(l, 1))
+
+# Convert a list [x, y, z] to Vec3
+pub listToVec3(l) = vec3(nth(l, 0), nth(l, 1), nth(l, 2))
+
+# Convert a list [x, y, z, w] to Vec4
+pub listToVec4(l) = vec4(nth(l, 0), nth(l, 1), nth(l, 2), nth(l, 3))
+
+# Convert Vec2 tuple to list
+pub vec2ToList(v) = {
+    (x, y) = v
+    [x, y]
+}
+
+# Convert Vec3 tuple to list
+pub vec3ToList(v) = {
+    (x, y, z) = v
+    [x, y, z]
+}
+
+# Convert Vec4 tuple to list
+pub vec4ToList(v) = {
+    (x, y, z, w) = v
+    [x, y, z, w]
+}
+
+# =============================================================================
+# Convenience Functions
+# =============================================================================
+
+# Create a Vec3 point (with w=1 for transformations)
+pub point3(x, y, z) = vec4(x, y, z, 1.0)
+
+# Create a Vec3 direction (with w=0 for transformations)
+pub direction3(x, y, z) = vec4(x, y, z, 0.0)
+
+# Transform a 3D point by a matrix (assumes w=1)
+pub transformPoint(m, p) = {
+    (x, y, z) = p
+    result = mat4MulVec4(m, (x, y, z, 1.0))
+    (rx, ry, rz, _rw) = result
+    (rx, ry, rz)
+}
+
+# Transform a 3D direction by a matrix (assumes w=0, ignores translation)
+pub transformDirection(m, d) = {
+    (x, y, z) = d
+    result = mat4MulVec4(m, (x, y, z, 0.0))
+    (rx, ry, rz, _rw) = result
+    (rx, ry, rz)
+}
+
+# Linear interpolation between two Vec3s
+pub vec3Lerp(a, b, t) = {
+    (ax, ay, az) = a
+    (bx, by, bz) = b
+    (ax + (bx - ax) * t, ay + (by - ay) * t, az + (bz - az) * t)
+}
+
+# Distance between two Vec3 points
+pub vec3Distance(a, b) =
+    vec3Length(vec3Sub(b, a))
+
+# Reflect vector v around normal n
+pub vec3Reflect(v, n) = {
+    dot = vec3Dot(v, n)
+    vec3Sub(v, vec3Mul(n, 2.0 * dot))
+}

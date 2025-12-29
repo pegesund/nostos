@@ -575,6 +575,14 @@ pub fn run_tui(args: &[String]) -> ExitCode {
                     match packages::fetch_and_build_all(&pkg_config) {
                         Ok(results) => {
                             for result in results {
+                                // Load the native extension library first (.so/.dylib)
+                                match engine.load_extension_library(&result.library_path) {
+                                    Ok(msg) => eprintln!("{}", msg),
+                                    Err(e) => {
+                                        eprintln!("Warning: Failed to load extension library: {}", e);
+                                    }
+                                }
+
                                 // Load .nos wrapper files from extension directory
                                 if let Ok(entries) = std::fs::read_dir(&result.module_dir) {
                                     for entry in entries.flatten() {
