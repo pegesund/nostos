@@ -7809,13 +7809,9 @@ impl AsyncProcess {
                 let ptr = self.heap.alloc_variant(json_type, Arc::new("String".to_string()), vec![GcValue::String(str_ptr)]);
                 Ok(GcValue::Variant(ptr))
             }
-            GcValue::NativeHandle(handle_ptr) => {
+            GcValue::NativeHandle(handle) => {
                 // Native handles don't have a meaningful JSON representation
-                let h = self.heap.get_native_handle(handle_ptr);
-                let s = match h {
-                    Some(handle) => format!("<native:type={}>", handle.type_id),
-                    None => "<native:invalid>".to_string(),
-                };
+                let s = format!("<native:type={}>", handle.type_id);
                 let str_ptr = self.heap.alloc_string(s);
                 let ptr = self.heap.alloc_variant(json_type, Arc::new("String".to_string()), vec![GcValue::String(str_ptr)]);
                 Ok(GcValue::Variant(ptr))

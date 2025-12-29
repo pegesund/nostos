@@ -787,8 +787,9 @@ pub enum GcValue {
     Type(Arc<TypeValue>),
     Pointer(usize),
 
-    // Native handle with GC-managed cleanup (Arc-wrapped for safe cloning)
-    NativeHandle(GcPtr<Arc<GcNativeHandle>>),
+    // Native handle with GC-managed cleanup.
+    // Stored directly as Arc (not in heap) - Drop triggers when GcValue is dropped.
+    NativeHandle(Arc<GcNativeHandle>),
 }
 
 impl Default for GcValue {
@@ -982,8 +983,8 @@ impl GcValue {
             GcValue::Closure(ptr, _) => vec![ptr.as_raw()],
             // Int64List contains raw i64s, no GC pointers
             GcValue::Int64List(_) => vec![],
-            // Native handle is on the heap, need to trace it
-            GcValue::NativeHandle(ptr) => vec![ptr.as_raw()],
+            // Native handle stored directly (not in heap), no GC pointers to trace
+            GcValue::NativeHandle(_) => vec![],
         }
     }
 
@@ -2198,12 +2199,8 @@ impl Heap {
                     .map(|b| b.to_string())
                     .unwrap_or_else(|| "<buffer>".to_string())
             }
-            GcValue::NativeHandle(ptr) => {
-                if let Some(h) = self.get_native_handle(*ptr) {
-                    format!("<native ptr=0x{:x} type={}>", h.ptr, h.type_id)
-                } else {
-                    "<invalid native handle>".to_string()
-                }
+            GcValue::NativeHandle(h) => {
+                format!("<native ptr=0x{:x} type={}>", h.ptr, h.type_id)
             }
         }
     }
@@ -2689,16 +2686,8 @@ impl Heap {
 
             // Native handles cannot be deep copied - they own unique native memory.
             // For message passing, the extension should provide a copy mechanism.
-            // Here we create a non-owning clone (ptr=0) that's safe but unusable.
-            GcValue::NativeHandle(ptr) => {
-                if let Some(h) = source.get_native_handle(*ptr) {
-                    // Clone creates non-owning copy (ptr=0) - see GcNativeHandle::clone
-                    let cloned = h.clone();
-                    GcValue::NativeHandle(self.alloc_native_handle(cloned))
-                } else {
-                    GcValue::Unit
-                }
-            }
+            // We share the Arc - the handle will only be freed when all refs are dropped.
+            GcValue::NativeHandle(h) => GcValue::NativeHandle(h.clone())
         }
     }
 
@@ -2912,15 +2901,8 @@ impl Heap {
                     GcValue::Unit
                 }
             }
-            // Native handle - clone creates non-owning copy (ptr=0)
-            GcValue::NativeHandle(ptr) => {
-                if let Some(h) = self.get_native_handle(*ptr) {
-                    let cloned = h.clone(); // Creates non-owning copy
-                    GcValue::NativeHandle(self.alloc_native_handle(cloned))
-                } else {
-                    GcValue::Unit
-                }
-            }
+            // Native handle - just clone the Arc (shares ownership)
+            GcValue::NativeHandle(h) => GcValue::NativeHandle(h.clone())
         }
     }
 
@@ -3117,11 +3099,8 @@ impl Heap {
             Value::Ref(r) => GcValue::Ref(r.0),
             Value::Pointer(p) => GcValue::Pointer(*p),
 
-            // Native handle - allocate on heap
-            Value::NativeHandle(h) => {
-                let ptr = self.alloc_native_handle(h.clone());
-                GcValue::NativeHandle(ptr)
-            }
+            // Native handle - store Arc directly (not in heap)
+            Value::NativeHandle(h) => GcValue::NativeHandle(h.clone())
         }
     }
 
@@ -3331,11 +3310,8 @@ impl Heap {
                 Value::String(Arc::new(s))
             }
             // Native handle - convert to Value::NativeHandle
-            GcValue::NativeHandle(ptr) => {
-                let h = self.get_native_handle(*ptr)
-                    .expect("invalid native handle pointer");
-                Value::NativeHandle(h.clone())
-            }
+            // Native handle - just clone the Arc
+            GcValue::NativeHandle(h) => Value::NativeHandle(h.clone())
         }
     }
 
