@@ -23,6 +23,7 @@ use crate::nostos_panel::NostosPanel;
 use crate::debug_panel::{DebugPanel, DebugPanelCommand};
 use crate::git_panel::{GitHistoryPanel, GitPanelCommand, HistoryTarget};
 use crate::tutorial;
+use crate::packages;
 
 /// Debug logging disabled. Uncomment to enable.
 #[allow(unused)]
@@ -549,6 +550,60 @@ pub fn run_tui(args: &[String]) -> ExitCode {
     let mut engine = ReplEngine::new(config);
     if let Err(e) = engine.load_stdlib() {
         eprintln!("Failed to load stdlib: {}", e);
+    }
+
+    // Look for nostos.toml and load extensions
+    // First determine the search directory from args
+    let search_dir = args.iter()
+        .find(|arg| !arg.starts_with('-'))
+        .map(|arg| {
+            let path = std::path::Path::new(arg);
+            if path.is_dir() {
+                std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+            } else {
+                let parent = path.parent().unwrap_or(std::path::Path::new("."));
+                std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf())
+            }
+        })
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+
+    if let Some(config_path) = packages::find_config(&search_dir) {
+        eprintln!("Found package config: {:?}", config_path);
+        match packages::parse_config(&config_path) {
+            Ok(pkg_config) => {
+                if !pkg_config.extensions.is_empty() {
+                    match packages::fetch_and_build_all(&pkg_config) {
+                        Ok(results) => {
+                            for result in results {
+                                // Load .nos wrapper files from extension directory
+                                if let Ok(entries) = std::fs::read_dir(&result.module_dir) {
+                                    for entry in entries.flatten() {
+                                        let path = entry.path();
+                                        if path.extension().map(|e| e == "nos").unwrap_or(false) {
+                                            if let Ok(source) = std::fs::read_to_string(&path) {
+                                                if let Err(e) = engine.load_extension_module(
+                                                    &result.name,
+                                                    &source,
+                                                    path.to_str().unwrap_or("")
+                                                ) {
+                                                    eprintln!("Warning: Failed to load extension module {}: {}", path.display(), e);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to load extensions: {}", e);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to parse nostos.toml: {}", e);
+            }
+        }
     }
 
     // Discover nostlets from nostlets/ directory

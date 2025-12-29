@@ -787,6 +787,40 @@ impl ReplEngine {
         Ok(())
     }
 
+    /// Load an extension module (a .nos file from an extension directory).
+    /// This adds the module to the compiler with the extension name as the module path.
+    pub fn load_extension_module(&mut self, ext_name: &str, source: &str, file_path: &str) -> Result<(), String> {
+        let (module_opt, errors) = parse(source);
+        if !errors.is_empty() {
+            let source_errors = parse_errors_to_source_errors(&errors);
+            let error_msgs: Vec<String> = source_errors.iter().map(|e| {
+                format!("{}", e.message)
+            }).collect();
+            return Err(format!("Parse errors in extension {}: {}", ext_name, error_msgs.join(", ")));
+        }
+
+        let module = module_opt.ok_or_else(|| format!("Failed to parse extension module {}", ext_name))?;
+
+        // Module path is just the extension name (e.g., ["nalgebra"])
+        let module_path = vec![ext_name.to_string()];
+
+        self.compiler.add_module(&module, module_path, Arc::new(source.to_string()), file_path.to_string())
+            .map_err(|e| format!("Failed to compile extension module {}: {}", ext_name, e))?;
+
+        // Compile all bodies
+        if let Err((e, _, _)) = self.compiler.compile_all() {
+            return Err(format!("Failed to compile extension {}: {}", ext_name, e));
+        }
+
+        // Sync updated functions to VM
+        self.vm.set_stdlib_functions(
+            self.compiler.get_all_functions().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        );
+        self.vm.set_stdlib_function_list(self.compiler.get_function_list_names().to_vec());
+
+        Ok(())
+    }
+
     /// Discover and register nostlets from ~/.nostos/nostlets/ and ./nostlets/
     /// Nostlets are Nostos modules that export: nostlet_name(), nostlet_description(), render(), onKey(key)
     pub fn discover_nostlets(&mut self) -> Result<usize, String> {
@@ -3447,6 +3481,19 @@ impl ReplEngine {
         // Build set of known function base names (without signature suffix)
         let mut known_functions: HashSet<String> = HashSet::new();
 
+        // Build set of known module names (from imports)
+        let mut known_modules: HashSet<String> = HashSet::new();
+
+        // Collect imports first
+        for item in &module.items {
+            if let Item::Import(import_stmt) = item {
+                // Module name is the first component of the import path
+                if let Some(first) = import_stmt.path.first() {
+                    known_modules.insert(first.node.clone());
+                }
+            }
+        }
+
         // Add builtins
         for name in Compiler::get_builtin_names() {
             known_functions.insert(name.to_string());
@@ -3830,9 +3877,10 @@ impl ReplEngine {
             calls: &mut Vec<(String, usize, usize, bool)>,
             local_types: &mut HashMap<String, String>,
             variant_constructors: &HashMap<String, String>,
+            known_modules: &HashSet<String>,
         ) {
             match stmt {
-                Stmt::Expr(expr) => collect_calls(expr, calls, local_types, variant_constructors),
+                Stmt::Expr(expr) => collect_calls(expr, calls, local_types, variant_constructors, known_modules),
                 Stmt::Let(binding) => {
                     // Infer type from value and track it
                     if let Some(ty) = infer_expr_type(&binding.value, local_types, variant_constructors) {
@@ -3840,9 +3888,9 @@ impl ReplEngine {
                             local_types.insert(ident.node.clone(), ty);
                         }
                     }
-                    collect_calls(&binding.value, calls, local_types, variant_constructors);
+                    collect_calls(&binding.value, calls, local_types, variant_constructors, known_modules);
                 }
-                Stmt::Assign(_, expr, _) => collect_calls(expr, calls, local_types, variant_constructors),
+                Stmt::Assign(_, expr, _) => collect_calls(expr, calls, local_types, variant_constructors, known_modules),
             }
         }
 
@@ -3854,6 +3902,7 @@ impl ReplEngine {
             calls: &mut Vec<(String, usize, usize, bool)>,
             local_types: &mut HashMap<String, String>,
             variant_constructors: &HashMap<String, String>,
+            known_modules: &HashSet<String>,
         ) {
             match expr {
                 Expr::Call(callee, _, args, span) => {
@@ -3861,21 +3910,25 @@ impl ReplEngine {
                         // Regular function calls are not qualified method calls
                         calls.push((name, span.start, args.len(), false));
                     }
-                    collect_calls(callee, calls, local_types, variant_constructors);
+                    collect_calls(callee, calls, local_types, variant_constructors, known_modules);
                     for arg in args {
-                        collect_calls(arg, calls, local_types, variant_constructors);
+                        collect_calls(arg, calls, local_types, variant_constructors, known_modules);
                     }
                 }
                 Expr::MethodCall(receiver, method, args, span) => {
                     // Try to determine the receiver type for method validation
-                    // Priority: Module name > Variable type lookup > Expression type inference
+                    // Priority: Imported module > Capitalized module > Variable type lookup > Expression type inference
                     let receiver_type = match receiver.as_ref() {
                         // Capitalized name with empty fields = module/type name (e.g., Server)
                         Expr::Record(ident, fields, _) if fields.is_empty() => {
                             Some(ident.node.clone())
                         }
-                        // Capitalized variable = module name
+                        // Capitalized variable or imported module = module name
                         Expr::Var(ident) if ident.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) => {
+                            Some(ident.node.clone())
+                        }
+                        // Imported module name (e.g., nalgebra, testmath)
+                        Expr::Var(ident) if known_modules.contains(&ident.node) => {
                             Some(ident.node.clone())
                         }
                         // Lowercase variable - look up its type
@@ -3892,7 +3945,9 @@ impl ReplEngine {
                             ident.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
                         }
                         Expr::Var(ident) => {
+                            // Uppercase or imported module name = qualified call
                             ident.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+                                || known_modules.contains(&ident.node)
                         }
                         _ => false,
                     };
@@ -3906,63 +3961,63 @@ impl ReplEngine {
                     // Only collect from receiver if it's not a module name
                     // Module names (uppercase Record/Var) are used as qualifiers, not constructors
                     if !is_qualified_call {
-                        collect_calls(receiver, calls, local_types, variant_constructors);
+                        collect_calls(receiver, calls, local_types, variant_constructors, known_modules);
                     }
                     for arg in args {
-                        collect_calls(arg, calls, local_types, variant_constructors);
+                        collect_calls(arg, calls, local_types, variant_constructors, known_modules);
                     }
                 }
                 Expr::BinOp(left, _, right, _) => {
-                    collect_calls(left, calls, local_types, variant_constructors);
-                    collect_calls(right, calls, local_types, variant_constructors);
+                    collect_calls(left, calls, local_types, variant_constructors, known_modules);
+                    collect_calls(right, calls, local_types, variant_constructors, known_modules);
                 }
                 Expr::UnaryOp(_, operand, _) => {
-                    collect_calls(operand, calls, local_types, variant_constructors);
+                    collect_calls(operand, calls, local_types, variant_constructors, known_modules);
                 }
                 Expr::If(cond, then_branch, else_branch, _) => {
-                    collect_calls(cond, calls, local_types, variant_constructors);
-                    collect_calls(then_branch, calls, local_types, variant_constructors);
-                    collect_calls(else_branch, calls, local_types, variant_constructors);
+                    collect_calls(cond, calls, local_types, variant_constructors, known_modules);
+                    collect_calls(then_branch, calls, local_types, variant_constructors, known_modules);
+                    collect_calls(else_branch, calls, local_types, variant_constructors, known_modules);
                 }
                 Expr::Match(scrutinee, arms, _) => {
-                    collect_calls(scrutinee, calls, local_types, variant_constructors);
+                    collect_calls(scrutinee, calls, local_types, variant_constructors, known_modules);
                     for arm in arms {
                         if let Some(guard) = &arm.guard {
-                            collect_calls(guard, calls, local_types, variant_constructors);
+                            collect_calls(guard, calls, local_types, variant_constructors, known_modules);
                         }
-                        collect_calls(&arm.body, calls, local_types, variant_constructors);
+                        collect_calls(&arm.body, calls, local_types, variant_constructors, known_modules);
                     }
                 }
                 Expr::Block(stmts, _) => {
                     for stmt in stmts {
-                        collect_calls_stmt(stmt, calls, local_types, variant_constructors);
+                        collect_calls_stmt(stmt, calls, local_types, variant_constructors, known_modules);
                     }
                 }
                 Expr::Lambda(_, body, _) => {
-                    collect_calls(body, calls, local_types, variant_constructors);
+                    collect_calls(body, calls, local_types, variant_constructors, known_modules);
                 }
                 Expr::Tuple(exprs, _) => {
                     for e in exprs {
-                        collect_calls(e, calls, local_types, variant_constructors);
+                        collect_calls(e, calls, local_types, variant_constructors, known_modules);
                     }
                 }
                 Expr::List(exprs, spread, _) => {
                     for e in exprs {
-                        collect_calls(e, calls, local_types, variant_constructors);
+                        collect_calls(e, calls, local_types, variant_constructors, known_modules);
                     }
                     if let Some(s) = spread {
-                        collect_calls(s, calls, local_types, variant_constructors);
+                        collect_calls(s, calls, local_types, variant_constructors, known_modules);
                     }
                 }
                 Expr::Map(pairs, _) => {
                     for (k, v) in pairs {
-                        collect_calls(k, calls, local_types, variant_constructors);
-                        collect_calls(v, calls, local_types, variant_constructors);
+                        collect_calls(k, calls, local_types, variant_constructors, known_modules);
+                        collect_calls(v, calls, local_types, variant_constructors, known_modules);
                     }
                 }
                 Expr::Set(exprs, _) => {
                     for e in exprs {
-                        collect_calls(e, calls, local_types, variant_constructors);
+                        collect_calls(e, calls, local_types, variant_constructors, known_modules);
                     }
                 }
                 Expr::Record(name, fields, _) => {
@@ -3971,89 +4026,89 @@ impl ReplEngine {
                     calls.push((format!("C:{}", name.node), name.span.start, fields.len(), false));
                     for field in fields {
                         match field {
-                            nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls, local_types, variant_constructors),
-                            nostos_syntax::ast::RecordField::Named(_, expr) => collect_calls(expr, calls, local_types, variant_constructors),
+                            nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls, local_types, variant_constructors, known_modules),
+                            nostos_syntax::ast::RecordField::Named(_, expr) => collect_calls(expr, calls, local_types, variant_constructors, known_modules),
                         }
                     }
                 }
                 Expr::RecordUpdate(_, base, fields, _) => {
-                    collect_calls(base, calls, local_types, variant_constructors);
+                    collect_calls(base, calls, local_types, variant_constructors, known_modules);
                     for field in fields {
                         match field {
-                            nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls, local_types, variant_constructors),
-                            nostos_syntax::ast::RecordField::Named(_, expr) => collect_calls(expr, calls, local_types, variant_constructors),
+                            nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls, local_types, variant_constructors, known_modules),
+                            nostos_syntax::ast::RecordField::Named(_, expr) => collect_calls(expr, calls, local_types, variant_constructors, known_modules),
                         }
                     }
                 }
                 Expr::FieldAccess(base, _, _) => {
-                    collect_calls(base, calls, local_types, variant_constructors);
+                    collect_calls(base, calls, local_types, variant_constructors, known_modules);
                 }
                 Expr::Index(base, index, _) => {
-                    collect_calls(base, calls, local_types, variant_constructors);
-                    collect_calls(index, calls, local_types, variant_constructors);
+                    collect_calls(base, calls, local_types, variant_constructors, known_modules);
+                    collect_calls(index, calls, local_types, variant_constructors, known_modules);
                 }
                 Expr::Try(try_expr, catch_arms, finally_expr, _) => {
-                    collect_calls(try_expr, calls, local_types, variant_constructors);
+                    collect_calls(try_expr, calls, local_types, variant_constructors, known_modules);
                     for arm in catch_arms {
                         if let Some(guard) = &arm.guard {
-                            collect_calls(guard, calls, local_types, variant_constructors);
+                            collect_calls(guard, calls, local_types, variant_constructors, known_modules);
                         }
-                        collect_calls(&arm.body, calls, local_types, variant_constructors);
+                        collect_calls(&arm.body, calls, local_types, variant_constructors, known_modules);
                     }
                     if let Some(f) = finally_expr {
-                        collect_calls(f, calls, local_types, variant_constructors);
+                        collect_calls(f, calls, local_types, variant_constructors, known_modules);
                     }
                 }
                 Expr::Try_(inner, _) => {
-                    collect_calls(inner, calls, local_types, variant_constructors);
+                    collect_calls(inner, calls, local_types, variant_constructors, known_modules);
                 }
                 Expr::While(cond, body, _) => {
-                    collect_calls(cond, calls, local_types, variant_constructors);
-                    collect_calls(body, calls, local_types, variant_constructors);
+                    collect_calls(cond, calls, local_types, variant_constructors, known_modules);
+                    collect_calls(body, calls, local_types, variant_constructors, known_modules);
                 }
                 Expr::For(_, start, end, body, _) => {
-                    collect_calls(start, calls, local_types, variant_constructors);
-                    collect_calls(end, calls, local_types, variant_constructors);
-                    collect_calls(body, calls, local_types, variant_constructors);
+                    collect_calls(start, calls, local_types, variant_constructors, known_modules);
+                    collect_calls(end, calls, local_types, variant_constructors, known_modules);
+                    collect_calls(body, calls, local_types, variant_constructors, known_modules);
                 }
                 Expr::Do(stmts, _) => {
                     for stmt in stmts {
                         match stmt {
-                            DoStmt::Bind(_, expr) => collect_calls(expr, calls, local_types, variant_constructors),
-                            DoStmt::Expr(expr) => collect_calls(expr, calls, local_types, variant_constructors),
+                            DoStmt::Bind(_, expr) => collect_calls(expr, calls, local_types, variant_constructors, known_modules),
+                            DoStmt::Expr(expr) => collect_calls(expr, calls, local_types, variant_constructors, known_modules),
                         }
                     }
                 }
                 Expr::Send(target, msg, _) => {
-                    collect_calls(target, calls, local_types, variant_constructors);
-                    collect_calls(msg, calls, local_types, variant_constructors);
+                    collect_calls(target, calls, local_types, variant_constructors, known_modules);
+                    collect_calls(msg, calls, local_types, variant_constructors, known_modules);
                 }
                 Expr::Receive(arms, timeout, _) => {
                     for arm in arms {
                         if let Some(guard) = &arm.guard {
-                            collect_calls(guard, calls, local_types, variant_constructors);
+                            collect_calls(guard, calls, local_types, variant_constructors, known_modules);
                         }
-                        collect_calls(&arm.body, calls, local_types, variant_constructors);
+                        collect_calls(&arm.body, calls, local_types, variant_constructors, known_modules);
                     }
                     if let Some((timeout_expr, timeout_body)) = timeout {
-                        collect_calls(timeout_expr, calls, local_types, variant_constructors);
-                        collect_calls(timeout_body, calls, local_types, variant_constructors);
+                        collect_calls(timeout_expr, calls, local_types, variant_constructors, known_modules);
+                        collect_calls(timeout_body, calls, local_types, variant_constructors, known_modules);
                     }
                 }
                 Expr::Spawn(_, callee, args, _) => {
-                    collect_calls(callee, calls, local_types, variant_constructors);
+                    collect_calls(callee, calls, local_types, variant_constructors, known_modules);
                     for arg in args {
-                        collect_calls(arg, calls, local_types, variant_constructors);
+                        collect_calls(arg, calls, local_types, variant_constructors, known_modules);
                     }
                 }
                 Expr::Break(Some(expr), _) => {
-                    collect_calls(expr, calls, local_types, variant_constructors);
+                    collect_calls(expr, calls, local_types, variant_constructors, known_modules);
                 }
                 Expr::Quote(inner, _) => {
-                    collect_calls(inner, calls, local_types, variant_constructors);
+                    collect_calls(inner, calls, local_types, variant_constructors, known_modules);
                 }
                 Expr::Splice(inner, _) => {
-                    collect_calls(inner, calls, local_types, variant_constructors);
+                    collect_calls(inner, calls, local_types, variant_constructors, known_modules);
                 }
                 // Literals and simple expressions - no calls
                 _ => {}
@@ -4067,11 +4122,11 @@ impl ReplEngine {
             if let Item::FnDef(fn_def) = item {
                 for clause in &fn_def.clauses {
                     local_types.clear();
-                    collect_calls(&clause.body, &mut all_calls, &mut local_types, &variant_constructors);
+                    collect_calls(&clause.body, &mut all_calls, &mut local_types, &variant_constructors, &known_modules);
                 }
             }
             if let Item::Binding(binding) = item {
-                collect_calls(&binding.value, &mut all_calls, &mut local_types, &variant_constructors);
+                collect_calls(&binding.value, &mut all_calls, &mut local_types, &variant_constructors, &known_modules);
             }
         }
 
@@ -11087,6 +11142,66 @@ mod repl_state_tests {
         // This should still work
         let result3 = engine.eval("\"world\"");
         assert!(result3.is_ok(), "String literal should work after error, got: {:?}", result3);
+    }
+
+    #[test]
+    fn test_extension_module_loading() {
+        // Test that extension modules can be loaded and their functions become available
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Load a simple extension module (simulating what TUI does)
+        let ext_code = r#"
+# Simple test extension
+type Vec = { data: List }
+
+pub vec(data) -> Vec = Vec(data)
+pub vecAdd(a: Vec, b: Vec) -> Vec = Vec([])
+"#;
+        let result = engine.load_extension_module("testmath", ext_code, "<test>");
+        assert!(result.is_ok(), "Loading extension module should succeed: {:?}", result);
+
+        // Now check that code using the extension compiles
+        let code = r#"
+import testmath
+
+main() = {
+    v = testmath.vec([1, 2, 3])
+    v.data
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Code using extension should compile: {:?}", result);
+    }
+
+    #[test]
+    fn test_extension_unknown_function_detected() {
+        // Test that unknown functions in extensions are still detected
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Load a simple extension module
+        let ext_code = r#"
+type Vec = { data: List }
+pub vec(data) -> Vec = Vec(data)
+"#;
+        let _ = engine.load_extension_module("testmath", ext_code, "<test>");
+
+        // Now check that unknown function is detected
+        let code = r#"
+import testmath
+
+main() = {
+    testmath.unknownFunc([1, 2, 3])
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Unknown function in extension should be detected");
+        let err = result.unwrap_err();
+        assert!(err.contains("unknownFunc") || err.contains("unknown"),
+            "Error should mention unknownFunc: {}", err);
     }
 }
 

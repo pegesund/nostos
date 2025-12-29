@@ -25,6 +25,14 @@ pub struct ExtensionDep {
     pub version: Option<String>,
 }
 
+/// Extension build result with library and optional module path
+#[derive(Debug, Clone)]
+pub struct ExtensionResult {
+    pub name: String,
+    pub library_path: PathBuf,
+    pub module_dir: PathBuf,  // Directory containing .nos wrapper files
+}
+
 /// Error type for package operations
 #[derive(Debug)]
 pub enum PackageError {
@@ -296,17 +304,21 @@ pub fn build_extension(ext_dir: &Path) -> Result<PathBuf, PackageError> {
 }
 
 /// Fetch and build all extensions from a config
-pub fn fetch_and_build_all(config: &PackageConfig) -> Result<Vec<PathBuf>, PackageError> {
-    let mut libraries = Vec::new();
+pub fn fetch_and_build_all(config: &PackageConfig) -> Result<Vec<ExtensionResult>, PackageError> {
+    let mut results = Vec::new();
 
     for (name, dep) in &config.extensions {
         let ext_dir = fetch_extension(name, dep)?;
         let lib_path = build_extension(&ext_dir)?;
         eprintln!("Built extension {}: {:?}", name, lib_path);
-        libraries.push(lib_path);
+        results.push(ExtensionResult {
+            name: name.clone(),
+            library_path: lib_path,
+            module_dir: ext_dir,  // The extension dir contains .nos wrapper files
+        });
     }
 
-    Ok(libraries)
+    Ok(results)
 }
 
 /// Look for nostos.toml in the given directory or its parents

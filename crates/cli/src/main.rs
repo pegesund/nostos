@@ -841,15 +841,19 @@ fn main() -> ExitCode {
         std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf())
     };
 
+    // Store extension module directories for loading later
+    let mut extension_module_dirs: Vec<(String, std::path::PathBuf)> = Vec::new();
+
     if let Some(config_path) = packages::find_config(&search_dir) {
         eprintln!("Found package config: {:?}", config_path);
         match packages::parse_config(&config_path) {
             Ok(config) => {
                 if !config.extensions.is_empty() {
                     match packages::fetch_and_build_all(&config) {
-                        Ok(libs) => {
-                            for lib in libs {
-                                extension_paths.push(lib.to_string_lossy().to_string());
+                        Ok(results) => {
+                            for result in results {
+                                extension_paths.push(result.library_path.to_string_lossy().to_string());
+                                extension_module_dirs.push((result.name.clone(), result.module_dir));
                             }
                         }
                         Err(e) => {
@@ -969,6 +973,27 @@ fn main() -> ExitCode {
         // Register prelude imports so stdlib functions are available without prefix
         for (local_name, qualified_name) in stdlib_functions {
             compiler.add_prelude_import(local_name, qualified_name);
+        }
+    }
+
+    // Load extension modules (.nos wrapper files from extension repos)
+    for (ext_name, ext_dir) in &extension_module_dirs {
+        // Look for .nos files in the extension directory
+        for entry in fs::read_dir(ext_dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.extension().map(|e| e == "nos").unwrap_or(false) {
+                if let Ok(source) = fs::read_to_string(&path) {
+                    let (module_opt, _errors) = parse(&source);
+                    if let Some(module) = module_opt {
+                        // Module path is just the extension name (e.g., "glam")
+                        let module_path = vec![ext_name.clone()];
+
+                        if let Err(e) = compiler.add_module(&module, module_path, std::sync::Arc::new(source.clone()), path.to_str().unwrap().to_string()) {
+                            eprintln!("Warning: Failed to load extension module {}: {}", path.display(), e);
+                        }
+                    }
+                }
+            }
         }
     }
 
