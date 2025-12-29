@@ -2717,14 +2717,32 @@ impl ReplEngine {
     pub fn get_source(&self, name: &str) -> String {
         // Check for metadata request (e.g., "utils._meta")
         if name.ends_with("._meta") {
+            let module_name = &name[..name.len() - 6]; // Strip "._meta"
+            let mut output = String::new();
+
+            // Add imports section
+            let imports = self.compiler.get_module_imports(module_name);
+            if !imports.is_empty() {
+                output.push_str("# Imports\n");
+                for imp in &imports {
+                    output.push_str(&format!("import {}\n", imp));
+                }
+                output.push('\n');
+            }
+
+            // Add metadata from source manager if available
             if let Some(ref sm) = self.source_manager {
-                let module_name = &name[..name.len() - 6]; // Strip "._meta"
                 if let Some(meta) = sm.get_module_metadata(module_name) {
-                    return meta;
+                    output.push_str(&meta);
+                    return output;
                 }
             }
-            return format!("# Module metadata for {}\n# Add together directives here, e.g.:\n# together func1 func2\n",
-                &name[..name.len() - 6]);
+
+            // Default metadata template
+            output.push_str(&format!("# Module metadata for {}\n", module_name));
+            output.push_str("# Add together directives here, e.g.:\n");
+            output.push_str("# together func1 func2\n");
+            return output;
         }
 
         // Check SourceManager first (if available)
@@ -4674,7 +4692,61 @@ impl ReplEngine {
         let mut traits: BTreeSet<(String, bool)> = BTreeSet::new();
         let mut mvars: BTreeSet<String> = BTreeSet::new();
 
-        // Process functions
+        // FIRST: Collect type names at this level (so we can distinguish types from modules)
+        let mut type_names_at_level: BTreeSet<String> = BTreeSet::new();
+        for name in self.compiler.get_type_names() {
+            let is_eval = self.is_eval_type(name);
+            if prefix.is_empty() {
+                if let Some(dot_pos) = name.find('.') {
+                    modules.insert(name[..dot_pos].to_string());
+                } else {
+                    type_names_at_level.insert(name.to_string());
+                    types.insert((name.to_string(), is_eval));
+                }
+            } else if name.starts_with(&prefix) {
+                let rest = &name[prefix_len..];
+                if let Some(dot_pos) = rest.find('.') {
+                    modules.insert(rest[..dot_pos].to_string());
+                } else {
+                    type_names_at_level.insert(rest.to_string());
+                    types.insert((rest.to_string(), is_eval));
+                }
+            }
+        }
+
+        // Also collect dynamic types
+        {
+            let dyn_types = self.dynamic_types.read().expect("dynamic_types lock poisoned");
+            for name in dyn_types.keys() {
+                if prefix.is_empty() {
+                    if !name.contains('.') {
+                        type_names_at_level.insert(name.clone());
+                    }
+                } else if name.starts_with(&prefix) {
+                    let rest = &name[prefix_len..];
+                    if !rest.contains('.') {
+                        type_names_at_level.insert(rest.to_string());
+                    }
+                }
+            }
+        }
+
+        // Also collect trait names at this level (so we can distinguish traits from modules)
+        let mut trait_names_at_level: BTreeSet<String> = BTreeSet::new();
+        for name in self.compiler.get_trait_names() {
+            if prefix.is_empty() {
+                if !name.contains('.') {
+                    trait_names_at_level.insert(name.to_string());
+                }
+            } else if name.starts_with(&prefix) {
+                let rest = &name[prefix_len..];
+                if !rest.contains('.') {
+                    trait_names_at_level.insert(rest.to_string());
+                }
+            }
+        }
+
+        // THEN: Process functions
         for name in self.compiler.get_function_names() {
             // Skip internal names
             if name.starts_with("__") {
@@ -4707,8 +4779,13 @@ impl ReplEngine {
                 // Under our path
                 let rest = &base_name[prefix_len..];
                 if let Some(dot_pos) = rest.find('.') {
-                    // Has more path components - it's a submodule
-                    modules.insert(rest[..dot_pos].to_string());
+                    // Has more path components
+                    let potential_module = &rest[..dot_pos];
+                    // Only add as module if it's not a type or trait name at this level
+                    // (Type.Trait.method patterns should not create Type as a submodule)
+                    if !type_names_at_level.contains(potential_module) && !trait_names_at_level.contains(potential_module) {
+                        modules.insert(potential_module.to_string());
+                    }
                 } else {
                     // Direct function in this module
                     let sig = self.compiler.get_function_signature(name).unwrap_or_default();
@@ -4719,26 +4796,8 @@ impl ReplEngine {
             }
         }
 
-        // Process types from compiler
-        for name in self.compiler.get_type_names() {
-            let is_eval = self.is_eval_type(name);
-            if prefix.is_empty() {
-                if let Some(dot_pos) = name.find('.') {
-                    modules.insert(name[..dot_pos].to_string());
-                } else {
-                    types.insert((name.to_string(), is_eval));
-                }
-            } else if name.starts_with(&prefix) {
-                let rest = &name[prefix_len..];
-                if let Some(dot_pos) = rest.find('.') {
-                    modules.insert(rest[..dot_pos].to_string());
-                } else {
-                    types.insert((rest.to_string(), is_eval));
-                }
-            }
-        }
-
         // Process types from dynamic_types (eval-created, not in compiler)
+        // Already collected type_names_at_level above, now just add to types set
         {
             let dyn_types = self.dynamic_types.read().expect("dynamic_types lock poisoned");
             for name in dyn_types.keys() {
@@ -4760,6 +4819,7 @@ impl ReplEngine {
         }
 
         // Process traits (eval-created traits not supported yet, always false)
+        // Already collected trait_names_at_level above, now add to traits set
         for name in self.compiler.get_trait_names() {
             if prefix.is_empty() {
                 if let Some(dot_pos) = name.find('.') {
@@ -4770,7 +4830,11 @@ impl ReplEngine {
             } else if name.starts_with(&prefix) {
                 let rest = &name[prefix_len..];
                 if let Some(dot_pos) = rest.find('.') {
-                    modules.insert(rest[..dot_pos].to_string());
+                    // Don't add type or trait names as modules
+                    let potential_module = &rest[..dot_pos];
+                    if !type_names_at_level.contains(potential_module) && !trait_names_at_level.contains(potential_module) {
+                        modules.insert(potential_module.to_string());
+                    }
                 } else {
                     traits.insert((rest.to_string(), false));
                 }
@@ -4812,9 +4876,13 @@ impl ReplEngine {
         }
 
         // Metadata entry (when inside a module, not at root)
+        // Note: path may include "imports" as virtual folder - strip it for actual module name
         if !path.is_empty() {
-            let module_name = path.join(".");
-            items.push(BrowserItem::Metadata { module: module_name });
+            let actual_path: &[String] = if path[0] == "imports" { &path[1..] } else { path };
+            if !actual_path.is_empty() {
+                let module_name = actual_path.join(".");
+                items.push(BrowserItem::Metadata { module: module_name });
+            }
         }
 
         // Variables: REPL bindings at root level, mvars at any level
@@ -4869,10 +4937,16 @@ impl ReplEngine {
 
     /// Get the full qualified name for a browser item at a given path
     pub fn get_full_name(&self, path: &[String], item: &BrowserItem) -> String {
-        let prefix = if path.is_empty() {
+        // Strip "imports" prefix from path - it's a virtual folder, not part of actual names
+        let actual_path: &[String] = if !path.is_empty() && path[0] == "imports" {
+            &path[1..]
+        } else {
+            path
+        };
+        let prefix = if actual_path.is_empty() {
             String::new()
         } else {
-            format!("{}.", path.join("."))
+            format!("{}.", actual_path.join("."))
         };
         match item {
             BrowserItem::Module(name) => format!("{}{}", prefix, name),
@@ -4881,7 +4955,7 @@ impl ReplEngine {
             BrowserItem::Type { name, .. } => format!("{}{}", prefix, name),
             BrowserItem::Trait { name, .. } => format!("{}{}", prefix, name),
             BrowserItem::Variable { name, .. } => name.clone(),
-            BrowserItem::Metadata { module } => format!("{}._meta", module),
+            BrowserItem::Metadata { module } => format!("{}._meta", actual_path.join(".")),
         }
     }
 

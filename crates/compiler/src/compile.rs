@@ -10710,6 +10710,27 @@ impl Compiler {
         false
     }
 
+    /// Get the list of modules imported by a given module.
+    /// Returns module names as strings (e.g., ["nalgebra", "stdlib.list"]).
+    pub fn get_module_imports(&self, module_name: &str) -> Vec<String> {
+        let module_path: Vec<String> = if module_name.is_empty() {
+            vec![]
+        } else {
+            module_name.split('.').map(String::from).collect()
+        };
+
+        self.imported_modules
+            .iter()
+            .filter_map(|(importing_module, imported)| {
+                if *importing_module == module_path {
+                    Some(imported.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Get field names for a record type.
     /// Checks both user-defined types and builtin types.
     /// Returns empty vec for non-record types or unknown types.
