@@ -1,0 +1,59 @@
+# Test nalgebra operations with native handles
+
+# Helper for approximate equality
+approxEq(a, b) = {
+    diff = a - b
+    absDiff = if diff < 0.0 then 0.0 - diff else diff
+    absDiff < 0.0001
+}
+
+main() = {
+    # Test vector creation and operations
+    v1 = __native__("Nalgebra.dvec", [1.0, 2.0, 3.0, 4.0, 5.0])
+    v2 = __native__("Nalgebra.dvec", [5.0, 4.0, 3.0, 2.0, 1.0])
+
+    # Test vector length
+    len = __native__("Nalgebra.dvecLen", v1)
+    assert_eq(len, 5)
+    println("Vector length: OK")
+
+    # Test vector sum
+    sum = __native__("Nalgebra.dvecSum", v1)
+    assert(approxEq(sum, 15.0))
+    println("Vector sum: OK")
+
+    # Test vector dot product
+    dot = __native__("Nalgebra.dvecDot", v1, v2)
+    # 1*5 + 2*4 + 3*3 + 4*2 + 5*1 = 5 + 8 + 9 + 8 + 5 = 35
+    assert(approxEq(dot, 35.0))
+    println("Dot product: OK")
+
+    # Test vector addition
+    vadd = __native__("Nalgebra.dvecAdd", v1, v2)
+    # Should be [6, 6, 6, 6, 6]
+    addList = __native__("Nalgebra.dvecToList", vadd)
+    assert(approxEq(nth(addList, 0), 6.0))
+    assert(approxEq(nth(addList, 4), 6.0))
+    println("Vector addition: OK")
+
+    # Test matrix creation
+    m = __native__("Nalgebra.dmatIdentity", 3)
+    rows = __native__("Nalgebra.dmatRows", m)
+    cols = __native__("Nalgebra.dmatCols", m)
+    assert_eq(rows, 3)
+    assert_eq(cols, 3)
+    println("Matrix creation: OK")
+
+    # Test matrix trace (sum of diagonal)
+    trace = __native__("Nalgebra.dmatTrace", m)
+    assert(approxEq(trace, 3.0))  # Identity matrix has trace = dimension
+    println("Matrix trace: OK")
+
+    # Test matrix determinant
+    det = __native__("Nalgebra.dmatDeterminant", m)
+    assert(approxEq(det, 1.0))  # Identity matrix has determinant = 1
+    println("Matrix determinant: OK")
+
+    println("All tests passed!")
+    0
+}

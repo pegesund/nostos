@@ -268,6 +268,7 @@ pub fn vm_value_to_ext(v: &crate::Value) -> Value {
             Value::Tuple(Arc::new(items))
         }
         crate::Value::Pid(p) => Value::Pid(Pid(p.0)),
+        crate::Value::NativeHandle(h) => Value::GcHandle(h.clone()),
         // For other types, return Unit for now
         _ => Value::Unit,
     }
