@@ -10,6 +10,7 @@ mod nostos_panel;
 mod debug_panel;
 mod git_panel;
 mod tutorial;
+mod packages;
 
 use nostos_compiler::compile::{compile_module, Compiler, MvarInitValue};
 use nostos_jit::{JitCompiler, JitConfig};
@@ -831,6 +832,37 @@ fn main() -> ExitCode {
 
     let file_path_arg = &args[file_idx];
     let input_path = std::path::Path::new(file_path_arg);
+
+    // Look for nostos.toml and auto-load extensions
+    let search_dir = if input_path.is_dir() {
+        std::fs::canonicalize(input_path).unwrap_or_else(|_| input_path.to_path_buf())
+    } else {
+        let parent = input_path.parent().unwrap_or(std::path::Path::new("."));
+        std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf())
+    };
+
+    if let Some(config_path) = packages::find_config(&search_dir) {
+        eprintln!("Found package config: {:?}", config_path);
+        match packages::parse_config(&config_path) {
+            Ok(config) => {
+                if !config.extensions.is_empty() {
+                    match packages::fetch_and_build_all(&config) {
+                        Ok(libs) => {
+                            for lib in libs {
+                                extension_paths.push(lib.to_string_lossy().to_string());
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to load extensions: {}", e);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to parse nostos.toml: {}", e);
+            }
+        }
+    }
 
     // Check if input is directory or file
     let mut source_files = Vec::new();

@@ -48,3 +48,4 @@ bench/*.hi
 bench/*.o
 heaptrack.*.zst
 todo/
+\!examples/**/nostos.toml

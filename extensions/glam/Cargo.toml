@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 [workspace]
 
 [dependencies]
-nostos-extension = { path = "../../crates/extension" }
+nostos-extension = { git = "https://github.com/pegesund/nostos", branch = "master" }
 glam = "0.29"
 
 [dev-dependencies]

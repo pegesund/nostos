@@ -1,0 +1,49 @@
+# Glam example project
+# This project uses the glam extension loaded from nostos.toml
+
+main() = {
+    println("Glam Extension Demo")
+    println("==================")
+
+    # Create vectors
+    v1 = __native__("Glam.vec3", 1.0, 2.0, 3.0)
+    v2 = __native__("Glam.vec3", 4.0, 5.0, 6.0)
+
+    println("v1 = (1, 2, 3)")
+    println("v2 = (4, 5, 6)")
+
+    # Vector addition
+    sum = __native__("Glam.vec3Add", v1, v2)
+    (sx, sy, sz) = sum
+    println("v1 + v2 = (${sx}, ${sy}, ${sz})")
+
+    # Dot product
+    dot = __native__("Glam.vec3Dot", v1, v2)
+    println("v1 . v2 = ${dot}")
+
+    # Cross product
+    cross = __native__("Glam.vec3Cross", v1, v2)
+    (cx, cy, cz) = cross
+    println("v1 x v2 = (${cx}, ${cy}, ${cz})")
+
+    # Matrix operations
+    println("")
+    println("Matrix Demo")
+    println("-----------")
+
+    identity = __native__("Glam.mat4Identity")
+    println("Created identity matrix (16 elements)")
+
+    trans = __native__("Glam.mat4Translate", (10.0, 20.0, 30.0))
+    println("Created translation matrix for (10, 20, 30)")
+
+    # Transform a point
+    point = __native__("Glam.vec4", 1.0, 1.0, 1.0, 1.0)
+    transformed = __native__("Glam.mat4MulVec4", trans, point)
+    (px, py, pz, pw) = transformed
+    println("Translating (1, 1, 1) by (10, 20, 30) = (${px}, ${py}, ${pz})")
+
+    println("")
+    println("Demo complete!")
+    0
+}
