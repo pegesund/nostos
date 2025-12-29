@@ -1,0 +1,6 @@
+[package]
+name = "glam-example"
+version = "0.1.0"
+
+[extensions]
+glam = { git = "https://github.com/pegesund/nostos-glam" }
