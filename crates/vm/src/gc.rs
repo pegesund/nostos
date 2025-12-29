@@ -29,6 +29,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use nostos_extension::GcNativeHandle;
 use num_bigint::BigInt;
 
 use crate::shared_types::{SharedMap, SharedMapKey, SharedMapValue};
@@ -785,6 +786,9 @@ pub enum GcValue {
     Ref(u64),
     Type(Arc<TypeValue>),
     Pointer(usize),
+
+    // Native handle with GC-managed cleanup
+    NativeHandle(GcPtr<GcNativeHandle>),
 }
 
 impl Default for GcValue {
@@ -922,6 +926,7 @@ impl fmt::Debug for GcValue {
             GcValue::Pointer(p) => write!(f, "Pointer(0x{:x})", p),
             GcValue::Int64List(list) => write!(f, "Int64List[{}]", list.len()),
             GcValue::Buffer(_) => write!(f, "Buffer"),
+            GcValue::NativeHandle(ptr) => write!(f, "NativeHandle({:?})", ptr),
         }
     }
 }
@@ -977,6 +982,8 @@ impl GcValue {
             GcValue::Closure(ptr, _) => vec![ptr.as_raw()],
             // Int64List contains raw i64s, no GC pointers
             GcValue::Int64List(_) => vec![],
+            // Native handle is on the heap, need to trace it
+            GcValue::NativeHandle(ptr) => vec![ptr.as_raw()],
         }
     }
 
@@ -1066,6 +1073,7 @@ impl GcValue {
             GcValue::Pointer(_) => "Pointer",
             GcValue::Int64List(_) => "Int64List",
             GcValue::Buffer(_) => "Buffer",
+            GcValue::NativeHandle(_) => "NativeHandle",
         }
     }
 
@@ -1157,6 +1165,7 @@ pub enum ObjectType {
     Variant,
     BigInt,
     Closure,
+    NativeHandle,
 }
 
 /// A heap object with GC metadata.
@@ -1187,6 +1196,8 @@ pub enum HeapData {
     Variant(GcVariant),
     BigInt(GcBigInt),
     Closure(GcClosure),
+    /// Native handle with GC-managed cleanup
+    NativeHandle(GcNativeHandle),
 }
 
 impl HeapData {
@@ -1207,6 +1218,7 @@ impl HeapData {
             HeapData::Variant(_) => ObjectType::Variant,
             HeapData::BigInt(_) => ObjectType::BigInt,
             HeapData::Closure(_) => ObjectType::Closure,
+            HeapData::NativeHandle(_) => ObjectType::NativeHandle,
         }
     }
 
@@ -1258,6 +1270,7 @@ impl HeapData {
                 .iter()
                 .flat_map(|v| v.gc_pointers())
                 .collect(),
+            HeapData::NativeHandle(_) => vec![], // Native handles contain no GC pointers
         }
     }
 
@@ -1312,6 +1325,10 @@ impl HeapData {
             }
             HeapData::Buffer(b) => {
                 std::mem::size_of::<GcBuffer>() + b.data.borrow().len()
+            }
+            HeapData::NativeHandle(_) => {
+                // Just the handle struct size, not the native memory (we don't know its size)
+                std::mem::size_of::<GcNativeHandle>()
             }
         }
     }
@@ -1625,6 +1642,14 @@ impl Heap {
         GcPtr::from_raw(self.alloc(data))
     }
 
+    /// Allocate a native handle with GC-managed cleanup.
+    /// When this handle is garbage collected, the cleanup function will be called
+    /// with (ptr, type_id) to free the native memory.
+    pub fn alloc_native_handle(&mut self, handle: GcNativeHandle) -> GcPtr<GcNativeHandle> {
+        let data = HeapData::NativeHandle(handle);
+        GcPtr::from_raw(self.alloc(data))
+    }
+
     /// Get an object by raw pointer.
     pub fn get(&self, ptr: RawGcPtr) -> Option<&GcObject> {
         self.objects.get(ptr as usize).and_then(|o| o.as_ref())
@@ -1796,6 +1821,14 @@ impl Heap {
     pub fn get_bigint(&self, ptr: GcPtr<GcBigInt>) -> Option<&GcBigInt> {
         match self.get(ptr.as_raw())?.data {
             HeapData::BigInt(ref b) => Some(b),
+            _ => None,
+        }
+    }
+
+    /// Get a typed reference to native handle data.
+    pub fn get_native_handle(&self, ptr: GcPtr<GcNativeHandle>) -> Option<&GcNativeHandle> {
+        match self.get(ptr.as_raw())?.data {
+            HeapData::NativeHandle(ref h) => Some(h),
             _ => None,
         }
     }
@@ -2164,6 +2197,13 @@ impl Heap {
                     .map(|b| b.to_string())
                     .unwrap_or_else(|| "<buffer>".to_string())
             }
+            GcValue::NativeHandle(ptr) => {
+                if let Some(h) = self.get_native_handle(*ptr) {
+                    format!("<native ptr=0x{:x} type={}>", h.ptr, h.type_id)
+                } else {
+                    "<invalid native handle>".to_string()
+                }
+            }
         }
     }
 
@@ -2258,7 +2298,7 @@ impl Heap {
             GcValue::Decimal(_) | GcValue::BigInt(_) | GcValue::Array(_) |
             GcValue::Closure(_, _) | GcValue::Function(_) | GcValue::NativeFunction(_) |
             GcValue::Ref(_) | GcValue::Type(_) | GcValue::Pointer(_) |
-            GcValue::Int64List(_) | GcValue::Buffer(_) => {
+            GcValue::Int64List(_) | GcValue::Buffer(_) | GcValue::NativeHandle(_) => {
                 return None;
             }
         })
@@ -2645,6 +2685,19 @@ impl Heap {
                     GcValue::Unit
                 }
             }
+
+            // Native handles cannot be deep copied - they own unique native memory.
+            // For message passing, the extension should provide a copy mechanism.
+            // Here we create a non-owning clone (ptr=0) that's safe but unusable.
+            GcValue::NativeHandle(ptr) => {
+                if let Some(h) = source.get_native_handle(*ptr) {
+                    // Clone creates non-owning copy (ptr=0) - see GcNativeHandle::clone
+                    let cloned = h.clone();
+                    GcValue::NativeHandle(self.alloc_native_handle(cloned))
+                } else {
+                    GcValue::Unit
+                }
+            }
         }
     }
 
@@ -2858,6 +2911,15 @@ impl Heap {
                     GcValue::Unit
                 }
             }
+            // Native handle - clone creates non-owning copy (ptr=0)
+            GcValue::NativeHandle(ptr) => {
+                if let Some(h) = self.get_native_handle(*ptr) {
+                    let cloned = h.clone(); // Creates non-owning copy
+                    GcValue::NativeHandle(self.alloc_native_handle(cloned))
+                } else {
+                    GcValue::Unit
+                }
+            }
         }
     }
 
@@ -3053,6 +3115,12 @@ impl Heap {
             Value::Pid(p) => GcValue::Pid(p.0),
             Value::Ref(r) => GcValue::Ref(r.0),
             Value::Pointer(p) => GcValue::Pointer(*p),
+
+            // Native handle - allocate on heap
+            Value::NativeHandle(h) => {
+                let ptr = self.alloc_native_handle(h.clone());
+                GcValue::NativeHandle(ptr)
+            }
         }
     }
 
@@ -3260,6 +3328,12 @@ impl Heap {
                     .map(|b| b.to_string())
                     .unwrap_or_default();
                 Value::String(Arc::new(s))
+            }
+            // Native handle - convert to Value::NativeHandle
+            GcValue::NativeHandle(ptr) => {
+                let h = self.get_native_handle(*ptr)
+                    .expect("invalid native handle pointer");
+                Value::NativeHandle(h.clone())
             }
         }
     }

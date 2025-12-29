@@ -37,7 +37,7 @@ use tokio::sync::mpsc;
 #[repr(transparent)]
 pub struct Pid(pub u64);
 
-/// A native handle wrapping any Rust type
+/// A native handle wrapping any Rust type (Arc-based, cleanup on last drop)
 pub struct NativeHandle {
     inner: Arc<dyn Any + Send + Sync>,
     type_name: &'static str,
@@ -75,6 +75,90 @@ impl std::fmt::Debug for NativeHandle {
     }
 }
 
+/// Cleanup function type for GC-managed native handles.
+/// Called with (ptr, type_id) when the handle is garbage collected.
+pub type NativeCleanupFn = fn(ptr: usize, type_id: u64);
+
+/// A GC-managed native handle that stores a raw pointer and type ID.
+/// When the GC collects this handle, it calls the cleanup function.
+///
+/// This is more efficient than NativeHandle for FFI because:
+/// - No Arc overhead for reference counting
+/// - Extension controls exact cleanup logic
+/// - Type ID allows one cleanup function to handle multiple types
+///
+/// **Important**: Clone creates a non-owning copy (ptr set to 0) that won't
+/// trigger cleanup. Only the original handle owns the memory.
+pub struct GcNativeHandle {
+    /// Raw pointer to native data (as usize for FFI safety).
+    /// Set to 0 for non-owning clones.
+    pub ptr: usize,
+    /// Extension-defined type identifier (e.g., 1=DVector, 2=DMatrix)
+    pub type_id: u64,
+    /// Cleanup function called by GC when this handle is collected
+    pub cleanup: NativeCleanupFn,
+}
+
+impl GcNativeHandle {
+    /// Create a new GC-managed native handle.
+    ///
+    /// # Arguments
+    /// * `ptr` - Raw pointer to the native data
+    /// * `type_id` - Extension-defined type identifier
+    /// * `cleanup` - Function to call when GC collects this handle
+    ///
+    /// # Safety
+    /// The cleanup function must correctly free the memory pointed to by ptr
+    /// based on the type_id.
+    pub fn new(ptr: usize, type_id: u64, cleanup: NativeCleanupFn) -> Self {
+        GcNativeHandle { ptr, type_id, cleanup }
+    }
+
+    /// Create a handle from a boxed value, returning the handle.
+    /// The cleanup function will receive the pointer and type_id.
+    pub fn from_boxed<T>(value: Box<T>, type_id: u64, cleanup: NativeCleanupFn) -> Self {
+        let ptr = Box::into_raw(value) as usize;
+        GcNativeHandle { ptr, type_id, cleanup }
+    }
+
+    /// Check if this handle owns the native memory.
+    pub fn is_owner(&self) -> bool {
+        self.ptr != 0
+    }
+}
+
+/// Clone creates a non-owning copy. The cloned handle has ptr=0 and won't
+/// trigger cleanup when dropped. This is safe because:
+/// - Native handles should only exist on one heap (the creating process)
+/// - When message passing, the extension should be notified to deep-copy
+impl Clone for GcNativeHandle {
+    fn clone(&self) -> Self {
+        // Create a non-owning clone with ptr=0
+        // This prevents double-free when the clone is dropped
+        GcNativeHandle {
+            ptr: 0, // Non-owning
+            type_id: self.type_id,
+            cleanup: self.cleanup,
+        }
+    }
+}
+
+impl std::fmt::Debug for GcNativeHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "GcNativeHandle(ptr={:#x}, type_id={}, owner={})",
+               self.ptr, self.type_id, self.is_owner())
+    }
+}
+
+impl Drop for GcNativeHandle {
+    fn drop(&mut self) {
+        // Only call cleanup if this is the owning handle (ptr != 0)
+        if self.ptr != 0 {
+            (self.cleanup)(self.ptr, self.type_id);
+        }
+    }
+}
+
 /// Value type for extension arguments and return values.
 /// This is a simplified representation that maps to Nostos VM values.
 #[derive(Debug, Clone)]
@@ -104,8 +188,10 @@ pub enum Value {
     },
     /// Process ID
     Pid(Pid),
-    /// Opaque native handle (for holding Rust objects)
+    /// Opaque native handle (for holding Rust objects, Arc-based cleanup)
     Native(NativeHandle),
+    /// GC-managed native handle (pointer + type_id, GC calls cleanup function)
+    GcHandle(GcNativeHandle),
     /// None/null value
     None,
 }
@@ -154,6 +240,17 @@ impl Value {
 
     pub fn native<T: Any + Send + Sync>(value: T) -> Self {
         Value::Native(NativeHandle::new(value))
+    }
+
+    /// Create a GC-managed native handle from a boxed value.
+    /// The cleanup function will be called when the GC collects this value.
+    pub fn gc_handle<T>(value: Box<T>, type_id: u64, cleanup: NativeCleanupFn) -> Self {
+        Value::GcHandle(GcNativeHandle::from_boxed(value, type_id, cleanup))
+    }
+
+    /// Create a GC-managed native handle from raw pointer.
+    pub fn gc_handle_raw(ptr: usize, type_id: u64, cleanup: NativeCleanupFn) -> Self {
+        Value::GcHandle(GcNativeHandle::new(ptr, type_id, cleanup))
     }
 
     pub fn none() -> Self {
@@ -240,6 +337,24 @@ impl Value {
         }
     }
 
+    /// Get the GC-managed native handle's pointer and type_id.
+    pub fn as_gc_handle(&self) -> Result<&GcNativeHandle, String> {
+        match self {
+            Value::GcHandle(h) => Ok(h),
+            _ => Err(format!("Expected GcHandle, got {:?}", self.type_name())),
+        }
+    }
+
+    /// Get the raw pointer from a GC handle, casting to the expected type.
+    /// # Safety
+    /// Caller must ensure type_id matches the expected type.
+    pub unsafe fn as_gc_handle_ptr<T>(&self) -> Result<&T, String> {
+        match self {
+            Value::GcHandle(h) => Ok(&*(h.ptr as *const T)),
+            _ => Err(format!("Expected GcHandle, got {:?}", self.type_name())),
+        }
+    }
+
     pub fn as_float_list(&self) -> Result<Vec<f64>, String> {
         let list = self.as_list()?;
         list.iter().map(|v| v.as_f64()).collect()
@@ -264,6 +379,7 @@ impl Value {
             Value::Record { .. } => "Record",
             Value::Pid(_) => "Pid",
             Value::Native(_) => "Native",
+            Value::GcHandle(_) => "GcHandle",
             Value::None => "None",
         }
     }

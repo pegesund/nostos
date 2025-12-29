@@ -14,6 +14,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 
+use nostos_extension::GcNativeHandle;
 use num_bigint::BigInt;
 use rust_decimal::Decimal;
 
@@ -80,8 +81,10 @@ pub enum Value {
     // === Special ===
     /// Type value for introspection
     Type(Arc<TypeValue>),
-    /// Opaque pointer for FFI
+    /// Opaque pointer for FFI (legacy)
     Pointer(usize),
+    /// GC-managed native handle (extension data with cleanup callback)
+    NativeHandle(GcNativeHandle),
 }
 
 /// Key type for maps and sets (must be hashable).
@@ -1230,6 +1233,7 @@ impl Value {
             Value::Ref(_) => "Ref",
             Value::Type(_) => "Type",
             Value::Pointer(_) => "Pointer",
+            Value::NativeHandle(_) => "NativeHandle",
         }
     }
 
@@ -1338,6 +1342,7 @@ impl fmt::Debug for Value {
             Value::Float32Array(a) => write!(f, "Float32Array[{}]", a.read().unwrap().len()),
             Value::Type(t) => write!(f, "<type {}>", t.name),
             Value::Pointer(p) => write!(f, "<ptr 0x{:x}>", p),
+            Value::NativeHandle(h) => write!(f, "<native ptr=0x{:x} type={}>", h.ptr, h.type_id),
         }
     }
 }

@@ -153,6 +153,7 @@ impl Value {
             Value::Record(r) => r.fields.is_empty(),
             Value::Variant(v) => v.fields.is_empty() && v.named_fields.as_ref().map(|nf| nf.is_empty()).unwrap_or(true),
             Value::Closure(_) => false, // Can inspect captured vars
+            Value::NativeHandle(_) => true, // Native handles are leaf values
         }
     }
 
@@ -271,6 +272,7 @@ impl Value {
             Value::Ref(r) => format!("<ref {:?}>", r),
             Value::Type(t) => format!("<type {}>", t.name),
             Value::Pointer(p) => format!("<ptr 0x{:x}>", p),
+            Value::NativeHandle(h) => format!("<native type={}>", h.type_id),
         }
     }
 
@@ -284,7 +286,8 @@ impl Value {
             Value::Float32(_) | Value::Float64(_) |
             Value::BigInt(_) | Value::Decimal(_) |
             Value::Function(_) | Value::NativeFunction(_) |
-            Value::Pid(_) | Value::Ref(_) | Value::Type(_) | Value::Pointer(_) => vec![],
+            Value::Pid(_) | Value::Ref(_) | Value::Type(_) | Value::Pointer(_) |
+            Value::NativeHandle(_) => vec![],
 
             // String: only has slots if long (for chunked viewing)
             Value::String(_) => vec![],

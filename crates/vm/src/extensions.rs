@@ -14,7 +14,8 @@ use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::mpsc;
 
 pub use nostos_extension::{
-    ExtContext, ExtFn, ExtMessage, ExtRegistry, ExtensionDecl, NativeHandle, Pid, Value,
+    ExtContext, ExtFn, ExtMessage, ExtRegistry, ExtensionDecl, GcNativeHandle, NativeCleanupFn,
+    NativeHandle, Pid, Value,
 };
 
 /// Manages loaded extensions and provides function dispatch.
@@ -231,9 +232,12 @@ pub fn ext_value_to_vm(v: &Value) -> crate::Value {
             crate::Value::Pid(crate::Pid(p.0))
         }
         Value::Native(_h) => {
-            // For now, we use Pointer to store native handles
-            // This needs improvement - perhaps store in a handle map
+            // Arc-based NativeHandle - not converted to GC-managed, just Unit for now
             crate::Value::Unit
+        }
+        Value::GcHandle(h) => {
+            // GC-managed native handle - convert to VM's NativeHandle
+            crate::Value::NativeHandle(h.clone())
         }
         Value::None => crate::Value::Unit, // VM doesn't have None, use Unit
     }
