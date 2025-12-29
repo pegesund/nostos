@@ -1407,13 +1407,21 @@ impl ReplEngine {
         let thunk_name = format!("__repl_var_{}_{}", name, self.var_counter);
 
         // Build bindings preamble to inject existing variables (excluding the one being defined)
+        // Include type annotations so the compiler knows variable types for trait dispatch
         let bindings_preamble = if self.var_bindings.is_empty() {
             String::new()
         } else {
             let bindings: Vec<String> = self.var_bindings
                 .iter()
                 .filter(|(var_name, _)| *var_name != name) // Don't inject the variable being defined
-                .map(|(var_name, binding)| format!("{} = {}()", var_name, binding.thunk_name))
+                .map(|(var_name, binding)| {
+                    // Include type annotation if available for proper trait dispatch
+                    if let Some(ref type_ann) = binding.type_annotation {
+                        format!("{}: {} = {}()", var_name, type_ann, binding.thunk_name)
+                    } else {
+                        format!("{} = {}()", var_name, binding.thunk_name)
+                    }
+                })
                 .collect();
             if bindings.is_empty() {
                 String::new()
@@ -1936,12 +1944,20 @@ impl ReplEngine {
         self.eval_counter += 1;
         let eval_name = format!("__repl_eval_{}__", self.eval_counter);
 
+        // Include type annotations so the compiler knows variable types for trait dispatch
         let bindings_preamble = if self.var_bindings.is_empty() {
             String::new()
         } else {
             let bindings: Vec<String> = self.var_bindings
                 .iter()
-                .map(|(name, binding)| format!("{} = {}()", name, binding.thunk_name))
+                .map(|(name, binding)| {
+                    // Include type annotation if available for proper trait dispatch
+                    if let Some(ref type_ann) = binding.type_annotation {
+                        format!("{}: {} = {}()", name, type_ann, binding.thunk_name)
+                    } else {
+                        format!("{} = {}()", name, binding.thunk_name)
+                    }
+                })
                 .collect();
             bindings.join("\n    ") + "\n    "
         };
@@ -5938,12 +5954,19 @@ impl ReplEngine {
         self.eval_counter += 1;
         let eval_name = format!("__repl_eval_{}__", self.eval_counter);
 
+        // Include type annotations so the compiler knows variable types for trait dispatch
         let bindings_preamble = if self.var_bindings.is_empty() {
             String::new()
         } else {
             let bindings: Vec<String> = self.var_bindings
                 .iter()
-                .map(|(name, binding)| format!("{} = {}()", name, binding.thunk_name))
+                .map(|(name, binding)| {
+                    if let Some(ref type_ann) = binding.type_annotation {
+                        format!("{}: {} = {}()", name, type_ann, binding.thunk_name)
+                    } else {
+                        format!("{} = {}()", name, binding.thunk_name)
+                    }
+                })
                 .collect();
             bindings.join("\n    ") + "\n    "
         };
@@ -6017,12 +6040,19 @@ impl ReplEngine {
         self.eval_counter += 1;
         let eval_name = format!("__repl_eval_{}__", self.eval_counter);
 
+        // Include type annotations so the compiler knows variable types for trait dispatch
         let bindings_preamble = if self.var_bindings.is_empty() {
             String::new()
         } else {
             let bindings: Vec<String> = self.var_bindings
                 .iter()
-                .map(|(name, binding)| format!("{} = {}()", name, binding.thunk_name))
+                .map(|(name, binding)| {
+                    if let Some(ref type_ann) = binding.type_annotation {
+                        format!("{}: {} = {}()", name, type_ann, binding.thunk_name)
+                    } else {
+                        format!("{} = {}()", name, binding.thunk_name)
+                    }
+                })
                 .collect();
             bindings.join("\n    ") + "\n    "
         };
