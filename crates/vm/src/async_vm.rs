@@ -106,8 +106,12 @@ pub struct AsyncSharedState {
     pub functions: RwLock<HashMap<String, Arc<FunctionValue>>>,
     /// Function list for indexed calls - uses RwLock for concurrent eval support.
     pub function_list: RwLock<Vec<Arc<FunctionValue>>>,
-    /// Native functions.
+    /// Native functions (string-based lookup).
     pub natives: HashMap<String, Arc<GcNativeFn>>,
+    /// Native functions indexed by u16 for fast CallNativeIdx lookup.
+    pub natives_vec: Vec<Arc<GcNativeFn>>,
+    /// Maps native function names to their index in natives_vec.
+    pub native_name_to_idx: HashMap<String, u16>,
     /// Type definitions - uses RwLock for concurrent eval support.
     pub types: RwLock<HashMap<String, Arc<TypeValue>>>,
 
@@ -2943,6 +2947,16 @@ impl AsyncProcess {
                 };
                 let native = self.shared.natives.get(&name)
                     .ok_or_else(|| RuntimeError::Panic(format!("Unknown native function: {}", name)))?
+                    .clone();
+                let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r)).collect();
+                let result = (native.func)(&arg_values, &mut self.heap)?;
+                set_reg!(dst, result);
+            }
+
+            // Fast path for native function calls - uses index instead of string lookup
+            CallNativeIdx(dst, native_idx, ref args) => {
+                let native = self.shared.natives_vec.get(*native_idx as usize)
+                    .ok_or_else(|| RuntimeError::Panic(format!("Invalid native index: {}", native_idx)))?
                     .clone();
                 let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r)).collect();
                 let result = (native.func)(&arg_values, &mut self.heap)?;
@@ -8558,6 +8572,8 @@ impl AsyncVM {
             functions: RwLock::new(HashMap::new()),
             function_list: RwLock::new(Vec::new()),
             natives: HashMap::new(),
+            natives_vec: Vec::new(),
+            native_name_to_idx: HashMap::new(),
             types: RwLock::new(HashMap::new()),
             jit_int_functions: RwLock::new(HashMap::new()),
             jit_int_functions_0: RwLock::new(HashMap::new()),
@@ -8611,11 +8627,19 @@ impl AsyncVM {
     }
 
     /// Register a native function.
+    /// Also adds to indexed structures for CallNativeIdx optimization.
     pub fn register_native(&mut self, name: &str, native: Arc<GcNativeFn>) {
-        Arc::get_mut(&mut self.shared)
-            .expect("Cannot register after execution started")
-            .natives
-            .insert(name.to_string(), native);
+        let shared = Arc::get_mut(&mut self.shared)
+            .expect("Cannot register after execution started");
+        let idx = shared.natives_vec.len() as u16;
+        shared.natives_vec.push(native.clone());
+        shared.native_name_to_idx.insert(name.to_string(), idx);
+        shared.natives.insert(name.to_string(), native);
+    }
+
+    /// Get all native function indices for the compiler.
+    pub fn get_native_indices(&self) -> HashMap<String, u16> {
+        self.shared.native_name_to_idx.clone()
     }
 
     /// Register a type - safe during concurrent evals.

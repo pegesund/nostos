@@ -231,6 +231,8 @@ impl ReplEngine {
         };
         let mut vm = AsyncVM::new(vm_config);
         vm.register_default_natives();
+        // Initialize compiler with native indices for CallNativeIdx optimization
+        compiler.set_native_indices(vm.get_native_indices());
         let inspect_receiver = Some(vm.setup_inspect());
         let output_receiver = Some(vm.setup_output());
         // Log the receiver pointer for debugging

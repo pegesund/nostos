@@ -299,8 +299,16 @@ pub struct Scheduler {
     /// Parallel to functions map, indexed by func_idx.
     pub function_list: RwLock<Vec<Arc<FunctionValue>>>,
 
-    /// Native functions (shared across processes).
+    /// Native functions (shared across processes) - for string-based lookup.
     pub natives: RwLock<HashMap<String, Arc<GcNativeFn>>>,
+
+    /// Native functions indexed by u16 - for fast CallNativeIdx lookup.
+    /// Immutable after initialization, so no lock needed for reads.
+    pub natives_vec: RwLock<Vec<Arc<GcNativeFn>>>,
+
+    /// Maps native function names to their index in natives_vec.
+    /// Used by compiler to resolve names to indices at compile time.
+    pub native_name_to_idx: RwLock<HashMap<String, u16>>,
 
     /// Type definitions (shared).
     pub types: RwLock<HashMap<String, Arc<TypeValue>>>,
@@ -352,6 +360,8 @@ impl Scheduler {
             functions: RwLock::new(HashMap::new()),
             function_list: RwLock::new(Vec::new()),
             natives: RwLock::new(HashMap::new()),
+            natives_vec: RwLock::new(Vec::new()),
+            native_name_to_idx: RwLock::new(HashMap::new()),
             types: RwLock::new(HashMap::new()),
             globals: RwLock::new(HashMap::new()),
             jit_tracker: JitTracker::new(jit_config),
@@ -375,12 +385,44 @@ impl Scheduler {
         self.active_process_count.load(Ordering::Relaxed)
     }
 
+    /// Register a native function, adding it to both the name-based HashMap
+    /// and the indexed Vec for fast CallNativeIdx lookup.
+    /// Returns the index assigned to this native.
+    pub fn register_native(&self, native: Arc<GcNativeFn>) -> u16 {
+        let name = native.name.clone();
+        let mut vec = self.natives_vec.write();
+        let idx = vec.len() as u16;
+        vec.push(native.clone());
+        self.native_name_to_idx.write().insert(name.clone(), idx);
+        self.natives.write().insert(name, native);
+        idx
+    }
+
+    /// Get the index for a native function by name.
+    /// Used by the compiler to resolve native names to indices at compile time.
+    pub fn get_native_index(&self, name: &str) -> Option<u16> {
+        self.native_name_to_idx.read().get(name).copied()
+    }
+
+    /// Get all native function indices.
+    /// Used to initialize the compiler's native indices for CallNativeIdx optimization.
+    pub fn get_all_native_indices(&self) -> HashMap<String, u16> {
+        self.native_name_to_idx.read().clone()
+    }
+
+    /// Get a native function by index.
+    /// Used by CallNativeIdx for fast lookup.
+    #[inline]
+    pub fn get_native_by_index(&self, idx: u16) -> Option<Arc<GcNativeFn>> {
+        self.natives_vec.read().get(idx as usize).cloned()
+    }
+
     /// Register the default native functions (show, copy, print, println).
     pub fn register_default_natives(&self) {
         use crate::gc::GcNativeFn;
 
         // Show - convert value to string
-        self.natives.write().insert("show".to_string(), Arc::new(GcNativeFn {
+        self.register_native(Arc::new(GcNativeFn {
             name: "show".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
@@ -390,7 +432,7 @@ impl Scheduler {
         }));
 
         // Copy - deep copy a value
-        self.natives.write().insert("copy".to_string(), Arc::new(GcNativeFn {
+        self.register_native(Arc::new(GcNativeFn {
             name: "copy".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
@@ -399,7 +441,7 @@ impl Scheduler {
         }));
 
         // Print - print without newline
-        self.natives.write().insert("print".to_string(), Arc::new(GcNativeFn {
+        self.register_native(Arc::new(GcNativeFn {
             name: "print".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
@@ -410,7 +452,7 @@ impl Scheduler {
         }));
 
         // Println - print with newline
-        self.natives.write().insert("println".to_string(), Arc::new(GcNativeFn {
+        self.register_native(Arc::new(GcNativeFn {
             name: "println".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
@@ -421,7 +463,7 @@ impl Scheduler {
         }));
 
         // String.length
-        self.natives.write().insert("String.length".to_string(), Arc::new(GcNativeFn {
+        self.register_native(Arc::new(GcNativeFn {
             name: "String.length".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
@@ -439,7 +481,7 @@ impl Scheduler {
         }));
 
         // String.chars
-        self.natives.write().insert("String.chars".to_string(), Arc::new(GcNativeFn {
+        self.register_native(Arc::new(GcNativeFn {
             name: "String.chars".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
@@ -458,7 +500,7 @@ impl Scheduler {
         }));
 
         // String.from_chars
-        self.natives.write().insert("String.from_chars".to_string(), Arc::new(GcNativeFn {
+        self.register_native(Arc::new(GcNativeFn {
             name: "String.from_chars".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
@@ -477,8 +519,9 @@ impl Scheduler {
                 }
             }),
         }));
+
         // String.to_int
-        self.natives.write().insert("String.to_int".to_string(), Arc::new(GcNativeFn {
+        self.register_native(Arc::new(GcNativeFn {
             name: "String.to_int".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {

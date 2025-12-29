@@ -782,6 +782,9 @@ pub struct Compiler {
     /// Debug symbols accumulated during function compilation
     /// (not affected by scope restoration in compile_block)
     current_fn_debug_symbols: Vec<LocalVarSymbol>,
+    /// Native function indices: name -> index for CallNativeIdx optimization.
+    /// When set, CallNative instructions are replaced with faster CallNativeIdx.
+    native_indices: HashMap<String, u16>,
 }
 
 /// Information about a module-level mutable variable (mvar).
@@ -940,6 +943,7 @@ impl Compiler {
             current_fn_mvar_locks: Vec::new(),
             current_fn_has_blocking: false,
             current_fn_debug_symbols: Vec::new(),
+            native_indices: HashMap::new(),
         };
 
         // Register builtin types for autocomplete
@@ -1406,6 +1410,7 @@ impl Compiler {
             current_fn_mvar_locks: Vec::new(),
             current_fn_has_blocking: false,
             current_fn_debug_symbols: Vec::new(),
+            native_indices: HashMap::new(),
         }
     }
 
@@ -4175,8 +4180,7 @@ impl Compiler {
                             let path_reg = self.compile_expr_tail(&args[0], false)?;
                             let pattern_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![path_reg, pattern_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![path_reg, pattern_reg].into(), line);
                             return Ok(dst);
                         }
                         // WebSocket functions
@@ -4526,8 +4530,7 @@ impl Compiler {
                         | "String.words" | "String.isEmpty" if args.len() == 1 => {
                             let arg_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // String functions (2 args)
@@ -4536,8 +4539,7 @@ impl Compiler {
                             let arg0_reg = self.compile_expr_tail(&args[0], false)?;
                             let arg1_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
                         }
                         // String functions (3 args)
@@ -4547,15 +4549,13 @@ impl Compiler {
                             let arg1_reg = self.compile_expr_tail(&args[1], false)?;
                             let arg2_reg = self.compile_expr_tail(&args[2], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg, arg2_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg, arg2_reg].into(), line);
                             return Ok(dst);
                         }
                         // Time functions (0 args)
                         "Time.now" | "Time.nowSecs" | "Time.timezone" | "Time.timezoneOffset" if args.is_empty() => {
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![].into(), line);
                             return Ok(dst);
                         }
                         // Time functions (1 arg)
@@ -4563,8 +4563,7 @@ impl Compiler {
                         | "Time.second" | "Time.weekday" | "Time.toUtc" | "Time.fromUtc" if args.len() == 1 => {
                             let arg_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Time functions (2 args)
@@ -4572,30 +4571,26 @@ impl Compiler {
                             let arg0_reg = self.compile_expr_tail(&args[0], false)?;
                             let arg1_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
                         }
                         // Random functions (0 args)
                         "Random.float" | "Random.bool" if args.is_empty() => {
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![].into(), line);
                             return Ok(dst);
                         }
                         // Runtime stats functions (0 args)
                         "Runtime.threadCount" | "Runtime.uptimeMs" | "Runtime.memoryKb" | "Runtime.pid" | "Runtime.loadAvg" | "Runtime.numThreads" | "Runtime.tokioWorkers" | "Runtime.blockingThreads" if args.is_empty() => {
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![].into(), line);
                             return Ok(dst);
                         }
                         // Random functions (1 arg)
                         "Random.choice" | "Random.shuffle" | "Random.bytes" if args.len() == 1 => {
                             let arg_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Random.int (2 args)
@@ -4603,23 +4598,20 @@ impl Compiler {
                             let arg0_reg = self.compile_expr_tail(&args[0], false)?;
                             let arg1_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
                         }
                         // Env functions (0 args)
                         "Env.all" | "Env.cwd" | "Env.home" | "Env.args" | "Env.platform" if args.is_empty() => {
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![].into(), line);
                             return Ok(dst);
                         }
                         // Env functions (1 arg)
                         "Env.get" | "Env.remove" | "Env.setCwd" if args.len() == 1 => {
                             let arg_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Env.set (2 args)
@@ -4627,8 +4619,7 @@ impl Compiler {
                             let arg0_reg = self.compile_expr_tail(&args[0], false)?;
                             let arg1_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
                         }
                         // Path functions (1 arg)
@@ -4636,8 +4627,7 @@ impl Compiler {
                         | "Path.isAbsolute" | "Path.isRelative" | "Path.split" if args.len() == 1 => {
                             let arg_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Path functions (2 args)
@@ -4645,8 +4635,7 @@ impl Compiler {
                             let arg0_reg = self.compile_expr_tail(&args[0], false)?;
                             let arg1_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
                         }
                         // Regex functions (2 args)
@@ -4654,8 +4643,7 @@ impl Compiler {
                             let arg0_reg = self.compile_expr_tail(&args[0], false)?;
                             let arg1_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
                         }
                         // Regex functions (3 args)
@@ -4664,31 +4652,27 @@ impl Compiler {
                             let arg1_reg = self.compile_expr_tail(&args[1], false)?;
                             let arg2_reg = self.compile_expr_tail(&args[2], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg, arg2_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg, arg2_reg].into(), line);
                             return Ok(dst);
                         }
                         // UUID functions (0 args)
                         "Uuid.v4" if args.is_empty() => {
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![].into(), line);
                             return Ok(dst);
                         }
                         // UUID functions (1 arg)
                         "Uuid.isValid" if args.len() == 1 => {
                             let arg_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Crypto functions (1 arg)
                         "Crypto.sha256" | "Crypto.sha512" | "Crypto.md5" | "Crypto.randomBytes" if args.len() == 1 => {
                             let arg_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Crypto functions (2 args)
@@ -4696,16 +4680,14 @@ impl Compiler {
                             let arg0_reg = self.compile_expr_tail(&args[0], false)?;
                             let arg1_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
                         }
                         // Map functions (1 arg)
                         "Map.keys" | "Map.values" | "Map.size" | "Map.isEmpty" | "Map.toList" | "Map.fromList" if args.len() == 1 => {
                             let arg_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Map functions (2 args)
@@ -4713,8 +4695,7 @@ impl Compiler {
                             let arg0_reg = self.compile_expr_tail(&args[0], false)?;
                             let arg1_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
                         }
                         // Map.insert (3 args)
@@ -4723,16 +4704,14 @@ impl Compiler {
                             let arg1_reg = self.compile_expr_tail(&args[1], false)?;
                             let arg2_reg = self.compile_expr_tail(&args[2], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg, arg2_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg, arg2_reg].into(), line);
                             return Ok(dst);
                         }
                         // Set functions (1 arg)
                         "Set.size" | "Set.isEmpty" | "Set.toList" | "Set.fromList" if args.len() == 1 => {
                             let arg_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Set functions (2 args)
@@ -4742,8 +4721,7 @@ impl Compiler {
                             let arg0_reg = self.compile_expr_tail(&args[0], false)?;
                             let arg1_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
                         }
                         // File handle operations
@@ -4995,8 +4973,7 @@ impl Compiler {
                             let path_reg = self.compile_expr_tail(&args[0], false)?;
                             let pattern_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![path_reg, pattern_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![path_reg, pattern_reg].into(), line);
                             return Ok(dst);
                         }
                         // === WebSocket operations ===
@@ -5318,46 +5295,40 @@ impl Compiler {
                         "Panel.create" if args.len() == 1 => {
                             let title_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.create".to_string())));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![title_reg].into()), line);
+                            self.emit_call_native(dst, "Panel.create", vec![title_reg].into(), line);
                             return Ok(dst);
                         }
                         "Panel.setContent" if args.len() == 2 => {
                             let id_reg = self.compile_expr_tail(&args[0], false)?;
                             let content_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.setContent".to_string())));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![id_reg, content_reg].into()), line);
+                            self.emit_call_native(dst, "Panel.setContent", vec![id_reg, content_reg].into(), line);
                             return Ok(dst);
                         }
                         "Panel.show" if args.len() == 1 => {
                             let id_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.show".to_string())));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![id_reg].into()), line);
+                            self.emit_call_native(dst, "Panel.show", vec![id_reg].into(), line);
                             return Ok(dst);
                         }
                         "Panel.hide" if args.len() == 1 => {
                             let id_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.hide".to_string())));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![id_reg].into()), line);
+                            self.emit_call_native(dst, "Panel.hide", vec![id_reg].into(), line);
                             return Ok(dst);
                         }
                         "Panel.onKey" if args.len() == 2 => {
                             let id_reg = self.compile_expr_tail(&args[0], false)?;
                             let handler_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.onKey".to_string())));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![id_reg, handler_reg].into()), line);
+                            self.emit_call_native(dst, "Panel.onKey", vec![id_reg, handler_reg].into(), line);
                             return Ok(dst);
                         }
                         "Panel.registerHotkey" if args.len() == 2 => {
                             let key_reg = self.compile_expr_tail(&args[0], false)?;
                             let callback_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.registerHotkey".to_string())));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![key_reg, callback_reg].into()), line);
+                            self.emit_call_native(dst, "Panel.registerHotkey", vec![key_reg, callback_reg].into(), line);
                             return Ok(dst);
                         }
                         // === Eval ===
@@ -5365,8 +5336,7 @@ impl Compiler {
                         "eval" if args.len() == 1 && !self.has_user_function("eval", 1) => {
                             let code_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new("eval".to_string())));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![code_reg].into()), line);
+                            self.emit_call_native(dst, "eval", vec![code_reg].into(), line);
                             return Ok(dst);
                         }
                         // === External process execution ===
@@ -5419,23 +5389,20 @@ impl Compiler {
                         "Float64Array.fromList" if args.len() == 1 => {
                             let list_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![list_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![list_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float64Array.length" if args.len() == 1 => {
                             let arr_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arr_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float64Array.get" if args.len() == 2 => {
                             let arr_reg = self.compile_expr_tail(&args[0], false)?;
                             let idx_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg, idx_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arr_reg, idx_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float64Array.set" if args.len() == 3 => {
@@ -5443,46 +5410,40 @@ impl Compiler {
                             let idx_reg = self.compile_expr_tail(&args[1], false)?;
                             let val_reg = self.compile_expr_tail(&args[2], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg, idx_reg, val_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arr_reg, idx_reg, val_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float64Array.toList" if args.len() == 1 => {
                             let arr_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arr_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float64Array.make" if args.len() == 2 => {
                             let size_reg = self.compile_expr_tail(&args[0], false)?;
                             let val_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![size_reg, val_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![size_reg, val_reg].into(), line);
                             return Ok(dst);
                         }
                         // === Int64Array builtins ===
                         "Int64Array.fromList" if args.len() == 1 => {
                             let list_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![list_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![list_reg].into(), line);
                             return Ok(dst);
                         }
                         "Int64Array.length" if args.len() == 1 => {
                             let arr_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arr_reg].into(), line);
                             return Ok(dst);
                         }
                         "Int64Array.get" if args.len() == 2 => {
                             let arr_reg = self.compile_expr_tail(&args[0], false)?;
                             let idx_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg, idx_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arr_reg, idx_reg].into(), line);
                             return Ok(dst);
                         }
                         "Int64Array.set" if args.len() == 3 => {
@@ -5490,46 +5451,40 @@ impl Compiler {
                             let idx_reg = self.compile_expr_tail(&args[1], false)?;
                             let val_reg = self.compile_expr_tail(&args[2], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg, idx_reg, val_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arr_reg, idx_reg, val_reg].into(), line);
                             return Ok(dst);
                         }
                         "Int64Array.toList" if args.len() == 1 => {
                             let arr_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arr_reg].into(), line);
                             return Ok(dst);
                         }
                         "Int64Array.make" if args.len() == 2 => {
                             let size_reg = self.compile_expr_tail(&args[0], false)?;
                             let val_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![size_reg, val_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![size_reg, val_reg].into(), line);
                             return Ok(dst);
                         }
                         // === Float32Array builtins (for vectors/pgvector) ===
                         "Float32Array.fromList" if args.len() == 1 => {
                             let list_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![list_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![list_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float32Array.length" if args.len() == 1 => {
                             let arr_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arr_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float32Array.get" if args.len() == 2 => {
                             let arr_reg = self.compile_expr_tail(&args[0], false)?;
                             let idx_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg, idx_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arr_reg, idx_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float32Array.set" if args.len() == 3 => {
@@ -5537,23 +5492,20 @@ impl Compiler {
                             let idx_reg = self.compile_expr_tail(&args[1], false)?;
                             let val_reg = self.compile_expr_tail(&args[2], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg, idx_reg, val_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arr_reg, idx_reg, val_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float32Array.toList" if args.len() == 1 => {
                             let arr_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arr_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![arr_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float32Array.make" if args.len() == 2 => {
                             let size_reg = self.compile_expr_tail(&args[0], false)?;
                             let val_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![size_reg, val_reg].into()), line);
+                            self.emit_call_native(dst, &qualified_name, vec![size_reg, val_reg].into(), line);
                             return Ok(dst);
                         }
                         _ => {} // Fall through to user-defined functions
@@ -5750,8 +5702,7 @@ impl Compiler {
                             arg_regs.push(reg);
                         }
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new(native_name.to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
+                        self.emit_call_native(dst, native_name, arg_regs.into(), line);
                         return Ok(dst);
                     }
                 }
@@ -6647,53 +6598,45 @@ impl Compiler {
                     "inspect" if arg_regs.len() == 2 => {
                         // inspect(value, name) - call native function
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("inspect".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
+                        self.emit_call_native(dst, "inspect", arg_regs.into(), line);
                         return Ok(dst);
                     }
                     // === Panel (TUI) functions ===
                     "Panel.create" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.create".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
+                        self.emit_call_native(dst, "Panel.create", arg_regs.into(), line);
                         return Ok(dst);
                     }
                     "Panel.setContent" if arg_regs.len() == 2 => {
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.setContent".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
+                        self.emit_call_native(dst, "Panel.setContent", arg_regs.into(), line);
                         return Ok(dst);
                     }
                     "Panel.show" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.show".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
+                        self.emit_call_native(dst, "Panel.show", arg_regs.into(), line);
                         return Ok(dst);
                     }
                     "Panel.hide" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.hide".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
+                        self.emit_call_native(dst, "Panel.hide", arg_regs.into(), line);
                         return Ok(dst);
                     }
                     "Panel.onKey" if arg_regs.len() == 2 => {
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.onKey".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
+                        self.emit_call_native(dst, "Panel.onKey", arg_regs.into(), line);
                         return Ok(dst);
                     }
                     "Panel.registerHotkey" if arg_regs.len() == 2 => {
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("Panel.registerHotkey".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
+                        self.emit_call_native(dst, "Panel.registerHotkey", arg_regs.into(), line);
                         return Ok(dst);
                     }
                     // === Eval ===
                     // Only use built-in eval if no user-defined function exists
                     "eval" if arg_regs.len() == 1 && !self.has_user_function("eval", 1) => {
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("eval".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
+                        self.emit_call_native(dst, "eval", arg_regs.into(), line);
                         return Ok(dst);
                     }
                     "head" if arg_regs.len() == 1 => {
@@ -6772,8 +6715,7 @@ impl Compiler {
                     "range" if arg_regs.len() == 2 && !self.has_user_function("range", 2) => {
                         // range(start, end) - create list [start..end)
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("range".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_regs[0], arg_regs[1]].into()), line);
+                        self.emit_call_native(dst, "range", vec![arg_regs[0], arg_regs[1]].into(), line);
                         return Ok(dst);
                     }
                     "length" | "len" if arg_regs.len() == 1 => {
@@ -6784,8 +6726,7 @@ impl Compiler {
                     "sumInt64Array" if arg_regs.len() == 1 => {
                         // Fast native SIMD-optimized sum for Int64Array
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("sumInt64Array".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_regs[0]].into()), line);
+                        self.emit_call_native(dst, "sumInt64Array", vec![arg_regs[0]].into(), line);
                         return Ok(dst);
                     }
                     "panic" if arg_regs.len() == 1 => {
@@ -7085,15 +7026,13 @@ impl Compiler {
                     }
                     "newFloat32Array" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("newFloat32Array".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
+                        self.emit_call_native(dst, "newFloat32Array", arg_regs.into(), line);
                         return Ok(dst);
                     }
                     // === Option unwrapping ===
                     "unwrapOr" if arg_regs.len() == 2 => {
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new("unwrapOr".to_string())));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
+                        self.emit_call_native(dst, "unwrapOr", arg_regs.into(), line);
                         return Ok(dst);
                     }
                     // === Trait-based builtins (show, copy, hash) ===
@@ -7162,8 +7101,7 @@ impl Compiler {
 
                         // Fall back to native call
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
-                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), line);
+                        self.emit_call_native(dst, &qualified_name, arg_regs.into(), line);
                         return Ok(dst);
                     }
                     _ => {} // Fall through to normal function lookup
@@ -9782,8 +9720,7 @@ impl Compiler {
                     let expr_reg = self.compile_expr_tail(e, false)?;
                     // Call `show` to convert to string
                     let dst = self.alloc_reg();
-                    let name_idx = self.chunk.add_constant(Value::String(Arc::new("show".to_string())));
-                    self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![expr_reg].into()), 0);
+                    self.emit_call_native(dst, "show", vec![expr_reg].into(), 0);
                     dst
                 }
             };
@@ -10362,6 +10299,26 @@ impl Compiler {
     // =========================================================================
     // REPL Introspection Query Methods
     // =========================================================================
+
+    /// Set native function indices for CallNativeIdx optimization.
+    /// This should be called with the indices from the VM's scheduler after
+    /// default natives are registered.
+    pub fn set_native_indices(&mut self, indices: HashMap<String, u16>) {
+        self.native_indices = indices;
+    }
+
+    /// Emit a native function call, using CallNativeIdx if the index is known,
+    /// otherwise falling back to CallNative.
+    fn emit_call_native(&mut self, dst: Reg, name: &str, args: RegList, line: usize) {
+        if let Some(&idx) = self.native_indices.get(name) {
+            // Fast path: use indexed call
+            self.chunk.emit(Instruction::CallNativeIdx(dst, idx, args), line);
+        } else {
+            // Slow path: use string-based lookup
+            let name_idx = self.chunk.add_constant(Value::String(Arc::new(name.to_string())));
+            self.chunk.emit(Instruction::CallNative(dst, name_idx, args), line);
+        }
+    }
 
     /// Get all function names in the compiler.
     /// Returns the full names including type signatures (e.g., "greet/String").

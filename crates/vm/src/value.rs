@@ -719,8 +719,10 @@ pub enum Instruction {
     CallSelf(Reg, RegList),
     /// Tail call self (tail-recursive call to current function)
     TailCallSelf(RegList),
-    /// Call native function
+    /// Call native function (string-based lookup)
     CallNative(Reg, ConstIdx, RegList),
+    /// Call native function by index (fast path - no string lookup)
+    CallNativeIdx(Reg, u16, RegList),
     /// Call extension function (dynamic library): dst = ext_func(args...)
     CallExtension(Reg, ConstIdx, RegList),
     /// Return value from function

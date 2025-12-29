@@ -2085,6 +2085,28 @@ impl Worker {
                 });
             }
 
+            // Fast path for native function calls - uses index instead of string lookup
+            Instruction::CallNativeIdx(dst, native_idx, ref args) => {
+                let arg_values: Vec<GcValue> = args.iter().map(|&r| get_reg!(r)).collect();
+
+                // Direct vec lookup - no HashMap, no RwLock contention for reads
+                let native = self
+                    .scheduler
+                    .get_native_by_index(native_idx)
+                    .ok_or_else(|| RuntimeError::Panic(format!("Invalid native index: {}", native_idx)))?;
+
+                let result = self
+                    .scheduler
+                    .with_process_mut(pid, |proc| (native.func)(&arg_values, &mut proc.heap))
+                    .ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))??;
+
+                set_reg!(dst, result);
+
+                self.scheduler.with_process_mut(pid, |proc| {
+                    proc.consume_reductions(10);
+                });
+            }
+
             Instruction::CallExtension(dst, name_idx, ref args) => {
                 let name = match constants.get(name_idx as usize) {
                     Some(Value::String(s)) => s.clone(),
