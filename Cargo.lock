@@ -1980,6 +1980,7 @@ dependencies = [
  "reedline",
  "serde_json",
  "signal-hook",
+ "tokio",
  "ureq",
 ]
 
