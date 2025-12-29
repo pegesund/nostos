@@ -538,12 +538,6 @@ impl CodeEditor {
             }
         };
 
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-            use std::io::Write;
-            let _ = writeln!(f, "[Editor.check_compile] module_name={:?}, function_name={:?}, resolved_module={:?}",
-                self.module_name, self.function_name, module_name);
-        }
-
         match eng.check_module_compiles(&module_name, &content) {
             Ok(()) => {
                 self.compile_status = CompileStatus::Ok;
@@ -585,11 +579,6 @@ impl CodeEditor {
         self.module_name = extract_module_from_editor_name(name);
         // Store the simple function name (part after last dot, or full name)
         self.function_name = Some(name.rsplit('.').next().unwrap_or(name).to_string());
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-            use std::io::Write;
-            let _ = writeln!(f, "[Editor] with_function_name({:?}) -> module_name={:?}, function_name={:?}",
-                name, self.module_name, self.function_name);
-        }
         self
     }
 
