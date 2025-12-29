@@ -2714,6 +2714,31 @@ impl ReplEngine {
         format!("Not found: {}", name)
     }
 
+    /// Find the module that contains a function with the given simple name.
+    /// Returns the module name (e.g., "main" for a function in main.nos, or "" for root).
+    pub fn get_function_module(&self, simple_name: &str) -> Option<String> {
+        // Look through all function names to find one that matches
+        for func_name in self.compiler.get_function_names() {
+            // Extract base name (without signature suffix)
+            let base_name = func_name.split('/').next().unwrap_or(func_name);
+
+            // Check if this matches our simple name
+            if let Some(dot_pos) = base_name.rfind('.') {
+                // Function has module prefix (e.g., "main.foo" or "utils.bar")
+                let func_simple = &base_name[dot_pos + 1..];
+                if func_simple == simple_name {
+                    return Some(base_name[..dot_pos].to_string());
+                }
+            } else {
+                // Function is at root level (no module prefix)
+                if base_name == simple_name {
+                    return Some(String::new());
+                }
+            }
+        }
+        None
+    }
+
     pub fn get_source(&self, name: &str) -> String {
         // Check for metadata request (e.g., "utils._meta")
         if name.ends_with("._meta") {
@@ -2726,6 +2751,16 @@ impl ReplEngine {
                 output.push_str("# Imports\n");
                 for imp in &imports {
                     output.push_str(&format!("import {}\n", imp));
+                }
+                output.push('\n');
+            }
+
+            // Add use statements section
+            let use_stmts = self.compiler.get_module_use_stmts(module_name);
+            if !use_stmts.is_empty() {
+                output.push_str("# Use statements\n");
+                for stmt in &use_stmts {
+                    output.push_str(&format!("{}\n", stmt));
                 }
                 output.push('\n');
             }
@@ -3142,12 +3177,19 @@ impl ReplEngine {
                     self.call_graph.update(&qualified_name, qualified_deps);
                 }
 
-                self.compiler.add_module(
+                let result = self.compiler.add_module(
                     &module,
-                    components,
+                    components.clone(),
                     Arc::new(source.clone()),
                     file_path.to_str().unwrap().to_string(),
-                ).ok();
+                );
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                    use std::io::Write;
+                    let _ = writeln!(f, "[load_directory] add_module({:?}) result={:?}", components, result.is_ok());
+                    let use_stmts = self.compiler.get_all_use_stmts();
+                    let _ = writeln!(f, "[load_directory] all use_stmts after: {:?}", use_stmts);
+                }
+                result.ok();
 
 
 
@@ -3171,6 +3213,21 @@ impl ReplEngine {
             let mut defs_files = Vec::new();
             visit_dirs(&defs_dir, &mut defs_files)?;
 
+            // First, collect _imports.nos content per module directory
+            let mut module_imports: std::collections::HashMap<PathBuf, String> = std::collections::HashMap::new();
+            for file_path in &defs_files {
+                if file_path.file_name().map(|n| n == "_imports.nos").unwrap_or(false) {
+                    if let Some(parent) = file_path.parent() {
+                        if let Ok(content) = fs::read_to_string(file_path) {
+                            module_imports.insert(parent.to_path_buf(), content);
+                        }
+                    }
+                }
+            }
+
+            // Track which modules have had their imports processed
+            let mut processed_modules: HashSet<PathBuf> = HashSet::new();
+
             for file_path in &defs_files {
                 // Skip special files like _meta.nos and _imports.nos
                 if let Some(name) = file_path.file_stem() {
@@ -3180,8 +3237,30 @@ impl ReplEngine {
                     }
                 }
 
-                let source = fs::read_to_string(file_path)
+                let mut source = fs::read_to_string(file_path)
                     .map_err(|e| format!("Failed to read {}: {}", file_path.display(), e))?;
+
+                // Module path is relative to .nostos/defs/, excluding filename
+                let relative = file_path.strip_prefix(&defs_dir).unwrap();
+                let components: Vec<String> = relative
+                    .parent()
+                    .map(|p| {
+                        p.components()
+                            .map(|c| c.as_os_str().to_string_lossy().to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                // Get the module directory path
+                let module_dir = file_path.parent().unwrap_or(file_path);
+
+                // Prepend imports from _imports.nos if this is the first file for this module
+                if !processed_modules.contains(module_dir) {
+                    if let Some(imports_content) = module_imports.get(module_dir) {
+                        source = format!("{}\n{}", imports_content, source);
+                    }
+                    processed_modules.insert(module_dir.to_path_buf());
+                }
 
                 let (module_opt, errors) = parse(&source);
                 if !errors.is_empty() {
@@ -3189,17 +3268,6 @@ impl ReplEngine {
                 }
 
                 if let Some(module) = module_opt {
-                    // Module path is relative to .nostos/defs/, excluding filename
-                    let relative = file_path.strip_prefix(&defs_dir).unwrap();
-                    let components: Vec<String> = relative
-                        .parent()
-                        .map(|p| {
-                            p.components()
-                                .map(|c| c.as_os_str().to_string_lossy().to_string())
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
                     // Build module prefix for call graph
                     let prefix = if components.is_empty() {
                         String::new()
@@ -3238,7 +3306,7 @@ impl ReplEngine {
                          } else {
                              prefix
                          };
-                         // Note: In defs/, multiple files map to same module. 
+                         // Note: In defs/, multiple files map to same module.
                          // This overwrites, which is fine for "is_project_function" check.
                          self.module_sources.insert(module_path_str, file_path.clone());
                     }
@@ -3557,15 +3625,55 @@ impl ReplEngine {
         use nostos_syntax::ast::{Expr, Item, Stmt, DoStmt, TypeBody, Pattern};
         use nostos_compiler::Compiler;
 
+        // Debug logging
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+            use std::io::Write;
+            let imports = self.compiler.get_module_imports(module_name);
+            let use_stmts = self.compiler.get_module_use_stmts(module_name);
+            let _ = writeln!(f, "[check_module_compiles] module_name={:?}, imports={:?}, use_stmts={:?}",
+                module_name, imports, use_stmts);
+            let _ = writeln!(f, "[check_module_compiles] content first 200 chars: {:?}", &content.chars().take(200).collect::<String>());
+        }
+
+        // Prepend module-level imports and use statements if editing within a module context
+        // This ensures that when editing a function, the module's imports are visible
+        let full_content = if !module_name.is_empty() {
+            let mut prefix = String::new();
+            // Add imports from the module
+            for imp in self.compiler.get_module_imports(module_name) {
+                prefix.push_str(&format!("import {}\n", imp));
+            }
+            // Add use statements from the module
+            for stmt in self.compiler.get_module_use_stmts(module_name) {
+                prefix.push_str(&format!("{}\n", stmt));
+            }
+            if !prefix.is_empty() {
+                prefix.push('\n');
+            }
+            format!("{}{}", prefix, content)
+        } else {
+            content.to_string()
+        };
+
         // First do a quick parse check
-        let (module_opt, errors) = parse(content);
+        let (module_opt, errors) = parse(&full_content);
 
         if !errors.is_empty() {
             // Convert raw parse errors to SourceErrors
             let source_errors = parse_errors_to_source_errors(&errors);
             if let Some(first) = source_errors.first() {
-                let (line, _col) = offset_to_line_col(content, first.span.start);
-                return Err(format!("line {}: {}", line, first.message));
+                // Adjust line number for prepended imports
+                let prefix_lines = if !module_name.is_empty() {
+                    self.compiler.get_module_imports(module_name).len() +
+                    self.compiler.get_module_use_stmts(module_name).len() +
+                    if self.compiler.get_module_imports(module_name).is_empty() &&
+                       self.compiler.get_module_use_stmts(module_name).is_empty() { 0 } else { 1 }
+                } else {
+                    0
+                };
+                let (line, _col) = offset_to_line_col(&full_content, first.span.start);
+                let adjusted_line = if line > prefix_lines { line - prefix_lines } else { line };
+                return Err(format!("line {}: {}", adjusted_line, first.message));
             }
             return Err("Parse error".to_string());
         }
@@ -3607,7 +3715,20 @@ impl ReplEngine {
                         // Get all public functions from the module and add them
                         let public_funcs = self.compiler.get_module_public_functions(&module_path);
                         for (local_name, _qualified_name) in public_funcs {
-                            known_functions.insert(local_name);
+                            // Strip signature suffix (e.g., "vec/_" -> "vec")
+                            if let Some(base) = local_name.split('/').next() {
+                                known_functions.insert(base.to_string());
+                            }
+                        }
+                        // Also add types from the module (types can be used as constructors)
+                        let type_prefix = format!("{}.", module_path);
+                        for type_name in self.compiler.get_type_names() {
+                            if type_name.starts_with(&type_prefix) {
+                                // Extract local name (e.g., "nalgebra.Vec" -> "Vec")
+                                if let Some(local_name) = type_name.strip_prefix(&type_prefix) {
+                                    known_functions.insert(local_name.to_string());
+                                }
+                            }
                         }
                     }
                     UseImports::Named(items) => {
@@ -4371,6 +4492,11 @@ impl ReplEngine {
         for (name, type_val) in self.compiler.get_all_types() {
             check_compiler.register_external_type(&name, &type_val);
         }
+
+        // Register trait implementations from the main compiler
+        // This is critical for operators on extension types (e.g., Vec + Vec)
+        let trait_impls = self.compiler.get_all_trait_impls();
+        check_compiler.register_external_trait_impls(trait_impls);
 
         // Register known modules (so Module.func calls are recognized)
         for module in self.compiler.get_known_modules() {
@@ -11396,6 +11522,165 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_ok(), "Code using extension should compile: {:?}", result);
+    }
+
+    #[test]
+    fn test_extension_wildcard_import() {
+        // Test that wildcard imports from extension modules work in check_module_compiles
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Load a simple extension module
+        let ext_code = r#"
+# Simple test extension
+type Vec = { data: List }
+
+pub vec(data) -> Vec = Vec(data)
+pub vecAdd(a: Vec, b: Vec) -> Vec = Vec([])
+"#;
+        let result = engine.load_extension_module("testmath", ext_code, "<test>");
+        assert!(result.is_ok(), "Loading extension module should succeed: {:?}", result);
+
+        // Debug: Check what functions and types are available
+        let public_funcs = engine.compiler.get_module_public_functions("testmath");
+        println!("Public functions in testmath: {:?}", public_funcs);
+        let type_names: Vec<_> = engine.compiler.get_type_names()
+            .into_iter()
+            .filter(|n| n.starts_with("testmath."))
+            .collect();
+        println!("Types in testmath: {:?}", type_names);
+
+        // Now check that code using wildcard import compiles
+        let code = r#"
+import testmath
+use testmath.*
+
+main() = {
+    v = vec([1, 2, 3])
+    v.data
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Code using wildcard import should compile: {:?}", result);
+    }
+
+    #[test]
+    fn test_tui_exact_flow() {
+        // This test mimics the EXACT TUI flow with a temp directory
+        // to avoid any cached state issues
+
+        use std::fs;
+        use std::io::Write;
+
+        // Create temp directory structure
+        let temp_dir = std::env::temp_dir().join("nostos_tui_test");
+        let _ = fs::remove_dir_all(&temp_dir); // Clean up any previous run
+        fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+
+        // Create main.nos with import and use statements
+        let main_nos = r#"import nalgebra
+use nalgebra.*
+
+main() = {
+    v1 = vec([1.0, 2.0, 3.0])
+    v2 = vec([3.0, 2.0, 1.0])
+    vsum = v1 + v2
+    dot = vecDot(v1, v2)
+    0
+}
+"#;
+        let main_path = temp_dir.join("main.nos");
+        fs::write(&main_path, main_nos).expect("Failed to write main.nos");
+
+        // Initialize engine like TUI does
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Load nalgebra extension (like TUI does from nostos.toml)
+        let nalgebra_path = dirs::home_dir()
+            .unwrap()
+            .join(".nostos/extensions/nostos-nalgebra/nalgebra.nos");
+
+        if !nalgebra_path.exists() {
+            println!("Skipping test: nalgebra extension not cached");
+            let _ = fs::remove_dir_all(&temp_dir);
+            return;
+        }
+
+        let nalgebra_source = fs::read_to_string(&nalgebra_path).unwrap();
+        engine.load_extension_module("nalgebra", &nalgebra_source, nalgebra_path.to_str().unwrap())
+            .expect("Failed to load nalgebra extension");
+
+        // Load directory (like TUI does at line 635)
+        engine.load_directory(temp_dir.to_str().unwrap())
+            .expect("Failed to load directory");
+
+        // Check what module path was used
+        println!("=== After load_directory ===");
+        let all_use_stmts = engine.compiler.get_all_use_stmts();
+        println!("All use statements: {:?}", all_use_stmts);
+
+        // Check various module names
+        for module_name in &["", "main"] {
+            let imports = engine.compiler.get_module_imports(module_name);
+            let use_stmts = engine.compiler.get_module_use_stmts(module_name);
+            println!("Module '{}': imports={:?}, use_stmts={:?}", module_name, imports, use_stmts);
+        }
+
+        // Get source for "main" - this is what create_editor_view does
+        let main_source = engine.get_source("main");
+        println!("=== Source for 'main' ===\n{}\n===", main_source);
+
+        // Test get_function_module - this is what the editor uses to find the module
+        let found_module = engine.get_function_module("main");
+        println!("get_function_module('main') = {:?}", found_module);
+        assert_eq!(found_module, Some("main".to_string()), "Should find 'main' function in 'main' module");
+
+        // Now test check_module_compiles with the CORRECT module name (as the editor would do)
+        let module_name = found_module.as_ref().map(|s| s.as_str()).unwrap_or("");
+        let result = engine.check_module_compiles(module_name, &main_source);
+        println!("check_module_compiles('{}', source) = {:?}", module_name, result);
+
+        // Clean up
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        assert!(result.is_ok(), "Should compile without errors when using correct module: {:?}", result);
+    }
+
+    #[test]
+    fn test_nalgebra_full_source() {
+        // Test with the full source (import + use + code) - should work
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        let nalgebra_path = dirs::home_dir()
+            .unwrap()
+            .join(".nostos/extensions/nostos-nalgebra/nalgebra.nos");
+
+        if !nalgebra_path.exists() {
+            println!("Skipping test: nalgebra extension not cached");
+            return;
+        }
+
+        let nalgebra_source = std::fs::read_to_string(&nalgebra_path).unwrap();
+        engine.load_extension_module("nalgebra", &nalgebra_source, nalgebra_path.to_str().unwrap()).unwrap();
+
+        let code = r#"
+import nalgebra
+use nalgebra.*
+
+main() = {
+    v1 = vec([1.0, 2.0, 3.0])
+    v2 = vec([3.0, 2.0, 1.0])
+    vsum = v1 + v2
+    dot = vecDot(v1, v2)
+    0
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("check_module_compiles result: {:?}", result);
+        assert!(result.is_ok(), "Code using nalgebra wildcard import should compile: {:?}", result);
     }
 
     #[test]

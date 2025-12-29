@@ -750,6 +750,9 @@ pub struct Compiler {
     /// Imported modules per module: (current_module, imported_module_path)
     /// When in module X, this tracks which modules X has imported
     imported_modules: HashSet<(Vec<String>, String)>,
+    /// Use statements per module: (current_module_path, use_statement_string)
+    /// e.g., (["main"], "use nalgebra.*") or (["main"], "use stdlib.{map, filter}")
+    module_use_stmts: Vec<(Vec<String>, String)>,
     /// Local (inline) modules defined in the same compilation unit
     /// These don't require explicit import statements
     local_modules: HashSet<String>,
@@ -924,6 +927,7 @@ impl Compiler {
             type_defs: HashMap::new(),
             known_modules: builtin_modules,
             imported_modules: HashSet::new(),
+            module_use_stmts: Vec::new(),
             local_modules: HashSet::new(),
             repl_mode: false,
             prelude_functions: HashSet::new(),
@@ -1389,6 +1393,7 @@ impl Compiler {
             type_defs: HashMap::new(),
             known_modules: builtin_modules,
             imported_modules: HashSet::new(),
+            module_use_stmts: Vec::new(),
             local_modules: HashSet::new(),
             repl_mode: false,
             prelude_functions: HashSet::new(),
@@ -10510,6 +10515,26 @@ impl Compiler {
         self.get_vm_types()
     }
 
+    /// Get all trait implementations for external registration.
+    /// Returns Vec of (type_name, trait_name, TraitImplInfo).
+    pub fn get_all_trait_impls(&self) -> Vec<(String, String, TraitImplInfo)> {
+        self.trait_impls.iter()
+            .map(|((ty, tr), info)| (ty.clone(), tr.clone(), info.clone()))
+            .collect()
+    }
+
+    /// Register external trait implementations (for compile checking).
+    pub fn register_external_trait_impls(&mut self, impls: Vec<(String, String, TraitImplInfo)>) {
+        for (type_name, trait_name, info) in impls {
+            self.trait_impls.insert((type_name.clone(), trait_name.clone()), info);
+            // Also update type_traits
+            self.type_traits
+                .entry(type_name)
+                .or_insert_with(Vec::new)
+                .push(trait_name);
+        }
+    }
+
     /// Get all known module prefixes.
     pub fn get_known_modules(&self) -> impl Iterator<Item = &str> {
         self.known_modules.iter().map(|s| s.as_str())
@@ -10734,6 +10759,38 @@ impl Compiler {
                 }
             })
             .collect()
+    }
+
+    /// Get use statements for a module (for displaying in browser metadata).
+    pub fn get_module_use_stmts(&self, module_name: &str) -> Vec<String> {
+        let module_path: Vec<String> = if module_name.is_empty() {
+            vec![]
+        } else {
+            module_name.split('.').map(String::from).collect()
+        };
+
+        self.module_use_stmts
+            .iter()
+            .filter_map(|(path, stmt)| {
+                if *path == module_path {
+                    Some(stmt.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Get all use statements (for copying to another compiler).
+    pub fn get_all_use_stmts(&self) -> &[(Vec<String>, String)] {
+        &self.module_use_stmts
+    }
+
+    /// Register use statements from another compiler.
+    pub fn register_use_stmts(&mut self, stmts: &[(Vec<String>, String)]) {
+        for (path, stmt) in stmts {
+            self.module_use_stmts.push((path.clone(), stmt.clone()));
+        }
     }
 
     /// Get field names for a record type.
@@ -12979,6 +13036,24 @@ impl Compiler {
             .map(|ident| ident.node.as_str())
             .collect::<Vec<_>>()
             .join(".");
+
+        // Store the use statement for later retrieval (for editor/browser)
+        let use_stmt_string = match &use_stmt.imports {
+            UseImports::All => format!("use {}.*", module_path),
+            UseImports::Named(items) => {
+                let names: Vec<String> = items.iter()
+                    .map(|item| {
+                        if let Some(alias) = &item.alias {
+                            format!("{} as {}", item.name.node, alias.node)
+                        } else {
+                            item.name.node.clone()
+                        }
+                    })
+                    .collect();
+                format!("use {}.{{{}}}", module_path, names.join(", "))
+            }
+        };
+        self.module_use_stmts.push((self.module_path.clone(), use_stmt_string));
 
         match &use_stmt.imports {
             UseImports::All => {
