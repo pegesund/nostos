@@ -12909,7 +12909,12 @@ impl Compiler {
             if !self.function_indices.contains_key(&full_name) {
                 let idx = self.function_list.len() as u16;
                 self.function_indices.insert(full_name.clone(), idx);
-                self.function_list.push(full_name);
+                self.function_list.push(full_name.clone());
+            }
+
+            // Register visibility early (needed for `use module.*` to work across modules)
+            if let Some(vis) = fn_visibility.get(name) {
+                self.function_visibility.insert(full_name, *vis);
             }
         }
 
@@ -12987,11 +12992,19 @@ impl Compiler {
                     .collect();
 
                 for qualified_name in public_functions {
-                    // Extract local name (function name without module prefix)
-                    let local_name = qualified_name.strip_prefix(&prefix)
+                    // Extract local name (function name without module prefix and signature)
+                    // e.g., "nalgebra.vec/List" -> "vec"
+                    let without_prefix = qualified_name.strip_prefix(&prefix)
+                        .unwrap_or(&qualified_name);
+                    // Strip the signature part (after /)
+                    let local_name = without_prefix.split('/').next()
+                        .unwrap_or(without_prefix)
+                        .to_string();
+                    // Also strip the signature from qualified name for the import mapping
+                    let qualified_base = qualified_name.split('/').next()
                         .unwrap_or(&qualified_name)
                         .to_string();
-                    self.imports.insert(local_name, qualified_name);
+                    self.imports.insert(local_name, qualified_base);
                 }
             }
             UseImports::Named(items) => {
