@@ -10514,6 +10514,20 @@ impl Compiler {
         }
     }
 
+    /// Register a trait implementation from simple data (for REPL eval).
+    pub fn register_trait_impl_simple(&mut self, type_name: &str, trait_name: &str, method_names: Vec<String>) {
+        let info = TraitImplInfo {
+            type_name: type_name.to_string(),
+            trait_name: trait_name.to_string(),
+            method_names,
+        };
+        self.trait_impls.insert((type_name.to_string(), trait_name.to_string()), info);
+        self.type_traits
+            .entry(type_name.to_string())
+            .or_insert_with(Vec::new)
+            .push(trait_name.to_string());
+    }
+
     /// Get all known module prefixes.
     pub fn get_known_modules(&self) -> impl Iterator<Item = &str> {
         self.known_modules.iter().map(|s| s.as_str())
