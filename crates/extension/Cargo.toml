@@ -1,0 +1,19 @@
+[package]
+name = "nostos-extension"
+version = "0.1.0"
+edition = "2021"
+description = "API for building native Nostos extensions"
+license = "MIT"
+
+[dependencies]
+tokio = { workspace = true }
+rayon = { workspace = true }
+parking_lot = { workspace = true }
+
+[features]
+default = []
+loader = ["libloading"]
+
+[dependencies.libloading]
+workspace = true
+optional = true

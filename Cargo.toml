@@ -63,6 +63,13 @@ native-tls = "0.2"
 serde_json = "1"
 futures = "0.3"
 
+# Thread pools
+rayon = "1.8"
+parking_lot = "0.12"
+
+# Dynamic loading
+libloading = "0.8"
+
 # Internal crates
 nostos-syntax = { path = "crates/syntax" }
 nostos-compiler = { path = "crates/compiler" }
@@ -71,3 +78,4 @@ nostos-types = { path = "crates/types" }
 nostos-repl = { path = "crates/repl" }
 nostos-cli = { path = "crates/cli" }
 nostos-jit = { path = "crates/jit" }
+nostos-extension = { path = "crates/extension" }

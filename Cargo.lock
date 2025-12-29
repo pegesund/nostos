@@ -1750,6 +1750,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37c93d8daa9d8a012fd8ab92f088405fb202ea0b6ab73ee2482ae66af4f42091"
 
 [[package]]
+name = "libloading"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if 1.0.4",
+ "windows-link",
+]
+
+[[package]]
 name = "libredox"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1987,6 +1997,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nostos-extension"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+ "parking_lot",
+ "rayon",
+ "tokio",
+]
+
+[[package]]
 name = "nostos-jit"
 version = "0.1.0"
 dependencies = [
@@ -2066,9 +2086,11 @@ dependencies = [
  "hyper",
  "hyper-util",
  "imbl",
+ "libloading",
  "md-5",
  "native-tls",
  "nostos-compiler",
+ "nostos-extension",
  "nostos-syntax",
  "nostos-types",
  "num-bigint",
@@ -2077,6 +2099,7 @@ dependencies = [
  "percent-encoding",
  "postgres-native-tls",
  "rand 0.8.5",
+ "rayon",
  "regex",
  "reqwest",
  "rust_decimal",
@@ -2572,6 +2595,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6f97cdb2a36ed4183de61b2f824cc45c9f1037f28afe0a322e9fff4c108b5aaa"
 dependencies = [
  "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rayon"
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "368f01d005bf8fd9b1206fb6fa653e6c4a81ceb1466406b81792d87c5677a58f"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque 0.8.6",
+ "crossbeam-utils 0.8.21",
 ]
 
 [[package]]

@@ -9,6 +9,7 @@
 //! - Multi-CPU parallel execution
 
 pub mod async_vm;
+pub mod extensions;
 pub mod gc;
 pub mod inspect;
 pub mod io_runtime;
@@ -28,4 +29,5 @@ pub use scheduler::*;
 pub use supervisor::*;
 pub use value::*;
 pub use worker::*;
+pub use extensions::ExtensionManager;
 pub use async_vm::{ThreadedEvalHandle, DebugSession};

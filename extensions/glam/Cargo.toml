@@ -1,0 +1,17 @@
+[package]
+name = "nostos-glam"
+version = "0.1.0"
+edition = "2021"
+description = "Glam linear algebra extension for Nostos"
+
+[lib]
+crate-type = ["cdylib"]
+
+[workspace]
+
+[dependencies]
+nostos-extension = { path = "../../crates/extension" }
+glam = "0.29"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "sync"] }
