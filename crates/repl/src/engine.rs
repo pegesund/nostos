@@ -2482,6 +2482,12 @@ impl ReplEngine {
         self.compiler.get_type_constructors(type_name)
     }
 
+    /// Get UFCS methods for a type (functions whose first parameter matches the type)
+    /// Returns (local_name, signature, doc) tuples
+    pub fn get_ufcs_methods_for_type(&self, type_name: &str) -> Vec<(String, String, Option<String>)> {
+        self.compiler.get_ufcs_methods_for_type(type_name)
+    }
+
     /// Get the type of a REPL variable (for autocomplete field access)
     /// Returns the stored type annotation or the inferred return type of the variable's thunk function
     pub fn get_variable_type(&self, var_name: &str) -> Option<String> {

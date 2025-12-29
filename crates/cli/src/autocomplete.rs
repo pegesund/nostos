@@ -274,6 +274,10 @@ pub trait CompletionSource {
 
     /// Get the type of a variable (for field access completion)
     fn get_variable_type(&self, var_name: &str) -> Option<String>;
+
+    /// Get UFCS methods for a type (functions whose first parameter matches the type)
+    /// Returns (local_name, signature, doc) tuples
+    fn get_ufcs_methods_for_type(&self, type_name: &str) -> Vec<(String, String, Option<String>)>;
 }
 
 /// Completion context - what kind of completion is needed
@@ -1280,6 +1284,22 @@ impl Autocomplete {
             }
         }
 
+        // Get UFCS methods (functions whose first parameter matches the type)
+        // This enables v.vecLen() style completions for extension types
+        for (method_name, signature, doc) in source.get_ufcs_methods_for_type(&type_name) {
+            if method_name.to_lowercase().starts_with(&prefix_lower) {
+                // Skip if we already have this method from builtins
+                if !items.iter().any(|i| i.text == method_name) {
+                    items.push(CompletionItem {
+                        text: method_name.clone(),
+                        label: format!("{}{}", method_name, signature),
+                        kind: CompletionKind::Method,
+                        doc,
+                    });
+                }
+            }
+        }
+
         items.sort_by(|a, b| a.text.cmp(&b.text));
         items
     }
@@ -1715,6 +1735,11 @@ mod tests {
 
         fn get_variable_type(&self, var_name: &str) -> Option<String> {
             self.variable_types.get(var_name).cloned()
+        }
+
+        fn get_ufcs_methods_for_type(&self, _type_name: &str) -> Vec<(String, String, Option<String>)> {
+            // MockSource doesn't have UFCS methods
+            Vec::new()
         }
     }
 
@@ -3515,6 +3540,10 @@ mod tests {
 
         fn get_variable_type(&self, var_name: &str) -> Option<String> {
             self.engine.get_variable_type(var_name)
+        }
+
+        fn get_ufcs_methods_for_type(&self, type_name: &str) -> Vec<(String, String, Option<String>)> {
+            self.engine.get_ufcs_methods_for_type(type_name)
         }
     }
 
