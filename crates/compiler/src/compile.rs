@@ -10577,6 +10577,11 @@ impl Compiler {
         self.trait_defs.keys().map(|s| s.as_str()).collect()
     }
 
+    /// Get trait information by name.
+    pub fn get_trait_info(&self, name: &str) -> Option<&TraitInfo> {
+        self.trait_defs.get(name)
+    }
+
     /// Find a function by base name or full qualified name.
     /// Supports both "add" and "add/_,_" formats.
     fn find_function(&self, name: &str) -> Option<&Arc<FunctionValue>> {

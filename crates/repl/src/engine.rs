@@ -2785,6 +2785,11 @@ impl ReplEngine {
             }
         }
 
+        // Check traits
+        if let Some(trait_info) = self.compiler.get_trait_info(name) {
+            return self.reconstruct_trait_source(trait_info);
+        }
+
         format!("Not found: {}", name)
     }
 
@@ -2837,6 +2842,47 @@ impl ReplEngine {
             }
         }
 
+        output
+    }
+
+    /// Reconstruct trait source from TraitInfo
+    fn reconstruct_trait_source(&self, trait_info: &nostos_compiler::compile::TraitInfo) -> String {
+        let mut output = String::new();
+        output.push_str("trait ");
+
+        // Get unqualified name (strip module prefix if present)
+        let name = if let Some(dot_pos) = trait_info.name.rfind('.') {
+            &trait_info.name[dot_pos + 1..]
+        } else {
+            &trait_info.name
+        };
+        output.push_str(name);
+
+        // Add super traits if any
+        if !trait_info.super_traits.is_empty() {
+            output.push_str(": ");
+            output.push_str(&trait_info.super_traits.join(" + "));
+        }
+
+        output.push('\n');
+
+        // Add methods
+        for method in &trait_info.methods {
+            output.push_str("    ");
+            output.push_str(&method.name);
+            output.push_str("(self");
+            // Add placeholder parameters
+            for i in 1..method.param_count {
+                output.push_str(&format!(", arg{}", i));
+            }
+            output.push(')');
+            if method.has_default {
+                output.push_str(" = ...");
+            }
+            output.push('\n');
+        }
+
+        output.push_str("end\n");
         output
     }
 
