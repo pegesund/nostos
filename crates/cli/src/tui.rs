@@ -3444,6 +3444,12 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                     StyledString::plain(format!("📁 {}", name))
                 }
             }
+            BrowserItem::Imports => {
+                StyledString::styled(
+                    "📦 imports".to_string(),
+                    Style::from(Color::Rgb(150, 150, 200))  // Muted purple for imports
+                )
+            }
             BrowserItem::Type { name, eval_created } => {
                 let eval_prefix = if *eval_created { "[eval] " } else { "" };
                 let mut styled = StyledString::plain(format!("📦 {}{}", eval_prefix, name));
@@ -3563,6 +3569,9 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
             BrowserItem::Module(name) => {
                 StyledString::plain(format!("Module: {}", name))
             }
+            BrowserItem::Imports => {
+                StyledString::plain("Imported extension modules")
+            }
             BrowserItem::Variable { name, .. } => {
                 // Try REPL binding first, then mvar with qualified name
                 let mut eng = engine.borrow_mut();
@@ -3618,6 +3627,12 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 // Drill into module
                 s.pop_layer();
                 new_path.push(name.clone());
+                show_browser_dialog(s, engine, new_path);
+            }
+            BrowserItem::Imports => {
+                // Drill into imports
+                s.pop_layer();
+                new_path.push("imports".to_string());
                 show_browser_dialog(s, engine, new_path);
             }
             BrowserItem::Function { name, .. } => {

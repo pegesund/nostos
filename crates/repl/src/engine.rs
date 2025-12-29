@@ -20,6 +20,8 @@ use nostos_vm::process::ThreadSafeValue;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BrowserItem {
     Module(String),
+    /// Special folder for imported/extension modules
+    Imports,
     Function { name: String, signature: String, doc: Option<String>, eval_created: bool, is_public: bool },
     Type { name: String, eval_created: bool },
     Trait { name: String, eval_created: bool },
@@ -211,6 +213,8 @@ pub struct ReplEngine {
     extension_manager: Option<Arc<ExtensionManager>>,
     /// Tokio runtime for extension manager (kept alive for extensions)
     extension_runtime: Option<tokio::runtime::Runtime>,
+    /// Imported module names (extension modules loaded via import)
+    imported_modules: HashSet<String>,
 }
 
 impl ReplEngine {
@@ -682,6 +686,7 @@ impl ReplEngine {
             nostlets: HashMap::new(),
             extension_manager: None,
             extension_runtime: None,
+            imported_modules: HashSet::new(),
         }
     }
 
@@ -823,6 +828,9 @@ impl ReplEngine {
             self.compiler.get_all_functions().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
         );
         self.vm.set_stdlib_function_list(self.compiler.get_function_list_names().to_vec());
+
+        // Track this as an imported module
+        self.imported_modules.insert(ext_name.to_string());
 
         Ok(())
     }
@@ -4618,10 +4626,39 @@ impl ReplEngine {
 
     /// Get browser items at a given module path
     /// If path is empty, returns top-level modules and items
+    /// Special paths:
+    /// - ["imports"] -> list of imported/extension modules
+    /// - ["imports", "modname", ...] -> items within that imported module
     pub fn get_browser_items(&mut self, path: &[String]) -> Vec<BrowserItem> {
         // Sync any dynamic items from VM's eval() before building the list
         self.sync_dynamic_functions();
         self.sync_dynamic_types();
+
+        // Handle special "imports" path
+        if !path.is_empty() && path[0] == "imports" {
+            if path.len() == 1 {
+                // At imports level - show list of imported modules
+                let mut items = Vec::new();
+                for module_name in &self.imported_modules {
+                    items.push(BrowserItem::Module(module_name.clone()));
+                }
+                items.sort();
+                return items;
+            } else {
+                // Inside an imported module - redirect to actual module path
+                // e.g., ["imports", "nalgebra", "vec"] -> ["nalgebra", "vec"]
+                let actual_path: Vec<String> = path[1..].to_vec();
+                return self.get_browser_items_internal(&actual_path, false);
+            }
+        }
+
+        // Normal path - filter out imported modules at root level
+        self.get_browser_items_internal(path, true)
+    }
+
+    /// Internal helper for get_browser_items
+    /// filter_imports: if true and at root level, hide imported modules and their traits
+    fn get_browser_items_internal(&mut self, path: &[String], filter_imports: bool) -> Vec<BrowserItem> {
         let prefix = if path.is_empty() {
             String::new()
         } else {
@@ -4758,11 +4795,19 @@ impl ReplEngine {
             }
         }
 
-        // Build result list: modules first, then metadata, then variables/mvars, then types, traits, functions
+        // Build result list: imports first (at root), then modules, then metadata, then variables/mvars, then types, traits, functions
         let mut items = Vec::new();
 
-        // Modules first
+        // Add "imports" entry at root level if there are imported modules
+        if path.is_empty() && filter_imports && !self.imported_modules.is_empty() {
+            items.push(BrowserItem::Imports);
+        }
+
+        // Modules (filter out imported modules at root level)
         for m in modules {
+            if filter_imports && path.is_empty() && self.imported_modules.contains(&m) {
+                continue;  // Skip imported modules at root level
+            }
             items.push(BrowserItem::Module(m));
         }
 
@@ -4831,6 +4876,7 @@ impl ReplEngine {
         };
         match item {
             BrowserItem::Module(name) => format!("{}{}", prefix, name),
+            BrowserItem::Imports => "imports".to_string(),
             BrowserItem::Function { name, .. } => format!("{}{}", prefix, name),
             BrowserItem::Type { name, .. } => format!("{}{}", prefix, name),
             BrowserItem::Trait { name, .. } => format!("{}{}", prefix, name),
@@ -11683,5 +11729,79 @@ mod postgres_module_tests {
         println!("stdlib.html_parser.tokenize is_public: {}", is_priv);
 
         assert!(is_pub || is_pub_qualified, "htmlParse should be public");
+    }
+
+    #[test]
+    fn test_browser_imports_folder() {
+        // Test that imported modules appear under "imports" folder in browser
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Load an extension module (simulated using load_extension_module method)
+        // Define a mock module with a trait
+        let mock_module_code = r#"
+trait NumTrait
+    add(self, other: Self) -> Self
+end
+
+type Vec = { data: List }
+
+Vec: NumTrait
+    add(self, other: Vec) -> Vec = Vec(self.data)
+end
+
+pub vec(data) -> Vec = Vec(data)
+"#;
+
+        // Load as "testmod" extension
+        let result = engine.load_extension_module("testmod", mock_module_code, "testmod.nos");
+        println!("Load result: {:?}", result);
+        assert!(result.is_ok(), "Should load extension module: {:?}", result);
+
+        // Get root browser items
+        let root_items = engine.get_browser_items(&[]);
+        println!("Root items: {:?}", root_items);
+
+        // Should have an "imports" item
+        let has_imports = root_items.iter().any(|item| matches!(item, BrowserItem::Imports));
+        assert!(has_imports, "Root should have Imports folder");
+
+        // Should NOT have "testmod" as a direct module (it's under imports)
+        let has_testmod = root_items.iter().any(|item| {
+            matches!(item, BrowserItem::Module(name) if name == "testmod")
+        });
+        assert!(!has_testmod, "testmod should NOT be at root level");
+
+        // NumTrait should NOT appear at root level (it's qualified as testmod.NumTrait)
+        let has_trait = root_items.iter().any(|item| {
+            matches!(item, BrowserItem::Trait { name, .. } if name == "NumTrait")
+        });
+        assert!(!has_trait, "NumTrait should NOT be at root level");
+
+        // Get items under imports
+        let imports_items = engine.get_browser_items(&["imports".to_string()]);
+        println!("Imports items: {:?}", imports_items);
+
+        // Should have "testmod" as a module
+        let has_testmod_in_imports = imports_items.iter().any(|item| {
+            matches!(item, BrowserItem::Module(name) if name == "testmod")
+        });
+        assert!(has_testmod_in_imports, "imports should contain testmod");
+
+        // Get items under imports > testmod
+        let testmod_items = engine.get_browser_items(&["imports".to_string(), "testmod".to_string()]);
+        println!("testmod items: {:?}", testmod_items);
+
+        // Should have the trait
+        let has_trait_in_module = testmod_items.iter().any(|item| {
+            matches!(item, BrowserItem::Trait { name, .. } if name == "NumTrait")
+        });
+        assert!(has_trait_in_module, "testmod should contain NumTrait");
+
+        // Should have the vec function
+        let has_vec_fn = testmod_items.iter().any(|item| {
+            matches!(item, BrowserItem::Function { name, .. } if name == "vec")
+        });
+        assert!(has_vec_fn, "testmod should contain vec function");
     }
 }

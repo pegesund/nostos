@@ -2572,7 +2572,8 @@ impl Compiler {
 
     /// Compile a trait definition.
     fn compile_trait_def(&mut self, def: &TraitDef) -> Result<(), CompileError> {
-        let name = def.name.node.clone();
+        // Qualify trait name with module prefix
+        let name = self.qualify_name(&def.name.node);
 
         let super_traits: Vec<String> = def.super_traits
             .iter()
@@ -2609,15 +2610,27 @@ impl Compiler {
         // Use qualified name for type_traits registration and param_types
         let unqualified_type_name = self.type_expr_to_string(&impl_def.ty);
         let qualified_type_name = self.qualify_name(&unqualified_type_name);
-        let trait_name = impl_def.trait_name.node.clone();
+        let unqualified_trait_name = impl_def.trait_name.node.clone();
+        // Qualify trait name for lookup (trait defined in same module)
+        let qualified_trait_name = self.qualify_name(&unqualified_trait_name);
 
         // Check that the trait exists (unless it's a built-in derivable trait)
-        if !self.trait_defs.contains_key(&trait_name) && !self.is_builtin_derivable_trait(&trait_name) {
+        // Try both qualified and unqualified names for traits defined elsewhere
+        let trait_exists = self.trait_defs.contains_key(&qualified_trait_name)
+            || self.trait_defs.contains_key(&unqualified_trait_name)
+            || self.is_builtin_derivable_trait(&unqualified_trait_name);
+        if !trait_exists {
             return Err(CompileError::UnknownTrait {
-                name: trait_name,
+                name: unqualified_trait_name,
                 span: impl_def.trait_name.span,
             });
         }
+        // Use the name that exists in trait_defs
+        let trait_name = if self.trait_defs.contains_key(&qualified_trait_name) {
+            qualified_trait_name
+        } else {
+            unqualified_trait_name
+        };
 
         // Compile each method as a function with a special qualified name: Type.Trait.method
         // Use unqualified type name here because compile_fn_def will add module prefix
@@ -3130,32 +3143,54 @@ impl Compiler {
 
     /// Check if a type implements a specific trait.
     fn type_implements_trait(&self, _type_name: &str, trait_name: &str) -> bool {
+        self.find_implemented_trait(_type_name, trait_name).is_some()
+    }
+
+    /// Find the actual registered trait name if a type implements a trait.
+    /// Returns the qualified or unqualified trait name as registered, or None if not found.
+    /// This is needed because traits may be registered with qualified names (e.g., "nalgebra.Num")
+    /// but looked up with unqualified names (e.g., "Num").
+    fn find_implemented_trait(&self, type_name: &str, trait_name: &str) -> Option<String> {
         // Hash, Show, Eq, and Copy are now built-in for ALL types
         if matches!(trait_name, "Hash" | "Show" | "Eq" | "Copy") {
-            return true;
+            return Some(trait_name.to_string());
         }
 
         // Check if the type has an explicit trait implementation
-        if let Some(traits) = self.type_traits.get(_type_name) {
+        if let Some(traits) = self.type_traits.get(type_name) {
+            // Try exact match first
             if traits.contains(&trait_name.to_string()) {
-                return true;
+                return Some(trait_name.to_string());
+            }
+            // Try qualified match (e.g., looking for "Num" and finding "module.Num")
+            for registered_trait in traits {
+                if registered_trait == trait_name {
+                    return Some(registered_trait.clone());
+                }
+                // Check if the unqualified name matches
+                if let Some(dot_pos) = registered_trait.rfind('.') {
+                    let unqualified = &registered_trait[dot_pos + 1..];
+                    if unqualified == trait_name {
+                        return Some(registered_trait.clone());
+                    }
+                }
             }
         }
 
         // Check if type_name is a type parameter in the current function with the required bound
         // This handles nested calls like: double_hash[T: Hash](x) calling hashable[T: Hash](x)
         for type_param in &self.current_fn_type_params {
-            if type_param.name.node == _type_name {
+            if type_param.name.node == type_name {
                 // Check if this type parameter has the required trait bound
                 for constraint in &type_param.constraints {
                     if constraint.node == trait_name {
-                        return true;
+                        return Some(trait_name.to_string());
                     }
                 }
             }
         }
 
-        false
+        None
     }
 
     /// Check trait bounds for a function call.
@@ -6225,10 +6260,11 @@ impl Compiler {
             if let Some(left_type) = self.expr_type_name(left) {
                 // Only dispatch to trait methods for non-primitive custom types
                 if !Self::is_primitive_type(&left_type) && self.types.contains_key(&left_type) {
-                    // Check if the type implements the trait
-                    if self.type_implements_trait(&left_type, trait_name) {
-                        // Look up the trait method implementation
-                        let qualified_method = format!("{}.{}.{}", left_type, trait_name, method_name);
+                    // Check if the type implements the trait and get the actual registered trait name
+                    // (may be qualified like "nalgebra.Num" even if we looked for "Num")
+                    if let Some(actual_trait_name) = self.find_implemented_trait(&left_type, trait_name) {
+                        // Look up the trait method implementation using the actual trait name
+                        let qualified_method = format!("{}.{}.{}", left_type, actual_trait_name, method_name);
 
                         // Find the actual function with signature
                         let method_arg_types = vec![Some(left_type.clone()), self.expr_type_name(right)];
