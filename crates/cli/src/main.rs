@@ -902,6 +902,20 @@ fn main() -> ExitCode {
     // Initialize empty compiler
     let mut compiler = Compiler::new_empty();
 
+    // Pre-load extensions to get function indices for CallExtensionIdx optimization
+    if !extension_paths.is_empty() {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime for extensions");
+        let ext_mgr = nostos_vm::ExtensionManager::new(rt.handle().clone());
+        for path in &extension_paths {
+            let ext_path = std::path::Path::new(path);
+            if let Err(e) = ext_mgr.load(ext_path) {
+                eprintln!("Warning: Failed to pre-load extension '{}': {}", path, e);
+            }
+        }
+        // Set extension indices on compiler for CallExtensionIdx optimization
+        compiler.set_extension_indices(ext_mgr.get_all_function_indices());
+    }
+
     // Load stdlib
     let stdlib_candidates = vec![
         std::path::PathBuf::from("stdlib"),

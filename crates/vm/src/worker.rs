@@ -2155,6 +2155,46 @@ impl Worker {
                 });
             }
 
+            // Fast path for extension function calls - uses index instead of string lookup
+            Instruction::CallExtensionIdx(dst, ext_idx, ref args) => {
+                // Get argument values and convert to extension Value type
+                let arg_values: Vec<nostos_extension::Value> = args.iter().map(|&r| {
+                    let gc_val = get_reg!(r);
+                    self.scheduler.with_process(pid, |proc| {
+                        let vm_val = proc.heap.gc_to_value(&gc_val);
+                        vm_value_to_ext(&vm_val)
+                    }).unwrap_or(nostos_extension::Value::Unit)
+                }).collect();
+
+                // Get extension manager and call function by index
+                let extensions_guard = self.scheduler.extensions.read();
+                let result = if let Some(ref ext_mgr) = *extensions_guard {
+                    ext_mgr.call_by_index(ext_idx, &arg_values, nostos_extension::Pid(pid.0))
+                } else {
+                    Err(format!("No extension manager configured"))
+                };
+                drop(extensions_guard);
+
+                match result {
+                    Ok(ext_val) => {
+                        // Convert extension Value back to VM Value
+                        let vm_val = ext_value_to_vm(&ext_val);
+                        // Allocate on process heap
+                        let gc_val = self.scheduler.with_process_mut(pid, |proc| {
+                            proc.heap.value_to_gc(&vm_val)
+                        }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
+                        set_reg!(dst, gc_val);
+                    }
+                    Err(e) => {
+                        return Err(RuntimeError::Panic(format!("Extension call failed: {}", e)));
+                    }
+                }
+
+                self.scheduler.with_process_mut(pid, |proc| {
+                    proc.consume_reductions(20);
+                });
+            }
+
             // === Collections ===
             Instruction::MakeList(dst, ref elements) => {
                 let items: Vec<GcValue> = elements.iter().map(|&r| get_reg!(r)).collect();
