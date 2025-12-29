@@ -402,6 +402,16 @@ impl TypeEnv {
             return true;
         }
 
+        // Try flexible matching for module-qualified types
+        // If ty is "Vec" and impl is for "nalgebra.Vec", they should match
+        // Also check if trait names match with qualification
+        if self.impls.iter().any(|i| {
+            self.trait_names_match(&i.trait_name, trait_name) &&
+            self.types_match_flexible(&i.for_type, ty)
+        }) {
+            return true;
+        }
+
         // Handle parameterized types (Option, Result, List, Map, Set, etc.)
         // These implement Eq and Show if their element types do
         match ty {
@@ -447,6 +457,44 @@ impl TypeEnv {
     /// Check if two types match (simple equality for now).
     fn types_match(&self, a: &Type, b: &Type) -> bool {
         a == b
+    }
+
+    /// Check if two trait names match, considering module qualification.
+    /// "nalgebra.Num" matches "Num" and vice versa.
+    fn trait_names_match(&self, a: &str, b: &str) -> bool {
+        if a == b {
+            return true;
+        }
+        // Extract unqualified parts and compare
+        let a_short = a.rsplit('.').next().unwrap_or(a);
+        let b_short = b.rsplit('.').next().unwrap_or(b);
+        a_short == b_short
+    }
+
+    /// Flexible type matching that handles module-qualified names.
+    /// "nalgebra.Vec" matches "Vec" if they're the same underlying type.
+    fn types_match_flexible(&self, a: &Type, b: &Type) -> bool {
+        if a == b {
+            return true;
+        }
+        match (a, b) {
+            (Type::Named { name: a_name, args: a_args }, Type::Named { name: b_name, args: b_args }) => {
+                // If args don't match in length, they're different
+                if a_args.len() != b_args.len() {
+                    return false;
+                }
+                // Extract unqualified names and compare
+                let a_short = a_name.rsplit('.').next().unwrap_or(a_name);
+                let b_short = b_name.rsplit('.').next().unwrap_or(b_name);
+                if a_short != b_short {
+                    return false;
+                }
+                // Check args recursively
+                a_args.iter().zip(b_args.iter()).all(|(x, y)| self.types_match_flexible(x, y))
+            }
+            // For other type variants, use exact matching
+            _ => false,
+        }
     }
 
     /// Apply the current substitution to a type.
