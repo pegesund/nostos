@@ -874,6 +874,15 @@ impl ReplEngine {
         );
         self.vm.set_stdlib_function_list(self.compiler.get_function_list_names().to_vec());
 
+        // Sync types
+        self.vm.set_stdlib_types(self.compiler.get_vm_types());
+
+        // Update module exports cache for REPL `use module.*` support
+        self.update_module_exports();
+
+        // Update trait implementations for REPL operator dispatch
+        self.update_trait_impls();
+
         // Track this as an imported module
         self.imported_modules.insert(ext_name.to_string());
 
@@ -2516,6 +2525,32 @@ impl ReplEngine {
     fn infer_expr_type_from_structure(&self, expr: &str) -> Option<String> {
         // Parse the expression to look for method calls
         let trimmed = expr.trim();
+
+        // Check for qualified function calls like "module.func(args)"
+        // This handles extension module calls like "testmath.vec([1,2,3])"
+        if let Some(paren_pos) = trimmed.find('(') {
+            let func_part = trimmed[..paren_pos].trim();
+            if func_part.contains('.') && !func_part.contains(' ') {
+                // This looks like a qualified call - try to get the return type
+                if let Some(ret_type) = self.compiler.get_function_return_type(func_part) {
+                    if !ret_type.is_empty() {
+                        // If the return type is unqualified, try to qualify it
+                        if !ret_type.contains('.') {
+                            if let Some(dot_pos) = func_part.rfind('.') {
+                                let module_prefix = &func_part[..dot_pos];
+                                let qualified_type = format!("{}.{}", module_prefix, ret_type);
+                                // Check if qualified type exists
+                                let types = self.compiler.get_type_names();
+                                if types.iter().any(|t| t == &qualified_type) {
+                                    return Some(qualified_type);
+                                }
+                            }
+                        }
+                        return Some(ret_type);
+                    }
+                }
+            }
+        }
 
         // Check for type conversion methods like .asInt32()
         // These have well-known return types based on the method name
@@ -11780,6 +11815,52 @@ main() = {
         let err = result.unwrap_err();
         assert!(err.contains("unknownFunc") || err.contains("unknown"),
             "Error should mention unknownFunc: {}", err);
+    }
+
+    #[test]
+    fn test_repl_operator_dispatch_with_trait() {
+        // Test that operator dispatch works in REPL eval with custom types
+        let mut engine = ReplEngine::new(ReplConfig { enable_jit: false, num_threads: 1 });
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Define a simple type with Num trait implementation
+        let type_def = r#"
+type Vec = { data: List }
+
+trait Num
+    add(self, other: Self) -> Self
+end
+
+Vec: Num
+    add(self, other: Vec) -> Vec = Vec([99])
+end
+
+pub vec(data) -> Vec = Vec(data)
+"#;
+        let result = engine.load_extension_module("testmath", type_def, "<test>");
+        assert!(result.is_ok(), "Should load extension: {:?}", result);
+
+        // Check trait implementations and module exports are populated
+        assert!(!engine.trait_impls.read().unwrap().is_empty(), "Should have trait implementations");
+        assert!(engine.module_exports.read().unwrap().contains_key("testmath"), "Should have testmath exports");
+
+        // Create vectors using qualified calls
+        let result = engine.eval("v1 = testmath.vec([1,2,3])");
+        assert!(result.is_ok(), "Should create v1: {:?}", result);
+
+        // Check variable type is properly qualified
+        let v1_type = engine.get_variable_type("v1");
+        assert_eq!(v1_type, Some("testmath.Vec".to_string()), "v1 should have type testmath.Vec");
+
+        let result = engine.eval("v2 = testmath.vec([4,5,6])");
+        assert!(result.is_ok(), "Should create v2: {:?}", result);
+
+        // Test operator dispatch - should call Vec.testmath.Num.add
+        let result = engine.eval("v1 + v2");
+        assert!(result.is_ok(), "Should add vectors: {:?}", result);
+        let output = result.unwrap();
+        // Our mock add returns Vec([99])
+        assert!(output.contains("99"), "Should use trait add method: {}", output);
     }
 }
 
