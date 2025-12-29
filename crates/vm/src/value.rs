@@ -721,6 +721,8 @@ pub enum Instruction {
     TailCallSelf(RegList),
     /// Call native function
     CallNative(Reg, ConstIdx, RegList),
+    /// Call extension function (dynamic library): dst = ext_func(args...)
+    CallExtension(Reg, ConstIdx, RegList),
     /// Return value from function
     Return(Reg),
 
