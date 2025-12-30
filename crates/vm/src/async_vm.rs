@@ -12466,8 +12466,36 @@ impl AsyncVM {
             return_reg: None,
         });
 
+        // Spawn extension message handler task (if extension manager is configured)
+        let ext_handler = {
+            let extensions_guard = shared.extensions.read().unwrap();
+            if let Some(ref ext_mgr) = *extensions_guard {
+                if let Some(mut rx) = ext_mgr.take_message_receiver() {
+                    let shared_for_ext = Arc::clone(&shared);
+                    Some(tokio::spawn(async move {
+                        while let Some(msg) = rx.recv().await {
+                            // Convert extension Value to ThreadSafeValue
+                            if let Some(ts_value) = crate::extensions::ext_value_to_thread_safe(&msg.value) {
+                                let target_pid = crate::value::Pid(msg.target.0);
+                                shared_for_ext.send_message(target_pid, ts_value).await;
+                            }
+                        }
+                    }))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
         // Run main process (blocks until complete)
         let result = process.run().await;
+
+        // Abort extension handler task when main completes
+        if let Some(handle) = ext_handler {
+            handle.abort();
+        }
 
         match result {
             Ok(value) => {
@@ -12504,8 +12532,36 @@ impl AsyncVM {
             return_reg: None,
         });
 
+        // Spawn extension message handler task (if extension manager is configured)
+        let ext_handler = {
+            let extensions_guard = self.shared.extensions.read().unwrap();
+            if let Some(ref ext_mgr) = *extensions_guard {
+                if let Some(mut rx) = ext_mgr.take_message_receiver() {
+                    let shared_for_ext = Arc::clone(&self.shared);
+                    Some(tokio::spawn(async move {
+                        while let Some(msg) = rx.recv().await {
+                            // Convert extension Value to ThreadSafeValue
+                            if let Some(ts_value) = crate::extensions::ext_value_to_thread_safe(&msg.value) {
+                                let target_pid = crate::value::Pid(msg.target.0);
+                                shared_for_ext.send_message(target_pid, ts_value).await;
+                            }
+                        }
+                    }))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
         // Run main process (blocks until complete)
         let result = process.run().await;
+
+        // Abort extension handler task when main completes
+        if let Some(handle) = ext_handler {
+            handle.abort();
+        }
 
         // Get profiling summary if enabled
         let profile_summary = process.profile.as_ref().map(|p| p.format_summary());

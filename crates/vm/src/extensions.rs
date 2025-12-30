@@ -243,6 +243,68 @@ pub fn ext_value_to_vm(v: &Value) -> crate::Value {
     }
 }
 
+/// Convert extension Value directly to ThreadSafeValue (for async message delivery).
+/// This avoids needing heap access since extension Values are self-contained.
+pub fn ext_value_to_thread_safe(v: &Value) -> Option<crate::process::ThreadSafeValue> {
+    use crate::process::ThreadSafeValue;
+
+    Some(match v {
+        Value::Unit => ThreadSafeValue::Unit,
+        Value::Bool(b) => ThreadSafeValue::Bool(*b),
+        Value::Int(i) => ThreadSafeValue::Int64(*i),
+        Value::Float(f) => ThreadSafeValue::Float64(*f),
+        Value::String(s) => ThreadSafeValue::String((**s).clone()),
+        Value::Bytes(b) => {
+            // Convert bytes to list of Int64
+            let items: Vec<ThreadSafeValue> = b.iter()
+                .map(|byte| ThreadSafeValue::Int64(*byte as i64))
+                .collect();
+            ThreadSafeValue::List(items)
+        }
+        Value::List(l) => {
+            let items: Option<Vec<ThreadSafeValue>> = l.iter()
+                .map(ext_value_to_thread_safe)
+                .collect();
+            ThreadSafeValue::List(items?)
+        }
+        Value::Tuple(t) => {
+            let items: Option<Vec<ThreadSafeValue>> = t.iter()
+                .map(ext_value_to_thread_safe)
+                .collect();
+            ThreadSafeValue::Tuple(items?)
+        }
+        Value::Map(m) => {
+            // Convert to a list of tuples for now (Map in ThreadSafeValue is SharedMap)
+            let items: Option<Vec<ThreadSafeValue>> = m.iter()
+                .map(|(k, v)| {
+                    let key = ThreadSafeValue::String(k.clone());
+                    let val = ext_value_to_thread_safe(v)?;
+                    Some(ThreadSafeValue::Tuple(vec![key, val]))
+                })
+                .collect();
+            ThreadSafeValue::List(items?)
+        }
+        Value::Record { name, fields } => {
+            let field_names: Vec<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+            let field_values: Option<Vec<ThreadSafeValue>> = fields.iter()
+                .map(|(_, v)| ext_value_to_thread_safe(v))
+                .collect();
+            ThreadSafeValue::Record {
+                type_name: name.clone(),
+                field_names,
+                fields: field_values?,
+                mutable_fields: vec![false; fields.len()],
+            }
+        }
+        Value::Pid(p) => ThreadSafeValue::Pid(p.0),
+        Value::Native(_) | Value::GcHandle(_) => {
+            // Native handles cannot be safely sent across threads/processes
+            return None;
+        }
+        Value::None => ThreadSafeValue::Unit,
+    })
+}
+
 /// Convert VM Value to extension Value.
 pub fn vm_value_to_ext(v: &crate::Value) -> Value {
     match v {
