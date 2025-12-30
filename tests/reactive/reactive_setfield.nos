@@ -1,0 +1,10 @@
+# expect: 100
+# Test field assignment on reactive records
+
+reactive Point = { x: Int, y: Int }
+
+main() = {
+    p = Point(x: 0, y: 0)
+    p.x = 100
+    p.x
+}

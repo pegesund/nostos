@@ -1,0 +1,21 @@
+# expect: x:0->100
+# Test onChange callback on reactive records (synchronous)
+
+reactive Point = { x: Int, y: Int }
+
+mvar result: String = ""
+
+main() = {
+    p = Point(x: 0, y: 0)
+
+    # Register a callback that writes to the mvar
+    p.onChange((fieldName, oldVal, newVal) => {
+        result = fieldName ++ ":" ++ show(oldVal) ++ "->" ++ show(newVal)
+    })
+
+    # Change the field - callback runs synchronously before next line
+    p.x = 100
+
+    # Result is immediately available (no sleep needed)
+    result
+}

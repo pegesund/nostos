@@ -1,0 +1,9 @@
+# expect: 42
+# Test basic reactive record creation and field access
+
+reactive Point = { x: Int, y: Int }
+
+main() = {
+    p = Point(x: 42, y: 10)
+    p.x
+}

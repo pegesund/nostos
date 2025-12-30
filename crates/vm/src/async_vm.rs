@@ -3118,13 +3118,36 @@ impl AsyncProcess {
                         set_reg!(dst, value);
                     }
                     GcValue::ReactiveRecord(rec) => {
-                        let idx = rec.field_names.iter().position(|n| n == &field_name)
-                            .ok_or_else(|| RuntimeError::Panic(format!("Unknown field: {}", field_name)))?;
-                        let value = rec.get_field(idx)
-                            .ok_or_else(|| RuntimeError::Panic("Failed to read reactive record field".into()))?;
-                        // Convert Value to GcValue
-                        let gc_value = self.heap.value_to_gc(&value);
-                        set_reg!(dst, gc_value);
+                        // Handle special introspection fields
+                        if field_name == "parents" {
+                            // Return List[(ReactiveRecord, String)] of parent references
+                            let parents = rec.get_parents();
+                            let mut items = Vec::new();
+                            for (parent_arc, field_name) in parents {
+                                let parent_gc = GcValue::ReactiveRecord(parent_arc);
+                                let field_name_gc = GcValue::String(self.heap.alloc_string(field_name));
+                                let tuple_ptr = self.heap.alloc_tuple(vec![parent_gc, field_name_gc]);
+                                items.push(GcValue::Tuple(tuple_ptr));
+                            }
+                            let list = self.heap.make_list(items);
+                            set_reg!(dst, GcValue::List(list));
+                        } else if field_name == "children" {
+                            // Return List[ReactiveRecord] of child reactive records
+                            let children = rec.get_children();
+                            let items: Vec<GcValue> = children.into_iter()
+                                .map(|child| GcValue::ReactiveRecord(child))
+                                .collect();
+                            let list = self.heap.make_list(items);
+                            set_reg!(dst, GcValue::List(list));
+                        } else {
+                            let idx = rec.field_names.iter().position(|n| n == &field_name)
+                                .ok_or_else(|| RuntimeError::Panic(format!("Unknown field: {}", field_name)))?;
+                            let value = rec.get_field(idx)
+                                .ok_or_else(|| RuntimeError::Panic("Failed to read reactive record field".into()))?;
+                            // Convert Value to GcValue
+                            let gc_value = self.heap.value_to_gc(&value);
+                            set_reg!(dst, gc_value);
+                        }
                     }
                     _ => return Err(RuntimeError::Panic("GetField expects record, variant, tuple, or reactive record".into())),
                 }
@@ -3155,22 +3178,76 @@ impl AsyncProcess {
                         // Convert GcValue to Value for storage
                         let value_as_value = self.heap.gc_to_value(&value);
 
+                        // Get old value for callbacks
+                        let old_value = rec.get_field(idx);
+
                         // Check if old value was a reactive record (need to remove parent ref)
-                        if let Some(old_value) = rec.get_field(idx) {
-                            if let Value::ReactiveRecord(old_child) = old_value {
+                        if let Some(ref ov) = old_value {
+                            if let Value::ReactiveRecord(old_child) = ov {
                                 old_child.remove_parent(Arc::as_ptr(&rec));
                             }
                         }
 
                         // Set the new value
-                        rec.set_field(idx, value_as_value);
+                        rec.set_field(idx, value_as_value.clone());
 
                         // If new value is a reactive record, add parent reference
                         if let GcValue::ReactiveRecord(new_child) = &value {
                             new_child.add_parent(Arc::downgrade(&rec), idx as u16);
                         }
+
+                        // Invoke callbacks synchronously by pushing call frames
+                        let callbacks = rec.get_callbacks();
+                        if !callbacks.is_empty() {
+                            let field_name_gc = self.heap.value_to_gc(&Value::String(field_name.into()));
+                            let old_val_gc = self.heap.value_to_gc(&old_value.unwrap_or(Value::Unit));
+                            let new_val_gc = self.heap.value_to_gc(&value_as_value);
+
+                            // Push callbacks in reverse order so they execute in forward order
+                            for callback in callbacks.into_iter().rev() {
+                                let (func, captures) = match callback {
+                                    Value::Closure(c) => {
+                                        let gc_captures: Vec<GcValue> = c.captures.iter()
+                                            .map(|v| self.heap.value_to_gc(v))
+                                            .collect();
+                                        (c.function.clone(), gc_captures)
+                                    }
+                                    Value::Function(f) => (f, vec![]),
+                                    _ => continue,
+                                };
+
+                                // Set up registers with arguments
+                                let reg_count = func.code.register_count as usize;
+                                let mut registers = vec![GcValue::Unit; reg_count];
+                                if reg_count > 0 { registers[0] = field_name_gc.clone(); }
+                                if reg_count > 1 { registers[1] = old_val_gc.clone(); }
+                                if reg_count > 2 { registers[2] = new_val_gc.clone(); }
+
+                                // Push frame with return_reg = None (callback, no return value needed)
+                                self.frames.push(CallFrame {
+                                    function: func,
+                                    ip: 0,
+                                    registers,
+                                    captures,
+                                    return_reg: None,
+                                });
+                            }
+                        }
                     }
                     _ => return Err(RuntimeError::Panic("SetField expects record or reactive record".into())),
+                }
+            }
+
+            ReactiveAddCallback(record_reg, callback_reg) => {
+                let callback = reg!(callback_reg);
+                let rec_val = reg!(record_reg);
+                match rec_val {
+                    GcValue::ReactiveRecord(rec) => {
+                        // Convert GcValue callback to Value and store
+                        let callback_value = self.heap.gc_to_value(&callback);
+                        rec.add_callback(callback_value);
+                    }
+                    _ => return Err(RuntimeError::Panic("ReactiveAddCallback expects reactive record".into())),
                 }
             }
 
