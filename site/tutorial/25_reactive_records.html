@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reactive Records - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75; /* A distinct red/orange for operators */
+        }
+        .hljs-function {
+            color: #e5c07b; /* A distinct yellow/gold for functions */
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/yourusername/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+
+        <!-- Sidebar -->
+        <aside id="tutorial-sidebar" class="w-64 fixed top-16 h-[calc(100vh-4rem)] border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block pb-8">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_type_system.html" class="block text-slate-400 hover:text-white transition">7. Type System</a></li>
+                    <li><a href="08_traits.html" class="block text-slate-400 hover:text-white transition">8. Traits</a></li>
+                    <li><a href="09_builtin_traits.html" class="block text-slate-400 hover:text-white transition">9. Builtin Traits</a></li>
+                    <li><a href="10_trait_bounds.html" class="block text-slate-400 hover:text-white transition">10. Trait Bounds</a></li>
+                    <li><a href="11_error_handling.html" class="block text-slate-400 hover:text-white transition">11. Error Handling</a></li>
+                    <li><a href="12_modules.html" class="block text-slate-400 hover:text-white transition">12. Modules & Imports</a></li>
+                    <li><a href="13_stdlib.html" class="block text-slate-400 hover:text-white transition">13. Standard Library</a></li>
+                    <li><a href="14_json.html" class="block text-slate-400 hover:text-white transition">14. JSON</a></li>
+                    <li><a href="15_concurrency.html" class="block text-slate-400 hover:text-white transition">15. Concurrency</a></li>
+                    <li><a href="16_async_runtime.html" class="block text-slate-400 hover:text-white transition">16. Async Runtime</a></li>
+                    <li><a href="17_async_io_http.html" class="block text-slate-400 hover:text-white transition">17. Async I/O & HTTP</a></li>
+                    <li><a href="18_reflection.html" class="block text-slate-400 hover:text-white transition">18. Reflection & Eval</a></li>
+                    <li><a href="19_debugging_profiling.html" class="block text-slate-400 hover:text-white transition">19. Debugging & Profiling</a></li>
+                    <li><a href="20_html_templating.html" class="block text-slate-400 hover:text-white transition">20. HTML Templating</a></li>
+                    <li><a href="21_mutability.html" class="block text-slate-400 hover:text-white transition">21. Mutability</a></li>
+                    <li><a href="22_complete_web_app.html" class="block text-slate-400 hover:text-white transition">22. Complete Web App</a></li>
+                    <li><a href="23_ffi.html" class="block text-slate-400 hover:text-white transition">23. FFI & Extensions</a></li>
+                    <li><a href="24_command_line.html" class="block text-slate-400 hover:text-white transition">24. Command Line</a></li>
+                    <li><a href="25_reactive_records.html" class="block text-blue-400 font-medium">25. Reactive Records</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Reactive Records</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Reactive records are a special type of record that support <strong>automatic change tracking</strong> and <strong>parent/child introspection</strong>. Unlike regular immutable records, reactive records have mutable fields and can notify callbacks when their values change.
+                </p>
+
+                <!-- Defining Reactive Records -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Defining Reactive Records</h2>
+                <p class="text-slate-400 mb-4">
+                    Use the <code>reactive</code> keyword instead of <code>type</code> to define a reactive record. All fields are automatically mutable.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Regular record (immutable)
+type Point = { x: Int, y: Int }
+
+# Reactive record (mutable, with change tracking)
+reactive Point = { x: Int, y: Int }
+reactive Line = { start: Point, end: Point }</code></pre>
+                </div>
+
+                <!-- Creating and Modifying -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Creating and Modifying</h2>
+                <p class="text-slate-400 mb-4">
+                    Reactive records are created just like regular records. The difference is you can directly assign to their fields.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">reactive Counter = { value: Int, name: String }
+
+main() = {
+    counter = Counter(value: 0, name: "clicks")
+
+    # Direct field assignment (not possible with regular records)
+    counter.value = counter.value + 1
+    counter.value = counter.value + 1
+    counter.name = "total clicks"
+
+    println(counter.value)  # 2
+    println(counter.name)   # "total clicks"
+}</code></pre>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <p class="text-slate-400 text-sm"><strong>Note:</strong> Regular records require the <code>mutable</code> keyword on specific fields. Reactive records make all fields mutable by default and add change tracking capabilities.</p>
+                </div>
+
+                <!-- onChange Callbacks -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Change Callbacks with onChange</h2>
+                <p class="text-slate-400 mb-4">
+                    Register callbacks that fire <strong>synchronously</strong> whenever a field changes. Callbacks receive the field name, old value, and new value.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">reactive Point = { x: Int, y: Int }
+
+main() = {
+    p = Point(x: 0, y: 0)
+
+    # Register a change callback
+    p.onChange((fieldName, oldValue, newValue) => {
+        println(fieldName ++ " changed: " ++ show(oldValue) ++ " -> " ++ show(newValue))
+    })
+
+    # These assignments trigger the callback immediately
+    p.x = 10
+    p.y = 20
+}
+# Output:
+# x changed: 0 -> 10
+# y changed: 0 -> 20</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">
+                    Callbacks are <strong>synchronous</strong> - they execute immediately when a field changes, before the next line of code runs. You can register multiple callbacks; they execute in registration order.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">reactive Counter = { value: Int }
+
+mvar log: List[String] = []
+
+main() = {
+    c = Counter(value: 0)
+
+    # Multiple callbacks
+    c.onChange((f, old, new) => { log = log ++ ["first: " ++ show(new)] })
+    c.onChange((f, old, new) => { log = log ++ ["second: " ++ show(new)] })
+
+    c.value = 42
+
+    println(log)  # ["first: 42", "second: 42"]
+}</code></pre>
+                </div>
+
+                <!-- Parent/Child Introspection -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Parent/Child Introspection</h2>
+                <p class="text-slate-400 mb-4">
+                    When reactive records are nested, parent-child relationships are automatically tracked. Use <code>.parents</code> and <code>.children</code> for introspection.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">reactive Point = { x: Int, y: Int }
+reactive Line = { start: Point, end: Point }
+
+main() = {
+    p1 = Point(x: 0, y: 0)
+    p2 = Point(x: 10, y: 10)
+    line = Line(start: p1, end: p2)
+
+    # .parents returns List[(ReactiveRecord, String)]
+    # Each tuple is (parent, fieldName)
+    match p1.parents {
+        [(parent, fieldName)] -> println("p1 is in field: " ++ fieldName)
+        _ -> println("no parent")
+    }
+    # Output: p1 is in field: start
+
+    # .children returns List[ReactiveRecord]
+    println("line has " ++ show(length(line.children)) ++ " children")
+    # Output: line has 2 children
+}</code></pre>
+                </div>
+
+                <!-- Use Cases -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Use Cases</h2>
+                <div class="bg-gradient-to-r from-blue-900/20 to-emerald-900/20 rounded-lg p-6 mb-8 border border-blue-800/30">
+                    <h3 class="text-lg font-semibold text-white mb-3">When to Use Reactive Records</h3>
+                    <ul class="list-disc list-inside text-slate-400 space-y-2">
+                        <li><strong>UI State Management</strong> - Track form fields, component state with automatic change detection</li>
+                        <li><strong>Observable Data Models</strong> - Build reactive data layers where changes propagate automatically</li>
+                        <li><strong>Undo/Redo Systems</strong> - Use onChange to capture state changes for history</li>
+                        <li><strong>Validation</strong> - Trigger validation logic whenever a field changes</li>
+                        <li><strong>Debugging</strong> - Log all state changes during development</li>
+                    </ul>
+                </div>
+
+                <!-- Practical Example: Form Validation -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Practical Example: Form Validation</h2>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">reactive FormData = {
+    username: String,
+    email: String,
+    isValid: Bool
+}
+
+validate(form) = {
+    hasUsername = length(form.username) >= 3
+    hasEmail = form.email.contains("@")
+    form.isValid = hasUsername && hasEmail
+}
+
+main() = {
+    form = FormData(username: "", email: "", isValid: false)
+
+    # Auto-validate on any change
+    form.onChange((field, old, new) => {
+        if field != "isValid" {
+            validate(form)
+            println("Valid: " ++ show(form.isValid))
+        }
+    })
+
+    form.username = "jo"      # Valid: false (too short)
+    form.username = "john"    # Valid: false (no email)
+    form.email = "john@x.com" # Valid: true
+}</code></pre>
+                </div>
+
+                <!-- Practical Example: Change Log -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Practical Example: Change Log</h2>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">reactive Document = { title: String, content: String }
+
+type Change = { field: String, oldVal: String, newVal: String }
+
+mvar history: List[Change] = []
+
+main() = {
+    doc = Document(title: "Untitled", content: "")
+
+    # Track all changes
+    doc.onChange((field, old, new) => {
+        history = history ++ [Change(field: field, oldVal: show(old), newVal: show(new))]
+    })
+
+    doc.title = "My Document"
+    doc.content = "Hello, world!"
+    doc.content = "Hello, Nostos!"
+
+    # Print change history
+    history.each(change => {
+        println(change.field ++ ": " ++ change.oldVal ++ " -> " ++ change.newVal)
+    })
+}
+# Output:
+# title: "Untitled" -> "My Document"
+# content: "" -> "Hello, world!"
+# content: "Hello, world!" -> "Hello, Nostos!"</code></pre>
+                </div>
+
+                <!-- Reactive vs Regular Records -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Reactive vs Regular Records</h2>
+                <div class="overflow-x-auto mb-8">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="border-b border-slate-700">
+                                <th class="py-3 px-4 text-slate-300 font-semibold">Feature</th>
+                                <th class="py-3 px-4 text-slate-300 font-semibold">Regular Record</th>
+                                <th class="py-3 px-4 text-slate-300 font-semibold">Reactive Record</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-slate-400">
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4">Keyword</td>
+                                <td class="py-3 px-4"><code>type</code></td>
+                                <td class="py-3 px-4"><code>reactive</code></td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4">Field mutability</td>
+                                <td class="py-3 px-4">Immutable by default</td>
+                                <td class="py-3 px-4">All fields mutable</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4">Change callbacks</td>
+                                <td class="py-3 px-4">Not supported</td>
+                                <td class="py-3 px-4"><code>.onChange(callback)</code></td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4">Parent tracking</td>
+                                <td class="py-3 px-4">Not supported</td>
+                                <td class="py-3 px-4"><code>.parents</code></td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4">Child tracking</td>
+                                <td class="py-3 px-4">Not supported</td>
+                                <td class="py-3 px-4"><code>.children</code></td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4">Memory overhead</td>
+                                <td class="py-3 px-4">Minimal</td>
+                                <td class="py-3 px-4">Higher (tracking data)</td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 px-4">Best for</td>
+                                <td class="py-3 px-4">Immutable data, DTOs</td>
+                                <td class="py-3 px-4">Stateful objects, UI</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <p class="text-slate-400 text-sm"><strong>Performance note:</strong> Reactive records have slightly higher memory overhead due to parent tracking and callback storage. Use regular records for simple data transfer objects and reactive records when you need change tracking.</p>
+                </div>
+
+            </div>
+
+            <!-- Navigation Buttons -->
+            <div class="flex justify-between border-t border-slate-800 pt-8">
+                <a href="24_command_line.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
+                    Previous: Command Line
+                </a>
+                <span class="text-slate-600">End of Tutorial</span>
+            </div>
+        </main>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script src="../js/tutorial-sidebar.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>
+</html>
