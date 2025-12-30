@@ -1,0 +1,29 @@
+# expect: 1000
+# Test 3-level deep nested field setter
+
+var type Level3 = { value: Int }
+var type Level2 = { level3: Level3 }
+var type Level1 = { level2: Level2 }
+
+# Setters for all 3 levels
+level3SetValue(l3: Level3, v: Int) -> Level3 = {
+    Level3(v * 10)  # Multiply by 10
+}
+
+level2SetLevel3(l2: Level2, l3: Level3) -> Level2 = {
+    Level2(l3)
+}
+
+level1SetLevel2(l1: Level1, l2: Level2) -> Level1 = {
+    Level1(l2)
+}
+
+main() = {
+    root = Level1(Level2(Level3(1)))
+
+    # This should chain through all 3 setters
+    root.level2.level3.value = 100
+
+    # Result: 100 * 10 = 1000
+    root.level2.level3.value
+}
