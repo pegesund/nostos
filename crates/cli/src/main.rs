@@ -717,6 +717,7 @@ fn main() -> ExitCode {
     let mut num_threads: usize = 0; // 0 = auto-detect
     let mut profiling_enabled = false; // Enable function call profiling
     let mut extension_paths: Vec<String> = Vec::new(); // Extension library paths
+    let mut use_extensions: Vec<String> = Vec::new(); // Extensions to load by name from ~/.nostos/extensions/
 
     let mut i = 1;
     let mut file_idx: Option<usize> = None;
@@ -724,27 +725,49 @@ fn main() -> ExitCode {
         let arg = &args[i];
         if arg.starts_with("--") || arg.starts_with("-") {
             if arg == "--help" || arg == "-h" {
-                println!("Usage: nostos [options] <command|file.nos> [options...]");
+                println!("Nostos - A functional programming language with native extensions");
                 println!();
-                println!("Commands:");
-                println!("  repl           Start the interactive REPL");
+                println!("USAGE:");
+                println!("    nostos <file.nos>              Run a single file");
+                println!("    nostos <directory/>            Run a project (needs main.nos)");
+                println!("    nostos --use <ext> <file.nos>  Run with an extension");
+                println!("    nostos repl                    Start interactive TUI/REPL");
                 println!();
-                println!("Run a Nostos program file or start the REPL.");
+                println!("EXAMPLES:");
+                println!("    nostos hello.nos                       # Run a program");
+                println!("    nostos myproject/                      # Run a project");
+                println!("    nostos --use nalgebra script.nos       # Use nalgebra extension");
+                println!("    nostos --profile slow_program.nos      # Profile for performance");
                 println!();
-                println!("Options (can appear before or after the file):");
-                println!("  --help           Show this help message");
-                println!("  --version        Show version information");
-                println!("  --no-jit         Disable JIT compilation (for debugging)");
-                println!("  --debug          Show local variable values in stack traces");
-                println!("  --json-errors    Output errors as JSON (for debugger integration)");
-                println!("  --threads N      Use N worker threads (default: all CPUs)");
-                println!("  --profile        Enable function call profiling (JIT functions show as [JIT])");
-                println!("  --extension PATH Load native extension from shared library (.so/.dylib)");
+                println!("EXTENSIONS:");
+                println!("    --use NAME        Load installed extension from ~/.nostos/extensions/");
+                println!("                      Example: --use nalgebra, --use redis");
+                println!("    --extension PATH  Load extension directly from .so/.dylib file");
                 println!();
-                println!("REPL usage:");
-                println!("  nostos repl              Start interactive REPL");
-                println!("  nostos repl file.nos     Load file and start REPL");
-                println!("  nostos repl < script.nos Run script non-interactively");
+                println!("    Projects can also declare extensions in nostos.toml:");
+                println!("        [extensions]");
+                println!("        nalgebra = {{ git = \"https://github.com/user/nostos-nalgebra\" }}");
+                println!();
+                println!("PERFORMANCE:");
+                println!("    --threads N       Use N worker threads (default: all CPUs)");
+                println!("    --profile         Show function call timing after execution");
+                println!("    --no-jit          Disable JIT compilation");
+                println!();
+                println!("DEBUGGING:");
+                println!("    --debug           Show local variables in stack traces");
+                println!("    --json-errors     Output errors as JSON (for IDE integration)");
+                println!();
+                println!("COMMANDS:");
+                println!("    repl              Start the interactive TUI with editor and REPL");
+                println!("    tui               Same as repl");
+                println!("    nostlet list      List available nostlets from registry");
+                println!("    nostlet install   Install a nostlet plugin");
+                println!();
+                println!("MORE INFO:");
+                println!("    --help            Show this help");
+                println!("    --version         Show version");
+                println!();
+                println!("Documentation: https://pegesund.github.io/nostos/tutorial/24_command_line.html");
                 return ExitCode::SUCCESS;
             }
             if arg == "--version" || arg == "-v" {
@@ -792,6 +815,17 @@ fn main() -> ExitCode {
                     continue;
                 } else {
                     eprintln!("Error: --extension requires a path argument");
+                    return ExitCode::FAILURE;
+                }
+            }
+            if arg == "--use" || arg == "-u" {
+                // Load installed extension by name from ~/.nostos/extensions/
+                if i + 1 < args.len() {
+                    use_extensions.push(args[i + 1].clone());
+                    i += 2;
+                    continue;
+                } else {
+                    eprintln!("Error: --use requires an extension name");
                     return ExitCode::FAILURE;
                 }
             }
@@ -850,6 +884,60 @@ fn main() -> ExitCode {
                 eprintln!("Warning: Failed to parse nostos.toml: {}", e);
             }
         }
+    }
+
+    // Resolve --use extensions from ~/.nostos/extensions/
+    for ext_name in &use_extensions {
+        let home = match dirs::home_dir() {
+            Some(h) => h,
+            None => {
+                eprintln!("Error: Could not determine home directory");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        // Try different naming conventions for the extension directory
+        let ext_dir_candidates = vec![
+            home.join(".nostos").join("extensions").join(format!("nostos-{}", ext_name)),
+            home.join(".nostos").join("extensions").join(ext_name),
+        ];
+
+        let ext_dir = ext_dir_candidates.iter().find(|p| p.exists());
+        let ext_dir = match ext_dir {
+            Some(d) => d.clone(),
+            None => {
+                eprintln!("Error: Extension '{}' not found in ~/.nostos/extensions/", ext_name);
+                eprintln!("Tried:");
+                for c in &ext_dir_candidates {
+                    eprintln!("  - {}", c.display());
+                }
+                eprintln!();
+                eprintln!("Install extensions with: nostos nostlet install <name>");
+                eprintln!("Or use --extension <path> to load a .so file directly");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        // Find the shared library (.so on Linux, .dylib on macOS)
+        let lib_candidates = vec![
+            ext_dir.join("target").join("release").join(format!("lib{}.so", ext_name.replace("-", "_"))),
+            ext_dir.join("target").join("release").join(format!("libnostos_{}.so", ext_name)),
+            ext_dir.join("target").join("release").join(format!("lib{}.dylib", ext_name.replace("-", "_"))),
+            ext_dir.join("target").join("release").join(format!("libnostos_{}.dylib", ext_name)),
+        ];
+
+        let lib_path = lib_candidates.iter().find(|p| p.exists());
+        let lib_path = match lib_path {
+            Some(p) => p.clone(),
+            None => {
+                eprintln!("Error: Extension '{}' library not found. Build it first:", ext_name);
+                eprintln!("  cd {} && cargo build --release", ext_dir.display());
+                return ExitCode::FAILURE;
+            }
+        };
+
+        extension_paths.push(lib_path.to_string_lossy().to_string());
+        extension_module_dirs.push((ext_name.clone(), ext_dir));
     }
 
     // Check if input is directory or file

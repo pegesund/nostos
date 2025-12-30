@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Command Line - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75;
+        }
+        .hljs-function {
+            color: #e5c07b;
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/pegesund/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+
+        <!-- Sidebar -->
+        <aside id="tutorial-sidebar" class="w-64 fixed top-16 h-[calc(100vh-4rem)] border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block pb-8">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_type_system.html" class="block text-slate-400 hover:text-white transition">7. Type System</a></li>
+                    <li><a href="08_traits.html" class="block text-slate-400 hover:text-white transition">8. Traits</a></li>
+                    <li><a href="09_builtin_traits.html" class="block text-slate-400 hover:text-white transition">9. Builtin Traits</a></li>
+                    <li><a href="10_trait_bounds.html" class="block text-slate-400 hover:text-white transition">10. Trait Bounds</a></li>
+                    <li><a href="11_error_handling.html" class="block text-slate-400 hover:text-white transition">11. Error Handling</a></li>
+                    <li><a href="12_modules.html" class="block text-slate-400 hover:text-white transition">12. Modules & Imports</a></li>
+                    <li><a href="13_stdlib.html" class="block text-slate-400 hover:text-white transition">13. Standard Library</a></li>
+                    <li><a href="14_json.html" class="block text-slate-400 hover:text-white transition">14. JSON</a></li>
+                    <li><a href="15_concurrency.html" class="block text-slate-400 hover:text-white transition">15. Concurrency</a></li>
+                    <li><a href="16_async_runtime.html" class="block text-slate-400 hover:text-white transition">16. Async Runtime</a></li>
+                    <li><a href="17_async_io_http.html" class="block text-slate-400 hover:text-white transition">17. Async I/O & HTTP</a></li>
+                    <li><a href="18_reflection.html" class="block text-slate-400 hover:text-white transition">18. Reflection & Eval</a></li>
+                    <li><a href="19_debugging_profiling.html" class="block text-slate-400 hover:text-white transition">19. Debugging & Profiling</a></li>
+                    <li><a href="20_html_templating.html" class="block text-slate-400 hover:text-white transition">20. HTML Templating</a></li>
+                    <li><a href="21_mutability.html" class="block text-slate-400 hover:text-white transition">21. Mutability</a></li>
+                    <li><a href="22_complete_web_app.html" class="block text-slate-400 hover:text-white transition">22. Complete Web App</a></li>
+                    <li><a href="23_ffi.html" class="block text-slate-400 hover:text-white transition">23. FFI & Extensions</a></li>
+                    <li><a href="24_command_line.html" class="block text-blue-400 font-medium">24. Command Line</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">The Nostos Command Line</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    The <code>nostos</code> command is your gateway to running Nostos programs. Whether you're running a simple script, a multi-file project, or using native extensions for high-performance computing, this chapter covers everything you need to know.
+                </p>
+
+                <!-- Quick Start -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Quick Start</h2>
+                <p class="text-slate-400 mb-4">
+                    The simplest way to run a Nostos program:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-bash"># Run a single file
+nostos myprogram.nos
+
+# Run a project directory (must contain main.nos)
+nostos myproject/
+
+# Start the interactive TUI/REPL
+nostos repl</code></pre>
+                </div>
+
+                <!-- Running Single Files -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Running Single Files</h2>
+                <p class="text-slate-400 mb-4">
+                    A Nostos program file needs a <code>main()</code> function as its entry point:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># hello.nos
+main() = {
+    println("Hello, World!")
+    0  # Exit code
+}</code></pre>
+                </div>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-bash">$ nostos hello.nos
+Hello, World!</code></pre>
+                </div>
+
+                <!-- Running Projects -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Running Projects</h2>
+                <p class="text-slate-400 mb-4">
+                    For larger programs, organize your code into a project directory. The directory must contain a <code>main.nos</code> file:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-bash">myproject/
+├── main.nos        # Entry point (required)
+├── utils.nos       # Helper functions
+├── config.nos      # Configuration
+└── nostos.toml     # Project config (optional)</code></pre>
+                </div>
+                <p class="text-slate-400 mb-4">
+                    All <code>.nos</code> files in the directory are compiled together, and you can import between them using the module system.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-bash"># Run the project
+nostos myproject/</code></pre>
+                </div>
+
+                <!-- Using Extensions -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Using Native Extensions</h2>
+                <p class="text-slate-400 mb-4">
+                    Extensions let you call high-performance Rust libraries from Nostos. There are two ways to use them:
+                </p>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Method 1: The --use Flag (Recommended)</h3>
+                <p class="text-slate-400 mb-4">
+                    For standalone scripts, use the <code>--use</code> flag to load an installed extension by name:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-bash"># Run a script with the nalgebra linear algebra extension
+nostos --use nalgebra myscript.nos
+
+# Use multiple extensions
+nostos --use nalgebra --use redis myscript.nos</code></pre>
+                </div>
+                <p class="text-slate-400 mb-4">
+                    The extension must be installed in <code>~/.nostos/extensions/</code>. Example script using nalgebra:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># vector_math.nos
+import nalgebra
+use nalgebra.*
+
+main() = {
+    v1 = vec([1.0, 2.0, 3.0])
+    v2 = vec([4.0, 5.0, 6.0])
+
+    println("Dot product: " ++ show(vecDot(v1, v2)))
+    println("Norm of v1: " ++ show(vecNorm(v1)))
+    0
+}</code></pre>
+                </div>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-bash">$ nostos --use nalgebra vector_math.nos
+Loaded extension nalgebra v0.1.0
+Dot product: 32.0
+Norm of v1: 3.7416573867739413</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Method 2: Project Configuration (nostos.toml)</h3>
+                <p class="text-slate-400 mb-4">
+                    For projects, declare extensions in <code>nostos.toml</code> and they'll be automatically downloaded, built, and loaded:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-toml"># nostos.toml
+[project]
+name = "my-linear-algebra-app"
+version = "0.1.0"
+
+[extensions]
+nalgebra = { git = "https://github.com/pegesund/nostos-nalgebra" }</code></pre>
+                </div>
+                <p class="text-slate-400 mb-4">
+                    Now simply run the project - extensions are handled automatically:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-bash">$ nostos myproject/
+Found package config: "myproject/nostos.toml"
+Loaded extension nalgebra v0.1.0
+...</code></pre>
+                </div>
+
+                <!-- All Options -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Command Line Options</h2>
+                <p class="text-slate-400 mb-4">
+                    Here's a complete reference of all available options:
+                </p>
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <table class="w-full text-left">
+                        <thead>
+                            <tr class="border-b border-slate-700">
+                                <th class="py-2 text-blue-400">Option</th>
+                                <th class="py-2 text-slate-300">Description</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-slate-400">
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">--help</code></td>
+                                <td class="py-3">Show help message with all available options</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">--version</code></td>
+                                <td class="py-3">Display the Nostos version number</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">--use NAME</code></td>
+                                <td class="py-3">Load an installed extension by name from <code>~/.nostos/extensions/</code></td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">--extension PATH</code></td>
+                                <td class="py-3">Load a native extension directly from a <code>.so</code> or <code>.dylib</code> file</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">--threads N</code></td>
+                                <td class="py-3">Set number of worker threads (default: all CPU cores)</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">--profile</code></td>
+                                <td class="py-3">Enable function call profiling to measure performance</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">--no-jit</code></td>
+                                <td class="py-3">Disable JIT compilation (useful for debugging)</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">--debug</code></td>
+                                <td class="py-3">Show local variable values in stack traces</td>
+                            </tr>
+                            <tr>
+                                <td class="py-3"><code class="text-emerald-400">--json-errors</code></td>
+                                <td class="py-3">Output errors as JSON (for IDE/editor integration)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Subcommands -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Subcommands</h2>
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <table class="w-full text-left">
+                        <thead>
+                            <tr class="border-b border-slate-700">
+                                <th class="py-2 text-blue-400">Command</th>
+                                <th class="py-2 text-slate-300">Description</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-slate-400">
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">nostos repl</code></td>
+                                <td class="py-3">Start the interactive TUI with REPL, editor, and file browser</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">nostos tui</code></td>
+                                <td class="py-3">Same as <code>repl</code> - starts the TUI</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">nostos nostlet list</code></td>
+                                <td class="py-3">List available nostlets (plugins) from the registry</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">nostos nostlet install NAME</code></td>
+                                <td class="py-3">Install a nostlet to <code>~/.nostos/nostlets/</code></td>
+                            </tr>
+                            <tr>
+                                <td class="py-3"><code class="text-emerald-400">nostos nostlet installed</code></td>
+                                <td class="py-3">List locally installed nostlets</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Examples -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Common Examples</h2>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-bash"># Run a simple script
+nostos hello.nos
+
+# Run a project with extensions defined in nostos.toml
+nostos myproject/
+
+# Run a standalone script with an extension
+nostos --use nalgebra linear_algebra.nos
+
+# Profile a program to find performance bottlenecks
+nostos --profile myprogram.nos
+
+# Run with limited threads for testing
+nostos --threads 2 concurrent_program.nos
+
+# Debug mode with detailed stack traces
+nostos --debug failing_program.nos
+
+# Start the interactive development environment
+nostos repl</code></pre>
+                </div>
+
+                <div class="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-8">
+                    <p class="text-blue-300 text-sm">
+                        <strong>Tip:</strong> Options can appear before or after the file path. Both of these work:
+                        <code class="block mt-2 bg-slate-800 p-2 rounded">nostos --use nalgebra script.nos<br>nostos script.nos --use nalgebra</code>
+                    </p>
+                </div>
+
+            </div>
+
+            <!-- Navigation Buttons -->
+            <div class="flex justify-between border-t border-slate-800 pt-8">
+                <a href="23_ffi.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
+                    Previous: FFI & Extensions
+                </a>
+                <span class="text-slate-600">
+                    End of Tutorial
+                </span>
+            </div>
+        </main>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script src="../js/tutorial-sidebar.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>
+</html>
