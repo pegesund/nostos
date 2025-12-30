@@ -1,5 +1,6 @@
 #!/bin/bash
 # Nalgebra benchmark: Rust vs Nostos vs NumPy
+# Uses internal timing (excludes startup/data creation)
 
 set -e
 
@@ -20,6 +21,7 @@ NC='\033[0m'
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}  Nalgebra Benchmark${NC}"
 echo -e "${BLUE}  Rust vs Nostos vs NumPy${NC}"
+echo -e "${BLUE}  (Internal timing - excludes startup)${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
@@ -54,7 +56,7 @@ python3 -c "import numpy; print(f'Using NumPy {numpy.__version__}')"
 
 echo ""
 
-# Function to run benchmark and measure time
+# Function to run benchmark and extract internal timing
 run_benchmark() {
     local name=$1
     local cmd=$2
@@ -64,22 +66,30 @@ run_benchmark() {
     local result=""
 
     for i in $(seq 1 $runs); do
-        local start=$(date +%s.%N)
-        # Capture output, filter for numeric result (checksum)
-        result=$($cmd 2>/dev/null | grep -E '^[0-9]+\.[0-9]+$' | head -1)
-        local end=$(date +%s.%N)
-        local elapsed=$(echo "$end - $start" | bc)
+        # Capture full output
+        local output=$($cmd 2>/dev/null)
+
+        # Extract TIME_MS value (internal timing in milliseconds)
+        local time_ms=$(echo "$output" | grep -E '^TIME_MS:' | sed 's/TIME_MS: //')
+
+        # Extract result (checksum - last numeric line)
+        result=$(echo "$output" | grep -E '^[0-9]+\.[0-9]+$' | tail -1)
+
+        # Convert ms to seconds for comparison
+        local elapsed=$(echo "scale=6; $time_ms / 1000" | bc)
 
         if (( $(echo "$elapsed < $best_time" | bc -l) )); then
             best_time=$elapsed
         fi
     done
 
-    printf "  %-15s %8.3fs  (result: %s)\n" "$name:" "$best_time" "$result"
+    # Convert back to ms for display
+    local best_ms=$(echo "scale=0; $best_time * 1000 / 1" | bc)
+    printf "  %-15s %6dms  (result: %s)\n" "$name:" "$best_ms" "$result"
     echo "$best_time" > /tmp/bench_time_$$
 }
 
-echo -e "${GREEN}Running benchmarks (3 runs each, best time shown)...${NC}"
+echo -e "${GREEN}Running benchmarks (3 runs each, best internal time shown)...${NC}"
 echo ""
 
 # Run Rust nalgebra benchmark
@@ -106,13 +116,18 @@ rm -f /tmp/bench_time_$$
 
 echo ""
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}  Results${NC}"
+echo -e "${BLUE}  Results (computation time only)${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
-printf "  %-15s %8.3fs\n" "Rust:" "$rust_time"
-printf "  %-15s %8.3fs\n" "NumPy:" "$numpy_time"
-printf "  %-15s %8.3fs\n" "Nostos:" "$nostos_time"
+# Display in milliseconds
+rust_ms=$(echo "scale=0; $rust_time * 1000 / 1" | bc)
+numpy_ms=$(echo "scale=0; $numpy_time * 1000 / 1" | bc)
+nostos_ms=$(echo "scale=0; $nostos_time * 1000 / 1" | bc)
+
+printf "  %-15s %6dms\n" "Rust:" "$rust_ms"
+printf "  %-15s %6dms\n" "NumPy:" "$numpy_ms"
+printf "  %-15s %6dms\n" "Nostos:" "$nostos_ms"
 echo ""
 
 # Calculate comparisons
@@ -120,7 +135,13 @@ echo -e "${YELLOW}Comparisons:${NC}"
 
 # Nostos vs Rust (shows Nostos overhead)
 nostos_vs_rust=$(echo "scale=2; $nostos_time / $rust_time" | bc)
-echo -e "  Nostos vs Rust:  ${RED}${nostos_vs_rust}x slower${NC} (Nostos overhead)"
+overhead_pct=$(echo "($nostos_time / $rust_time - 1) * 100" | bc -l | cut -d. -f1)
+if (( $(echo "$nostos_time > $rust_time" | bc -l) )); then
+    echo -e "  Nostos vs Rust:  ${RED}${nostos_vs_rust}x${NC} (${overhead_pct}% FFI overhead)"
+else
+    ratio=$(echo "scale=2; $rust_time / $nostos_time" | bc)
+    echo -e "  Nostos vs Rust:  ${GREEN}${ratio}x faster${NC}"
+fi
 
 # Nostos vs NumPy
 if (( $(echo "$nostos_time < $numpy_time" | bc -l) )); then
@@ -144,7 +165,8 @@ echo ""
 
 # Notes
 echo -e "${YELLOW}Notes:${NC}"
+echo "  - All times are internal (computation only, excludes startup)"
 echo "  - Rust: Pure nalgebra, no runtime overhead"
 echo "  - NumPy: Python + optimized BLAS/LAPACK"
-echo "  - Nostos: ~0.5s startup + FFI overhead to nalgebra"
+echo "  - Nostos: FFI calls to nalgebra extension"
 echo ""

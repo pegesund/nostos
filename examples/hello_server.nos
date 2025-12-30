@@ -1,0 +1,66 @@
+# Minimal Hello World Server
+#
+# Simple server to test memory usage without database.
+# Only returns "Hello, World!" on all paths.
+#
+# Run with: ./target/release/nostos examples/hello_server.nos
+# Test with: wrk -t4 -c100 -d30s http://localhost:8080/
+
+handleRequest(server, req, main_pid) = {
+  path = req.path
+
+  if path == "/shutdown" then {
+    main_pid <- ("shutdown", ())
+    Server.respond(req.id, 200, [("Content-Type", "text/plain")], "Shutting down...")
+    ("shutdown_signal", ())
+  }
+  else {
+    Server.respond(req.id, 200, [("Content-Type", "text/plain")], "Hello, World!")
+    ("continue", ())
+  }
+}
+
+acceptLoop(server, main_pid) = {
+  result = try {
+    req = Server.accept(server)
+    (signal, _) = handleRequest(server, req, main_pid)
+
+    if signal == "shutdown_signal" then {
+      ()
+    } else {
+      acceptLoop(server, main_pid)
+    }
+    ()
+  } catch { e ->
+    ()
+  }
+  result
+}
+
+spawnWorkers(server, main_pid, 0) = ()
+spawnWorkers(server, main_pid, n) = {
+  spawn { acceptLoop(server, main_pid) }
+  spawnWorkers(server, main_pid, n - 1)
+}
+
+main() = {
+  main_pid = self()
+
+  result = try {
+    server = Server.bind(8080)
+    println("Hello server running on http://localhost:8080")
+    println("Hit /shutdown to stop")
+
+    spawnWorkers(server, main_pid, 8)
+
+    receive {
+      ("shutdown", _) -> {
+        Server.close(server)
+        println("Server shutdown complete.")
+      }
+    }
+  } catch { e ->
+    println("Error: " ++ e)
+  }
+  0
+}

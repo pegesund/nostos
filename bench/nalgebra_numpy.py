@@ -1,83 +1,80 @@
 #!/usr/bin/env python3
 # NumPy linear algebra benchmark - comparison with Nostos nalgebra
 # Tests same operations as the Nostos benchmark
+# Uses internal timing (excludes startup/import time)
 
 import numpy as np
+import time
 
-def gen_list(n, seed):
-    """Generate deterministic pseudo-random list (matches Nostos genList)"""
+def gen_vec(n, seed):
+    """Generate deterministic pseudo-random vector (matches Nostos vecFromSeed)"""
     result = []
     for i in range(n):
         x = (i * 1103515245 + seed) % 2147483647
         result.append((x % 1000000) / 1000000.0)
     return np.array(result, dtype=np.float64)
 
-def gen_matrix_data(rows, cols, seed):
-    """Generate matrix data (matches Nostos genMatrixData)"""
+def gen_matrix(rows, cols, seed):
+    """Generate matrix data (matches Nostos matFromSeed)"""
     result = []
     for r in range(rows):
-        result.append(gen_list(cols, seed + r * 1000))
+        row = []
+        for c in range(cols):
+            row_seed = seed + r * 1000
+            x = (c * 1103515245 + row_seed) % 2147483647
+            row.append((x % 1000000) / 1000000.0)
+        result.append(row)
     return np.array(result, dtype=np.float64)
-
-def bench_vector_dot(iterations, size):
-    """Vector dot product benchmark"""
-    v1 = gen_list(size, 42)
-    v2 = gen_list(size, 123)
-    total = 0.0
-    for _ in range(iterations):
-        total += np.dot(v1, v2)
-    return total
-
-def bench_vector_norm(iterations, size):
-    """Vector norm benchmark"""
-    v = gen_list(size, 42)
-    total = 0.0
-    for _ in range(iterations):
-        total += np.linalg.norm(v)
-    return total
-
-def bench_vector_sum(iterations, size):
-    """Vector sum benchmark"""
-    v = gen_list(size, 42)
-    total = 0.0
-    for _ in range(iterations):
-        total += np.sum(v)
-    return total
-
-def bench_matrix_trace(iterations, size):
-    """Matrix trace benchmark"""
-    m = gen_matrix_data(size, size, 42)
-    total = 0.0
-    for _ in range(iterations):
-        total += np.trace(m)
-    return total
-
-def bench_matrix_determinant(iterations, size):
-    """Matrix determinant benchmark"""
-    m = gen_matrix_data(size, size, 42)
-    total = 0.0
-    for _ in range(iterations):
-        total += np.linalg.det(m)
-    return total
 
 def main():
     # Configuration - same as Nostos benchmark
-
-    # Vector operations
     vec_size = 10000
     vec_iters = 10000
-    r1 = bench_vector_dot(vec_iters, vec_size)
-    r2 = bench_vector_norm(vec_iters, vec_size)
-    r3 = bench_vector_sum(vec_iters, vec_size)
-
-    # Matrix operations
     mat_size = 200
     mat_iters = 100
-    r4 = bench_matrix_trace(mat_iters, mat_size)
-    r5 = bench_matrix_determinant(mat_iters, mat_size)
 
-    # Print checksum for verification
-    print(f"{r1 + r2 + r3 + r4 + r5:.6f}")
+    # Create data (not timed)
+    v1 = gen_vec(vec_size, 42)
+    v2 = gen_vec(vec_size, 123)
+    m = gen_matrix(mat_size, mat_size, 42)
+
+    # === START TIMING (computation only) ===
+    start_time = time.time()
+
+    # Benchmark 1: Vector dot product
+    r1 = 0.0
+    for _ in range(vec_iters):
+        r1 += np.dot(v1, v2)
+
+    # Benchmark 2: Vector norm
+    r2 = 0.0
+    for _ in range(vec_iters):
+        r2 += np.linalg.norm(v1)
+
+    # Benchmark 3: Vector sum
+    r3 = 0.0
+    for _ in range(vec_iters):
+        r3 += np.sum(v1)
+
+    # Benchmark 4: Matrix trace
+    r4 = 0.0
+    for _ in range(mat_iters):
+        r4 += np.trace(m)
+
+    # Benchmark 5: Matrix determinant
+    r5 = 0.0
+    for _ in range(mat_iters):
+        r5 += np.linalg.det(m)
+
+    # === END TIMING ===
+    end_time = time.time()
+    elapsed_ms = (end_time - start_time) * 1000
+
+    result = r1 + r2 + r3 + r4 + r5
+
+    # Output format for shell script parsing
+    print(f"TIME_MS: {elapsed_ms:.0f}")
+    print(f"{result:.6f}")
 
 if __name__ == "__main__":
     main()
