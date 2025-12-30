@@ -1,91 +1,73 @@
+# Nalgebra linear algebra benchmark - comparison with NumPy
+# Tests vector and matrix operations using wrapper functions
 import nalgebra
 use nalgebra.*
 
+# Simple random-ish list generator (deterministic for reproducibility)
+genList(n, seed) = {
+    range(0, n).map(i => {
+        x = (i * 1103515245 + seed) % 2147483647
+        (x % 1000000) * 1.0 / 1000000.0
+    })
+}
+
+# Helper for iterations - returns Float accumulator
+doTimesF(n, f, acc) = if n <= 0 then acc else doTimesF(n - 1, f, f(acc))
+
+# Benchmark 1: Vector dot product (simpler - no operator overloading)
+benchVectorDot(iterations, size) = {
+    v1 = vec(genList(size, 42))
+    v2 = vec(genList(size, 123))
+    doTimesF(iterations, acc => acc + vecDot(v1, v2), 0.0)
+}
+
+# Benchmark 2: Vector norm
+benchVectorNorm(iterations, size) = {
+    v = vec(genList(size, 42))
+    doTimesF(iterations, acc => acc + vecNorm(v), 0.0)
+}
+
+# Benchmark 3: Vector sum
+benchVectorSum(iterations, size) = {
+    v = vec(genList(size, 42))
+    doTimesF(iterations, acc => acc + vecSum(v), 0.0)
+}
+
+# Helper to create matrix data
+genMatrixData(rows, cols, seed) = {
+    range(0, rows).map(r => genList(cols, seed + r * 1000))
+}
+
+# Benchmark 4: Matrix trace
+benchMatrixTrace(iterations, size) = {
+    m = mat(genMatrixData(size, size, 42))
+    doTimesF(iterations, acc => acc + matTrace(m), 0.0)
+}
+
+# Benchmark 5: Matrix determinant
+benchMatrixDeterminant(iterations, size) = {
+    m = mat(genMatrixData(size, size, 42))
+    doTimesF(iterations, acc => acc + matDeterminant(m), 0.0)
+}
+
 main() = {
-    println("=== Testing Nalgebra with Operator Overloading ===")
-    println("")
+    # Configuration - long enough to amortize startup time
 
-    # Test Vec type with operators
-    println("--- Vec Operator Tests ---")
-    v1 = vec([1.0, 2.0, 3.0, 4.0, 5.0])
-    v2 = vec([5.0, 4.0, 3.0, 2.0, 1.0])
+    # Vector operations (large vectors, many iterations)
+    vecSize = 10000
+    vecIters = 10000
+    r1 = benchVectorDot(vecIters, vecSize)
+    r2 = benchVectorNorm(vecIters, vecSize)
+    r3 = benchVectorSum(vecIters, vecSize)
 
-    println("v1 = ${v1.data}")
-    println("v2 = ${v2.data}")
+    # Matrix operations (medium matrices)
+    matSize = 200
+    matIters = 100
+    r4 = benchMatrixTrace(matIters, matSize)
+    r5 = benchMatrixDeterminant(matIters, matSize)
 
-    # Operator overloading!
-    vsum = v1 + v2
-    println("v1 + v2 = ${vsum.data}")
-
-    diff = v1 - v2
-    println("v1 - v2 = ${diff.data}")
-
-    prod = v1 * v2
-    println("v1 * v2 (component) = ${prod.data}")
-
-    # Function calls
-    dot = vecDot(v1, v2)
-    println("vecDot(v1, v2) = ${dot}")
-
-    norm = vecNorm(v1)
-    println("vecNorm(v1) = ${norm}")
-
-    scaled = vecScale(v1, 2.0)
-    println("vecScale(v1, 2.0) = ${scaled.data}")
-
-    println("")
-
-    # Test Mat type with operators
-    println("--- Mat Operator Tests ---")
-    m1 = mat([[1.0, 2.0], [3.0, 4.0]])
-    m2 = mat([[5.0, 6.0], [7.0, 8.0]])
-
-    println("m1 = ${m1.data}")
-    println("m2 = ${m2.data}")
-
-    # Matrix addition
-    msum = m1 + m2
-    println("m1 + m2 = ${msum.data}")
-
-    # Matrix multiplication
-    mprod = m1 * m2
-    println("m1 * m2 = ${mprod.data}")
-
-    # Function calls
-    det = matDeterminant(m1)
-    println("matDeterminant(m1) = ${det}")
-
-    inv = matInverse(m1)
-    println("matInverse(m1) = ${inv.data}")
-
-    # Verify M * M^-1 = I
-    identity = m1 * inv
-    println("m1 * matInverse(m1) = ${identity.data}")
-
-    println("")
-
-    # Test constructors
-    println("--- Constructor Tests ---")
-    zeros = vecZeros(3)
-    println("vecZeros(3) = ${zeros.data}")
-
-    ones = vecOnes(4)
-    println("vecOnes(4) = ${ones.data}")
-
-    eye = matIdentity(3)
-    println("matIdentity(3) = ${eye.data}")
-
-    println("")
-
-    # Test matrix-vector multiplication
-    println("--- Matrix-Vector Tests ---")
-    m = mat([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-    v = vec([1.0, 1.0, 1.0])
-    result = matMulVec(m, v)
-    println("matMulVec(m, v) = ${result.data}")
-
-    println("")
-    println("=== All tests complete ===")
-
+    # Print checksum (this is the exit code, shown last)
+    result = r1 + r2 + r3 + r4 + r5
+    println(show(result))
     0
 }

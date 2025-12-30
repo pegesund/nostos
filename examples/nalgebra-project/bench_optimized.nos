@@ -1,0 +1,68 @@
+# Optimized benchmark - isolates FFI performance from startup/data generation
+import nalgebra
+use nalgebra.*
+
+# Data generation helpers
+genList(n, seed) = {
+    range(0, n).map(i => {
+        x = (i * 1103515245 + seed) % 2147483647
+        (x % 1000000) * 1.0 / 1000000.0
+    })
+}
+
+genMatrixData(rows, cols, seed) = {
+    range(0, rows).map(r => genList(cols, seed + r * 1000))
+}
+
+main() = {
+    vecSize = 10000
+    vecIters = 10000
+    matSize = 200
+    matIters = 100
+
+    # === PRE-GENERATE ALL DATA (not timed) ===
+    v1 = vec(genList(vecSize, 42))
+    v2 = vec(genList(vecSize, 123))
+    m = mat(genMatrixData(matSize, matSize, 42))
+
+    # === START TIMING ===
+    startTime = Time.now()
+
+    # Benchmark 1: Vector dot product
+    var r1 = 0.0
+    for i = 0 to vecIters {
+        r1 = r1 + vecDot(v1, v2)
+    }
+
+    # Benchmark 2: Vector norm
+    var r2 = 0.0
+    for i = 0 to vecIters {
+        r2 = r2 + vecNorm(v1)
+    }
+
+    # Benchmark 3: Vector sum
+    var r3 = 0.0
+    for i = 0 to vecIters {
+        r3 = r3 + vecSum(v1)
+    }
+
+    # Benchmark 4: Matrix trace
+    var r4 = 0.0
+    for i = 0 to matIters {
+        r4 = r4 + matTrace(m)
+    }
+
+    # Benchmark 5: Matrix determinant
+    var r5 = 0.0
+    for i = 0 to matIters {
+        r5 = r5 + matDeterminant(m)
+    }
+
+    # === END TIMING ===
+    endTime = Time.now()
+
+    result = r1 + r2 + r3 + r4 + r5
+    println("Time (FFI only): " ++ show(endTime - startTime) ++ "ms")
+    println(show(result))
+    0
+}
