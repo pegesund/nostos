@@ -6133,10 +6133,13 @@ impl ReplEngine {
             bindings.join("\n    ") + "\n    "
         };
 
+        // Wrap expression in show() for pretty-printing
+        // This uses trait dispatch: types with Show trait get their custom show,
+        // otherwise falls back to native show for primitives
         let wrapper = if bindings_preamble.is_empty() {
-            format!("{}() = {}", eval_name, input)
+            format!("{}() = show({})", eval_name, input)
         } else {
-            format!("{}() = {{\n    {}{}\n}}", eval_name, bindings_preamble, input)
+            format!("{}() = {{\n    {}show({})\n}}", eval_name, bindings_preamble, input)
         };
 
         let (wrapper_module_opt, errors) = parse(&wrapper);
@@ -6223,10 +6226,13 @@ impl ReplEngine {
             bindings.join("\n    ") + "\n    "
         };
 
+        // Wrap expression in show() for pretty-printing
+        // This uses trait dispatch: types with Show trait get their custom show,
+        // otherwise falls back to native show for primitives
         let wrapper = if bindings_preamble.is_empty() {
-            format!("{}() = {}", eval_name, input)
+            format!("{}() = show({})", eval_name, input)
         } else {
-            format!("{}() = {{\n    {}{}\n}}", eval_name, bindings_preamble, input)
+            format!("{}() = {{\n    {}show({})\n}}", eval_name, bindings_preamble, input)
         };
 
         let (wrapper_module_opt, errors) = parse(&wrapper);

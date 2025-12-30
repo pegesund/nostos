@@ -25,7 +25,7 @@ use nostos_syntax::lexer::{Token, lex};
 use std::rc::Rc;
 use std::cell::RefCell;
 use nostos_repl::ReplEngine;
-use nostos_vm::ThreadedEvalHandle;
+use nostos_vm::{ThreadedEvalHandle, SendableValue};
 use std::fs;
 use std::env;
 use std::path::PathBuf;
@@ -478,10 +478,18 @@ impl ReplPanel {
             match result {
                 Some(Ok(result)) => {
                     debug_log(&format!("[poll_eval_result] repl_id={}, debug session completed OK", self.instance_id));
-                    let output = if result.is_unit() {
-                        String::new()
-                    } else {
-                        result.display()
+                    // Since expressions are wrapped in show(), result is a String
+                    // Extract it directly to avoid double-quoting
+                    let output = match result {
+                        SendableValue::String(s) => s,
+                        SendableValue::Unit => String::new(),
+                        _ => {
+                            if result.is_unit() {
+                                String::new()
+                            } else {
+                                result.display()
+                            }
+                        }
                     };
                     self.debug_session = None;
                     self.finish_eval_with_result(Ok(output));
@@ -514,10 +522,19 @@ impl ReplPanel {
 
         match handle.try_recv() {
             Ok(Ok(result)) => {
-                let output = if result.is_unit() {
-                    String::new()
-                } else {
-                    result.display()
+                // Since expressions are wrapped in show(), result is a String
+                // Extract it directly to avoid double-quoting
+                let output = match result {
+                    SendableValue::String(s) => s,
+                    SendableValue::Unit => String::new(),
+                    _ => {
+                        // Fallback for unexpected result types
+                        if result.is_unit() {
+                            String::new()
+                        } else {
+                            result.display()
+                        }
+                    }
                 };
                 self.finish_eval_with_result(Ok(output));
                 true
