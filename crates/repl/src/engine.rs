@@ -13,7 +13,7 @@ use crate::session::extract_dependencies_from_fn;
 use nostos_syntax::ast::{Item, Pattern};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::async_vm::{AsyncVM, AsyncConfig, AsyncSharedState};
-use nostos_vm::{InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver, ExtensionManager};
+use nostos_vm::{InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver, ExtensionManager, SendableValue};
 use nostos_vm::process::ThreadSafeValue;
 
 /// An item in the browser
@@ -1993,14 +1993,13 @@ impl ReplEngine {
             bindings.join("\n    ") + "\n    "
         };
 
-        // Wrap the expression in show() so that custom Show trait implementations are used
-        // for display. This makes types like Vec[1, 2, 3] display nicely instead of raw pointers.
-        let show_wrapped_input = format!("show({})", input);
-
+        // Wrap expression in show() for pretty-printing
+        // This uses trait dispatch: types with Show trait get their custom show,
+        // otherwise falls back to native show for primitives
         let wrapper = if bindings_preamble.is_empty() {
-            format!("{}() = {}", eval_name, show_wrapped_input)
+            format!("{}() = show({})", eval_name, input)
         } else {
-            format!("{}() = {{\n    {}{}\n}}", eval_name, bindings_preamble, show_wrapped_input)
+            format!("{}() = {{\n    {}show({})\n}}", eval_name, bindings_preamble, input)
         };
 
         let (wrapper_module_opt, errors) = parse(&wrapper);
@@ -2036,9 +2035,21 @@ impl ReplEngine {
             Ok(result) => {
                 let mut output = String::new();
 
-                // Add return value (if not Unit)
-                if !result.is_unit() {
-                    output.push_str(&result.display());
+                // Since we wrapped in show(), result should be a String
+                // Extract it directly to avoid double-quoting
+                match result {
+                    SendableValue::String(s) => {
+                        output.push_str(&s);
+                    }
+                    SendableValue::Unit => {
+                        // show() of () returns "()", but we don't want to display that
+                    }
+                    _ => {
+                        // Fallback for unexpected result types
+                        if !result.is_unit() {
+                            output.push_str(&result.display());
+                        }
+                    }
                 }
 
                 // Poll for any panel registrations that happened during evaluation
@@ -13242,5 +13253,173 @@ pub vecSum(v: Vec) -> Float = v.data.fold((acc, x) => acc + x, 0.0)
         }
 
         println!("\nVec scalar operations test passed!");
+    }
+
+    #[test]
+    fn test_show_trait_dispatch() {
+        // Test Show trait dispatch for extension types
+        // This reproduces the crash when calling v.show() in REPL
+
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().ok();
+
+        // Load extension with Show trait
+        let ext_source = r#"
+# Simple vector type with Show trait
+pub type Vec = { data: List }
+
+trait Show
+    show(self) -> String
+end
+
+# Constructor
+pub vec(data: List) -> Vec = Vec(data)
+
+# Show implementation
+Vec: Show
+    show(self) -> String = "Vec[" ++ show(self.data) ++ "]"
+end
+"#;
+
+        println!("\n=== Loading extension with Show trait ===");
+        match engine.load_extension_module("testvec", ext_source, "<test>") {
+            Ok(_) => println!("OK: Extension loaded"),
+            Err(e) => panic!("Failed to load extension: {}", e),
+        }
+
+        // Import extension
+        println!("\n=== use testvec.* ===");
+        match engine.eval("use testvec.*") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => panic!("Failed to import: {}", e),
+        }
+
+        // Create vector
+        println!("\n=== v = vec([1, 2, 3]) ===");
+        match engine.eval("v = vec([1, 2, 3])") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => panic!("Failed to create vector: {}", e),
+        }
+
+        // Debug: Print var_bindings
+        println!("var_bindings for v: {:?}", engine.var_bindings.get("v"));
+
+        // Test: Call show directly on v
+        println!("\n=== show(v) - function call ===");
+        match engine.eval("show(v)") {
+            Ok(result) => {
+                println!("OK: {}", result);
+                assert!(result.contains("Vec["), "Expected Vec[...], got: {}", result);
+            }
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("show(v) failed: {}", e);
+            }
+        }
+
+        // Test: Call v.show() using UFCS
+        println!("\n=== v.show() - UFCS call ===");
+        match engine.eval("v.show()") {
+            Ok(result) => {
+                println!("OK: {}", result);
+                assert!(result.contains("Vec["), "Expected Vec[...], got: {}", result);
+            }
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("v.show() failed (UFCS): {}", e);
+            }
+        }
+
+        println!("\nShow trait dispatch test passed!");
+    }
+
+    #[test]
+    fn test_show_with_real_nalgebra() {
+        // Test Show trait with real nalgebra extension (uses __native__ calls)
+        // This reproduces the actual crash scenario
+
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().ok();
+
+        // Load real nalgebra extension (like TUI does)
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let nalgebra_path = std::path::PathBuf::from(&home)
+            .join(".nostos/extensions/nostos-nalgebra/nalgebra.nos");
+        let lib_path = std::path::PathBuf::from(&home)
+            .join(".nostos/extensions/nostos-nalgebra/target/release/libnostos_nalgebra.so");
+
+        if !nalgebra_path.exists() {
+            println!("Skipping test - nalgebra extension not installed at {:?}", nalgebra_path);
+            return;
+        }
+
+        // Load native library first
+        if lib_path.exists() {
+            match engine.load_extension_library(&lib_path) {
+                Ok(_) => println!("Loaded native library"),
+                Err(e) => println!("Failed to load native library: {} (continuing anyway)", e),
+            }
+        }
+
+        // Load .nos source
+        let nalgebra_source = std::fs::read_to_string(&nalgebra_path).unwrap();
+        match engine.load_extension_module("nalgebra", &nalgebra_source, nalgebra_path.to_str().unwrap()) {
+            Ok(_) => println!("Loaded nalgebra.nos"),
+            Err(e) => {
+                println!("Failed to load nalgebra.nos: {}", e);
+                return;
+            }
+        }
+
+        // Import nalgebra
+        println!("\n=== use nalgebra.* ===");
+        match engine.eval("use nalgebra.*") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed to import nalgebra: {}", e);
+            }
+        }
+
+        // Create vector
+        println!("\n=== v = vec([1.0, 2.0, 3.0]) ===");
+        match engine.eval("v = vec([1.0, 2.0, 3.0])") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => panic!("Failed to create vector: {}", e),
+        }
+
+        // Debug: Print var_bindings
+        println!("var_bindings for v: {:?}", engine.var_bindings.get("v"));
+
+        // Test v directly - see how it's displayed
+        println!("\n=== v ===");
+        match engine.eval("v") {
+            Ok(result) => println!("v = {}", result),
+            Err(e) => println!("ERR: {}", e),
+        }
+
+        // Test: Call show directly on v
+        println!("\n=== show(v) - function call ===");
+        match engine.eval("show(v)") {
+            Ok(result) => {
+                println!("show(v) = {}", result);
+            }
+            Err(e) => {
+                println!("show(v) ERR: {}", e);
+            }
+        }
+
+        // Test: Call v.show() using UFCS - THIS IS WHAT CRASHES
+        println!("\n=== v.show() - UFCS call ===");
+        match engine.eval("v.show()") {
+            Ok(result) => {
+                println!("v.show() = {}", result);
+            }
+            Err(e) => {
+                println!("v.show() ERR: {}", e);
+            }
+        }
+
+        println!("\nReal nalgebra show test completed!");
     }
 }
