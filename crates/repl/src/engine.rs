@@ -1474,6 +1474,13 @@ impl ReplEngine {
         self.compiler.add_module(&wrapper_module, vec![], Arc::new(wrapper.clone()), "<repl>".to_string())
             .map_err(|e| format!("Error: {}", e))?;
 
+        // Set local types for variables with known types (for UFCS and scalar dispatch)
+        for (var_name, binding) in &self.var_bindings {
+            if let Some(ref type_ann) = binding.type_annotation {
+                self.compiler.set_local_type(var_name.clone(), type_ann.clone());
+            }
+        }
+
         if let Err((e, _, _)) = self.compiler.compile_all() {
             return Err(format!("Compilation error: {}", e));
         }
@@ -13137,7 +13144,7 @@ pub vecDivScalar(v: Vec, s: Float) -> Vec = Vec(v.data.map(x => x / s))
 # Constructor and accessor
 pub vec(data: List) -> Vec = Vec(data)
 pub vecData(v: Vec) -> List = v.data
-pub vecSum(v: Vec) -> Float = v.data.fold((acc, x) => acc + x, 0.0)
+pub vecSum(v: Vec) -> Float = v.data.fold(0.0, (acc, x) => acc + x)
 "#;
 
         println!("\n=== Loading test extension with scalar methods ===");
