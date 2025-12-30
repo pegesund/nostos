@@ -486,6 +486,187 @@ fn run_nostlet_command(args: &[String]) -> ExitCode {
     }
 }
 
+/// Run the extension subcommand
+fn run_extension_command(args: &[String]) -> ExitCode {
+    if args.is_empty() {
+        eprintln!("Manage native Rust extensions for Nostos");
+        eprintln!();
+        eprintln!("USAGE:");
+        eprintln!("    nostos extension <command>");
+        eprintln!();
+        eprintln!("COMMANDS:");
+        eprintln!("    install <git-url>   Install extension from GitHub repository");
+        eprintln!("    list                List installed extensions");
+        eprintln!("    remove <name>       Remove an installed extension");
+        eprintln!();
+        eprintln!("EXAMPLES:");
+        eprintln!("    nostos extension install https://github.com/pegesund/nostos-nalgebra");
+        eprintln!("    nostos extension list");
+        eprintln!();
+        eprintln!("After installation, use extensions with:");
+        eprintln!("    nostos --use nalgebra myprogram.nos");
+        return ExitCode::FAILURE;
+    }
+
+    match args[0].as_str() {
+        "install" => {
+            if args.len() < 2 {
+                eprintln!("Usage: nostos extension install <git-url>");
+                eprintln!();
+                eprintln!("Example:");
+                eprintln!("    nostos extension install https://github.com/pegesund/nostos-nalgebra");
+                return ExitCode::FAILURE;
+            }
+            extension_install(&args[1])
+        }
+        "list" => extension_list(),
+        "remove" => {
+            if args.len() < 2 {
+                eprintln!("Usage: nostos extension remove <name>");
+                return ExitCode::FAILURE;
+            }
+            extension_remove(&args[1])
+        }
+        _ => {
+            eprintln!("Unknown extension command: {}", args[0]);
+            eprintln!("Use 'nostos extension' for help");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Install an extension from a git URL
+fn extension_install(git_url: &str) -> ExitCode {
+    // Extract repo name from URL
+    let repo_name = git_url
+        .trim_end_matches(".git")
+        .rsplit('/')
+        .next()
+        .unwrap_or("unknown");
+
+    println!("Installing extension from {}...", git_url);
+
+    // Create extension dependency
+    let dep = packages::ExtensionDep {
+        git: git_url.to_string(),
+        branch: None,
+        tag: None,
+        version: None,
+    };
+
+    // Fetch the extension
+    let ext_dir = match packages::fetch_extension(repo_name, &dep) {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("Error fetching extension: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Build the extension
+    match packages::build_extension(&ext_dir) {
+        Ok(lib_path) => {
+            println!();
+            println!("Extension installed successfully!");
+            println!("  Location: {}", ext_dir.display());
+            println!("  Library:  {}", lib_path.display());
+            println!();
+            println!("Use it with:");
+            println!("    nostos --use {} yourprogram.nos", repo_name.strip_prefix("nostos-").unwrap_or(repo_name));
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("Error building extension: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// List installed extensions
+fn extension_list() -> ExitCode {
+    let ext_dir = packages::extensions_cache_dir();
+
+    if !ext_dir.exists() {
+        println!("No extensions installed.");
+        println!();
+        println!("Install extensions with:");
+        println!("    nostos extension install <git-url>");
+        return ExitCode::SUCCESS;
+    }
+
+    let entries = match fs::read_dir(&ext_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Error reading extensions directory: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    println!("Installed extensions in {}:", ext_dir.display());
+    println!("{:-<60}", "");
+
+    let mut found = false;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = path.file_name().unwrap().to_string_lossy();
+
+            // Check if it has a built library
+            let release_dir = path.join("target").join("release");
+            let has_lib = release_dir.exists() && fs::read_dir(&release_dir)
+                .map(|entries| entries.flatten().any(|e| {
+                    let p = e.path();
+                    p.extension().map(|ext| ext == "so" || ext == "dylib").unwrap_or(false)
+                }))
+                .unwrap_or(false);
+
+            let status = if has_lib { "built" } else { "not built" };
+            let use_name = name.strip_prefix("nostos-").unwrap_or(&name);
+
+            println!("  {} [{}]", name, status);
+            println!("      Use with: nostos --use {} <file.nos>", use_name);
+            println!();
+            found = true;
+        }
+    }
+
+    if !found {
+        println!("  (none)");
+    }
+
+    ExitCode::SUCCESS
+}
+
+/// Remove an installed extension
+fn extension_remove(name: &str) -> ExitCode {
+    let ext_dir = packages::extensions_cache_dir();
+
+    // Try both with and without nostos- prefix
+    let candidates = vec![
+        ext_dir.join(format!("nostos-{}", name)),
+        ext_dir.join(name),
+    ];
+
+    for path in &candidates {
+        if path.exists() {
+            println!("Removing extension at {}...", path.display());
+            if let Err(e) = fs::remove_dir_all(path) {
+                eprintln!("Error removing extension: {}", e);
+                return ExitCode::FAILURE;
+            }
+            println!("Extension '{}' removed.", name);
+            return ExitCode::SUCCESS;
+        }
+    }
+
+    eprintln!("Extension '{}' not found.", name);
+    eprintln!("Tried:");
+    for c in &candidates {
+        eprintln!("  - {}", c.display());
+    }
+    ExitCode::FAILURE
+}
+
 /// Fetch the nostlet registry from GitHub
 fn fetch_registry() -> Result<serde_json::Value, String> {
     let response = ureq::get(REGISTRY_URL)
@@ -684,15 +865,16 @@ fn main() -> ExitCode {
         eprintln!("Usage: nostos [options] <command|file.nos> [args...]");
         eprintln!();
         eprintln!("Commands:");
-        eprintln!("  repl       Start the interactive REPL");
-        eprintln!("  tui        Start the TUI editor");
-        eprintln!("  nostlet    Manage nostlets (plugins)");
+        eprintln!("  repl        Start the interactive REPL");
+        eprintln!("  tui         Start the TUI editor");
+        eprintln!("  extension   Manage native Rust extensions");
+        eprintln!("  nostlet     Manage nostlets (pure Nostos plugins)");
         eprintln!();
         eprintln!("Run a Nostos program file or start the REPL.");
         eprintln!();
         eprintln!("Options:");
-        eprintln!("  --help     Show this help message");
-        eprintln!("  --version  Show version information");
+        eprintln!("  --help      Show detailed help message");
+        eprintln!("  --version   Show version information");
         return ExitCode::FAILURE;
     }
 
@@ -706,6 +888,9 @@ fn main() -> ExitCode {
         }
         if args[1] == "nostlet" {
             return run_nostlet_command(&args[2..]);
+        }
+        if args[1] == "extension" {
+            return run_extension_command(&args[2..]);
         }
     }
 
@@ -760,6 +945,8 @@ fn main() -> ExitCode {
                 println!("COMMANDS:");
                 println!("    repl              Start the interactive TUI with editor and REPL");
                 println!("    tui               Same as repl");
+                println!("    extension install Install a native extension from GitHub");
+                println!("    extension list    List installed extensions");
                 println!("    nostlet list      List available nostlets from registry");
                 println!("    nostlet install   Install a nostlet plugin");
                 println!();
