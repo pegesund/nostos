@@ -331,6 +331,8 @@ main() = {
                         <li><code class="text-blue-400">+</code>, <code class="text-blue-400">-</code>, <code class="text-blue-400">*</code>, <code class="text-blue-400">/</code> → <code class="text-emerald-400">Num</code> trait (<code>add</code>, <code>sub</code>, <code>mul</code>, <code>div</code>)</li>
                         <li><code class="text-blue-400">&lt;</code>, <code class="text-blue-400">&gt;</code>, <code class="text-blue-400">&lt;=</code>, <code class="text-blue-400">&gt;=</code> → <code class="text-emerald-400">Ord</code> trait (<code>lt</code>, <code>gt</code>, <code>lte</code>, <code>gte</code>)</li>
                         <li><code class="text-blue-400">==</code>, <code class="text-blue-400">!=</code> → <code class="text-emerald-400">Eq</code> trait (<code>eq</code>, <code>neq</code>)</li>
+                        <li><code class="text-blue-400">v[i]</code> → <code class="text-emerald-400">Index</code> trait (<code>index</code>)</li>
+                        <li><code class="text-blue-400">v[i] = x</code> → <code class="text-emerald-400">IndexMut</code> trait (<code>indexMut</code>)</li>
                     </ul>
                 </div>
 
@@ -379,6 +381,204 @@ main() = {
                         if the left operand's type implements the relevant trait and generates a direct call to
                         the trait method, ensuring zero runtime overhead.
                     </p>
+                </div>
+
+                <!-- Scalar Operations -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Mixed-Type Operations (Scalars)</h2>
+                <p class="text-slate-400 mb-4">
+                    What happens when you want to multiply a vector by a scalar, like <code>myVec * 2.0</code>?
+                    The <code>Num</code> trait requires both operands to be the same type (<code>Self</code>),
+                    so <code>Vec * Float</code> won't match <code>mul(self, other: Self)</code>.
+                </p>
+                <p class="text-slate-400 mb-4">
+                    Nostos solves this with a <strong>naming convention</strong>: when an operator doesn't match
+                    the trait method, the compiler looks for a standalone function named
+                    <code>{typeLower}{Op}Scalar</code>. For example, <code>Vec * 2.0</code> will call
+                    <code>vecMulScalar(v, 2.0)</code>.
+                </p>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-6 border border-slate-700">
+                    <h4 class="text-sm font-semibold text-slate-300 mb-2">Scalar Function Naming Convention</h4>
+                    <ul class="text-slate-400 text-sm space-y-1">
+                        <li><code class="text-blue-400">v + 2.0</code> → looks for <code class="text-emerald-400">vecAddScalar(v, 2.0)</code></li>
+                        <li><code class="text-blue-400">v - 1.0</code> → looks for <code class="text-emerald-400">vecSubScalar(v, 1.0)</code></li>
+                        <li><code class="text-blue-400">v * 3.0</code> → looks for <code class="text-emerald-400">vecMulScalar(v, 3.0)</code></li>
+                        <li><code class="text-blue-400">v / 2.0</code> → looks for <code class="text-emerald-400">vecDivScalar(v, 2.0)</code></li>
+                    </ul>
+                </div>
+
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># A vector type with both vector-vector and vector-scalar operations
+type Vec = { data: List }
+
+# Num trait for vector-vector operations
+trait Num
+    add(self, other: Self) -> Self
+    sub(self, other: Self) -> Self
+    mul(self, other: Self) -> Self
+    div(self, other: Self) -> Self
+end
+
+Vec: Num
+    add(self, other: Vec) -> Vec = Vec(zipWith((a, b) => a + b, self.data, other.data))
+    sub(self, other: Vec) -> Vec = Vec(zipWith((a, b) => a - b, self.data, other.data))
+    mul(self, other: Vec) -> Vec = Vec(zipWith((a, b) => a * b, self.data, other.data))
+    div(self, other: Vec) -> Vec = Vec(zipWith((a, b) => a / b, self.data, other.data))
+end
+
+# Scalar operations - the compiler finds these by naming convention
+pub vecAddScalar(v: Vec, s: Float) -> Vec = Vec(v.data.map(x => x + s))
+pub vecSubScalar(v: Vec, s: Float) -> Vec = Vec(v.data.map(x => x - s))
+pub vecMulScalar(v: Vec, s: Float) -> Vec = Vec(v.data.map(x => x * s))
+pub vecDivScalar(v: Vec, s: Float) -> Vec = Vec(v.data.map(x => x / s))
+
+# Constructor
+pub vec(data: List) -> Vec = Vec(data)
+
+main() = {
+    v = vec([1.0, 2.0, 3.0])
+
+    # Vector + Vector (uses Num trait)
+    v2 = v + v                    # Vec([2.0, 4.0, 6.0])
+
+    # Vector * Scalar (uses vecMulScalar)
+    scaled = v * 2.0              # Vec([2.0, 4.0, 6.0])
+
+    # Can chain operations naturally
+    result = v * 2.0 + vec([1.0, 1.0, 1.0])  # Vec([3.0, 5.0, 7.0])
+
+    println(show(scaled.data))    # [2.0, 4.0, 6.0]
+}
+</code></pre>
+                </div>
+
+                <div class="bg-gradient-to-r from-blue-900/20 to-emerald-900/20 rounded-lg p-6 mb-8 border border-blue-800/30">
+                    <h3 class="text-lg font-semibold text-white mb-3">How It Works</h3>
+                    <p class="text-slate-400 mb-2">When the compiler sees <code>v * 2.0</code> where <code>v: Vec</code>:</p>
+                    <ol class="list-decimal list-inside text-slate-400 space-y-2">
+                        <li>First, it tries to find <code>Vec.Num.mul(v, 2.0)</code> — but this expects <code>Vec</code>, not <code>Float</code></li>
+                        <li>Then, it looks for a function named <code>vecMulScalar</code> that takes <code>(Vec, Float)</code></li>
+                        <li>If found, it generates a call to <code>vecMulScalar(v, 2.0)</code></li>
+                    </ol>
+                </div>
+
+                <!-- Index Operator Overloading -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Index Operator Overloading</h2>
+                <p class="text-slate-400 mb-4">
+                    The <code>[]</code> operator can be overloaded to provide array-like access to your custom types.
+                    Implement the <code>Index</code> trait to enable <code>v[i]</code> syntax for reading,
+                    and optionally <code>IndexMut</code> for <code>v[i] = value</code> syntax.
+                </p>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-6 border border-slate-700">
+                    <h4 class="text-sm font-semibold text-slate-300 mb-2">Index Traits</h4>
+                    <ul class="text-slate-400 text-sm space-y-1">
+                        <li><code class="text-blue-400">v[i]</code> → <code class="text-emerald-400">Index</code> trait (<code>index(self, i) -> T</code>)</li>
+                        <li><code class="text-blue-400">v[i] = x</code> → <code class="text-emerald-400">IndexMut</code> trait (<code>indexMut(self, i, value) -> Self</code>)</li>
+                    </ul>
+                </div>
+
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Index trait for reading: v[i]
+trait Index
+    index(self, i: Int) -> Float
+end
+
+# IndexMut trait for writing: v[i] = x
+trait IndexMut
+    indexMut(self, i: Int, value: Float) -> Self
+end
+
+type Vec = { data: List }
+
+Vec: Index
+    index(self, i: Int) -> Float = self.data.get(i)
+end
+
+Vec: IndexMut
+    # Returns a new Vec with the element at index i replaced
+    indexMut(self, i: Int, value: Float) -> Vec = {
+        newData = self.data.set(i, value)
+        Vec(newData)
+    }
+end
+
+pub vec(data: List) -> Vec = Vec(data)
+
+main() = {
+    v = vec([1.0, 2.0, 3.0])
+
+    # Reading with index operator
+    first = v[0]              # 1.0
+    second = v[1]             # 2.0
+
+    # Writing with index operator (returns new Vec)
+    v2 = v[0] = 10.0          # Vec([10.0, 2.0, 3.0])
+
+    # Chain index operations
+    v3 = v[0] = 10.0
+    v4 = v3[2] = 30.0         # Vec([10.0, 2.0, 30.0])
+
+    println(show(v[0]))       # 1.0
+    println(show(v2[0]))      # 10.0
+}
+</code></pre>
+                </div>
+
+                <div class="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 mb-8">
+                    <p class="text-amber-300 text-sm">
+                        <strong>Important:</strong> Like all values in Nostos, index assignment creates a <em>new</em>
+                        value rather than mutating in place. The expression <code>v[0] = 10.0</code> returns a new
+                        <code>Vec</code> with the modified element. This preserves immutability by default.
+                    </p>
+                </div>
+
+                <!-- Real-World Example -->
+                <h3 class="text-xl font-semibold text-white mb-3">Real-World Example: Linear Algebra Library</h3>
+                <p class="text-slate-400 mb-4">
+                    Here's how these features combine in a real linear algebra extension,
+                    where you want natural mathematical syntax:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Using the nalgebra extension
+import nalgebra
+use nalgebra.*
+
+main() = {
+    # Create vectors
+    v1 = vec([1.0, 2.0, 3.0])
+    v2 = vec([4.0, 5.0, 6.0])
+
+    # Vector + Vector (Num trait)
+    sum = v1 + v2             # Vec[5.0, 7.0, 9.0]
+
+    # Vector * Scalar (vecMulScalar)
+    scaled = v1 * 2.0         # Vec[2.0, 4.0, 6.0]
+
+    # Index access (Index trait)
+    first = v1[0]             # 1.0
+
+    # Index assignment (IndexMut trait)
+    modified = v1[0] = 10.0   # Vec[10.0, 2.0, 3.0]
+
+    # All operations chain naturally
+    result = (v1 + v2) * 0.5  # Vec[2.5, 3.5, 4.5]
+
+    # Show trait gives pretty output
+    println(show(result))     # Vec[2.5, 3.5, 4.5]
+}
+</code></pre>
+                </div>
+
+                <div class="bg-gradient-to-r from-blue-900/20 to-emerald-900/20 rounded-lg p-6 mb-8 border border-blue-800/30">
+                    <h3 class="text-lg font-semibold text-white mb-3">Summary: Operator Overloading in Nostos</h3>
+                    <ul class="list-disc list-inside text-slate-400 space-y-2">
+                        <li><strong>Same-type operations:</strong> Implement the <code>Num</code> trait for <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code></li>
+                        <li><strong>Mixed-type (scalar) operations:</strong> Define <code>typeOpScalar</code> functions (e.g., <code>vecMulScalar</code>)</li>
+                        <li><strong>Index reading:</strong> Implement the <code>Index</code> trait for <code>v[i]</code></li>
+                        <li><strong>Index writing:</strong> Implement the <code>IndexMut</code> trait for <code>v[i] = x</code></li>
+                        <li><strong>Pretty display:</strong> Implement the <code>Show</code> trait for REPL output</li>
+                    </ul>
                 </div>
             </div>
 
