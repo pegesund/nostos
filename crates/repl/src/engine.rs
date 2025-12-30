@@ -1993,10 +1993,14 @@ impl ReplEngine {
             bindings.join("\n    ") + "\n    "
         };
 
+        // Wrap the expression in show() so that custom Show trait implementations are used
+        // for display. This makes types like Vec[1, 2, 3] display nicely instead of raw pointers.
+        let show_wrapped_input = format!("show({})", input);
+
         let wrapper = if bindings_preamble.is_empty() {
-            format!("{}() = {}", eval_name, input)
+            format!("{}() = {}", eval_name, show_wrapped_input)
         } else {
-            format!("{}() = {{\n    {}{}\n}}", eval_name, bindings_preamble, input)
+            format!("{}() = {{\n    {}{}\n}}", eval_name, bindings_preamble, show_wrapped_input)
         };
 
         let (wrapper_module_opt, errors) = parse(&wrapper);
