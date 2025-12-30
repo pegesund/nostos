@@ -9799,6 +9799,52 @@ impl Compiler {
                 self.chunk.emit(Instruction::SetField(obj_reg, field_idx, value_reg), 0);
             }
             AssignTarget::Index(coll, idx) => {
+                // Check for custom type index assignment dispatch: MyType[i] = v -> myTypeSet(coll, i, v)
+                if let Some(coll_type) = self.expr_type_name(coll) {
+                    if !Self::is_primitive_type(&coll_type) && self.types.contains_key(&coll_type) {
+                        // Build the set function name: {module}.{typeNameLower}Set
+                        let func_name = if let Some(dot_pos) = coll_type.rfind('.') {
+                            let module = &coll_type[..dot_pos];
+                            let type_name = &coll_type[dot_pos + 1..];
+                            let type_lower = type_name.chars().next()
+                                .map(|c| c.to_lowercase().collect::<String>() + &type_name[c.len_utf8()..])
+                                .unwrap_or_else(|| type_name.to_lowercase());
+                            format!("{}.{}Set", module, type_lower)
+                        } else {
+                            let type_lower = coll_type.chars().next()
+                                .map(|c| c.to_lowercase().collect::<String>() + &coll_type[c.len_utf8()..])
+                                .unwrap_or_else(|| coll_type.to_lowercase());
+                            format!("{}Set", type_lower)
+                        };
+
+                        // For set functions, args are (CollType, Int, ValueType)
+                        let func_arg_types = vec![Some(coll_type.clone()), Some("Int".to_string()), None];
+                        if let Some(resolved_func) = self.resolve_function_call(&func_name, &func_arg_types) {
+                            if self.functions.contains_key(&resolved_func) {
+                                let coll_reg = self.compile_expr_tail(coll, false)?;
+                                let idx_reg = self.compile_expr_tail(idx, false)?;
+                                let result_reg = self.alloc_reg();
+
+                                let func_idx = *self.function_indices.get(&resolved_func)
+                                    .expect("Function should have been assigned an index");
+
+                                self.current_fn_calls.insert(resolved_func.clone());
+                                self.chunk.emit(Instruction::CallDirect(result_reg, func_idx, vec![coll_reg, idx_reg, value_reg].into()), 0);
+
+                                // For variable targets, update the variable binding with the new value
+                                if let Expr::Var(ident) = coll.as_ref() {
+                                    if let Some(local_info) = self.locals.get(&ident.node) {
+                                        let local_reg = local_info.reg;
+                                        self.chunk.emit(Instruction::Move(local_reg, result_reg), 0);
+                                    }
+                                }
+                                return Ok(self.alloc_reg()); // Return unit
+                            }
+                        }
+                    }
+                }
+
+                // Default: use built-in IndexSet instruction for lists/maps
                 let coll_reg = self.compile_expr_tail(coll, false)?;
                 let idx_reg = self.compile_expr_tail(idx, false)?;
                 self.chunk.emit(Instruction::IndexSet(coll_reg, idx_reg, value_reg), 0);
