@@ -3130,6 +3130,50 @@ impl AsyncProcess {
                 }
             }
 
+            SetField(record_reg, field_idx, value_reg) => {
+                let field_name = match get_const!(field_idx) {
+                    Value::String(s) => (*s).clone(),
+                    _ => return Err(RuntimeError::Panic("SetField: field name must be string".into())),
+                };
+                let value = reg!(value_reg);
+                let rec_val = reg!(record_reg);
+                match rec_val {
+                    GcValue::Record(ptr) => {
+                        let rec = self.heap.get_record_mut(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid record reference".into()))?;
+                        let idx = rec.field_names.iter().position(|n| n == &field_name)
+                            .ok_or_else(|| RuntimeError::Panic(format!("Unknown field: {}", field_name)))?;
+                        if !rec.mutable_fields[idx] {
+                            return Err(RuntimeError::Panic(format!("Field '{}' is not mutable", field_name)));
+                        }
+                        rec.fields[idx] = value;
+                    }
+                    GcValue::ReactiveRecord(rec) => {
+                        let idx = rec.field_names.iter().position(|n| n == &field_name)
+                            .ok_or_else(|| RuntimeError::Panic(format!("Unknown field: {}", field_name)))?;
+
+                        // Convert GcValue to Value for storage
+                        let value_as_value = self.heap.gc_to_value(&value);
+
+                        // Check if old value was a reactive record (need to remove parent ref)
+                        if let Some(old_value) = rec.get_field(idx) {
+                            if let Value::ReactiveRecord(old_child) = old_value {
+                                old_child.remove_parent(Arc::as_ptr(&rec));
+                            }
+                        }
+
+                        // Set the new value
+                        rec.set_field(idx, value_as_value);
+
+                        // If new value is a reactive record, add parent reference
+                        if let GcValue::ReactiveRecord(new_child) = &value {
+                            new_child.add_parent(Arc::downgrade(&rec), idx as u16);
+                        }
+                    }
+                    _ => return Err(RuntimeError::Panic("SetField expects record or reactive record".into())),
+                }
+            }
+
             MakeList(dst, ref elems) => {
                 let values: Vec<GcValue> = elems.iter().map(|r| reg!(*r)).collect();
                 let list = self.heap.make_list(values);
@@ -4089,6 +4133,14 @@ impl AsyncProcess {
                     fields,
                     reactive_mask,
                 ));
+
+                // Register this record as parent of any child reactive records
+                for (i, gv) in gc_fields.iter().enumerate() {
+                    if let GcValue::ReactiveRecord(child) = gv {
+                        child.add_parent(Arc::downgrade(&reactive_record), i as u16);
+                    }
+                }
+
                 set_reg!(dst, GcValue::ReactiveRecord(reactive_record));
             }
 
