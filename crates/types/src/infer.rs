@@ -1003,22 +1003,36 @@ impl<'a> InferCtx<'a> {
                 let index_ty = self.infer_expr(index)?;
                 let elem_ty = self.fresh();
 
-                // Container could be List, Array, Map, or String
-                let list_ty = Type::List(Box::new(elem_ty.clone()));
-                let _array_ty = Type::Array(Box::new(elem_ty.clone()));
+                // Apply substitutions to get resolved container type
+                let resolved_container = self.env.apply_subst(&container_ty);
 
-                // For now, assume Int index for lists/arrays
-                // This is simplified - a full impl would handle Map[K, V]
-                self.unify(index_ty, Type::Int);
+                // Check if container is a custom Named type - allow indexing without List unification
+                // The compiler will dispatch to {typeLower}Get function
+                match &resolved_container {
+                    Type::Named { .. } | Type::Var(_) => {
+                        // Custom type or unresolved type variable - allow Int indexing
+                        // The compiler will handle dispatch to typeGet function
+                        self.unify(index_ty, Type::Int);
+                        Ok(elem_ty)
+                    }
+                    _ => {
+                        // Container could be List, Array, Map, or String
+                        let list_ty = Type::List(Box::new(elem_ty.clone()));
 
-                // Try to unify with List or Array
-                // We'll handle this via constraint solving
-                self.constraints.push(Constraint::Equal(
-                    container_ty,
-                    list_ty,
-                ));
+                        // For now, assume Int index for lists/arrays
+                        // This is simplified - a full impl would handle Map[K, V]
+                        self.unify(index_ty, Type::Int);
 
-                Ok(elem_ty)
+                        // Try to unify with List or Array
+                        // We'll handle this via constraint solving
+                        self.constraints.push(Constraint::Equal(
+                            container_ty,
+                            list_ty,
+                        ));
+
+                        Ok(elem_ty)
+                    }
+                }
             }
 
             // Block

@@ -5802,6 +5802,44 @@ impl Compiler {
 
             // Index access
             Expr::Index(coll, index, _) => {
+                // Check for custom type index dispatch: MyType[i] -> myTypeGet(coll, i)
+                if let Some(coll_type) = self.expr_type_name(coll) {
+                    if !Self::is_primitive_type(&coll_type) && self.types.contains_key(&coll_type) {
+                        // Build the get function name: {module}.{typeNameLower}Get
+                        let func_name = if let Some(dot_pos) = coll_type.rfind('.') {
+                            let module = &coll_type[..dot_pos];
+                            let type_name = &coll_type[dot_pos + 1..];
+                            let type_lower = type_name.chars().next()
+                                .map(|c| c.to_lowercase().collect::<String>() + &type_name[c.len_utf8()..])
+                                .unwrap_or_else(|| type_name.to_lowercase());
+                            format!("{}.{}Get", module, type_lower)
+                        } else {
+                            let type_lower = coll_type.chars().next()
+                                .map(|c| c.to_lowercase().collect::<String>() + &coll_type[c.len_utf8()..])
+                                .unwrap_or_else(|| coll_type.to_lowercase());
+                            format!("{}Get", type_lower)
+                        };
+
+                        // For get functions, args are (CollType, Int)
+                        let func_arg_types = vec![Some(coll_type.clone()), Some("Int".to_string())];
+                        if let Some(resolved_func) = self.resolve_function_call(&func_name, &func_arg_types) {
+                            if self.functions.contains_key(&resolved_func) {
+                                let coll_reg = self.compile_expr_tail(coll, false)?;
+                                let idx_reg = self.compile_expr_tail(index, false)?;
+                                let dst = self.alloc_reg();
+
+                                let func_idx = *self.function_indices.get(&resolved_func)
+                                    .expect("Function should have been assigned an index");
+
+                                self.current_fn_calls.insert(resolved_func.clone());
+                                self.chunk.emit(Instruction::CallDirect(dst, func_idx, vec![coll_reg, idx_reg].into()), line);
+                                return Ok(dst);
+                            }
+                        }
+                    }
+                }
+
+                // Default: use built-in Index instruction for lists/maps/strings
                 let coll_reg = self.compile_expr_tail(coll, false)?;
                 let idx_reg = self.compile_expr_tail(index, false)?;
                 let dst = self.alloc_reg();
