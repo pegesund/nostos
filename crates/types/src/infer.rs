@@ -1374,6 +1374,22 @@ impl<'a> InferCtx<'a> {
                         // Mixed Int/BigInt arithmetic - result is BigInt
                         Ok(Type::BigInt)
                     }
+                    // Scalar operations: custom type OP numeric type
+                    // e.g., Vec * Float, Vec + Int - compiler generates scalar function calls
+                    (Type::Named { .. }, Type::Float | Type::Int | Type::Float64 | Type::Int64) |
+                    (Type::Named { .. }, Type::Var(_)) => {
+                        // Custom type with numeric scalar - require Num trait and return the custom type
+                        // The compiler will dispatch to {typeLower}{Op}Scalar function
+                        self.require_trait(left_ty.clone(), "Num");
+                        Ok(left_ty)
+                    }
+                    // Handle type variable on left with numeric on right - defer unification
+                    // This allows Vec (as Var) * Float to succeed when the Var is later resolved to Vec
+                    (Type::Var(_), Type::Float | Type::Int | Type::Float64 | Type::Int64) => {
+                        // Don't unify - let the compiler handle scalar dispatch if left resolves to Named
+                        self.require_trait(left_ty.clone(), "Num");
+                        Ok(left_ty)
+                    }
                     _ => {
                         // Same type or type variables - standard unification
                         self.unify(left_ty.clone(), right_ty);

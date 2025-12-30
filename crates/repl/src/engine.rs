@@ -1426,6 +1426,9 @@ impl ReplEngine {
         self.var_counter += 1;
         let thunk_name = format!("__repl_var_{}_{}", name, self.var_counter);
 
+        // Collect modules needed for type annotations
+        let mut needed_modules: HashSet<String> = HashSet::new();
+
         // Build bindings preamble to inject existing variables (excluding the one being defined)
         let bindings_preamble = if self.var_bindings.is_empty() {
             String::new()
@@ -1435,7 +1438,13 @@ impl ReplEngine {
                 .filter(|(var_name, _)| *var_name != name) // Don't inject the variable being defined
                 .map(|(var_name, binding)| {
                     if let Some(ref type_ann) = binding.type_annotation {
-                        if Self::is_safe_type_annotation(type_ann) {
+                        // Check if type is module-qualified (e.g., "testvec.Vec")
+                        if let Some(dot_pos) = type_ann.find('.') {
+                            let module = &type_ann[..dot_pos];
+                            needed_modules.insert(module.to_string());
+                            // Use the full qualified type (module will be imported)
+                            format!("{}: {} = {}()", var_name, type_ann, binding.thunk_name)
+                        } else if Self::is_safe_type_annotation(type_ann) {
                             format!("{}: {} = {}()", var_name, type_ann, binding.thunk_name)
                         } else {
                             format!("{} = {}()", var_name, binding.thunk_name)
@@ -1452,10 +1461,20 @@ impl ReplEngine {
             }
         };
 
-        let wrapper = if bindings_preamble.is_empty() {
-            format!("{}() = {}", thunk_name, expr)
+        // Build import statements for modules (so qualified types like testvec.Vec work)
+        let import_statements = if needed_modules.is_empty() {
+            String::new()
         } else {
-            format!("{}() = {{\n    {}{}\n}}", thunk_name, bindings_preamble, expr)
+            needed_modules.iter()
+                .map(|m| format!("import {}", m))
+                .collect::<Vec<_>>()
+                .join("\n") + "\n"
+        };
+
+        let wrapper = if bindings_preamble.is_empty() {
+            format!("{}{}() = {}", import_statements, thunk_name, expr)
+        } else {
+            format!("{}{}() = {{\n    {}{}\n}}", import_statements, thunk_name, bindings_preamble, expr)
         };
 
         let (wrapper_module_opt, errors) = parse(&wrapper);
@@ -2659,7 +2678,17 @@ impl ReplEngine {
         if left_type == right_type {
             Some(left_type)
         } else {
-            None
+            // Check for scalar operations: custom_type OP numeric_type
+            // Result type is the custom type (e.g., Vec * Float -> Vec)
+            let right_is_numeric = matches!(right_type.as_str(), "Float" | "Int" | "Float64" | "Int64");
+            let left_is_primitive = matches!(left_type.as_str(), "Float" | "Int" | "Float64" | "Int64" | "String" | "Bool");
+
+            if right_is_numeric && !left_is_primitive {
+                // Left is a custom type, right is numeric - result is the left type
+                Some(left_type)
+            } else {
+                None
+            }
         }
     }
 
@@ -2852,6 +2881,14 @@ impl ReplEngine {
         }
         if trimmed.starts_with('"') {
             return Some("String".to_string());
+        }
+
+        // Check for numeric literals
+        if trimmed.contains('.') && trimmed.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') {
+            return Some("Float".to_string());
+        }
+        if trimmed.chars().all(|c| c.is_ascii_digit() || c == '-') && !trimmed.is_empty() {
+            return Some("Int".to_string());
         }
 
         // Check for nested method calls (recursive)
@@ -13054,5 +13091,166 @@ pub vecData(v: Vec) -> List = v.data
         }
 
         println!("\nExtension module var bindings test passed!");
+    }
+
+    #[test]
+    fn test_vec_scalar_operations() {
+        // Test scalar operations: v + 1.0, v - 1.0, v * 2.0, v / 2.0
+        // This tests the compiler's scalar function fallback
+
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().ok();
+
+        // Load a simple extension with scalar functions
+        let ext_source = r#"
+# Simple vector type with scalar operations
+pub type Vec = { data: List }
+
+trait Num
+    add(self, other: Self) -> Self
+    sub(self, other: Self) -> Self
+    mul(self, other: Self) -> Self
+    div(self, other: Self) -> Self
+end
+
+Vec: Num
+    add(self, other: Vec) -> Vec = Vec(zipWith((a, b) => a + b, self.data, other.data))
+    sub(self, other: Vec) -> Vec = Vec(zipWith((a, b) => a - b, self.data, other.data))
+    mul(self, other: Vec) -> Vec = Vec(zipWith((a, b) => a * b, self.data, other.data))
+    div(self, other: Vec) -> Vec = Vec(zipWith((a, b) => a / b, self.data, other.data))
+end
+
+# Scalar operations as standalone functions - compiler dispatches to these
+# Convention: {typeLower}{ScalarMethod} e.g., vecMulScalar for Vec * Float
+pub vecAddScalar(v: Vec, s: Float) -> Vec = Vec(v.data.map(x => x + s))
+pub vecSubScalar(v: Vec, s: Float) -> Vec = Vec(v.data.map(x => x - s))
+pub vecMulScalar(v: Vec, s: Float) -> Vec = Vec(v.data.map(x => x * s))
+pub vecDivScalar(v: Vec, s: Float) -> Vec = Vec(v.data.map(x => x / s))
+
+# Constructor and accessor
+pub vec(data: List) -> Vec = Vec(data)
+pub vecData(v: Vec) -> List = v.data
+pub vecSum(v: Vec) -> Float = v.data.fold((acc, x) => acc + x, 0.0)
+"#;
+
+        println!("\n=== Loading test extension with scalar methods ===");
+        match engine.load_extension_module("testvec", ext_source, "<test>") {
+            Ok(_) => println!("OK: Extension loaded"),
+            Err(e) => panic!("Failed to load extension: {}", e),
+        }
+
+        // Use the extension
+        println!("\n=== use testvec.* ===");
+        match engine.eval("use testvec.*") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => panic!("Failed to import testvec: {}", e),
+        }
+
+        // Create vector
+        println!("\n=== v = vec([1.0, 2.0, 3.0]) ===");
+        match engine.eval("v = vec([1.0, 2.0, 3.0])") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => panic!("Failed to create vector: {}", e),
+        }
+
+        // Test scalar multiplication: v * 2.0
+        println!("\n=== v2 = v * 2.0 ===");
+        match engine.eval("v2 = v * 2.0") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => panic!("Failed scalar multiply: {}", e),
+        }
+
+        // Debug: Check v2 bindings
+        println!("var_bindings for v2: {:?}", engine.var_bindings.get("v2"));
+
+        // First verify v2 itself
+        println!("\n=== v2 ===");
+        match engine.eval("v2") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => println!("ERR accessing v2: {}", e),
+        }
+
+        // Verify result using v2.data directly
+        println!("\n=== v2.data ===");
+        match engine.eval("v2.data") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => println!("ERR accessing v2.data: {}", e),
+        }
+
+        // Verify result
+        println!("\n=== vecSum(v2) (should be 12.0) ===");
+        match engine.eval("vecSum(v2)") {
+            Ok(result) => {
+                println!("OK: {}", result);
+                assert!(result.contains("12"), "Expected sum 12.0, got: {}", result);
+            }
+            Err(e) => panic!("Failed to get sum: {}", e),
+        }
+
+        // Test scalar addition: v + 1.0
+        println!("\n=== vadd = v + 1.0 ===");
+        match engine.eval("vadd = v + 1.0") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => panic!("Failed scalar add: {}", e),
+        }
+
+        println!("\n=== vecSum(vadd) (should be 9.0) ===");
+        match engine.eval("vecSum(vadd)") {
+            Ok(result) => {
+                println!("OK: {}", result);
+                assert!(result.contains("9"), "Expected sum 9.0, got: {}", result);
+            }
+            Err(e) => panic!("Failed to get sum: {}", e),
+        }
+
+        // Test scalar subtraction: v - 0.5
+        println!("\n=== vsub = v - 0.5 ===");
+        match engine.eval("vsub = v - 0.5") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => panic!("Failed scalar sub: {}", e),
+        }
+
+        println!("\n=== vecSum(vsub) (should be 4.5) ===");
+        match engine.eval("vecSum(vsub)") {
+            Ok(result) => {
+                println!("OK: {}", result);
+                assert!(result.contains("4.5"), "Expected sum 4.5, got: {}", result);
+            }
+            Err(e) => panic!("Failed to get sum: {}", e),
+        }
+
+        // Test scalar division: v / 2.0
+        println!("\n=== vdiv = v / 2.0 ===");
+        match engine.eval("vdiv = v / 2.0") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => panic!("Failed scalar div: {}", e),
+        }
+
+        println!("\n=== vecSum(vdiv) (should be 3.0) ===");
+        match engine.eval("vecSum(vdiv)") {
+            Ok(result) => {
+                println!("OK: {}", result);
+                assert!(result.contains("3"), "Expected sum 3.0, got: {}", result);
+            }
+            Err(e) => panic!("Failed to get sum: {}", e),
+        }
+
+        // Test with Int scalar (should coerce to Float)
+        println!("\n=== vint = v * 3 ===");
+        match engine.eval("vint = v * 3") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => panic!("Failed scalar multiply with int: {}", e),
+        }
+
+        println!("\n=== vecSum(vint) (should be 18.0) ===");
+        match engine.eval("vecSum(vint)") {
+            Ok(result) => {
+                println!("OK: {}", result);
+                assert!(result.contains("18"), "Expected sum 18.0, got: {}", result);
+            }
+            Err(e) => panic!("Failed to get sum: {}", e),
+        }
+
+        println!("\nVec scalar operations test passed!");
     }
 }
