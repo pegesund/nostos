@@ -151,6 +151,7 @@ impl Value {
             Value::Map(m) => m.is_empty(),
             Value::Set(s) => s.is_empty(),
             Value::Record(r) => r.fields.is_empty(),
+            Value::ReactiveRecord(r) => r.fields.read().map(|f| f.is_empty()).unwrap_or(true),
             Value::Variant(v) => v.fields.is_empty() && v.named_fields.as_ref().map(|nf| nf.is_empty()).unwrap_or(true),
             Value::Closure(_) => false, // Can inspect captured vars
             Value::NativeHandle(_) => true, // Native handles are leaf values
@@ -257,6 +258,9 @@ impl Value {
             }
             Value::Record(r) => {
                 format!("{}{{...}}", r.type_name)
+            }
+            Value::ReactiveRecord(r) => {
+                format!("reactive {}{{...}}", r.type_name)
             }
             Value::Variant(v) => {
                 if v.fields.is_empty() {
@@ -389,6 +393,20 @@ impl Value {
                     preview: v.preview(DEFAULT_MAX_PREVIEW_LEN),
                     is_leaf: v.is_leaf(),
                 }).collect()
+            }
+
+            // ReactiveRecord
+            Value::ReactiveRecord(r) => {
+                if let Ok(fields) = r.fields.read() {
+                    r.field_names.iter().zip(fields.iter()).map(|(name, v)| SlotInfo {
+                        slot: Slot::Field(name.clone()),
+                        value_type: v.type_name().to_string(),
+                        preview: v.preview(DEFAULT_MAX_PREVIEW_LEN),
+                        is_leaf: v.is_leaf(),
+                    }).collect()
+                } else {
+                    vec![]
+                }
             }
 
             // Variant

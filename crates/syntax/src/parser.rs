@@ -1385,24 +1385,48 @@ fn type_body() -> impl Parser<Token, TypeBody, Error = Simple<Token>> + Clone {
 }
 
 /// Parser for type definition.
+/// Supports: `type Name = ...`, `var type Name = ...`, `reactive Name = ...`
 fn type_def() -> impl Parser<Token, TypeDef, Error = Simple<Token>> + Clone {
-    let mutable = just(Token::Var).or_not().map(|v| v.is_some());
+    // Regular type: [var] type Name = ...
+    let regular_type = {
+        let mutable = just(Token::Var).or_not().map(|v| v.is_some());
 
-    visibility()
-        .then(mutable)
-        .then_ignore(just(Token::Type))
+        visibility()
+            .then(mutable)
+            .then_ignore(just(Token::Type))
+            .then(type_name())
+            .then(type_params())
+            .then(just(Token::Eq).ignore_then(type_body()).or_not())
+            .map_with_span(|((((vis, mutable), name), type_params), body), span| TypeDef {
+                visibility: vis,
+                doc: None,
+                mutable,
+                reactive: false,
+                name,
+                type_params,
+                body: body.unwrap_or(TypeBody::Empty),
+                span: to_span(span),
+            })
+    };
+
+    // Reactive type: reactive Name = { ... }
+    let reactive_type = visibility()
+        .then_ignore(just(Token::Reactive))
         .then(type_name())
         .then(type_params())
         .then(just(Token::Eq).ignore_then(type_body()).or_not())
-        .map_with_span(|((((vis, mutable), name), type_params), body), span| TypeDef {
+        .map_with_span(|(((vis, name), type_params), body), span| TypeDef {
             visibility: vis,
             doc: None,
-            mutable,
+            mutable: false,
+            reactive: true,
             name,
             type_params,
             body: body.unwrap_or(TypeBody::Empty),
             span: to_span(span),
-        })
+        });
+
+    choice((reactive_type, regular_type))
 }
 
 /// Parser for a binding (top-level or local).

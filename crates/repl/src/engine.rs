@@ -3201,6 +3201,14 @@ impl ReplEngine {
                 output.push_str(&fields.join(", "));
                 output.push_str(" }");
             }
+            TypeKind::Reactive => {
+                output.push_str("{ ");
+                let fields: Vec<String> = type_val.fields.iter()
+                    .map(|f| format!("{}: {}", f.name, f.type_name))
+                    .collect();
+                output.push_str(&fields.join(", "));
+                output.push_str(" }");
+            }
             TypeKind::Variant => {
                 let variants: Vec<String> = type_val.constructors.iter()
                     .map(|c| {

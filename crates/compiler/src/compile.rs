@@ -857,6 +857,8 @@ pub struct TypeInfo {
 pub enum TypeInfoKind {
     /// Record type: fields with (name, type_name) pairs
     Record { fields: Vec<(String, String)>, mutable: bool },
+    /// Reactive record type: fields with (name, type_name) pairs and parent tracking
+    Reactive { fields: Vec<(String, String)> },
     /// Variant type: constructors with (name, field_types)
     /// Field types are stored as simple strings: "Float", "Int", etc.
     Variant { constructors: Vec<(String, Vec<String>)> },
@@ -2552,7 +2554,11 @@ impl Compiler {
                 let field_info: Vec<(String, String)> = fields.iter()
                     .map(|f| (f.name.node.clone(), self.type_expr_name(&f.ty)))
                     .collect();
-                TypeInfoKind::Record { fields: field_info, mutable: def.mutable }
+                if def.reactive {
+                    TypeInfoKind::Reactive { fields: field_info }
+                } else {
+                    TypeInfoKind::Record { fields: field_info, mutable: def.mutable }
+                }
             }
             TypeBody::Variant(variants) => {
                 let constructors: Vec<(String, Vec<String>)> = variants.iter()
@@ -10113,7 +10119,15 @@ impl Compiler {
             self.chunk.emit(Instruction::MakeVariant(dst, type_idx, ctor_idx, field_regs.into()), 0);
         } else {
             let type_idx = self.chunk.add_constant(Value::String(Arc::new(type_name.to_string())));
-            self.chunk.emit(Instruction::MakeRecord(dst, type_idx, field_regs.into()), 0);
+            // Check if this is a reactive record
+            let is_reactive = self.types.get(type_name)
+                .map(|info| matches!(&info.kind, TypeInfoKind::Reactive { .. }))
+                .unwrap_or(false);
+            if is_reactive {
+                self.chunk.emit(Instruction::MakeReactiveRecord(dst, type_idx, field_regs.into()), 0);
+            } else {
+                self.chunk.emit(Instruction::MakeRecord(dst, type_idx, field_regs.into()), 0);
+            }
         }
         Ok(dst)
     }
@@ -10271,6 +10285,12 @@ impl Compiler {
                     .collect();
                 TypeInfoKind::Variant { constructors }
             }
+            TypeKind::Reactive => {
+                let fields = type_val.fields.iter()
+                    .map(|f| (f.name.clone(), f.type_name.clone()))
+                    .collect();
+                TypeInfoKind::Reactive { fields }
+            }
             TypeKind::Primitive | TypeKind::Alias { .. } => return,
         };
         let type_info = TypeInfo { name: name.to_string(), kind };
@@ -10427,6 +10447,28 @@ impl Compiler {
                     TypeValue {
                         name: name.clone(),
                         kind: TypeKind::Record { mutable: *mutable },
+                        fields: field_infos,
+                        constructors: vec![],
+                        traits: self.type_traits.get(name).cloned().unwrap_or_default(),
+                        // REPL introspection fields
+                        source_code: type_def.map(|d| d.body_string()),
+                        source_file: self.current_source_name.clone(),
+                        doc: type_def.and_then(|d| d.doc.clone()),
+                        type_params: type_def.map(|d| d.type_param_names()).unwrap_or_default(),
+                    }
+                }
+                TypeInfoKind::Reactive { fields } => {
+                    let field_infos: Vec<FieldInfo> = fields.iter()
+                        .map(|(fname, ftype)| FieldInfo {
+                            name: fname.clone(),
+                            type_name: ftype.clone(),
+                            mutable: true, // Reactive fields are always mutable
+                            private: false,
+                        })
+                        .collect();
+                    TypeValue {
+                        name: name.clone(),
+                        kind: TypeKind::Reactive,
                         fields: field_infos,
                         constructors: vec![],
                         traits: self.type_traits.get(name).cloned().unwrap_or_default(),
@@ -11100,6 +11142,21 @@ impl Compiler {
                         },
                     );
                 }
+                TypeInfoKind::Reactive { fields } => {
+                    // Reactive records are treated like mutable records in the type system
+                    let field_types: Vec<(String, nostos_types::Type, bool)> = fields
+                        .iter()
+                        .map(|(n, ty)| (n.clone(), self.type_name_to_type(ty), false))
+                        .collect();
+                    env.define_type(
+                        name.clone(),
+                        nostos_types::TypeDef::Record {
+                            params: type_params,
+                            fields: field_types,
+                            is_mutable: true,
+                        },
+                    );
+                }
                 TypeInfoKind::Variant { constructors } => {
                     let ctors: Vec<nostos_types::Constructor> = constructors
                         .iter()
@@ -11358,6 +11415,21 @@ impl Compiler {
                             params: type_params,
                             fields: field_types,
                             is_mutable: *mutable,
+                        },
+                    );
+                }
+                TypeInfoKind::Reactive { fields } => {
+                    // Reactive records are treated like mutable records in the type system
+                    let field_types: Vec<(String, nostos_types::Type, bool)> = fields
+                        .iter()
+                        .map(|(n, ty)| (n.clone(), self.type_name_to_type(ty), false))
+                        .collect();
+                    env.define_type(
+                        name.clone(),
+                        nostos_types::TypeDef::Record {
+                            params: type_params,
+                            fields: field_types,
+                            is_mutable: true,
                         },
                     );
                 }

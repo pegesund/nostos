@@ -75,7 +75,7 @@ impl InlineOp {
 use rust_decimal::Decimal;
 
 use crate::value::{
-    ClosureValue, FunctionValue, MapKey, Pid, RecordValue, RuntimeError, TypeValue, Value, VariantValue,
+    ClosureValue, FunctionValue, MapKey, Pid, ReactiveRecordValue, RecordValue, RuntimeError, TypeValue, Value, VariantValue,
 };
 
 /// Raw index into the heap. Used for type-erased operations.
@@ -773,6 +773,8 @@ pub enum GcValue {
     SharedMap(SharedMap),
     Set(GcPtr<GcSet>),
     Record(GcPtr<GcRecord>),
+    /// Reactive record with parent tracking - stored as Arc for shared mutation
+    ReactiveRecord(Arc<ReactiveRecordValue>),
     Variant(GcPtr<GcVariant>),
     BigInt(GcPtr<GcBigInt>),
     Closure(GcPtr<GcClosure>, InlineOp),
@@ -916,6 +918,7 @@ impl fmt::Debug for GcValue {
             GcValue::SharedMap(map) => write!(f, "SharedMap({} entries)", map.len()),
             GcValue::Set(ptr) => write!(f, "Set({:?})", ptr),
             GcValue::Record(ptr) => write!(f, "Record({:?})", ptr),
+            GcValue::ReactiveRecord(r) => write!(f, "ReactiveRecord({})", r.type_name),
             GcValue::Variant(ptr) => write!(f, "Variant({:?})", ptr),
             GcValue::BigInt(ptr) => write!(f, "BigInt({:?})", ptr),
             GcValue::Closure(ptr, _) => write!(f, "Closure({:?})", ptr),
@@ -978,6 +981,8 @@ impl GcValue {
             GcValue::SharedMap(_) => vec![],
             GcValue::Set(ptr) => vec![ptr.as_raw()],
             GcValue::Record(ptr) => vec![ptr.as_raw()],
+            // ReactiveRecord is Arc-managed, no GC pointers
+            GcValue::ReactiveRecord(_) => vec![],
             GcValue::Variant(ptr) => vec![ptr.as_raw()],
             GcValue::BigInt(ptr) => vec![ptr.as_raw()],
             GcValue::Closure(ptr, _) => vec![ptr.as_raw()],
@@ -1059,6 +1064,7 @@ impl GcValue {
                     .map(|r| r.type_name.as_str())
                     .unwrap_or("Record")
             }
+            GcValue::ReactiveRecord(r) => r.type_name.as_str(),
             GcValue::Variant(ptr) => {
                 heap.get_variant(*ptr)
                     .map(|v| v.type_name.as_str())
@@ -2154,6 +2160,10 @@ impl Heap {
                     "<invalid record>".to_string()
                 }
             }
+            GcValue::ReactiveRecord(rec) => {
+                let field_count = rec.field_names.len();
+                format!("{}{{...{} fields}}", rec.type_name, field_count)
+            }
             GcValue::Variant(ptr) => {
                 if let Some(var) = self.get_variant(*ptr) {
                     if var.fields.is_empty() {
@@ -2296,7 +2306,8 @@ impl Heap {
             GcValue::Decimal(_) | GcValue::BigInt(_) | GcValue::Array(_) |
             GcValue::Closure(_, _) | GcValue::Function(_) | GcValue::NativeFunction(_) |
             GcValue::Ref(_) | GcValue::Type(_) | GcValue::Pointer(_) |
-            GcValue::Int64List(_) | GcValue::Buffer(_) | GcValue::NativeHandle(_) => {
+            GcValue::Int64List(_) | GcValue::Buffer(_) | GcValue::NativeHandle(_) |
+            GcValue::ReactiveRecord(_) => {
                 return None;
             }
         })
@@ -2630,6 +2641,20 @@ impl Heap {
                     GcValue::Unit
                 }
             }
+            GcValue::ReactiveRecord(rec) => {
+                // Deep copy creates a new reactive record with copied fields but empty parents
+                if let Ok(fields) = rec.fields.read() {
+                    let copied_fields: Vec<Value> = fields.iter().cloned().collect();
+                    GcValue::ReactiveRecord(Arc::new(ReactiveRecordValue::new(
+                        rec.type_name.clone(),
+                        rec.field_names.clone(),
+                        copied_fields,
+                        rec.reactive_field_mask,
+                    )))
+                } else {
+                    GcValue::Unit
+                }
+            }
             GcValue::Variant(ptr) => {
                 if let Some(var) = source.get_variant(*ptr) {
                     let fields: Vec<GcValue> = var
@@ -2858,6 +2883,20 @@ impl Heap {
                     GcValue::Unit
                 }
             }
+            GcValue::ReactiveRecord(rec) => {
+                // Clone creates a new reactive record with copied fields but empty parents
+                if let Ok(fields) = rec.fields.read() {
+                    let cloned_fields: Vec<Value> = fields.iter().cloned().collect();
+                    GcValue::ReactiveRecord(Arc::new(ReactiveRecordValue::new(
+                        rec.type_name.clone(),
+                        rec.field_names.clone(),
+                        cloned_fields,
+                        rec.reactive_field_mask,
+                    )))
+                } else {
+                    GcValue::Unit
+                }
+            }
             GcValue::Variant(ptr) => {
                 let var_data = self.get_variant(*ptr).map(|v| {
                     (Arc::clone(&v.type_name), Arc::clone(&v.constructor), v.fields.clone())
@@ -3067,6 +3106,9 @@ impl Heap {
                 GcValue::Record(ptr)
             }
 
+            // ReactiveRecord - store Arc directly (preserves parent tracking)
+            Value::ReactiveRecord(r) => GcValue::ReactiveRecord(r.clone()),
+
             // Variant - convert fields
             Value::Variant(v) => {
                 let gc_fields: Vec<GcValue> = v.fields.iter().map(|f| self.value_to_gc(f)).collect();
@@ -3263,6 +3305,9 @@ impl Heap {
                     mutable_fields: record.mutable_fields.clone(),
                 }))
             }
+
+            // ReactiveRecord - just unwrap the Arc
+            GcValue::ReactiveRecord(rec) => Value::ReactiveRecord(rec.clone()),
 
             // Variant
             GcValue::Variant(ptr) => {
