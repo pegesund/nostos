@@ -1265,6 +1265,9 @@ pub enum Instruction {
     /// Parse HTTP request params to typed record: dst = requestToType(request, type_name)
     /// Returns Result[T, String] - Ok(record) or Err(error_message)
     RequestToType(Reg, Reg, Reg),
+    /// Get unique ID of a reactive record: dst = reactiveId(reactive_record)
+    /// Returns Int (the stable u64 id of the reactive record)
+    ReactiveId(Reg, Reg),
 
     // === IO/Debug builtins ===
     /// Print value, return string representation: dst = print(value)

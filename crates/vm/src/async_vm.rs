@@ -7123,6 +7123,14 @@ impl AsyncProcess {
                 set_reg!(dst, map_val);
             }
 
+            ReactiveId(dst, val_reg) => {
+                let id = match reg!(val_reg) {
+                    GcValue::ReactiveRecord(rec) => rec.id,
+                    _ => return Err(RuntimeError::TypeError { expected: "ReactiveRecord".to_string(), found: "non-reactive".to_string() }),
+                };
+                set_reg!(dst, GcValue::Int64(id as i64));
+            }
+
             Construct(dst, type_reg, json_reg) => {
                 let type_name = match reg!(type_reg) {
                     GcValue::String(ptr) => {

@@ -389,6 +389,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     // Type introspection and reflection
     BuiltinInfo { name: "typeInfo", signature: "String -> Map k v", doc: "Get type metadata by name as Map (fields, constructors, etc.)" },
     BuiltinInfo { name: "typeOf", signature: "a -> String", doc: "Get type name of a value (Int, Float, String, Bool, List, Record, Variant, etc.)" },
+    BuiltinInfo { name: "reactiveId", signature: "a -> Int", doc: "Get unique ID of a reactive record for dependency tracking" },
     BuiltinInfo { name: "tagOf", signature: "a -> String", doc: "Get variant tag name, or empty string for non-variants" },
     BuiltinInfo { name: "reflect", signature: "a -> Json", doc: "Convert any value to Json type for inspection/serialization" },
     BuiltinInfo { name: "jsonToType", signature: "[T] Json -> T", doc: "Convert Json to typed value: jsonToType[Person](json)" },
@@ -7163,6 +7164,11 @@ impl Compiler {
                     "typeInfo" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::TypeInfo(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    "reactiveId" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ReactiveId(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "jsonToType" if arg_regs.len() == 1 && !type_args.is_empty() => {

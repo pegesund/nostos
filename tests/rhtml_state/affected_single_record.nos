@@ -1,0 +1,16 @@
+use stdlib.rhtml
+
+# expect: [header]
+# When a record changes, find affected components
+
+reactive User = { name: String }
+
+main() = {
+    user = User("Alice")
+    headerComp = () => RHtml(h1(user.name))
+    
+    result = RHtml(div([component("header", headerComp)]))
+    
+    # Get components affected by the user record
+    affectedComponents(result.deps, reactiveId(user))
+}
