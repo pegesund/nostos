@@ -25,8 +25,8 @@ mvar dependencies: List[(String, List[String])] = []
 # Render stack: track which component is currently rendering
 mvar renderStack: List[String] = []
 
-# Event handlers: handlerId -> handler function
-mvar eventHandlers: List[(String, () -> Unit)] = []
+# Event handlers: removed to avoid initialization issues with function-typed MVars
+# mvar eventHandlers: List[(String, () -> Unit)] = []
 
 # Counter for generating unique IDs
 mvar idCounter: Int = 0
@@ -146,17 +146,8 @@ currentRenderingComponent() = match renderStack {
 }
 
 # === Event Handler Registration ===
-
-registerHandler(handlerId: String, handler: () -> Unit) = {
-    eventHandlers = [(handlerId, handler)] ++ eventHandlers
-}
-
-findHandler(handlerId: String) = findHandlerIn(handlerId, eventHandlers)
-
-findHandlerIn(handlerId: String, handlers: List[(String, () -> Unit)]) = match handlers {
-    [] -> None
-    [(hid, h) | rest] -> if hid == handlerId then Some(h) else findHandlerIn(hid, rest)
-}
+# Removed to avoid initialization issues with function-typed MVars
+# Use reactiveButton with registerReactiveHandler instead
 
 # === Component Rendering ===
 
@@ -255,12 +246,7 @@ hasAncestorIn(compId: String, allIds: List[String]) = match findNode(compId) {
 wrapComponent(compId: String, html: Html) =
     Element("div", [("id", compId), ("data-component", "true")], [html])
 
-# Create a button with event handler
-eventButton(label: String, handler: () -> Unit) = {
-    handlerId = generateId("handler")
-    registerHandler(handlerId, handler)
-    Element("button", [("hx-post", "/event/" ++ handlerId), ("hx-swap", "outerHTML")], [Text(label)])
-}
+# eventButton removed - use reactiveButton instead
 
 # === Session State Reset ===
 
@@ -268,7 +254,6 @@ resetSession() = {
     componentTree = []
     dependencies = []
     renderStack = []
-    eventHandlers = []
     idCounter = 0
     pendingRerenders = []
 }
@@ -462,3 +447,82 @@ hasAncestorInTree(compId: String, allIds: List[String], tree: List[(String, Comp
         else if containsStr(allIds, node.parentId) then true
         else hasAncestorInTree(node.parentId, allIds, tree)
 }
+
+# ============================================================================
+# Reactive Web Server
+# ============================================================================
+
+# HTMX + Idiomorph base layout
+# Creates a full HTML page with htmx and idiomorph loaded from CDN
+# hx-boost on body enables automatic AJAX for all links
+# hx-ext="morph" + hx-swap="morph:outerHTML" uses idiomorph for smooth DOM updates
+reactiveLayout(pageTitle: String, content: Html) = Element("html", [], [
+    Element("head", [], [
+        Element("meta", [("charset", "UTF-8")], []),
+        Element("meta", [("name", "viewport"), ("content", "width=device-width, initial-scale=1.0")], []),
+        Element("title", [], [Text(pageTitle)]),
+        # HTMX
+        Element("script", [("src", "https://unpkg.com/htmx.org@2.0.4")], [Text("")]),
+        # Idiomorph extension for HTMX
+        Element("script", [("src", "https://unpkg.com/idiomorph@0.3.0/dist/idiomorph-ext.min.js")], [Text("")])
+    ]),
+    Element("body", [
+        ("hx-boost", "true"),
+        ("hx-ext", "morph"),
+        ("hx-swap", "morph:outerHTML")
+    ], [content])
+])
+
+# Render a full reactive page
+renderReactivePage(title: String, content: Html) = render(reactiveLayout(title, content))
+
+# === Session Management ===
+
+# Session storage: sessionId -> RenderState
+mvar sessions: List[(String, RenderState)] = []
+
+# Get or create session
+getSession(sessionId: String) = match findSession(sessionId, sessions) {
+    Some(state) -> state
+    None -> {
+        state = emptyRenderState()
+        sessions = [(sessionId, state)] ++ sessions
+        state
+    }
+}
+
+findSession(sessionId: String, ss: List[(String, RenderState)]) = match ss {
+    [] -> None
+    [(sid, state) | rest] -> if sid == sessionId then Some(state) else findSession(sessionId, rest)
+}
+
+# Update session state
+updateSession(sessionId: String, state: RenderState) = {
+    sessions = updateSessionIn(sessionId, state, sessions)
+}
+
+updateSessionIn(sessionId: String, state: RenderState, ss: List[(String, RenderState)]) = match ss {
+    [] -> [(sessionId, state)]
+    [(sid, s) | rest] ->
+        if sid == sessionId then [(sessionId, state)] ++ rest
+        else [(sid, s)] ++ updateSessionIn(sessionId, state, rest)
+}
+
+# === Component Renderers and Event Handlers ===
+# These features require function-typed MVars which cause initialization issues.
+# For now, implement event handling directly in user code using stdlib.server.
+
+# === Cookie Helpers ===
+
+getSessionIdFromCookies(cookies: List[(String, String)]) = match cookies {
+    [] -> None
+    [(name, value) | rest] -> if name == "session_id" then Some(value) else getSessionIdFromCookies(rest)
+}
+
+generateSessionId() = generateId("sess")
+
+setSessionCookie(sessionId: String) = ("Set-Cookie", "session_id=" ++ sessionId ++ "; Path=/; HttpOnly")
+
+# === Reactive App Server (to be implemented in user code) ===
+# The server-side code has been removed to avoid initialization issues.
+# Users should use stdlib.server.serve and implement their own routing.

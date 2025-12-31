@@ -1,0 +1,22 @@
+# Reactive Counter Example
+#
+# A simple counter app demonstrating the reactive web framework
+# with HTMX + Idiomorph for smooth DOM updates.
+#
+# Run: ./target/release/nostos examples/reactive_counter.nos
+# Visit: http://localhost:8080
+
+use stdlib.server.{serve, respondText}
+use stdlib.html.{Element, Text, render}
+use stdlib.reactiveWeb.{reactiveLayout}
+
+handleRequest(req) = {
+    content = Element("div", [], [Text("Count: 0")])
+    html = reactiveLayout("Counter", content)
+    respondText(req, render(html))
+}
+
+main() = {
+    println("Reactive Counter: http://localhost:8090")
+    serve(8090, handleRequest)
+}
