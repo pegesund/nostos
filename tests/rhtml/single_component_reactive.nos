@@ -3,10 +3,9 @@
 
 reactive User = { name: String }
 
-greeting(user: User) = RHtml(h1(user.name))
-
 main() = {
     user = User("Alice")
-    result = RHtml(div([component("greeting", () => greeting(user))]))
+    greeting = () => RHtml(h1(user.name))
+    result = RHtml(div([component("greeting", greeting)]))
     renderRHtml(result)
 }

@@ -4,13 +4,14 @@
 inner() = RHtml(p("inner"))
 middle() = RHtml(div([component("inner", inner)]))
 outer() = RHtml(div([component("middle", middle)]))
+sibling() = RHtml(p("sibling"))
 
 main() = {
     result = RHtml(div([
         component("outer", outer),
-        component("sibling", () => RHtml(p("sibling")))
+        component("sibling", sibling)
     ]))
-    
+
     # Should have 4 renderers: outer, middle, inner, sibling
     Map.size(result.renderers)
 }
