@@ -378,15 +378,6 @@ mergeAllResults(baseDeps, baseRenderers, reRendered) = match reRendered {
     }
 }
 
-# Helper to create RHtmlResult
-makeRHtmlResult(tr, dp, cm, rn) =
-    makeRecordByName("stdlib.rhtml.RHtmlResult",
-        Map.insert(Map.insert(Map.insert(Map.insert(%{},
-            "tree", tr),
-            "deps", dp),
-            "components", cm),
-            "renderers", rn))
-
 # Main state update function
 updateState(state, changedRecordIds) = {
     affected = affectedComponentsMulti(state.deps, changedRecordIds)
@@ -396,6 +387,7 @@ updateState(state, changedRecordIds) = {
     (mergedDeps, mergedRenderers) = mergeAllResults(cleanedDeps, state.renderers, reRendered)
     childrenMap = buildChildrenMap(reRendered, %{})
     newComponents = updateTrees(state.components, childrenMap)
-    makeRHtmlResult(state.tree, mergedDeps, newComponents, mergedRenderers)
+    # Use record update syntax to create new RHtmlResult with updated fields
+    stdlib.rhtml.RHtmlResult(state, deps: mergedDeps, components: newComponents, renderers: mergedRenderers)
 }
 
