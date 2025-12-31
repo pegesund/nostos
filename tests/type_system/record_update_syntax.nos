@@ -1,0 +1,12 @@
+# expect: 42
+# Record update syntax: Type(base, field: value)
+# Creates a new record with updated field values
+
+type Point = { x: Int, y: Int, z: Int }
+
+main() = {
+    p = Point(1, 2, 3)
+    # Update x and z, keep y unchanged
+    p2 = Point(p, x: 10, z: 30)
+    p2.x + p2.y + p2.z
+}

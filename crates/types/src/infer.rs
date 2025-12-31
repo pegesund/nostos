@@ -935,6 +935,44 @@ impl<'a> InferCtx<'a> {
             // Record construction
             Expr::Record(name, fields, _) => {
                 let type_name = &name.node;
+
+                // Check for record update pattern: first field is positional (base), rest have named fields
+                // E.g., Point(p, x: 10) means "update p with x = 10"
+                if fields.len() >= 2 {
+                    if let RecordField::Positional(base_expr) = &fields[0] {
+                        // Check if any subsequent field is named
+                        let has_named = fields[1..].iter().any(|f| matches!(f, RecordField::Named(_, _)));
+                        if has_named {
+                            // This is a record update - infer base type and require it matches the record type
+                            let base_ty = self.infer_expr(base_expr)?;
+                            let expected_ty = Type::Named {
+                                name: type_name.clone(),
+                                args: vec![],
+                            };
+                            self.unify(base_ty, expected_ty.clone());
+
+                            // Infer and check types of named update fields
+                            if let Some(TypeDef::Record { fields: def_fields, .. }) = self.env.lookup_type(type_name).cloned() {
+                                for field in &fields[1..] {
+                                    if let RecordField::Named(fname, expr) = field {
+                                        let ty = self.infer_expr(expr)?;
+                                        if let Some((_, fty, _)) = def_fields.iter().find(|(n, _, _)| n == &fname.node) {
+                                            self.unify(ty, fty.clone());
+                                        } else {
+                                            return Err(TypeError::NoSuchField {
+                                                ty: type_name.clone(),
+                                                field: fname.node.clone(),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+
+                            return Ok(expected_ty);
+                        }
+                    }
+                }
+
                 if let Some(TypeDef::Record {
                     fields: def_fields, ..
                 }) = self.env.lookup_type(type_name).cloned()
