@@ -1559,6 +1559,30 @@ impl Heap {
         GcList::new()
     }
 
+    /// Create a variant value (convenience method).
+    pub fn make_variant(&mut self, type_name: &str, constructor: &str, fields: Vec<GcValue>) -> GcValue {
+        let ptr = self.alloc_variant(
+            Arc::new(type_name.to_string()),
+            Arc::new(constructor.to_string()),
+            fields,
+        );
+        GcValue::Variant(ptr)
+    }
+
+    /// Create a tuple value (convenience method).
+    pub fn make_tuple(&mut self, fields: Vec<GcValue>) -> GcValue {
+        // Tuples are represented as records with numeric field names
+        let field_names: Vec<String> = (0..fields.len()).map(|i| i.to_string()).collect();
+        let mutable_fields = vec![false; fields.len()];
+        let ptr = self.alloc_record(
+            "Tuple".to_string(),
+            field_names,
+            fields,
+            mutable_fields,
+        );
+        GcValue::Record(ptr)
+    }
+
     /// Allocate an array.
     pub fn alloc_array(&mut self, items: Vec<GcValue>) -> GcPtr<GcArray> {
         let data = HeapData::Array(GcArray { items });

@@ -1,0 +1,9 @@
+# expect: <div><div id="greeting" data-component="true"><h1>Hello</h1></div></div>
+# Single component with static content (no reactive data)
+
+greeting() = RHtml(h1("Hello"))
+
+main() = {
+    result = RHtml(div([component("greeting", greeting)]))
+    renderRHtml(result)
+}

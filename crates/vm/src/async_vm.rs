@@ -77,6 +77,13 @@ pub struct ReactiveRenderContext {
 
     /// Root-level components (when stack is empty, new components go here).
     pub root_components: Vec<ComponentTreeNode>,
+
+    /// Renderer functions: component name -> render function.
+    /// Used to re-render individual components.
+    pub renderers: HashMap<String, GcValue>,
+
+    /// Nesting depth for RHtml calls. Only clear context on depth=0.
+    pub nesting_depth: usize,
 }
 use crate::gc::{GcConfig, GcInt64List, GcList, GcMapKey, GcValue, Heap, GcNativeFn};
 
@@ -7455,12 +7462,16 @@ impl AsyncProcess {
             }
 
             RenderContextStart => {
-                // Clear deps, component tree, and stacks for new render
-                self.reactive_context.dependencies.clear();
-                self.reactive_context.pending_rerenders.clear();
-                self.reactive_context.render_stack.clear();
-                self.reactive_context.component_tree_stack.clear();
-                self.reactive_context.root_components.clear();
+                // Only clear context on outermost RHtml call
+                if self.reactive_context.nesting_depth == 0 {
+                    self.reactive_context.dependencies.clear();
+                    self.reactive_context.pending_rerenders.clear();
+                    self.reactive_context.render_stack.clear();
+                    self.reactive_context.component_tree_stack.clear();
+                    self.reactive_context.root_components.clear();
+                    self.reactive_context.renderers.clear();
+                }
+                self.reactive_context.nesting_depth += 1;
             }
 
             RenderContextFinish(dst) => {
@@ -7487,9 +7498,35 @@ impl AsyncProcess {
                 }
                 let components = convert_tree(&mut self.heap, &self.reactive_context.root_components);
 
-                // Return tuple (deps, components) - use alloc_tuple for proper GcValue::Tuple
-                let tuple_ptr = self.heap.alloc_tuple(vec![GcValue::Map(deps_map), components]);
+                // Get renderers map
+                let mut renderers_entries = ImblHashMap::new();
+                for (name, func) in &self.reactive_context.renderers {
+                    let key = GcMapKey::String(name.clone());
+                    renderers_entries.insert(key, func.clone());
+                }
+                let renderers_map = self.heap.alloc_map(renderers_entries);
+
+                // Decrement nesting depth
+                self.reactive_context.nesting_depth = self.reactive_context.nesting_depth.saturating_sub(1);
+
+                // Return tuple (deps, components, renderers)
+                let tuple_ptr = self.heap.alloc_tuple(vec![
+                    GcValue::Map(deps_map),
+                    components,
+                    GcValue::Map(renderers_map),
+                ]);
                 set_reg!(dst, GcValue::Tuple(tuple_ptr));
+            }
+
+            RegisterRenderer(name_reg, func_reg) => {
+                // Get component name
+                let name = match reg!(name_reg) {
+                    GcValue::String(s) => self.heap.get_string(s).map(|s| s.data.clone()).unwrap_or_else(|| String::new()),
+                    _ => return Err(RuntimeError::Panic("RegisterRenderer: name must be string".into())),
+                };
+                // Store function in renderers map
+                let func = reg!(func_reg).clone();
+                self.reactive_context.renderers.insert(name, func);
             }
 
             // Unimplemented instructions - add as needed

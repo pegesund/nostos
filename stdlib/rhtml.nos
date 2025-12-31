@@ -9,17 +9,18 @@ type RNode =
     | Text(String)
     | Raw(String)
     | Empty
-    | Component(String, RNode)
+    | Component(String)  # just the name, content comes from renderers
 
 # Component tree - reflects hierarchy of components with their IDs
 type ComponentTree =
     | CNode(String, List[ComponentTree])  # name, children
 
 # Result of an RHtml render
-# tree: the HTML tree
+# tree: the HTML tree with Component placeholders
 # deps: reactive record ID -> component names that read it
-# components: component hierarchy (list because root may have multiple)
-type RHtmlResult = { tree: RNode, deps: Map[Int, List[String]], components: List[ComponentTree] }
+# components: component hierarchy
+# renderers: component name -> render function (returns RHtmlResult)
+type RHtmlResult = { tree: RNode, deps: Map[Int, List[String]], components: List[ComponentTree], renderers: Map[String, () -> RHtmlResult] }
 
 # === Text and special ===
 
@@ -28,8 +29,10 @@ raw(str: String) = Raw(str)
 empty() = Empty
 
 # === Component ===
-
-component(name: String, content: RNode) = Component(name, content)
+# component(name, renderFn) is handled specially by the compiler
+# It stores the function, calls it, merges deps, and returns Component(name)
+# This stub is for type checking only
+component(name: String, renderFn: () -> RHtmlResult) = Component(name)
 
 # === Tag functions (same as Html) ===
 
@@ -93,21 +96,21 @@ el(tag: String, attrs: List[(String, String)], children: List[RNode]) = Element(
 
 # === Rendering ===
 
-# Render RHtmlResult by extracting the tree
-render(result: RHtmlResult) = {
+# Render RHtmlResult - uses renderers map for component content
+renderRHtml(result: RHtmlResult) = {
     buf = Buffer.new()
-    renderToBuffer(result.tree, buf)
+    renderToBuffer(result.tree, result.renderers, buf)
     Buffer.toString(buf)
 }
 
-# Render RNode directly
-render(rhtml: RNode) = {
+# Render RNode directly (no component support)
+renderRNode(rhtml: RNode) = {
     buf = Buffer.new()
-    renderToBuffer(rhtml, buf)
+    renderToBuffer(rhtml, %{}, buf)
     Buffer.toString(buf)
 }
 
-renderToBuffer(rhtml: RNode, buf) = match rhtml {
+renderToBuffer(rhtml: RNode, renderers: Map[String, () -> RHtmlResult], buf) = match rhtml {
     Element(tag, attrs, children) -> {
         Buffer.append(buf, "<")
         Buffer.append(buf, tag)
@@ -116,7 +119,7 @@ renderToBuffer(rhtml: RNode, buf) = match rhtml {
             Buffer.append(buf, " />")
         } else {
             Buffer.append(buf, ">")
-            renderChildrenToBuffer(children, buf)
+            renderChildrenToBuffer(children, renderers, buf)
             Buffer.append(buf, "</")
             Buffer.append(buf, tag)
             Buffer.append(buf, ">")
@@ -125,20 +128,25 @@ renderToBuffer(rhtml: RNode, buf) = match rhtml {
     Text(s) -> Buffer.append(buf, escapeHtml(s))
     Raw(s) -> Buffer.append(buf, s)
     Empty -> ()
-    Component(name, content) -> {
+    Component(name) -> {
         Buffer.append(buf, "<div id=\"")
         Buffer.append(buf, name)
         Buffer.append(buf, "\" data-component=\"true\">")
-        renderToBuffer(content, buf)
+        # Look up and call the render function for this component
+        if Map.contains(renderers, name) then {
+            renderFn = Map.get(renderers, name)
+            childResult = renderFn()
+            renderToBuffer(childResult.tree, childResult.renderers, buf)
+        } else ()
         Buffer.append(buf, "</div>")
     }
 }
 
-renderChildrenToBuffer(children: List[RNode], buf) = match children {
+renderChildrenToBuffer(children: List[RNode], renderers: Map[String, () -> RHtmlResult], buf) = match children {
     [] -> ()
     [child | rest] -> {
-        renderToBuffer(child, buf)
-        renderChildrenToBuffer(rest, buf)
+        renderToBuffer(child, renderers, buf)
+        renderChildrenToBuffer(rest, renderers, buf)
     }
 }
 

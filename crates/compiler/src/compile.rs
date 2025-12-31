@@ -4111,27 +4111,29 @@ impl Compiler {
 
                         let line = self.span_line(*span);
 
-                        // 1. Start render context (clears deps and component tree)
+                        // 1. Start render context (clears deps, component tree, renderers)
                         self.chunk.emit(Instruction::RenderContextStart, line);
 
                         // 2. Transform and compile the tree
                         let transformed_arg = self.transform_rhtml_expr(inner_expr);
                         let tree_reg = self.compile_expr_tail(&transformed_arg, false)?;
 
-                        // 3. Finish render context - returns (deps, components) tuple
+                        // 3. Finish render context - returns (deps, components, renderers) tuple
                         let context_reg = self.alloc_reg();
                         self.chunk.emit(Instruction::RenderContextFinish(context_reg), line);
 
-                        // 4. Extract deps and components from tuple
+                        // 4. Extract deps, components, and renderers from tuple
                         let deps_reg = self.alloc_reg();
                         self.chunk.emit(Instruction::GetTupleField(deps_reg, context_reg, 0), line);
                         let components_reg = self.alloc_reg();
                         self.chunk.emit(Instruction::GetTupleField(components_reg, context_reg, 1), line);
+                        let renderers_reg = self.alloc_reg();
+                        self.chunk.emit(Instruction::GetTupleField(renderers_reg, context_reg, 2), line);
 
-                        // 5. Construct RHtmlResult { tree, deps, components }
+                        // 5. Construct RHtmlResult { tree, deps, components, renderers }
                         let dst = self.alloc_reg();
                         let type_idx = self.chunk.add_constant(Value::String(Arc::new("stdlib.rhtml.RHtmlResult".to_string())));
-                        self.chunk.emit(Instruction::MakeRecord(dst, type_idx, vec![tree_reg, deps_reg, components_reg].into()), line);
+                        self.chunk.emit(Instruction::MakeRecord(dst, type_idx, vec![tree_reg, deps_reg, components_reg, renderers_reg].into()), line);
 
                         return Ok(dst);
                     }
@@ -6865,63 +6867,75 @@ impl Compiler {
             }
 
             // Handle RHtml(...) - transforms bare HTML tag names to stdlib.rhtml.* calls
-            // Returns RHtmlResult { tree, deps, components }
+            // Returns RHtmlResult { tree, deps, components, renderers }
             if name == "RHtml" && args.len() == 1 {
                 // Ensure required modules are registered for name resolution
                 self.known_modules.insert("stdlib".to_string());
                 self.known_modules.insert("stdlib.rhtml".to_string());
                 self.known_modules.insert("RenderStack".to_string());
 
-                // 1. Start render context (clears deps and component tree)
+                // 1. Start render context (clears deps, component tree, renderers)
                 self.chunk.emit(Instruction::RenderContextStart, line);
 
                 // 2. Transform and compile the tree
                 let transformed_arg = self.transform_rhtml_expr(&args[0]);
                 let tree_reg = self.compile_expr_tail(&transformed_arg, false)?;
 
-                // 3. Finish render context - returns (deps, components) tuple
+                // 3. Finish render context - returns (deps, components, renderers) tuple
                 let context_reg = self.alloc_reg();
                 self.chunk.emit(Instruction::RenderContextFinish(context_reg), line);
 
-                // 4. Extract deps and components from tuple
+                // 4. Extract deps, components, and renderers from tuple
                 let deps_reg = self.alloc_reg();
                 self.chunk.emit(Instruction::GetTupleField(deps_reg, context_reg, 0), line);
                 let components_reg = self.alloc_reg();
                 self.chunk.emit(Instruction::GetTupleField(components_reg, context_reg, 1), line);
+                let renderers_reg = self.alloc_reg();
+                self.chunk.emit(Instruction::GetTupleField(renderers_reg, context_reg, 2), line);
 
-                // 5. Construct RHtmlResult { tree, deps, components }
+                // 5. Construct RHtmlResult { tree, deps, components, renderers }
                 let dst = self.alloc_reg();
                 let type_idx = self.chunk.add_constant(Value::String(Arc::new("stdlib.rhtml.RHtmlResult".to_string())));
-                self.chunk.emit(Instruction::MakeRecord(dst, type_idx, vec![tree_reg, deps_reg, components_reg].into()), line);
+                self.chunk.emit(Instruction::MakeRecord(dst, type_idx, vec![tree_reg, deps_reg, components_reg, renderers_reg].into()), line);
 
                 return Ok(dst);
             }
 
-            // Handle stdlib.rhtml.component - wrap with RenderStack.push/pop for dependency tracking
+            // Handle stdlib.rhtml.component - register renderer and return Component(name) placeholder
             if name == "stdlib.rhtml.component" && args.len() == 2 {
-                // component(name, content) compiles to:
-                //   push name to render stack
-                //   compile content (reactive reads tracked here)
-                //   pop render stack
-                //   call Component(name, content)
+                // component(name, renderFn) compiles to:
+                //   1. compile name and renderFn
+                //   2. register renderer (name -> fn)
+                //   3. push name to render stack
+                //   4. call renderFn() to track deps (result ignored, just for tracking)
+                //   5. pop render stack
+                //   6. return Component(name)
 
                 // Compile name argument
                 let name_reg = self.compile_expr_tail(&args[0], false)?;
 
+                // Compile render function argument
+                let func_reg = self.compile_expr_tail(&args[1], false)?;
+
+                // Register the renderer function
+                self.chunk.emit(Instruction::RegisterRenderer(name_reg, func_reg), line);
+
                 // Push component name to render stack (for dependency tracking)
                 self.chunk.emit(Instruction::RenderStackPush(name_reg), line);
 
-                // Compile content (reactive reads will be associated with this component)
-                let content_reg = self.compile_expr_tail(&args[1], false)?;
+                // Call the render function to track deps (result is RHtmlResult, we ignore it)
+                // The deps from this call are automatically tracked in the render context
+                let _result_reg = self.alloc_reg();
+                self.chunk.emit(Instruction::Call(_result_reg, func_reg, vec![].into()), line);
 
                 // Pop render stack
                 self.chunk.emit(Instruction::RenderStackPop, line);
 
-                // Construct Component(name, content) variant directly
+                // Construct Component(name) variant - just the name, content comes from renderers
                 let dst = self.alloc_reg();
                 let type_idx = self.chunk.add_constant(Value::String(Arc::new("stdlib.rhtml.RNode".to_string())));
                 let ctor_idx = self.chunk.add_constant(Value::String(Arc::new("Component".to_string())));
-                self.chunk.emit(Instruction::MakeVariant(dst, type_idx, ctor_idx, vec![name_reg, content_reg].into()), line);
+                self.chunk.emit(Instruction::MakeVariant(dst, type_idx, ctor_idx, vec![name_reg].into()), line);
                 return Ok(dst);
             }
         }
@@ -13164,7 +13178,10 @@ impl Compiler {
             }
 
             Expr::Lambda(params, body, span) => {
-                Expr::Lambda(params.clone(), Box::new(self.transform_rhtml_expr(body)), *span)
+                // DO NOT transform lambda bodies - they contain user code, not HTML
+                // The component function receives a lambda that returns RHtmlResult,
+                // and the lambda body should be compiled normally (may call RHtml itself)
+                expr.clone()
             }
 
             Expr::Block(stmts, span) => {

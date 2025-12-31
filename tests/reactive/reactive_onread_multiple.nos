@@ -1,0 +1,22 @@
+# expect: 3
+# Test onRead callback fires on each read
+
+reactive Counter = { value: Int }
+
+mvar readCount: Int = 0
+
+main() = {
+    c = Counter(value: 100)
+
+    # Register a callback that counts reads
+    c.onRead((fieldName, value) => {
+        readCount = readCount + 1
+    })
+
+    # Read the field multiple times
+    _ = c.value
+    _ = c.value
+    _ = c.value
+
+    readCount
+}

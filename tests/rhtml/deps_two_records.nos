@@ -1,0 +1,18 @@
+# expect: 2
+# Deps tracking: two different reactive records should have 2 entries
+
+reactive User = { name: String }
+reactive Theme = { color: String }
+
+userDisplay(user: User) = RHtml(p(user.name))
+themeDisplay(theme: Theme) = RHtml(p(theme.color))
+
+main() = {
+    user = User("Alice")
+    theme = Theme("blue")
+    result = RHtml(div([
+        component("user-info", () => userDisplay(user)),
+        component("theme-info", () => themeDisplay(theme))
+    ]))
+    Map.size(result.deps)
+}

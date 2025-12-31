@@ -1,0 +1,12 @@
+# expect: <div><div id="greeting" data-component="true"><h1>Alice</h1></div></div>
+# Single component with reactive data
+
+reactive User = { name: String }
+
+greeting(user: User) = RHtml(h1(user.name))
+
+main() = {
+    user = User("Alice")
+    result = RHtml(div([component("greeting", () => greeting(user))]))
+    renderRHtml(result)
+}

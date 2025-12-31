@@ -1,0 +1,12 @@
+# expect: 2
+# Component tree tracks nested structure
+
+inner() = RHtml(p("Hello"))
+outer() = RHtml(div([component("inner", inner)]))
+
+main() = {
+    result = RHtml(div([component("outer", outer)]))
+    # Components list should have outer, which contains inner
+    # Total component count (flattened) = 2
+    length(result.components) + length(match result.components { [CNode(_, children) | _] -> children, _ -> [] })
+}
