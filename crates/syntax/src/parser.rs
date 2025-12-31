@@ -962,7 +962,21 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         let call_comma = call_nl.clone().ignore_then(just(Token::Comma)).then_ignore(call_nl.clone());
         let call_args = call_nl.clone()
             .ignore_then(expr.clone())
-            .separated_by(call_comma)
+            .separated_by(call_comma.clone())
+            .then_ignore(call_nl.clone())
+            .delimited_by(just(Token::LParen), just(Token::RParen));
+
+        // Record field args for qualified record construction: .TypeName(base, field: value)
+        let postfix_record_field = call_nl.clone().ignore_then(choice((
+            ident()
+                .then_ignore(just(Token::Colon))
+                .then(call_nl.clone().ignore_then(expr.clone()))
+                .map(|(name, val)| RecordField::Named(name, val)),
+            expr.clone().map(RecordField::Positional),
+        )));
+        let record_field_args = postfix_record_field
+            .separated_by(call_comma.clone())
+            .allow_trailing()
             .then_ignore(call_nl.clone())
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
@@ -982,6 +996,13 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                 call_args
                     .clone()
                     .map_with_span(|args, span| (PostfixOp::Call(vec![], args), to_span(span))),
+                // Qualified record construction: .TypeName(base, field: value)
+                // Must come before regular method call to handle record field syntax
+                skip_newlines()
+                    .ignore_then(just(Token::Dot))
+                    .ignore_then(type_name())
+                    .then(record_field_args.clone())
+                    .map_with_span(|(name, fields), span| (PostfixOp::QualifiedRecord(name, fields), to_span(span))),
                 // Method call or field access: .foo or .foo(args) or tuple index .0 .1
                 // Allow newlines before . for multi-line method chaining
                 skip_newlines()
@@ -1030,6 +1051,14 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
             PostfixOp::Try => {
                 let full_span = get_span(&lhs).merge(span);
                 Expr::Try_(Box::new(lhs), full_span)
+            }
+            PostfixOp::QualifiedRecord(type_name, fields) => {
+                // lhs is the module path (e.g., stdlib.rhtml), type_name is the type (e.g., RHtmlResult)
+                // We need to extract the path and combine with type_name to form a qualified type name
+                let full_span = get_span(&lhs).merge(span);
+                let qualified_name = extract_qualified_path(&lhs, &type_name.node);
+                let qualified_ident = Ident { node: qualified_name, span: full_span };
+                Expr::Record(qualified_ident, fields, full_span)
             }
         });
 
@@ -1194,6 +1223,33 @@ enum PostfixOp {
     FieldAccess(Ident),
     Index(Expr),
     Try,
+    /// Qualified record construction: .TypeName(base, field: value)
+    /// The Ident is the type name (uppercase), Vec<RecordField> are the fields
+    QualifiedRecord(Ident, Vec<RecordField>),
+}
+
+/// Extract a qualified path from an expression chain and append a type name.
+/// E.g., for `stdlib.rhtml` (as FieldAccess chain) and type_name "RHtmlResult",
+/// returns "stdlib.rhtml.RHtmlResult"
+fn extract_qualified_path(expr: &Expr, type_name: &str) -> String {
+    fn extract_path(expr: &Expr) -> String {
+        match expr {
+            Expr::Var(ident) => ident.node.clone(),
+            Expr::FieldAccess(base, field, _) => {
+                let base_path = extract_path(base);
+                format!("{}.{}", base_path, field.node)
+            }
+            // Empty record expression (uppercase identifier parsed as record constructor)
+            Expr::Record(name, fields, _) if fields.is_empty() => name.node.clone(),
+            _ => String::new(),
+        }
+    }
+    let path = extract_path(expr);
+    if path.is_empty() {
+        type_name.to_string()
+    } else {
+        format!("{}.{}", path, type_name)
+    }
 }
 
 /// Get span from an expression.

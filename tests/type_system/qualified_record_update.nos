@@ -1,0 +1,21 @@
+# expect: 42
+# Qualified record update syntax: module.Type(base, field: value)
+# Creates a new record with updated field values using a qualified type name
+
+use stdlib.rhtml
+
+main() = {
+    # Create a basic RHtml result
+    result = RHtml(div([span("Hello")]))
+    
+    # Update using qualified type with record update syntax
+    newDeps = %{ 42: ["comp1"] }
+    updated = stdlib.rhtml.RHtmlResult(result, deps: newDeps)
+    
+    # Get the key from deps to verify update worked
+    keys = Map.keys(updated.deps)
+    match keys {
+        [k | _] -> k
+        [] -> 0
+    }
+}
