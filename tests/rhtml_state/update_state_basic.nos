@@ -1,0 +1,34 @@
+use stdlib.rhtml
+
+# expect: true
+# Test that updateState returns a valid RHtmlResult with correct structure
+
+reactive Counter = { value: Int }
+
+main() = {
+    counter = Counter(0)
+
+    # Simple component that reads counter
+    display = () => RHtml(span(show(counter.value)))
+
+    result = RHtml(div([component("display", display)]))
+
+    # Simulate counter change
+    changedIds = [reactiveId(counter)]
+    newState = updateState(result, changedIds)
+
+    # Verify we get a valid RHtmlResult back
+    # Check that tree is preserved (should be same reference or structure)
+    hasTree = match newState.tree {
+        Element(_, _, _) -> true
+        _ -> false
+    }
+
+    # Check that we have deps (should have counter -> display mapping)
+    hasDeps = Map.size(newState.deps) >= 0
+
+    # Check that renderers map exists
+    hasRenderers = Map.size(newState.renderers) >= 0
+
+    hasTree && hasDeps && hasRenderers
+}

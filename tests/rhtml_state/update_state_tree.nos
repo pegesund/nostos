@@ -1,0 +1,29 @@
+use stdlib.rhtml
+
+# expect: true
+# Test that updateState preserves component tree structure
+
+reactive User = { name: String }
+
+main() = {
+    user = User("Alice")
+
+    header = () => RHtml(h1(user.name))
+    content = () => RHtml(p("Static content"))
+
+    result = RHtml(div([
+        component("header", header),
+        component("content", content)
+    ]))
+
+    # Check initial component count
+    initialCount = length(result.components)
+
+    # Update state
+    newState = updateState(result, [reactiveId(user)])
+
+    # Component count should be same after update
+    newCount = length(newState.components)
+
+    initialCount == newCount && initialCount == 2
+}

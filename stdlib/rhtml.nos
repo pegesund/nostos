@@ -258,3 +258,139 @@ filterOutermost(affected, components) = {
     ancestryMap = buildAncestryMap(components, [], %{})
     filterAffectedList(affected, ancestryMap, [])
 }
+
+# === Update State ===
+
+# Re-render a list of component names, collecting results
+reRenderComponents(names, renderers, acc) = match names {
+    [] -> acc
+    [name | rest] ->
+        if Map.contains(renderers, name) then {
+            renderFn = Map.get(renderers, name)
+            result = renderFn()
+            reRenderComponents(rest, renderers, [(name, result) | acc])
+        } else reRenderComponents(rest, renderers, acc)
+}
+
+# Helper for integer lists (for deps keys)
+listContainsInt(list, n) = match list {
+    [] -> false
+    [x | rest] -> if x == n then true else listContainsInt(rest, n)
+}
+
+addUniqueInt(items, acc) = match items {
+    [] -> acc
+    [x | rest] ->
+        if listContainsInt(acc, x) then addUniqueInt(rest, acc)
+        else addUniqueInt(rest, [x | acc])
+}
+
+unionIntLists(a, b) = addUniqueInt(b, a)
+
+# Merge two deps maps (union the component lists for each key)
+mergeDeps(deps1, deps2, keys, acc) = match keys {
+    [] -> acc
+    [key | rest] -> {
+        list1 = if Map.contains(deps1, key) then Map.get(deps1, key) else []
+        list2 = if Map.contains(deps2, key) then Map.get(deps2, key) else []
+        merged = unionStrLists(list1, list2)
+        mergeDeps(deps1, deps2, rest, Map.insert(acc, key, merged))
+    }
+}
+
+# Merge deps from a single re-rendered component
+mergeSingleDeps(baseDeps, componentResult) = {
+    newDeps = componentResult.deps
+    allKeys = unionIntLists(Map.keys(baseDeps), Map.keys(newDeps))
+    mergeDeps(baseDeps, newDeps, allKeys, %{})
+}
+
+# Merge renderers: second map overwrites first for same keys
+mergeRenderers(r1, r2, keys, acc) = match keys {
+    [] -> acc
+    [key | rest] ->
+        if Map.contains(r2, key) then
+            mergeRenderers(r1, r2, rest, Map.insert(acc, key, Map.get(r2, key)))
+        else if Map.contains(r1, key) then
+            mergeRenderers(r1, r2, rest, Map.insert(acc, key, Map.get(r1, key)))
+        else
+            mergeRenderers(r1, r2, rest, acc)
+}
+
+# Merge renderers from a single re-rendered component
+mergeSingleRenderers(baseRenderers, componentResult) = {
+    newRenderers = componentResult.renderers
+    allKeys = unionStrLists(Map.keys(baseRenderers), Map.keys(newRenderers))
+    mergeRenderers(baseRenderers, newRenderers, allKeys, %{})
+}
+
+# Build map from component name to its new children (from re-rendered results)
+buildChildrenMap(reRendered, acc) = match reRendered {
+    [] -> acc
+    [(name, result) | rest] ->
+        buildChildrenMap(rest, Map.insert(acc, name, result.components))
+}
+
+# Update component trees: replace children of re-rendered components
+updateTrees(trees, childrenMap) = match trees {
+    [] -> []
+    [CNode(name, children) | rest] ->
+        if Map.contains(childrenMap, name) then {
+            # This component was re-rendered, use its new children
+            newChildren = Map.get(childrenMap, name)
+            [CNode(name, newChildren) | updateTrees(rest, childrenMap)]
+        } else {
+            # Recurse into children
+            [CNode(name, updateTrees(children, childrenMap)) | updateTrees(rest, childrenMap)]
+        }
+}
+
+# Remove component names from a deps list
+removeFromList(toRemove, list) = match list {
+    [] -> []
+    [x | rest] ->
+        if listContainsStr(toRemove, x) then removeFromList(toRemove, rest)
+        else [x | removeFromList(toRemove, rest)]
+}
+
+# Remove affected components from all deps entries
+removeFromDeps(deps, toRemove, keys, acc) = match keys {
+    [] -> acc
+    [key | rest] -> {
+        components = Map.get(deps, key)
+        filtered = removeFromList(toRemove, components)
+        removeFromDeps(deps, toRemove, rest, Map.insert(acc, key, filtered))
+    }
+}
+
+# Merge all deps and renderers from re-rendered results
+mergeAllResults(baseDeps, baseRenderers, reRendered) = match reRendered {
+    [] -> (baseDeps, baseRenderers)
+    [(_, result) | rest] -> {
+        newDeps = mergeSingleDeps(baseDeps, result)
+        newRenderers = mergeSingleRenderers(baseRenderers, result)
+        mergeAllResults(newDeps, newRenderers, rest)
+    }
+}
+
+# Helper to create RHtmlResult
+makeRHtmlResult(tr, dp, cm, rn) =
+    makeRecordByName("stdlib.rhtml.RHtmlResult",
+        Map.insert(Map.insert(Map.insert(Map.insert(%{},
+            "tree", tr),
+            "deps", dp),
+            "components", cm),
+            "renderers", rn))
+
+# Main state update function
+updateState(state, changedRecordIds) = {
+    affected = affectedComponentsMulti(state.deps, changedRecordIds)
+    outermost = filterOutermost(affected, state.components)
+    reRendered = reRenderComponents(outermost, state.renderers, [])
+    cleanedDeps = removeFromDeps(state.deps, affected, Map.keys(state.deps), %{})
+    (mergedDeps, mergedRenderers) = mergeAllResults(cleanedDeps, state.renderers, reRendered)
+    childrenMap = buildChildrenMap(reRendered, %{})
+    newComponents = updateTrees(state.components, childrenMap)
+    makeRHtmlResult(state.tree, mergedDeps, newComponents, mergedRenderers)
+}
+

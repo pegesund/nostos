@@ -1,0 +1,39 @@
+use stdlib.rhtml
+
+# expect: true
+# Test that updateState correctly preserves unaffected deps
+
+reactive User = { name: String }
+reactive Theme = { color: String }
+
+main() = {
+    user = User("Alice")
+    theme = Theme("dark")
+
+    userComp = () => RHtml(span(user.name))
+    themeComp = () => RHtml(span(theme.color))
+
+    result = RHtml(div([
+        component("user-comp", userComp),
+        component("theme-comp", themeComp)
+    ]))
+
+    # Get initial affected components for theme
+    initialThemeAffected = affectedComponents(result.deps, reactiveId(theme))
+    hasThemeComp = listContainsStr(initialThemeAffected, "theme-comp")
+
+    # Update state when user changes (theme-comp is unaffected)
+    newState = updateState(result, [reactiveId(user)])
+
+    # Theme-comp should still be there (was not affected, not re-rendered)
+    newThemeAffected = affectedComponents(newState.deps, reactiveId(theme))
+    stillHasThemeComp = listContainsStr(newThemeAffected, "theme-comp")
+
+    # Check that we got a valid result back with expected structure
+    hasTree = match newState.tree {
+        Element(_, _, _) -> true
+        _ -> false
+    }
+
+    hasThemeComp && stillHasThemeComp && hasTree
+}

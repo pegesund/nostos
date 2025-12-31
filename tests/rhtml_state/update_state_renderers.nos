@@ -1,0 +1,35 @@
+use stdlib.rhtml
+
+# expect: true
+# Test that updateState preserves renderers for all components
+
+reactive Counter = { value: Int }
+
+main() = {
+    counter = Counter(0)
+
+    compA = () => RHtml(span("A"))
+    compB = () => RHtml(span(show(counter.value)))
+    compC = () => RHtml(span("C"))
+
+    result = RHtml(div([
+        component("comp-a", compA),
+        component("comp-b", compB),
+        component("comp-c", compC)
+    ]))
+
+    # All three renderers should be in initial state
+    hasA = Map.contains(result.renderers, "comp-a")
+    hasB = Map.contains(result.renderers, "comp-b")
+    hasC = Map.contains(result.renderers, "comp-c")
+
+    # Update state when counter changes (only comp-b affected)
+    newState = updateState(result, [reactiveId(counter)])
+
+    # All three renderers should still be present after update
+    stillHasA = Map.contains(newState.renderers, "comp-a")
+    stillHasB = Map.contains(newState.renderers, "comp-b")
+    stillHasC = Map.contains(newState.renderers, "comp-c")
+
+    hasA && hasB && hasC && stillHasA && stillHasB && stillHasC
+}

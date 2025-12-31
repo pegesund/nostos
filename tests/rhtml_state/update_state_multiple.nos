@@ -1,0 +1,42 @@
+use stdlib.rhtml
+
+# expect: true
+# Test multiple sequential state updates
+
+reactive Counter = { value: Int }
+reactive Theme = { color: String }
+
+main() = {
+    counter = Counter(0)
+    theme = Theme("dark")
+
+    counterComp = () => RHtml(span(show(counter.value)))
+    themeComp = () => RHtml(span(theme.color))
+
+    result = RHtml(div([
+        component("counter", counterComp),
+        component("theme", themeComp)
+    ]))
+
+    # First update: counter changes
+    state1 = updateState(result, [reactiveId(counter)])
+
+    # Verify theme-comp deps still there after first update
+    theme1 = affectedComponents(state1.deps, reactiveId(theme))
+    hasTheme1 = listContainsStr(theme1, "theme")
+
+    # Second update: theme changes
+    state2 = updateState(state1, [reactiveId(theme)])
+
+    # Third update: both change
+    state3 = updateState(state2, [reactiveId(counter), reactiveId(theme)])
+
+    # Verify structure is preserved after multiple updates
+    hasTree = match state3.tree {
+        Element(_, _, _) -> true
+        _ -> false
+    }
+    hasRenderers = Map.size(state3.renderers) == 2
+
+    hasTheme1 && hasTree && hasRenderers
+}
