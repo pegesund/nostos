@@ -897,7 +897,7 @@ impl Compiler {
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
             "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array", "Buffer",
-            "Runtime", "WebSocket",
+            "Runtime", "WebSocket", "RenderStack", "Reactive",
         ].iter().map(|s| s.to_string()).collect();
 
         let mut this = Self {
@@ -1365,7 +1365,7 @@ impl Compiler {
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
             "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array", "Buffer",
-            "Runtime", "WebSocket",
+            "Runtime", "WebSocket", "RenderStack", "Reactive",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -4558,6 +4558,61 @@ impl Compiler {
                             self.chunk.emit(Instruction::BufferToString(dst, buf_reg), line);
                             return Ok(dst);
                         }
+                        // === Reactive Render Context (for RHtml) ===
+                        "RenderStack.push" if args.len() == 1 => {
+                            let id_reg = self.compile_expr_tail(&args[0], false)?;
+                            self.chunk.emit(Instruction::RenderStackPush(id_reg), line);
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                            return Ok(dst);
+                        }
+                        "RenderStack.pop" if args.is_empty() => {
+                            self.chunk.emit(Instruction::RenderStackPop, line);
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                            return Ok(dst);
+                        }
+                        "RenderStack.current" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::RenderStackCurrent(dst), line);
+                            return Ok(dst);
+                        }
+                        "Reactive.flushPending" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FlushPendingRerenders(dst), line);
+                            return Ok(dst);
+                        }
+                        "Reactive.clearDependencies" if args.is_empty() => {
+                            self.chunk.emit(Instruction::ClearReactiveDependencies, line);
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                            return Ok(dst);
+                        }
+                        "Reactive.clearComponentDeps" if args.len() == 1 => {
+                            let id_reg = self.compile_expr_tail(&args[0], false)?;
+                            self.chunk.emit(Instruction::ClearComponentDeps(id_reg), line);
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                            return Ok(dst);
+                        }
+                        "Reactive.getId" if args.len() == 1 => {
+                            let rec_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ReactiveGetId(dst, rec_reg), line);
+                            return Ok(dst);
+                        }
+                        "Reactive.setDeps" if args.len() == 1 => {
+                            let deps_reg = self.compile_expr_tail(&args[0], false)?;
+                            self.chunk.emit(Instruction::ReactiveSetDeps(deps_reg), line);
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                            return Ok(dst);
+                        }
+                        "Reactive.getDeps" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ReactiveGetDeps(dst), line);
+                            return Ok(dst);
+                        }
                         // String functions (1 arg)
                         "String.length" | "String.chars" | "String.from_chars" | "String.toInt" | "String.to_int"
                         | "String.toFloat" | "String.trim" | "String.trimStart" | "String.trimEnd"
@@ -4974,6 +5029,61 @@ impl Compiler {
                             let buf_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::BufferToString(dst, buf_reg), line);
+                            return Ok(dst);
+                        }
+                        // === Reactive Render Context (for RHtml) ===
+                        "RenderStack.push" if args.len() == 1 => {
+                            let id_reg = self.compile_expr_tail(&args[0], false)?;
+                            self.chunk.emit(Instruction::RenderStackPush(id_reg), line);
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                            return Ok(dst);
+                        }
+                        "RenderStack.pop" if args.is_empty() => {
+                            self.chunk.emit(Instruction::RenderStackPop, line);
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                            return Ok(dst);
+                        }
+                        "RenderStack.current" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::RenderStackCurrent(dst), line);
+                            return Ok(dst);
+                        }
+                        "Reactive.flushPending" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::FlushPendingRerenders(dst), line);
+                            return Ok(dst);
+                        }
+                        "Reactive.clearDependencies" if args.is_empty() => {
+                            self.chunk.emit(Instruction::ClearReactiveDependencies, line);
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                            return Ok(dst);
+                        }
+                        "Reactive.clearComponentDeps" if args.len() == 1 => {
+                            let id_reg = self.compile_expr_tail(&args[0], false)?;
+                            self.chunk.emit(Instruction::ClearComponentDeps(id_reg), line);
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                            return Ok(dst);
+                        }
+                        "Reactive.getId" if args.len() == 1 => {
+                            let rec_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ReactiveGetId(dst, rec_reg), line);
+                            return Ok(dst);
+                        }
+                        "Reactive.setDeps" if args.len() == 1 => {
+                            let deps_reg = self.compile_expr_tail(&args[0], false)?;
+                            self.chunk.emit(Instruction::ReactiveSetDeps(deps_reg), line);
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                            return Ok(dst);
+                        }
+                        "Reactive.getDeps" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::ReactiveGetDeps(dst), line);
                             return Ok(dst);
                         }
                         // === HTTP Server operations ===

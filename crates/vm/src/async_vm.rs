@@ -48,6 +48,22 @@ impl<F: Future> Future for AssertSend<F> {
 }
 
 use crate::extensions::{ext_value_to_vm, vm_value_to_ext, ExtensionManager};
+
+/// Reactive render context for tracking component dependencies during RHtml rendering.
+/// This enables automatic re-rendering when reactive records change.
+#[derive(Debug, Clone, Default)]
+pub struct ReactiveRenderContext {
+    /// Stack of component IDs currently being rendered.
+    /// When non-empty, we're inside an RHtml render and should track dependencies.
+    pub render_stack: Vec<String>,
+
+    /// Dependencies: reactive record pointer -> list of component IDs that read from it.
+    /// Key is the Arc pointer address as u64 for fast lookup.
+    pub dependencies: HashMap<u64, Vec<String>>,
+
+    /// Components queued for re-render due to reactive record changes.
+    pub pending_rerenders: Vec<String>,
+}
 use crate::gc::{GcConfig, GcInt64List, GcList, GcMapKey, GcValue, Heap, GcNativeFn};
 
 /// Held mvar lock guard (owned so it can be stored).
@@ -321,6 +337,10 @@ pub struct AsyncProcess {
 
     /// Skip the next breakpoint check (used after Continue to avoid re-hitting same breakpoint)
     pub skip_next_breakpoint_check: bool,
+
+    /// Reactive render context for RHtml dependency tracking.
+    /// Tracks which components depend on which reactive records.
+    pub reactive_context: ReactiveRenderContext,
 }
 
 /// Helper trait to convert register/constant indices (u8, u16, etc.) to usize.
@@ -386,6 +406,7 @@ impl AsyncProcess {
             debug_command_receiver: None,
             debug_event_sender: None,
             skip_next_breakpoint_check: false,
+            reactive_context: ReactiveRenderContext::default(),
         }
     }
 
@@ -423,6 +444,7 @@ impl AsyncProcess {
             debug_command_receiver: None,
             debug_event_sender: None,
             skip_next_breakpoint_check: false,
+            reactive_context: ReactiveRenderContext::default(),
         }
     }
 
@@ -3146,6 +3168,16 @@ impl AsyncProcess {
                                 .ok_or_else(|| RuntimeError::Panic("Failed to read reactive record field".into()))?;
                             // Convert Value to GcValue
                             let gc_value = self.heap.value_to_gc(&value);
+
+                            // Track dependency if we're inside an RHtml render context
+                            if let Some(current_component) = self.reactive_context.render_stack.last() {
+                                let record_id = rec.id;
+                                let deps = self.reactive_context.dependencies.entry(record_id).or_insert_with(Vec::new);
+                                if !deps.contains(current_component) {
+                                    deps.push(current_component.clone());
+                                }
+                            }
+
                             set_reg!(dst, gc_value);
                         }
                     }
@@ -3231,6 +3263,16 @@ impl AsyncProcess {
                                     captures,
                                     return_reg: None,
                                 });
+                            }
+                        }
+
+                        // Queue dependent components for re-render
+                        let record_id = rec.id;
+                        if let Some(deps) = self.reactive_context.dependencies.get(&record_id) {
+                            for comp_id in deps {
+                                if !self.reactive_context.pending_rerenders.contains(comp_id) {
+                                    self.reactive_context.pending_rerenders.push(comp_id.clone());
+                                }
                             }
                         }
                     }
@@ -7184,6 +7226,141 @@ impl AsyncProcess {
                         });
                     }
                 }
+            }
+
+            // === Reactive Render Context (for RHtml) ===
+
+            RenderStackPush(id_reg) => {
+                let id = reg!(id_reg);
+                match &id {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = self.heap.get_string(*s) {
+                            self.reactive_context.render_stack.push(str_val.data.clone());
+                        } else {
+                            return Err(RuntimeError::Panic("Invalid string for render stack push".into()));
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: id.type_name(&self.heap).to_string(),
+                        });
+                    }
+                }
+            }
+
+            RenderStackPop => {
+                self.reactive_context.render_stack.pop();
+            }
+
+            RenderStackCurrent(dst) => {
+                let current = self.reactive_context.render_stack.last()
+                    .map(|s| s.clone())
+                    .unwrap_or_default();
+                let str_ptr = self.heap.alloc_string(current);
+                set_reg!(dst, GcValue::String(str_ptr));
+            }
+
+            FlushPendingRerenders(dst) => {
+                // Move pending rerenders out and clear the list
+                let pending = std::mem::take(&mut self.reactive_context.pending_rerenders);
+                // Convert to GcValue list of strings
+                let items: Vec<GcValue> = pending.into_iter()
+                    .map(|s| GcValue::String(self.heap.alloc_string(s)))
+                    .collect();
+                let list = self.heap.make_list(items);
+                set_reg!(dst, GcValue::List(list));
+            }
+
+            ClearReactiveDependencies => {
+                self.reactive_context.dependencies.clear();
+                self.reactive_context.pending_rerenders.clear();
+            }
+
+            ClearComponentDeps(id_reg) => {
+                let id = reg!(id_reg);
+                match &id {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = self.heap.get_string(*s) {
+                            let comp_id = &str_val.data;
+                            // Remove this component from all dependency lists
+                            for deps in self.reactive_context.dependencies.values_mut() {
+                                deps.retain(|d| d != comp_id);
+                            }
+                            // Also remove from pending rerenders
+                            self.reactive_context.pending_rerenders.retain(|d| d != comp_id);
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: id.type_name(&self.heap).to_string(),
+                        });
+                    }
+                }
+            }
+
+            ReactiveGetId(dst, record_reg) => {
+                let rec_val = reg!(record_reg);
+                match &rec_val {
+                    GcValue::ReactiveRecord(rec) => {
+                        set_reg!(dst, GcValue::Int64(rec.id as i64));
+                    }
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "ReactiveRecord".to_string(),
+                            found: rec_val.type_name(&self.heap).to_string(),
+                        });
+                    }
+                }
+            }
+
+            ReactiveSetDeps(deps_reg) => {
+                let deps_val = reg!(deps_reg);
+                // deps_val should be a Map[Int, List[String]]
+                match &deps_val {
+                    GcValue::Map(map_ptr) => {
+                        if let Some(map) = self.heap.get_map(*map_ptr) {
+                            self.reactive_context.dependencies.clear();
+                            for (key, value) in map.entries.iter() {
+                                if let GcMapKey::Int64(record_id) = key {
+                                    if let GcValue::List(list) = value {
+                                        let mut comp_ids = Vec::new();
+                                        for item in list.iter() {
+                                            if let GcValue::String(s) = item {
+                                                if let Some(str_val) = self.heap.get_string(*s) {
+                                                    comp_ids.push(str_val.data.clone());
+                                                }
+                                            }
+                                        }
+                                        self.reactive_context.dependencies.insert(*record_id as u64, comp_ids);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Map[Int, List[String]]".to_string(),
+                            found: deps_val.type_name(&self.heap).to_string(),
+                        });
+                    }
+                }
+            }
+
+            ReactiveGetDeps(dst) => {
+                // Convert dependencies HashMap to a GcValue Map
+                let mut map_entries = ImblHashMap::new();
+                for (record_id, comp_ids) in &self.reactive_context.dependencies {
+                    let key = GcMapKey::Int64(*record_id as i64);
+                    let items: Vec<GcValue> = comp_ids.iter()
+                        .map(|s| GcValue::String(self.heap.alloc_string(s.clone())))
+                        .collect();
+                    let list = self.heap.make_list(items);
+                    map_entries.insert(key, GcValue::List(list));
+                }
+                let map = self.heap.alloc_map(map_entries);
+                set_reg!(dst, GcValue::Map(map));
             }
 
             // Unimplemented instructions - add as needed

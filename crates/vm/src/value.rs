@@ -202,10 +202,15 @@ pub struct RecordValue {
     pub mutable_fields: Vec<bool>,
 }
 
+/// Global counter for generating unique reactive record IDs.
+static REACTIVE_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// A reactive record with parent tracking for automatic update propagation.
 /// Field assignments propagate to all parent containers automatically.
 #[derive(Clone)]
 pub struct ReactiveRecordValue {
+    /// Unique ID for this reactive record (stable for dependency tracking)
+    pub id: u64,
     /// Type name (e.g., "Point")
     pub type_name: String,
     /// Field names in order
@@ -222,9 +227,11 @@ pub struct ReactiveRecordValue {
 }
 
 impl ReactiveRecordValue {
-    /// Create a new reactive record
+    /// Create a new reactive record with a unique ID
     pub fn new(type_name: String, field_names: Vec<String>, fields: Vec<Value>, reactive_field_mask: u64) -> Self {
+        let id = REACTIVE_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         ReactiveRecordValue {
+            id,
             type_name,
             field_names,
             fields: Arc::new(std::sync::RwLock::new(fields)),
@@ -232,6 +239,11 @@ impl ReactiveRecordValue {
             parents: Arc::new(std::sync::RwLock::new(Vec::new())),
             callbacks: Arc::new(std::sync::RwLock::new(Vec::new())),
         }
+    }
+
+    /// Get the unique ID of this reactive record
+    pub fn get_id(&self) -> u64 {
+        self.id
     }
 
     /// Register an onChange callback (should be a closure taking fieldName and newValue)
@@ -1267,6 +1279,30 @@ pub enum Instruction {
     BufferAppend(Reg, Reg),
     /// Convert buffer to string: dst = buffer.toString()
     BufferToString(Reg, Reg),
+
+    // === Reactive Render Context (for RHtml) ===
+    /// Push component ID onto render stack: RenderStack.push(id)
+    RenderStackPush(Reg),
+    /// Pop from render stack: RenderStack.pop()
+    RenderStackPop,
+    /// Get current rendering component ID: dst = RenderStack.current()
+    /// Returns empty string if not rendering
+    RenderStackCurrent(Reg),
+    /// Get pending re-renders and clear the list: dst = Reactive.flushPending()
+    /// Returns List[String] of component IDs that need re-rendering
+    FlushPendingRerenders(Reg),
+    /// Clear all reactive dependencies: Reactive.clearDependencies()
+    ClearReactiveDependencies,
+    /// Clear dependencies for specific component: Reactive.clearComponentDeps(componentId)
+    ClearComponentDeps(Reg),
+    /// Get reactive record ID: dst = Reactive.getId(record)
+    ReactiveGetId(Reg, Reg),
+    /// Set dependencies map: Reactive.setDeps(depsMap)
+    /// depsMap is Map[Int, List[String]] where key is reactive ID, value is component IDs
+    ReactiveSetDeps(Reg),
+    /// Get dependencies map: dst = Reactive.getDeps()
+    /// Returns Map[Int, List[String]]
+    ReactiveGetDeps(Reg),
 
     // === Debug ===
     /// No operation (for alignment/debugging)

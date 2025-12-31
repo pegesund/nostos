@@ -1,0 +1,35 @@
+# expect: comp-1
+# Test reactive record onChange triggers component re-render queue
+
+import stdlib.reactiveWeb
+
+# Define a reactive session var
+reactive Counter = { value: Int }
+
+main() = {
+    resetSession()
+
+    # Create counter and register onChange handler
+    counter = Counter(value: 0)
+    counter.onChange(onVarChange("counter"))
+
+    # Render a component that uses the counter
+    result = rwRenderRoot("comp", (compId) => {
+        useVar("counter")
+        Element("div", [], [Text(show(counter.value))])
+    })
+
+    # No pending re-renders yet
+    before = hasPendingRerenders()
+
+    # Change the counter - should trigger onChange -> queue re-render
+    counter.value = 42
+
+    # Now there should be a pending re-render
+    pending = flushPendingRerenders()
+    match pending {
+        [id] -> id
+        [] -> "none"
+        _ -> "multiple"
+    }
+}

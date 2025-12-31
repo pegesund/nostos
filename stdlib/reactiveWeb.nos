@@ -1,0 +1,464 @@
+# Reactive Web Framework for Nostos
+# Component-based web framework with automatic re-rendering on state changes
+
+import stdlib.html
+
+# === Core Types ===
+
+# Component node in the tree (parentId "" for root components)
+type ComponentNode = { id: String, parentId: String, childIds: List[String] }
+
+# Render context passed to component render functions
+type RenderContext = { componentId: String, slotContent: Html }
+
+# A rendered component result
+type RenderedComponent = { id: String, html: Html }
+
+# === Global State (per request/session) ===
+
+# Component tree: componentId -> ComponentNode
+mvar componentTree: List[(String, ComponentNode)] = []
+
+# Dependencies: sessionVarId -> list of componentIds that depend on it
+mvar dependencies: List[(String, List[String])] = []
+
+# Render stack: track which component is currently rendering
+mvar renderStack: List[String] = []
+
+# Event handlers: handlerId -> handler function
+mvar eventHandlers: List[(String, () -> Unit)] = []
+
+# Counter for generating unique IDs
+mvar idCounter: Int = 0
+
+# === ID Generation ===
+
+generateId(prefix: String) = {
+    idCounter = idCounter + 1
+    prefix ++ "-" ++ show(idCounter)
+}
+
+# === Component Tree Operations ===
+
+# Find a node by ID
+findNode(id: String) = findNodeIn(id, componentTree)
+
+findNodeIn(id: String, nodes: List[(String, ComponentNode)]) = match nodes {
+    [] -> None
+    [(nodeId, node) | rest] -> if nodeId == id then Some(node) else findNodeIn(id, rest)
+}
+
+# Add or update a node
+setNode(id: String, node: ComponentNode) = {
+    componentTree = setNodeIn(id, node, componentTree)
+}
+
+setNodeIn(id: String, node: ComponentNode, nodes: List[(String, ComponentNode)]) = match nodes {
+    [] -> [(id, node)]
+    [(nodeId, n) | rest] ->
+        if nodeId == id then [(id, node)] ++ rest
+        else [(nodeId, n)] ++ setNodeIn(id, node, rest)
+}
+
+# Remove a node
+removeNode(id: String) = {
+    componentTree = removeNodeIn(id, componentTree)
+}
+
+removeNodeIn(id: String, nodes: List[(String, ComponentNode)]) = match nodes {
+    [] -> []
+    [(nodeId, n) | rest] ->
+        if nodeId == id then rest
+        else [(nodeId, n)] ++ removeNodeIn(id, rest)
+}
+
+# Add child to parent
+addChildToParent(parentId: String, childId: String) = match findNode(parentId) {
+    Some(parent) -> setNode(parentId, ComponentNode(
+        id: parent.id,
+        parentId: parent.parentId,
+        childIds: parent.childIds ++ [childId]
+    ))
+    None -> ()
+}
+
+# === Dependency Tracking ===
+
+# Get dependencies for a var
+getDeps(varId: String) = getDepsIn(varId, dependencies)
+
+getDepsIn(varId: String, deps: List[(String, List[String])]) = match deps {
+    [] -> []
+    [(vid, compIds) | rest] -> if vid == varId then compIds else getDepsIn(varId, rest)
+}
+
+# Add a dependency: component depends on var
+addDependency(varId: String, componentId: String) = {
+    current = getDeps(varId)
+    if containsStr(current, componentId) then ()
+    else {
+        newDeps = setDep(varId, current ++ [componentId], dependencies)
+        dependencies = newDeps
+    }
+}
+
+containsStr(lst: List[String], item: String) = match lst {
+    [] -> false
+    [h | t] -> if h == item then true else containsStr(t, item)
+}
+
+setDep(varId: String, compIds: List[String], deps: List[(String, List[String])]) = match deps {
+    [] -> [(varId, compIds)]
+    [(vid, _) | rest] -> if vid == varId then [(varId, compIds)] ++ rest
+        else [(vid, getDepsIn(vid, deps))] ++ setDep(varId, compIds, rest)
+}
+
+# Clear dependencies for a component
+clearDepsForComponent(componentId: String) = {
+    dependencies = clearDepsIn(componentId, dependencies)
+}
+
+clearDepsIn(componentId: String, deps: List[(String, List[String])]) = match deps {
+    [] -> []
+    [(varId, compIds) | rest] ->
+        [(varId, removeFromList(componentId, compIds))] ++ clearDepsIn(componentId, rest)
+}
+
+removeFromList(item: String, lst: List[String]) = match lst {
+    [] -> []
+    [h | t] -> if h == item then t else [h] ++ removeFromList(item, t)
+}
+
+# === Render Stack Operations ===
+
+pushRenderStack(componentId: String) = {
+    renderStack = [componentId] ++ renderStack
+}
+
+popRenderStack() = match renderStack {
+    [] -> ()
+    [_ | rest] -> { renderStack = rest }
+}
+
+currentRenderingComponent() = match renderStack {
+    [] -> None
+    [id | _] -> Some(id)
+}
+
+# === Event Handler Registration ===
+
+registerHandler(handlerId: String, handler: () -> Unit) = {
+    eventHandlers = [(handlerId, handler)] ++ eventHandlers
+}
+
+findHandler(handlerId: String) = findHandlerIn(handlerId, eventHandlers)
+
+findHandlerIn(handlerId: String, handlers: List[(String, () -> Unit)]) = match handlers {
+    [] -> None
+    [(hid, h) | rest] -> if hid == handlerId then Some(h) else findHandlerIn(hid, rest)
+}
+
+# === Component Rendering ===
+
+# Render a component using a render function
+# The render function receives the component ID for tracking
+renderWith(prefix: String, parentId: String, renderFn: (String) -> Html) = {
+    compId = generateId(prefix)
+
+    # Create component node
+    node = ComponentNode(id: compId, parentId: parentId, childIds: [])
+    setNode(compId, node)
+
+    # Add as child of parent
+    if parentId != "" then addChildToParent(parentId, compId) else ()
+
+    # Push to render stack
+    pushRenderStack(compId)
+
+    # Execute render function
+    html = renderFn(compId)
+
+    # Pop from render stack
+    popRenderStack()
+
+    RenderedComponent(id: compId, html: html)
+}
+
+# Simple render without tracking parent
+rwRenderRoot(prefix: String, renderFn: (String) -> Html) = {
+    compId = generateId(prefix)
+    node = ComponentNode(id: compId, parentId: "", childIds: [])
+    setNode(compId, node)
+    pushRenderStack(compId)
+    html = renderFn(compId)
+    popRenderStack()
+    RenderedComponent(id: compId, html: html)
+}
+
+# === Clearing Subtree (for re-render) ===
+
+clearSubtree(componentId: String) = match findNode(componentId) {
+    None -> ()
+    Some(node) -> {
+        # Recursively clear children first
+        clearChildrenSubtrees(node.childIds)
+        # Clear this component's dependencies
+        clearDepsForComponent(componentId)
+        # Update node to have no children
+        setNode(componentId, ComponentNode(
+            id: node.id,
+            parentId: node.parentId,
+            childIds: []
+        ))
+    }
+}
+
+clearChildrenSubtrees(childIds: List[String]) = match childIds {
+    [] -> ()
+    [childId | rest] -> {
+        clearSubtreeAndRemove(childId)
+        clearChildrenSubtrees(rest)
+    }
+}
+
+clearSubtreeAndRemove(componentId: String) = match findNode(componentId) {
+    None -> ()
+    Some(node) -> {
+        clearChildrenSubtrees(node.childIds)
+        clearDepsForComponent(componentId)
+        removeNode(componentId)
+    }
+}
+
+# === Ancestor Deduplication ===
+
+# Given a list of component IDs, return only the roots (no ancestors in list)
+deduplicateAncestors(compIds: List[String]) = filterRoots(compIds, compIds)
+
+filterRoots(compIds: List[String], allIds: List[String]) = match compIds {
+    [] -> []
+    [id | rest] ->
+        if hasAncestorIn(id, allIds) then filterRoots(rest, allIds)
+        else [id] ++ filterRoots(rest, allIds)
+}
+
+hasAncestorIn(compId: String, allIds: List[String]) = match findNode(compId) {
+    None -> false
+    Some(node) -> if node.parentId == "" then false
+        else if containsStr(allIds, node.parentId) then true
+        else hasAncestorIn(node.parentId, allIds)
+}
+
+# === HTML Helpers with Component ID ===
+
+# Wrap HTML with component ID for targeting updates
+wrapComponent(compId: String, html: Html) =
+    Element("div", [("id", compId), ("data-component", "true")], [html])
+
+# Create a button with event handler
+eventButton(label: String, handler: () -> Unit) = {
+    handlerId = generateId("handler")
+    registerHandler(handlerId, handler)
+    Element("button", [("hx-post", "/event/" ++ handlerId), ("hx-swap", "outerHTML")], [Text(label)])
+}
+
+# === Session State Reset ===
+
+resetSession() = {
+    componentTree = []
+    dependencies = []
+    renderStack = []
+    eventHandlers = []
+    idCounter = 0
+    pendingRerenders = []
+}
+
+# === Introspection ===
+
+getComponentCount() = length(componentTree)
+
+getDependencyCount() = length(dependencies)
+
+getRenderStackSize() = length(renderStack)
+
+# === Tracking Session Var Reads ===
+
+# Call this when reading a session var to track dependency
+trackRead(varId: String) = match currentRenderingComponent() {
+    None -> ()
+    Some(compId) -> addDependency(varId, compId)
+}
+
+# Alias for clarity in components
+useVar(varId: String) = trackRead(varId)
+
+# === Get Components to Re-render ===
+
+# Given a var that changed, get the root components to re-render
+getComponentsToRerender(varId: String) = {
+    affected = getDeps(varId)
+    deduplicateAncestors(affected)
+}
+
+# === Session Var Registration ===
+
+# Pending re-renders from onChange callbacks
+mvar pendingRerenders: List[String] = []
+
+# Create an onChange handler for a session var
+# Usage: myReactiveRecord.onChange(onVarChange("myVarId"))
+onVarChange(varId: String) = (field, oldVal, newVal) => {
+    roots = getComponentsToRerender(varId)
+    queueRerenders(roots)
+}
+
+# Queue components for re-render
+queueRerenders(compIds: List[String]) = match compIds {
+    [] -> ()
+    [id | rest] -> {
+        if containsStr(pendingRerenders, id) then ()
+        else {
+            newList = pendingRerenders ++ [id]
+            pendingRerenders = newList
+        }
+        queueRerenders(rest)
+    }
+}
+
+# Get and clear pending re-renders
+flushPendingRerenders() = {
+    result = pendingRerenders
+    pendingRerenders = []
+    result
+}
+
+# Check if there are pending re-renders
+hasPendingRerenders() = length(pendingRerenders) > 0
+
+# ============================================================================
+# RHtml - Reactive HTML with Explicit State Passing
+# ============================================================================
+
+# RenderState holds everything needed for reactive rendering
+# - tree: component hierarchy (componentId -> ComponentNode)
+# - deps: dependency tracking (reactiveRecordId -> [componentIds])
+type RenderState = { tree: List[(String, ComponentNode)], deps: Map[Int, List[String]], nextId: Int }
+
+# Create an empty render state
+emptyRenderState() = RenderState(tree: [], deps: %{}, nextId: 1)
+
+# Generate a unique component ID within a state
+generateComponentId(state: RenderState, prefix: String) = {
+    id = prefix ++ "-" ++ show(state.nextId)
+    newState = RenderState(tree: state.tree, deps: state.deps, nextId: state.nextId + 1)
+    (id, newState)
+}
+
+# RHtml - Render HTML with automatic dependency tracking
+# Input:
+#   state: current RenderState
+#   componentId: ID for the root component being rendered
+#   renderFn: function that produces Html (reads from reactive records are tracked)
+# Output:
+#   (Html, RenderState) - the rendered HTML and new state with updated deps
+rhtml(state: RenderState, componentId: String, renderFn: () -> Html) = {
+    # Initialize VM render context with existing dependencies
+    Reactive.setDeps(state.deps)
+
+    # Push component onto render stack (VM will track reactive reads)
+    RenderStack.push(componentId)
+
+    # Execute render function - any reactive record reads are tracked by VM
+    html = renderFn()
+
+    # Pop from render stack
+    RenderStack.pop()
+
+    # Get the updated dependencies from VM
+    newDeps = Reactive.getDeps()
+
+    # Build new state with updated deps
+    newState = RenderState(tree: state.tree, deps: newDeps, nextId: state.nextId)
+
+    (html, newState)
+}
+
+# RHtml for initial full page render
+# Generates a component ID automatically
+rhtmlRoot(state: RenderState, prefix: String, renderFn: () -> Html) = {
+    (componentId, state1) = generateComponentId(state, prefix)
+
+    # Add root component to tree
+    node = ComponentNode(id: componentId, parentId: "", childIds: [])
+    newTree = setNodeIn(componentId, node, state1.tree)
+    state2 = RenderState(tree: newTree, deps: state1.deps, nextId: state1.nextId)
+
+    # Render with tracking
+    (html, finalState) = rhtml(state2, componentId, renderFn)
+
+    # Wrap HTML with component ID div
+    wrappedHtml = Element("div", [("id", componentId), ("data-component", "true")], [html])
+
+    (wrappedHtml, finalState, componentId)
+}
+
+# RHtml for nested component render
+# parentId: the parent component's ID
+rhtmlNested(state: RenderState, parentId: String, prefix: String, renderFn: () -> Html) = {
+    (componentId, state1) = generateComponentId(state, prefix)
+
+    # Add component to tree with parent
+    node = ComponentNode(id: componentId, parentId: parentId, childIds: [])
+    newTree = setNodeIn(componentId, node, state1.tree)
+
+    # Update parent's childIds
+    updatedTree = match findNodeIn(parentId, newTree) {
+        Some(parent) -> setNodeIn(parentId, ComponentNode(
+            id: parent.id,
+            parentId: parent.parentId,
+            childIds: parent.childIds ++ [componentId]
+        ), newTree)
+        None -> newTree
+    }
+
+    state2 = RenderState(tree: updatedTree, deps: state1.deps, nextId: state1.nextId)
+
+    # Push parent onto stack first (for correct nesting)
+    RenderStack.push(parentId)
+
+    # Render nested component with tracking
+    (html, finalState) = rhtml(state2, componentId, renderFn)
+
+    # Pop parent
+    RenderStack.pop()
+
+    # Wrap HTML with component ID div
+    wrappedHtml = Element("div", [("id", componentId), ("data-component", "true")], [html])
+
+    (wrappedHtml, finalState, componentId)
+}
+
+# Get pending re-renders from VM (components that depend on changed reactive records)
+getPendingRerenders() = Reactive.flushPending()
+
+# Find which components need to re-render after a reactive record change
+# Uses ancestor deduplication to avoid redundant re-renders
+getComponentsToRerenderVM(state: RenderState) = {
+    pending = getPendingRerenders()
+    deduplicateAncestorsIn(pending, pending, state.tree)
+}
+
+# Ancestor deduplication using the tree from state
+deduplicateAncestorsIn(compIds: List[String], allIds: List[String], tree: List[(String, ComponentNode)]) = match compIds {
+    [] -> []
+    [id | rest] ->
+        if hasAncestorInTree(id, allIds, tree) then deduplicateAncestorsIn(rest, allIds, tree)
+        else [id] ++ deduplicateAncestorsIn(rest, allIds, tree)
+}
+
+hasAncestorInTree(compId: String, allIds: List[String], tree: List[(String, ComponentNode)]) = match findNodeIn(compId, tree) {
+    None -> false
+    Some(node) -> if node.parentId == "" then false
+        else if containsStr(allIds, node.parentId) then true
+        else hasAncestorInTree(node.parentId, allIds, tree)
+}

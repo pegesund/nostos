@@ -1,0 +1,11 @@
+# expect: <div>Hello from Counter!</div>
+# Test basic component registration and rendering
+
+import stdlib.reactiveWeb
+
+main() = {
+    result = rwRenderRoot("Counter", (compId) => {
+        Element("div", [], [Text("Hello from Counter!")])
+    })
+    render(result.html)
+}
