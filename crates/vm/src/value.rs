@@ -222,8 +222,10 @@ pub struct ReactiveRecordValue {
     /// Parent references: (weak_parent, field_index_in_parent)
     /// Uses Weak to avoid reference cycles
     pub parents: Arc<std::sync::RwLock<Vec<(std::sync::Weak<ReactiveRecordValue>, u16)>>>,
-    /// Registered onChange callbacks - called with (fieldName: String, newValue: Value)
+    /// Registered onChange callbacks - called with (fieldName: String, oldValue: Value, newValue: Value)
     pub callbacks: Arc<std::sync::RwLock<Vec<Value>>>,
+    /// Registered onRead callbacks - called with (fieldName: String, value: Value)
+    pub read_callbacks: Arc<std::sync::RwLock<Vec<Value>>>,
 }
 
 impl ReactiveRecordValue {
@@ -238,6 +240,7 @@ impl ReactiveRecordValue {
             reactive_field_mask,
             parents: Arc::new(std::sync::RwLock::new(Vec::new())),
             callbacks: Arc::new(std::sync::RwLock::new(Vec::new())),
+            read_callbacks: Arc::new(std::sync::RwLock::new(Vec::new())),
         }
     }
 
@@ -256,6 +259,20 @@ impl ReactiveRecordValue {
     /// Get all registered callbacks
     pub fn get_callbacks(&self) -> Vec<Value> {
         self.callbacks.read()
+            .map(|cbs| cbs.clone())
+            .unwrap_or_default()
+    }
+
+    /// Register an onRead callback (called with fieldName and value when field is read)
+    pub fn add_read_callback(&self, callback: Value) {
+        if let Ok(mut callbacks) = self.read_callbacks.write() {
+            callbacks.push(callback);
+        }
+    }
+
+    /// Get all registered read callbacks
+    pub fn get_read_callbacks(&self) -> Vec<Value> {
+        self.read_callbacks.read()
             .map(|cbs| cbs.clone())
             .unwrap_or_default()
     }
@@ -821,6 +838,8 @@ pub enum Instruction {
     SetField(Reg, ConstIdx, Reg),
     /// Register onChange callback on reactive record: record.onChange(callback)
     ReactiveAddCallback(Reg, Reg),
+    /// Register onRead callback on reactive record: record.onRead(callback)
+    ReactiveAddReadCallback(Reg, Reg),
     /// Update record: dst = base with new field values
     UpdateRecord(Reg, Reg, ConstIdx, RegList),
 
@@ -1303,6 +1322,13 @@ pub enum Instruction {
     /// Get dependencies map: dst = Reactive.getDeps()
     /// Returns Map[Int, List[String]]
     ReactiveGetDeps(Reg),
+    /// Get component tree: dst = Reactive.getComponentTree()
+    /// Returns List[ComponentTree] where ComponentTree = CNode(String, List[ComponentTree])
+    GetComponentTree(Reg),
+    /// Start a new render context (clears deps and component tree)
+    RenderContextStart,
+    /// Finish render context and get result: dst = (deps_map, component_tree)
+    RenderContextFinish(Reg),
 
     // === Debug ===
     /// No operation (for alignment/debugging)

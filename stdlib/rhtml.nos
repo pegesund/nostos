@@ -1,0 +1,181 @@
+# RHtml - Reactive HTML
+#
+# Same API as Html, but with component boundaries for reactive updates.
+# Use RHtml(...) syntax like Html(...) - tag names are auto-resolved.
+
+# The RNode type (HTML tree)
+type RNode =
+    | Element(String, List[(String, String)], List[RNode])
+    | Text(String)
+    | Raw(String)
+    | Empty
+    | Component(String, RNode)
+
+# Component tree - reflects hierarchy of components with their IDs
+type ComponentTree =
+    | CNode(String, List[ComponentTree])  # name, children
+
+# Result of an RHtml render
+# tree: the HTML tree
+# deps: reactive record ID -> component names that read it
+# components: component hierarchy (list because root may have multiple)
+type RHtmlResult = { tree: RNode, deps: Map[Int, List[String]], components: List[ComponentTree] }
+
+# === Text and special ===
+
+text(str: String) = Text(str)
+raw(str: String) = Raw(str)
+empty() = Empty
+
+# === Component ===
+
+component(name: String, content: RNode) = Component(name, content)
+
+# === Tag functions (same as Html) ===
+
+div(children: List[RNode]) = Element("div", [], children)
+div(str: String) = Element("div", [], [Text(str)])
+
+span(children: List[RNode]) = Element("span", [], children)
+span(str: String) = Element("span", [], [Text(str)])
+
+p(children: List[RNode]) = Element("p", [], children)
+p(str: String) = Element("p", [], [Text(str)])
+
+h1(children: List[RNode]) = Element("h1", [], children)
+h1(str: String) = Element("h1", [], [Text(str)])
+
+h2(children: List[RNode]) = Element("h2", [], children)
+h2(str: String) = Element("h2", [], [Text(str)])
+
+h3(children: List[RNode]) = Element("h3", [], children)
+h3(str: String) = Element("h3", [], [Text(str)])
+
+button(children: List[RNode]) = Element("button", [], children)
+button(str: String) = Element("button", [], [Text(str)])
+
+ul(children: List[RNode]) = Element("ul", [], children)
+ol(children: List[RNode]) = Element("ol", [], children)
+li(children: List[RNode]) = Element("li", [], children)
+li(str: String) = Element("li", [], [Text(str)])
+
+table(children: List[RNode]) = Element("table", [], children)
+thead(children: List[RNode]) = Element("thead", [], children)
+tbody(children: List[RNode]) = Element("tbody", [], children)
+tr(children: List[RNode]) = Element("tr", [], children)
+th(children: List[RNode]) = Element("th", [], children)
+th(str: String) = Element("th", [], [Text(str)])
+td(children: List[RNode]) = Element("td", [], children)
+td(str: String) = Element("td", [], [Text(str)])
+
+nav(children: List[RNode]) = Element("nav", [], children)
+header(children: List[RNode]) = Element("header", [], children)
+footer(children: List[RNode]) = Element("footer", [], children)
+section(children: List[RNode]) = Element("section", [], children)
+article(children: List[RNode]) = Element("article", [], children)
+form(children: List[RNode]) = Element("form", [], children)
+
+html(children: List[RNode]) = Element("html", [], children)
+headEl(children: List[RNode]) = Element("head", [], children)
+body(children: List[RNode]) = Element("body", [], children)
+title(str: String) = Element("title", [], [Text(str)])
+
+# Self-closing
+br() = Element("br", [], [])
+hr() = Element("hr", [], [])
+img(attrs: List[(String, String)]) = Element("img", attrs, [])
+input(attrs: List[(String, String)]) = Element("input", attrs, [])
+
+# With attributes
+a(attrs: List[(String, String)], children: List[RNode]) = Element("a", attrs, children)
+a(attrs: List[(String, String)], str: String) = Element("a", attrs, [Text(str)])
+el(tag: String, attrs: List[(String, String)], children: List[RNode]) = Element(tag, attrs, children)
+
+# === Rendering ===
+
+# Render RHtmlResult by extracting the tree
+render(result: RHtmlResult) = {
+    buf = Buffer.new()
+    renderToBuffer(result.tree, buf)
+    Buffer.toString(buf)
+}
+
+# Render RNode directly
+render(rhtml: RNode) = {
+    buf = Buffer.new()
+    renderToBuffer(rhtml, buf)
+    Buffer.toString(buf)
+}
+
+renderToBuffer(rhtml: RNode, buf) = match rhtml {
+    Element(tag, attrs, children) -> {
+        Buffer.append(buf, "<")
+        Buffer.append(buf, tag)
+        renderAttrs(attrs, buf)
+        if isSelfClosing(tag) then {
+            Buffer.append(buf, " />")
+        } else {
+            Buffer.append(buf, ">")
+            renderChildrenToBuffer(children, buf)
+            Buffer.append(buf, "</")
+            Buffer.append(buf, tag)
+            Buffer.append(buf, ">")
+        }
+    }
+    Text(s) -> Buffer.append(buf, escapeHtml(s))
+    Raw(s) -> Buffer.append(buf, s)
+    Empty -> ()
+    Component(name, content) -> {
+        Buffer.append(buf, "<div id=\"")
+        Buffer.append(buf, name)
+        Buffer.append(buf, "\" data-component=\"true\">")
+        renderToBuffer(content, buf)
+        Buffer.append(buf, "</div>")
+    }
+}
+
+renderChildrenToBuffer(children: List[RNode], buf) = match children {
+    [] -> ()
+    [child | rest] -> {
+        renderToBuffer(child, buf)
+        renderChildrenToBuffer(rest, buf)
+    }
+}
+
+renderAttrs(attrs: List[(String, String)], buf) = match attrs {
+    [] -> ()
+    [(name, value) | rest] -> {
+        Buffer.append(buf, " ")
+        Buffer.append(buf, name)
+        Buffer.append(buf, "=\"")
+        Buffer.append(buf, escapeHtml(value))
+        Buffer.append(buf, "\"")
+        renderAttrs(rest, buf)
+    }
+}
+
+isSelfClosing(tag: String) = match tag {
+    "br" -> true
+    "hr" -> true
+    "img" -> true
+    "input" -> true
+    "meta" -> true
+    "link" -> true
+    _ -> false
+}
+
+escapeChar(c: Char) = match c {
+    '<' -> "&lt;"
+    '>' -> "&gt;"
+    '&' -> "&amp;"
+    '"' -> "&quot;"
+    '\'' -> "&#39;"
+    _ -> String.from_chars([c])
+}
+
+escapeHtmlChars(chars: List[Char]) = match chars {
+    [] -> ""
+    [c | rest] -> escapeChar(c) ++ escapeHtmlChars(rest)
+}
+
+escapeHtml(str: String) = escapeHtmlChars(String.chars(str))

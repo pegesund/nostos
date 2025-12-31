@@ -1,0 +1,27 @@
+# expect: "counter"
+
+use stdlib.rhtml.{render, component, div, p}
+
+reactive State = { count: Int }
+
+main() = {
+    state = State(0)
+
+    # Create component that reads from reactive state
+    # RHtml now returns RHtmlResult { tree, deps, components }
+    result = RHtml(
+        component("counter",
+            p("Count: " ++ show(state.count))  # This read should be tracked
+        )
+    )
+
+    # result.tree is the RNode tree
+    # result.deps is Map[Int, List[String]] - record ID -> component names
+    # result.components is List[ComponentTree] - the component hierarchy
+
+    # Check component tree
+    match result.components {
+        [CNode(name, children) | _] -> name
+        [] -> "no components"
+    }
+}
