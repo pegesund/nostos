@@ -262,12 +262,17 @@ filterOutermost(affected, components) = {
 # === Update State ===
 
 # Re-render a list of component names, collecting results
+# Each render function is called with the component name on the render stack
+# so that deps are tracked correctly
 reRenderComponents(names, renderers, acc) = match names {
     [] -> acc
     [name | rest] ->
         if Map.contains(renderers, name) then {
             renderFn = Map.get(renderers, name)
+            # Push component name to render stack for dep tracking
+            RenderStack.push(name)
             result = renderFn()
+            RenderStack.pop()
             reRenderComponents(rest, renderers, [(name, result) | acc])
         } else reRenderComponents(rest, renderers, acc)
 }

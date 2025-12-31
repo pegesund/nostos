@@ -898,7 +898,7 @@ impl Compiler {
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
             "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array", "Buffer",
-            "Runtime", "WebSocket", "RenderStack", "Reactive",
+            "Runtime", "WebSocket", "RenderStack", "RenderContext", "Reactive",
         ].iter().map(|s| s.to_string()).collect();
 
         let mut this = Self {
@@ -1366,7 +1366,7 @@ impl Compiler {
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
             "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array", "Buffer",
-            "Runtime", "WebSocket", "RenderStack", "Reactive",
+            "Runtime", "WebSocket", "RenderStack", "RenderContext", "Reactive",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -4617,6 +4617,17 @@ impl Compiler {
                             self.chunk.emit(Instruction::RenderStackCurrent(dst), line);
                             return Ok(dst);
                         }
+                        "RenderContext.start" if args.is_empty() => {
+                            self.chunk.emit(Instruction::RenderContextStart, line);
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                            return Ok(dst);
+                        }
+                        "RenderContext.finish" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::RenderContextFinish(dst), line);
+                            return Ok(dst);
+                        }
                         "Reactive.flushPending" if args.is_empty() => {
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FlushPendingRerenders(dst), line);
@@ -5088,6 +5099,17 @@ impl Compiler {
                         "RenderStack.current" if args.is_empty() => {
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::RenderStackCurrent(dst), line);
+                            return Ok(dst);
+                        }
+                        "RenderContext.start" if args.is_empty() => {
+                            self.chunk.emit(Instruction::RenderContextStart, line);
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                            return Ok(dst);
+                        }
+                        "RenderContext.finish" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::RenderContextFinish(dst), line);
                             return Ok(dst);
                         }
                         "Reactive.flushPending" if args.is_empty() => {

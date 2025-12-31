@@ -7474,7 +7474,8 @@ impl AsyncProcess {
                 if self.reactive_context.nesting_depth == 0 {
                     self.reactive_context.dependencies.clear();
                     self.reactive_context.pending_rerenders.clear();
-                    self.reactive_context.render_stack.clear();
+                    // Don't clear render_stack - it may have been set by RenderStack.push
+                    // for re-rendering components with proper dep tracking
                     self.reactive_context.component_tree_stack.clear();
                     self.reactive_context.root_components.clear();
                     self.reactive_context.renderers.clear();
