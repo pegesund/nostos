@@ -1,0 +1,110 @@
+# Logging Library for Nostos
+#
+# Simple logging system with console and stderr output.
+# Supports log levels and message formatting.
+
+# Log Levels - prefixed with L to avoid namespace conflicts
+type LogLevel = LDebug | LInfo | LWarn | LError | LFatal
+
+# Convert log level to string
+levelToString(level) = match level {
+    LDebug -> "DEBUG"
+    LInfo -> "INFO"
+    LWarn -> "WARN"
+    LError -> "ERROR"
+    LFatal -> "FATAL"
+}
+
+# Get priority for comparison (higher = more severe)
+levelPriority(level) = match level {
+    LDebug -> 0
+    LInfo -> 1
+    LWarn -> 2
+    LError -> 3
+    LFatal -> 4
+}
+
+# Log Entry
+type LogEntry = { level: LogLevel, message: String, timestamp: Int, source: String }
+
+# Create entries
+makeEntry(level, message) = LogEntry(level, message, Time.now(), "")
+makeEntryFrom(level, message, source) = LogEntry(level, message, Time.now(), source)
+
+# Pad with zeros
+repeatStr(0, acc) = acc
+repeatStr(n, acc) = repeatStr(n - 1, acc ++ "0")
+
+padZero(n, width) = {
+    s = show(n)
+    len = s.length()
+    if len >= width then s
+    else repeatStr(width - len, "") ++ s
+}
+
+# Format timestamp
+formatTimestamp(ts) = {
+    millis = ts % 1000
+    totalSecs = ts / 1000
+    secs = totalSecs % 60
+    totalMins = totalSecs / 60
+    mins = totalMins % 60
+    totalHours = totalMins / 60
+    hours = totalHours % 24
+    days = totalHours / 24
+    years = 1970 + (days / 365)
+    dayOfYear = days % 365
+    month = (dayOfYear / 30) + 1
+    day = (dayOfYear % 30) + 1
+    padZero(years, 4) ++ "-" ++ padZero(month, 2) ++ "-" ++ padZero(day, 2) ++ " " ++
+    padZero(hours, 2) ++ ":" ++ padZero(mins, 2) ++ ":" ++ padZero(secs, 2) ++ "." ++
+    padZero(millis, 3)
+}
+
+# Format a log entry
+formatEntry(entry) = {
+    ts = formatTimestamp(entry.timestamp)
+    lvl = levelToString(entry.level)
+    src = if entry.source == "" then "" else "[" ++ entry.source ++ "] "
+    "[" ++ ts ++ "] [" ++ lvl ++ "] " ++ src ++ entry.message
+}
+
+# Console Logger
+type ConsoleLogger = { minLevel: LogLevel }
+
+newConsoleLogger() = ConsoleLogger(LDebug)
+newConsoleLoggerWithLevel(level) = ConsoleLogger(level)
+
+consoleLog(logger, entry) = {
+    if levelPriority(entry.level) >= levelPriority(logger.minLevel) then
+        println(formatEntry(entry))
+    else ()
+}
+consoleFlush(logger) = flushStdout()
+
+# Stderr Logger
+type StderrLogger = { minLevel: LogLevel }
+
+newStderrLogger() = StderrLogger(LDebug)
+newStderrLoggerWithLevel(level) = StderrLogger(level)
+
+stderrLog(logger, entry) = {
+    if levelPriority(entry.level) >= levelPriority(logger.minLevel) then
+        eprintln(formatEntry(entry))
+    else ()
+}
+stderrFlush(logger) = flushStderr()
+
+# Convenience functions for console logger
+logDebug(logger, message) = consoleLog(logger, makeEntry(LDebug, message))
+logInfo(logger, message) = consoleLog(logger, makeEntry(LInfo, message))
+logWarn(logger, message) = consoleLog(logger, makeEntry(LWarn, message))
+logError(logger, message) = consoleLog(logger, makeEntry(LError, message))
+logFatal(logger, message) = consoleLog(logger, makeEntry(LFatal, message))
+
+# Log with source
+logDebugFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LDebug, message, source))
+logInfoFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LInfo, message, source))
+logWarnFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LWarn, message, source))
+logErrorFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LError, message, source))
+logFatalFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LFatal, message, source))

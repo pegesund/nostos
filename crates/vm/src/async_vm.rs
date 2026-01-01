@@ -9715,6 +9715,54 @@ impl AsyncVM {
             }),
         }));
 
+        // eprint - print to stderr without newline
+        self.register_native("eprint", Arc::new(GcNativeFn {
+            name: "eprint".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use std::io::Write;
+                let s = heap.display_value(&args[0]);
+                eprint!("{}", s);
+                let _ = std::io::stderr().flush();
+                Ok(GcValue::Unit)
+            }),
+        }));
+
+        // eprintln - print to stderr with newline
+        self.register_native("eprintln", Arc::new(GcNativeFn {
+            name: "eprintln".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use std::io::Write;
+                let s = heap.display_value(&args[0]);
+                eprintln!("{}", s);
+                let _ = std::io::stderr().flush();
+                Ok(GcValue::Unit)
+            }),
+        }));
+
+        // flushStdout - flush stdout buffer
+        self.register_native("flushStdout", Arc::new(GcNativeFn {
+            name: "flushStdout".to_string(),
+            arity: 0,
+            func: Box::new(|_args, _heap| {
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+                Ok(GcValue::Unit)
+            }),
+        }));
+
+        // flushStderr - flush stderr buffer
+        self.register_native("flushStderr", Arc::new(GcNativeFn {
+            name: "flushStderr".to_string(),
+            arity: 0,
+            func: Box::new(|_args, _heap| {
+                use std::io::Write;
+                let _ = std::io::stderr().flush();
+                Ok(GcValue::Unit)
+            }),
+        }));
+
         // String.length
         self.register_native("String.length", Arc::new(GcNativeFn {
             name: "String.length".to_string(),
