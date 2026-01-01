@@ -11231,8 +11231,97 @@ impl Compiler {
     }
 
     /// Get a function's return type directly.
+    /// Falls back to inferring from the function body AST if no explicit type.
     pub fn get_function_return_type(&self, name: &str) -> Option<String> {
-        self.find_function(name).and_then(|f| f.return_type.clone())
+        // First try explicit return type from compiled function
+        if let Some(ret_type) = self.find_function(name).and_then(|f| f.return_type.clone()) {
+            return Some(ret_type);
+        }
+
+        // Fall back to inferring from AST body for functions like: f(x) = TypeName(...)
+        self.infer_return_type_from_ast(name)
+    }
+
+    /// Infer return type from function AST body.
+    /// Handles simple cases like: newFoo(x) = Foo(x, y)
+    fn infer_return_type_from_ast(&self, name: &str) -> Option<String> {
+        // Try to find the function AST (exact match first)
+        if let Some(ast) = self.fn_asts.get(name) {
+            let clause = ast.clauses.first()?;
+            return self.infer_type_from_expr(&clause.body);
+        }
+
+        // If name doesn't contain '/', search by prefix
+        if !name.contains('/') {
+            let prefix = format!("{}/", name);
+            for (key, ast) in &self.fn_asts {
+                if key.starts_with(&prefix) {
+                    let clause = ast.clauses.first()?;
+                    return self.infer_type_from_expr(&clause.body);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Infer type from an expression AST.
+    fn infer_type_from_expr(&self, expr: &nostos_syntax::Expr) -> Option<String> {
+        use nostos_syntax::Expr;
+
+        match expr {
+            // Record/variant construction: TypeName(...)
+            Expr::Record(type_name, _, _) => {
+                let name = &type_name.node;
+                // Check if it's a known type
+                if self.types.contains_key(name) {
+                    return Some(name.clone());
+                }
+                // Try resolving the name
+                let resolved = self.resolve_name(name);
+                if self.types.contains_key(&resolved) {
+                    return Some(resolved);
+                }
+                // Check if it's a variant constructor
+                for (ty_name, info) in &self.types {
+                    if let TypeInfoKind::Variant { constructors } = &info.kind {
+                        if constructors.iter().any(|(ctor, _)| ctor == name) {
+                            return Some(ty_name.clone());
+                        }
+                    }
+                }
+                Some(name.clone())
+            }
+            // Block: return type of last expression
+            Expr::Block(stmts, _span) => {
+                if stmts.is_empty() {
+                    return Some("()".to_string());
+                }
+                // Get the last statement's expression
+                match stmts.last()? {
+                    nostos_syntax::Stmt::Expr(e) => self.infer_type_from_expr(e),
+                    _ => None,
+                }
+            }
+            // If/then/else: return type of then branch
+            Expr::If(_, then_branch, _, _) => self.infer_type_from_expr(then_branch),
+            // Match: return type of first arm's body
+            Expr::Match(_, arms, _) => {
+                arms.first().and_then(|arm| self.infer_type_from_expr(&arm.body))
+            }
+            // Literals
+            Expr::Int(_, _) => Some("Int".to_string()),
+            Expr::Float(_, _) => Some("Float".to_string()),
+            Expr::String(_, _) => Some("String".to_string()),
+            Expr::Bool(_, _) => Some("Bool".to_string()),
+            Expr::Char(_, _) => Some("Char".to_string()),
+            Expr::Unit(_) => Some("()".to_string()),
+            Expr::List(_, _, _) => Some("List".to_string()),
+            Expr::Map(_, _) => Some("Map".to_string()),
+            Expr::Set(_, _) => Some("Set".to_string()),
+            Expr::Tuple(_, _) => Some("Tuple".to_string()),
+            _ => None,
+        }
     }
 
     /// Get a function's doc comment.
