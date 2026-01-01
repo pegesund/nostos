@@ -1,7 +1,31 @@
 # Logging Library for Nostos
 #
-# Simple logging system with console and stderr output.
-# Supports log levels and message formatting.
+# Provides console, stderr, and file logging with level filtering.
+#
+# Built-in loggers:
+#   - ConsoleLogger: logs to stdout
+#   - StderrLogger: logs to stderr
+#   - FileLogger: logs to file (append mode)
+#   - RotatingFileLogger: logs to file with size-based rotation
+#
+# Usage:
+#   use stdlib.logging.*
+#   logger = newConsoleLogger()
+#   logInfo(logger, "Hello!")
+#   consoleFlush(logger)
+#
+# Custom loggers: Define a type with minLevel field, then create
+# myLog(logger, entry) and myFlush(logger) functions. Example:
+#
+#   type PrefixLogger = { prefix: String, minLevel: LogLevel }
+#   prefixLog(logger, entry) = {
+#       if levelPriority(entry.level) >= levelPriority(logger.minLevel) then
+#           println("[" ++ logger.prefix ++ "] " ++ formatEntry(entry))
+#       else ()
+#   }
+#
+# The Logger trait is exported for documentation purposes.
+# Use function-based API for logger operations.
 
 # Log Levels - prefixed with L to avoid namespace conflicts
 type LogLevel = LDebug | LInfo | LWarn | LError | LFatal
@@ -68,6 +92,15 @@ formatEntry(entry) = {
     src = if entry.source == "" then "" else "[" ++ entry.source ++ "] "
     "[" ++ ts ++ "] [" ++ lvl ++ "] " ++ src ++ entry.message
 }
+
+# Logger Trait (for documentation - stdlib traits have limited accessibility)
+# Custom loggers should define:
+#   - myLog(logger, entry: LogEntry) -> ()
+#   - myFlush(logger) -> ()
+trait Logger
+    log(self, entry: LogEntry) -> ()
+    flush(self) -> ()
+end
 
 # Console Logger
 type ConsoleLogger = { minLevel: LogLevel }
@@ -196,3 +229,5 @@ rotatingLogInfo(logger, message) = rotatingFileLog(logger, makeEntry(LInfo, mess
 rotatingLogWarn(logger, message) = rotatingFileLog(logger, makeEntry(LWarn, message))
 rotatingLogError(logger, message) = rotatingFileLog(logger, makeEntry(LError, message))
 rotatingLogFatal(logger, message) = rotatingFileLog(logger, makeEntry(LFatal, message))
+
+
