@@ -310,6 +310,10 @@ rwebHandleRequest(req, title, sessionSetup) = {
         # WebSocket upgrade - accept FIRST before any IO
         ws = WebSocket.accept(req.id)
 
+        # Log session start (after WebSocket.accept to avoid blocking)
+        pid = self()
+        println("[RWeb] Session started: pid=" ++ show(pid))
+
         # Create fresh session state for this connection
         (renderPage, onAction) = sessionSetup()
         renderResult = renderPage()
@@ -321,6 +325,9 @@ rwebHandleRequest(req, title, sessionSetup) = {
 
         # Enter session loop (this process becomes the session)
         sessionLoop(ws, renderResult, renderPage, onAction)
+
+        # Session has ended (sessionLoop returned)
+        println("[RWeb] Session ended: pid=" ++ show(pid))
     }
     else respond404(req)
 }
