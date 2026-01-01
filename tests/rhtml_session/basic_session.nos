@@ -1,0 +1,33 @@
+# expect: 0
+# Test basic session creation and retrieval
+
+use stdlib.rhtml
+use stdlib.rhtml_session
+
+main() = {
+    # Create initial state
+    initialState = RHtml(div([span("Hello")]))
+
+    # Create a session
+    sessionId = createSession(initialState)
+
+    # Verify session exists
+    assert_eq(true, hasSession(sessionId))
+
+    # Get session state
+    state = getSession(sessionId)
+
+    # Verify we can render it
+    html = renderRHtml(state)
+    assert_eq(true, String.contains(html, "Hello"))
+
+    # Session count should be 1
+    assert_eq(1, sessionCount())
+
+    # Remove session
+    removeSession(sessionId)
+    assert_eq(false, hasSession(sessionId))
+    assert_eq(0, sessionCount())
+
+    0
+}

@@ -1,0 +1,49 @@
+# expect: 0
+# Test multiple concurrent sessions
+
+use stdlib.rhtml
+use stdlib.rhtml_session
+
+main() = {
+    # Create multiple sessions
+    state1 = RHtml(div([span("User 1")]))
+    state2 = RHtml(div([span("User 2")]))
+    state3 = RHtml(div([span("User 3")]))
+
+    session1 = createSession(state1)
+    session2 = createSession(state2)
+    session3 = createSession(state3)
+
+    # All sessions should exist
+    assert_eq(3, sessionCount())
+    assert_eq(true, hasSession(session1))
+    assert_eq(true, hasSession(session2))
+    assert_eq(true, hasSession(session3))
+
+    # Each session has its own state
+    html1 = renderSession(session1)
+    html2 = renderSession(session2)
+    html3 = renderSession(session3)
+
+    match html1 {
+        Some(h) -> assert_eq(true, String.contains(h, "User 1"))
+        None() -> assert_eq(true, false)
+    }
+    match html2 {
+        Some(h) -> assert_eq(true, String.contains(h, "User 2"))
+        None() -> assert_eq(true, false)
+    }
+    match html3 {
+        Some(h) -> assert_eq(true, String.contains(h, "User 3"))
+        None() -> assert_eq(true, false)
+    }
+
+    # Remove one session, others remain
+    removeSession(session2)
+    assert_eq(2, sessionCount())
+    assert_eq(true, hasSession(session1))
+    assert_eq(false, hasSession(session2))
+    assert_eq(true, hasSession(session3))
+
+    0
+}
