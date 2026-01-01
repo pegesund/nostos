@@ -13426,9 +13426,21 @@ fn free_vars(expr: &Expr, bound: &std::collections::HashSet<String>) -> std::col
                     }
                     Stmt::Assign(target, val, _) => {
                         free.extend(free_vars(val, &local_bound));
-                        if let AssignTarget::Var(ident) = target {
-                            if !local_bound.contains(&ident.node) {
-                                free.insert(ident.node.clone());
+                        // Handle all assign target types to capture variables used in the target
+                        match target {
+                            AssignTarget::Var(ident) => {
+                                if !local_bound.contains(&ident.node) {
+                                    free.insert(ident.node.clone());
+                                }
+                            }
+                            AssignTarget::Field(obj, _) => {
+                                // For field assignment like `obj.field = val`, capture obj's free vars
+                                free.extend(free_vars(obj, &local_bound));
+                            }
+                            AssignTarget::Index(obj, idx) => {
+                                // For index assignment like `obj[idx] = val`, capture both
+                                free.extend(free_vars(obj, &local_bound));
+                                free.extend(free_vars(idx, &local_bound));
                             }
                         }
                     }
