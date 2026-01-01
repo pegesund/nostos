@@ -2259,6 +2259,65 @@ impl AsyncProcess {
                 set_reg!(dst, GcValue::Pid(self.pid.0));
             }
 
+            // === GC operations ===
+            GcCollect(dst) => {
+                // Gather roots from current execution state (same as maybe_gc)
+                let mut roots = Vec::new();
+                for frame in &self.frames {
+                    for val in &frame.registers {
+                        roots.extend(val.gc_pointers());
+                    }
+                    for val in &frame.captures {
+                        roots.extend(val.gc_pointers());
+                    }
+                }
+                if let Some(ref exc) = self.current_exception {
+                    roots.extend(exc.gc_pointers());
+                }
+                if let Some(ref val) = self.exit_value {
+                    roots.extend(val.gc_pointers());
+                }
+                self.heap.set_roots(roots);
+                let live_before = self.heap.live_objects();
+                self.heap.collect();
+                let live_after = self.heap.live_objects();
+                self.heap.clear_roots();
+                let collected = (live_before - live_after) as i64;
+
+                // Return record with collection results
+                let record = self.heap.alloc_record(
+                    "GcResult".to_string(),
+                    vec!["collected".to_string(), "live".to_string()],
+                    vec![GcValue::Int64(collected), GcValue::Int64(live_after as i64)],
+                    vec![false, false],
+                );
+                set_reg!(dst, GcValue::Record(record));
+            }
+
+            GcStats(dst) => {
+                let stats = self.heap.stats();
+                let live = self.heap.live_objects() as i64;
+
+                // Return record with GC statistics
+                let record = self.heap.alloc_record(
+                    "GcStats".to_string(),
+                    vec![
+                        "live".to_string(),
+                        "totalAllocated".to_string(),
+                        "totalFreed".to_string(),
+                        "collections".to_string(),
+                    ],
+                    vec![
+                        GcValue::Int64(live),
+                        GcValue::Int64(stats.total_allocated as i64),
+                        GcValue::Int64(stats.total_freed as i64),
+                        GcValue::Int64(stats.collections as i64),
+                    ],
+                    vec![false, false, false, false],
+                );
+                set_reg!(dst, GcValue::Record(record));
+            }
+
             ProcessAll(dst) => {
                 // Get all registered process PIDs
                 let registry = self.shared.process_registry.read().await;

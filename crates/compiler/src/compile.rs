@@ -205,6 +205,10 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Process.info", signature: "Pid -> ProcessInfo", doc: "Get process info: { status, mailbox, uptime }" },
     BuiltinInfo { name: "Process.kill", signature: "Pid -> Bool", doc: "Kill a process (returns true if successful)" },
 
+    // === Garbage Collection ===
+    BuiltinInfo { name: "Gc.collect", signature: "() -> GcResult", doc: "Force garbage collection, returns { collected: Int, live: Int }" },
+    BuiltinInfo { name: "Gc.stats", signature: "() -> GcStats", doc: "Get GC statistics: { live, totalAllocated, totalFreed, collections }" },
+
     // === Panel (TUI) ===
     BuiltinInfo { name: "Panel.create", signature: "String -> Int", doc: "Create a panel with title, returns panel ID" },
     BuiltinInfo { name: "Panel.setContent", signature: "Int -> String -> ()", doc: "Set panel content by ID" },
@@ -898,7 +902,7 @@ impl Compiler {
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
             "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array", "Buffer",
-            "Runtime", "WebSocket", "RenderStack", "RenderContext", "Reactive",
+            "Runtime", "WebSocket", "RenderStack", "RenderContext", "Reactive", "Gc",
         ].iter().map(|s| s.to_string()).collect();
 
         let mut this = Self {
@@ -1366,7 +1370,7 @@ impl Compiler {
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
             "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array", "Buffer",
-            "Runtime", "WebSocket", "RenderStack", "RenderContext", "Reactive",
+            "Runtime", "WebSocket", "RenderStack", "RenderContext", "Reactive", "Gc",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -5528,6 +5532,17 @@ impl Compiler {
                             self.chunk.emit(Instruction::ProcessKill(dst, pid_reg), line);
                             return Ok(dst);
                         }
+                        // === Garbage collection ===
+                        "Gc.collect" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::GcCollect(dst), line);
+                            return Ok(dst);
+                        }
+                        "Gc.stats" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::GcStats(dst), line);
+                            return Ok(dst);
+                        }
                         // === Panel (TUI) functions ===
                         "Panel.create" if args.len() == 1 => {
                             let title_reg = self.compile_expr_tail(&args[0], false)?;
@@ -7596,6 +7611,17 @@ impl Compiler {
                     "Process.kill" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ProcessKill(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    // === Garbage collection ===
+                    "Gc.collect" if arg_regs.is_empty() => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::GcCollect(dst), line);
+                        return Ok(dst);
+                    }
+                    "Gc.stats" if arg_regs.is_empty() => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::GcStats(dst), line);
                         return Ok(dst);
                     }
                     // === External process execution ===

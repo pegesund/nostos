@@ -327,7 +327,14 @@ rwebHandleRequest(req, title, sessionSetup) = {
         sessionLoop(ws, renderResult, renderPage, onAction)
 
         # Session has ended (sessionLoop returned)
-        println("[RWeb] Session ended: pid=" ++ show(pid))
+        # Run GC and report stats before process exits
+        gcResult = Gc.collect()
+        stats = Gc.stats()
+        println("[RWeb] Session ended: pid=" ++ show(pid) ++
+                " | gc collected=" ++ show(gcResult.collected) ++
+                " live=" ++ show(stats.live) ++
+                " totalAllocated=" ++ show(stats.totalAllocated) ++
+                " totalFreed=" ++ show(stats.totalFreed))
     }
     else respond404(req)
 }

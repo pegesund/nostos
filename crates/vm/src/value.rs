@@ -942,6 +942,10 @@ pub enum Instruction {
     Send(Reg, Reg),
     /// Get self PID: dst = self()
     SelfPid(Reg),
+    /// Force garbage collection: Gc.collect() -> { collected: Int, live: Int }
+    GcCollect(Reg),
+    /// Get GC statistics: Gc.stats() -> { live: Int, total_allocated: Int, total_freed: Int, collections: Int }
+    GcStats(Reg),
     /// Receive message into dst register (handled specially by VM - switches to receive mode)
     Receive(Reg),
     /// Receive with timeout: dst = receive or Unit if timeout (timeout_ms in timeout_reg)
