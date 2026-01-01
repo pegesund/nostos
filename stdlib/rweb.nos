@@ -14,25 +14,23 @@
 #
 #   reactive Counter = { value: Int }
 #
-#   initState() = Counter(0)
-#
-#   myPage(counter: Counter) = RHtml(
-#       div([
-#           component("display", () => RHtml(
-#               span("Count: " ++ show(counter.value))
-#           )),
-#           button([attr("data-action", "increment")], "+1")
-#       ])
-#   )
-#
-#   # Action handler just mutates - no return value needed!
-#   # VM tracks changes automatically via Reactive.getChangedRecordIds()
-#   handleAction(action, params, counter) = match action {
-#       "increment" -> counter.value = counter.value + 1
-#       _ -> ()
+#   session() = {
+#       counter = Counter(0)
+#       (
+#           () => RHtml(div([
+#               component("display", () => RHtml(
+#                   span("Count: " ++ show(counter.value))
+#               )),
+#               button([attr("data-action", "increment")], "+1")
+#           ])),
+#           (action, params) => match action {
+#               "increment" -> { counter.value = counter.value + 1 }
+#               _ -> ()
+#           }
+#       )
 #   }
 #
-#   main() = startRWeb(8080, "My App", initState, myPage, handleAction)
+#   main() = startRWeb(8080, "My App", session)
 
 use stdlib.server.{serve, respondHtml, respond404}
 use stdlib.rhtml
@@ -159,11 +157,10 @@ pageTemplate(title, content) =
 # --- Session Process ---
 
 # Session process main loop
-# Holds: appState (user's reactive records), renderResult (current render state)
-# actionHandler receives: (action, params, appState) -> ()
-#   Just mutates reactive records directly - no return value needed
-#   The VM automatically tracks which records were modified
-sessionLoop(ws, appState, renderResult: RHtmlResult, pageRenderer, actionHandler) = {
+# renderResult: current render state with deps, components, renderers
+# renderPage: () -> RHtmlResult - renders the page (captures state via closure)
+# onAction: (action, params) -> () - handles actions by mutating reactive records
+sessionLoop(ws, renderResult: RHtmlResult, renderPage, onAction) = {
     result = try {
         msgJson = WebSocket.recv(ws)
 
@@ -171,7 +168,7 @@ sessionLoop(ws, appState, renderResult: RHtmlResult, pageRenderer, actionHandler
         (action, params) = parseActionMessage(msgJson)
 
         # Call user's action handler - just mutates reactive records
-        actionHandler(action, params, appState)
+        onAction(action, params)
 
         # Get record IDs that were modified during action handler
         changedIds = Reactive.getChangedRecordIds()
@@ -207,7 +204,7 @@ sessionLoop(ws, appState, renderResult: RHtmlResult, pageRenderer, actionHandler
     } }
 
     match result {
-        (true, newState) -> sessionLoop(ws, appState, newState, pageRenderer, actionHandler)
+        (true, newState) -> sessionLoop(ws, newState, renderPage, onAction)
         (false, _) -> WebSocket.close(ws)
     }
 }
@@ -299,13 +296,13 @@ escapeJsonChar(c) = match c {
 # --- Request Handler ---
 
 # Handle HTTP requests
-rwebHandleRequest(req, title, initState, pageRenderer, actionHandler) = {
+rwebHandleRequest(req, title, sessionSetup) = {
     # NOTE: For WebSocket, we MUST call WebSocket.accept BEFORE any println!
     # Otherwise the spawned process blocks stdout before handshake completes
     if req.path == "/" then {
-        # Serve initial HTML page
-        state = initState()
-        result = pageRenderer(state)
+        # Serve initial HTML page - create fresh session for rendering
+        (renderPage, _) = sessionSetup()
+        result = renderPage()
         html = renderRHtml(result)
         respondHtml(req, pageTemplate(title, html))
     }
@@ -313,9 +310,9 @@ rwebHandleRequest(req, title, initState, pageRenderer, actionHandler) = {
         # WebSocket upgrade - accept FIRST before any IO
         ws = WebSocket.accept(req.id)
 
-        # Initialize state and render for this session
-        appState = initState()
-        renderResult = pageRenderer(appState)
+        # Create fresh session state for this connection
+        (renderPage, onAction) = sessionSetup()
+        renderResult = renderPage()
 
         # Send initial full page HTML
         html = renderRHtml(renderResult)
@@ -323,7 +320,7 @@ rwebHandleRequest(req, title, initState, pageRenderer, actionHandler) = {
         WebSocket.send(ws, msg)
 
         # Enter session loop (this process becomes the session)
-        sessionLoop(ws, appState, renderResult, pageRenderer, actionHandler)
+        sessionLoop(ws, renderResult, renderPage, onAction)
     }
     else respond404(req)
 }
@@ -331,12 +328,12 @@ rwebHandleRequest(req, title, initState, pageRenderer, actionHandler) = {
 # --- Main Entry Point ---
 
 # Start the reactive web server
-# initState: () -> YourStateType - creates initial reactive state for this session
-# pageRenderer: (state) -> RHtmlResult - renders the page with components
-# actionHandler: (action, params, state) -> () - handles actions by mutating reactive records
-#   No return value needed - VM tracks changes via Reactive.getChangedRecordIds()
-startRWeb(port, title, initState, pageRenderer, actionHandler) = {
+# sessionSetup: () -> (renderPage, onAction) - creates fresh state per session
+#   Returns a tuple of:
+#   - renderPage: () -> RHtmlResult - renders the page
+#   - onAction: (action, params) -> () - handles actions by mutating reactive records
+startRWeb(port, title, sessionSetup) = {
     println("RWeb server started on http://localhost:" ++ show(port))
     println("WebSocket endpoint: ws://localhost:" ++ show(port) ++ "/ws")
-    serve(port, req => rwebHandleRequest(req, title, initState, pageRenderer, actionHandler))
+    serve(port, req => rwebHandleRequest(req, title, sessionSetup))
 }
