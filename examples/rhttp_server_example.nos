@@ -1,0 +1,22 @@
+# Reactive HTTP Server Example
+#
+# A simple reactive web page with a counter.
+# Run with: ./target/release/nostos examples/rhttp_server_example.nos
+# Open: http://localhost:8080
+
+use stdlib.rhtml
+use stdlib.rhttp_server
+
+# Define the page content
+myPage() = RHtml(
+    div([
+        h1("Welcome to Nostos RHtml!"),
+        p("This is a reactive HTML page."),
+        div([
+            span("Counter: "),
+            span("0")
+        ])
+    ])
+)
+
+main() = startRHttpServerWithTitle(8080, myPage, "My Reactive App")

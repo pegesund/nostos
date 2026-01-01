@@ -1,0 +1,285 @@
+# Reactive HTTP Server
+#
+# Serves reactive HTML pages with session management.
+# Each user gets their own session with RHtml state.
+#
+# Usage:
+#   use stdlib.rhttp_server
+#
+#   # Define your page renderer
+#   myPage() = RHtml(div([
+#       span("Hello, reactive world!")
+#   ]))
+#
+#   # Start the server
+#   main() = startRHttpServer(8080, myPage)
+
+use stdlib.rhtml
+use stdlib.rhtml_session
+use stdlib.server
+
+# Session cookie name
+sessionCookieName() = "nostos_session"
+
+# Generate a random session ID (simple version using timestamp + counter)
+mvar idCounter: Int = 0
+
+generateId() = {
+    count = idCounter
+    idCounter = count + 1
+    "s" ++ show(count) ++ "_" ++ show(Time.now())
+}
+
+# Extract session ID from cookies
+getSessionIdFromCookies(cookies): Option[String] = {
+    cookieValue = getParam(cookies, sessionCookieName())
+    if cookieValue == "" then None()
+    else Some(cookieValue)
+}
+
+# Wrap HTML content in a basic page template
+wrapInHtmlPage(title, bodyContent) =
+    "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>" ++ title ++ "</title>\n</head>\n<body>\n" ++ bodyContent ++ "\n</body>\n</html>"
+
+# --- Request Handlers ---
+
+# Handle initial page load
+# Creates a new session or retrieves existing one
+handlePageLoad(req, pageRenderer, pageTitle) = {
+    sessionIdOpt = getSessionIdFromCookies(req.cookies)
+
+    (sessionId, isNew) = match sessionIdOpt {
+        Some(id) ->
+            if hasSession(id) then (id, false)
+            else {
+                # Session expired or invalid, create new one
+                newId = generateId()
+                (newId, true)
+            }
+        None() -> {
+            newId = generateId()
+            (newId, true)
+        }
+    }
+
+    # Create session if new
+    if isNew then {
+        initialState = pageRenderer()
+        createSessionWithId(sessionId, initialState)
+        ()
+    } else ()
+
+    # Render the current state
+    stateOpt = getSessionOpt(sessionId)
+    html = match stateOpt {
+        Some(state) -> renderRHtml(state)
+        None() -> "<p>Error: Session not found</p>"
+    }
+
+    fullPage = wrapInHtmlPage(pageTitle, html)
+
+    # Set session cookie if new
+    headers = if isNew then [setCookieWithAge(sessionCookieName(), sessionId, 86400)]
+              else []
+
+    respondHtmlWith(req, fullPage, headers)
+}
+
+# Handle state update request (POST with changed record IDs)
+# Returns the re-rendered HTML for affected components
+handleStateUpdate(req) = {
+    sessionIdOpt = getSessionIdFromCookies(req.cookies)
+
+    match sessionIdOpt {
+        None() -> respond401(req, "No session")
+        Some(sessionId) -> {
+            if hasSession(sessionId) then {
+                # Parse the request body for changed record IDs
+                # Expected format: JSON array of integers [1, 2, 3]
+                changedIds = parseRecordIds(req.body)
+
+                # Update the session state
+                resultOpt = updateSessionState(sessionId, changedIds)
+
+                match resultOpt {
+                    Some(newState) -> {
+                        # Return the full re-rendered HTML for now
+                        # TODO: In future, return only affected component HTML
+                        html = renderRHtml(newState)
+                        respondHtml(req, html)
+                    }
+                    None() -> respond404(req)
+                }
+            } else respond401(req, "Invalid session")
+        }
+    }
+}
+
+# Parse JSON array of integers from request body
+# Simple parser for format: [1, 2, 3]
+parseRecordIds(body) = {
+    # Remove whitespace and brackets
+    trimmed = String.trim(body)
+    if String.startsWith(trimmed, "[") then {
+        inner = String.substring(trimmed, 1, String.length(trimmed) - 1)
+        if inner == "" then []
+        else parseCommaSeparatedInts(String.chars(inner), "", [])
+    } else []
+}
+
+# Parse comma-separated integers from char list
+parseCommaSeparatedInts(chars, current, acc) = match chars {
+    [] -> {
+        # Handle last number
+        trimmed = String.trim(current)
+        if trimmed == "" then acc
+        else match String.toInt(trimmed) {
+            Some(n) -> acc ++ [n]
+            None() -> acc
+        }
+    }
+    [',' | rest] -> {
+        # End of current number
+        trimmed = String.trim(current)
+        newAcc = if trimmed == "" then acc
+                 else match String.toInt(trimmed) {
+                     Some(n) -> acc ++ [n]
+                     None() -> acc
+                 }
+        parseCommaSeparatedInts(rest, "", newAcc)
+    }
+    [c | rest] -> parseCommaSeparatedInts(rest, current ++ String.from_chars([c]), acc)
+}
+
+# Handle session info request (for debugging)
+handleSessionInfo(req) = {
+    sessionIdOpt = getSessionIdFromCookies(req.cookies)
+
+    match sessionIdOpt {
+        None() -> respondJson(req, "{\"hasSession\": false}")
+        Some(sessionId) -> {
+            exists = hasSession(sessionId)
+            respondJson(req, "{\"hasSession\": " ++ show(exists) ++ ", \"sessionId\": \"" ++ sessionId ++ "\"}")
+        }
+    }
+}
+
+# Handle logout - remove session
+handleLogout(req) = {
+    sessionIdOpt = getSessionIdFromCookies(req.cookies)
+
+    match sessionIdOpt {
+        Some(sessionId) -> {
+            _ = removeSession(sessionId)
+            redirectWith(req, "/", [clearCookie(sessionCookieName())])
+        }
+        None() -> redirect(req, "/")
+    }
+}
+
+# --- Main Server ---
+
+# Default request handler with routing
+defaultHandler(req, pageRenderer, pageTitle, mainPid) = {
+    path = req.path
+    method = req.method
+
+    if path == "/" then handlePageLoad(req, pageRenderer, pageTitle)
+    else if path == "/rhtml/update" && method == "POST" then handleStateUpdate(req)
+    else if path == "/rhtml/session" then handleSessionInfo(req)
+    else if path == "/rhtml/logout" then handleLogout(req)
+    else if path == "/rhtml/shutdown" then {
+        respondText(req, "Shutting down...")
+        mainPid <- "shutdown"
+    }
+    else respond404(req)
+}
+
+# Server accept loop
+rhttpAcceptLoop(server, pageRenderer, pageTitle, mainPid) = {
+    ok = try {
+        req = Server.accept(server)
+        spawn { defaultHandler(req, pageRenderer, pageTitle, mainPid) }
+        true
+    } catch { _ -> false }
+    if ok then rhttpAcceptLoop(server, pageRenderer, pageTitle, mainPid) else ()
+}
+
+# Start the reactive HTTP server
+# pageRenderer: () -> RHtmlResult - function that returns the initial page state
+# Returns when server shuts down
+startRHttpServer(port, pageRenderer) =
+    startRHttpServerWithTitle(port, pageRenderer, "Nostos App")
+
+startRHttpServerWithTitle(port, pageRenderer, pageTitle) = {
+    mainPid = self()
+
+    result = try {
+        server = Server.bind(port)
+        println("RHtml Server started on http://localhost:" ++ show(port))
+        println("Endpoints:")
+        println("  /              - Main page")
+        println("  /rhtml/update  - POST state updates")
+        println("  /rhtml/session - Session info")
+        println("  /rhtml/logout  - Logout")
+        println("  /rhtml/shutdown - Shutdown server")
+        println("")
+        println("Active sessions: " ++ show(sessionCount()))
+
+        # Spawn server loop
+        spawn { rhttpAcceptLoop(server, pageRenderer, pageTitle, mainPid) }
+
+        # Wait for shutdown signal
+        receive {
+            "shutdown" -> {
+                sleep(100)
+                Server.close(server)
+                println("Server shutdown complete.")
+            }
+        }
+    } catch { (kind, msg) ->
+        println("Error [" ++ kind ++ "]: " ++ msg)
+    }
+    result
+}
+
+# Start server with custom handler for additional routes
+startRHttpServerCustom(port, pageRenderer, pageTitle, customHandler) = {
+    mainPid = self()
+
+    # Combined handler: try custom first, fall back to default
+    combinedHandler = req => {
+        handled = customHandler(req)
+        if handled then ()
+        else defaultHandler(req, pageRenderer, pageTitle, mainPid)
+    }
+
+    result = try {
+        server = Server.bind(port)
+        println("RHtml Server started on http://localhost:" ++ show(port))
+
+        spawn {
+            customAcceptLoop(server, combinedHandler)
+        }
+
+        receive {
+            "shutdown" -> {
+                sleep(100)
+                Server.close(server)
+                println("Server shutdown complete.")
+            }
+        }
+    } catch { (kind, msg) ->
+        println("Error [" ++ kind ++ "]: " ++ msg)
+    }
+    result
+}
+
+customAcceptLoop(server, handler) = {
+    ok = try {
+        req = Server.accept(server)
+        spawn { handler(req) }
+        true
+    } catch { _ -> false }
+    if ok then customAcceptLoop(server, handler) else ()
+}
