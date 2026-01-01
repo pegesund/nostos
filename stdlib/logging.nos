@@ -108,3 +108,91 @@ logInfoFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LInfo, m
 logWarnFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LWarn, message, source))
 logErrorFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LError, message, source))
 logFatalFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LFatal, message, source))
+
+# File Logger (simple, no rotation)
+type FileLogger = { path: String, minLevel: LogLevel }
+
+newFileLogger(path) = FileLogger(path, LDebug)
+newFileLoggerWithLevel(path, level) = FileLogger(path, level)
+
+fileLog(logger, entry) = {
+    if levelPriority(entry.level) >= levelPriority(logger.minLevel) then {
+        line = formatEntry(entry) ++ "\n"
+        handle = File.open(logger.path, "a")
+        File.write(handle, line)
+        File.close(handle)
+    } else ()
+}
+
+fileFlush(logger) = {
+    # File is already closed after each write, so this is a no-op
+    ()
+}
+
+# Rotating File Logger
+type RotatingFileLogger = { path: String, minLevel: LogLevel, maxSize: Int, maxBackups: Int }
+
+newRotatingFileLogger(path, maxSize, maxBackups) = RotatingFileLogger(path, LDebug, maxSize, maxBackups)
+newRotatingFileLoggerWithLevel(path, level, maxSize, maxBackups) = RotatingFileLogger(path, level, maxSize, maxBackups)
+
+# Rotate files: app.log -> app.log.1, app.log.1 -> app.log.2, etc.
+rotateFilesImpl(basePath, n, maxBackups) = {
+    if n == 0 then ()
+    else {
+        oldPath = basePath ++ "." ++ show(n)
+        newPath = basePath ++ "." ++ show(n + 1)
+        if File.exists(oldPath) then {
+            if n == maxBackups then
+                File.remove(oldPath)
+            else
+                File.rename(oldPath, newPath)
+        } else ()
+        rotateFilesImpl(basePath, n - 1, maxBackups)
+    }
+}
+
+rotateFiles(basePath, maxBackups) = {
+    # Shift all existing backups
+    rotateFilesImpl(basePath, maxBackups, maxBackups)
+
+    # Move current file to .1
+    if File.exists(basePath) then
+        File.rename(basePath, basePath ++ ".1")
+    else ()
+}
+
+rotatingFileLog(logger, entry) = {
+    if levelPriority(entry.level) >= levelPriority(logger.minLevel) then {
+        # Check if rotation needed
+        needsRotation = if File.exists(logger.path) then
+            File.size(logger.path) >= logger.maxSize
+        else false
+
+        if needsRotation then rotateFiles(logger.path, logger.maxBackups) else ()
+
+        # Write the log entry
+        line = formatEntry(entry) ++ "\n"
+        handle = File.open(logger.path, "a")
+        File.write(handle, line)
+        File.close(handle)
+    } else ()
+}
+
+rotatingFileFlush(logger) = {
+    # File is already closed after each write, so this is a no-op
+    ()
+}
+
+# Convenience functions for file logger
+fileLogDebug(logger, message) = fileLog(logger, makeEntry(LDebug, message))
+fileLogInfo(logger, message) = fileLog(logger, makeEntry(LInfo, message))
+fileLogWarn(logger, message) = fileLog(logger, makeEntry(LWarn, message))
+fileLogError(logger, message) = fileLog(logger, makeEntry(LError, message))
+fileLogFatal(logger, message) = fileLog(logger, makeEntry(LFatal, message))
+
+# Convenience functions for rotating file logger
+rotatingLogDebug(logger, message) = rotatingFileLog(logger, makeEntry(LDebug, message))
+rotatingLogInfo(logger, message) = rotatingFileLog(logger, makeEntry(LInfo, message))
+rotatingLogWarn(logger, message) = rotatingFileLog(logger, makeEntry(LWarn, message))
+rotatingLogError(logger, message) = rotatingFileLog(logger, makeEntry(LError, message))
+rotatingLogFatal(logger, message) = rotatingFileLog(logger, makeEntry(LFatal, message))
