@@ -27,6 +27,7 @@ const tutorialChapters = [
     { num: 23, file: "23_ffi.html", title: "FFI & Extensions" },
     { num: 24, file: "24_command_line.html", title: "Command Line" },
     { num: 25, file: "25_reactive_records.html", title: "Reactive Records" },
+    { num: 26, file: "26_logging.html", title: "Logging" },
 ];
 
 function generateTutorialSidebar() {

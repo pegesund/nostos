@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logging - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75; /* A distinct red/orange for operators */
+        }
+        .hljs-function {
+            color: #e5c07b; /* A distinct yellow/gold for functions */
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/yourusername/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+
+        <!-- Sidebar -->
+        <aside id="tutorial-sidebar" class="w-64 fixed top-16 h-[calc(100vh-4rem)] border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block pb-8">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_type_system.html" class="block text-slate-400 hover:text-white transition">7. Type System</a></li>
+                    <li><a href="08_traits.html" class="block text-slate-400 hover:text-white transition">8. Traits</a></li>
+                    <li><a href="09_builtin_traits.html" class="block text-slate-400 hover:text-white transition">9. Builtin Traits</a></li>
+                    <li><a href="10_trait_bounds.html" class="block text-slate-400 hover:text-white transition">10. Trait Bounds</a></li>
+                    <li><a href="11_error_handling.html" class="block text-slate-400 hover:text-white transition">11. Error Handling</a></li>
+                    <li><a href="12_modules.html" class="block text-slate-400 hover:text-white transition">12. Modules & Imports</a></li>
+                    <li><a href="13_stdlib.html" class="block text-slate-400 hover:text-white transition">13. Standard Library</a></li>
+                    <li><a href="14_json.html" class="block text-slate-400 hover:text-white transition">14. JSON</a></li>
+                    <li><a href="15_concurrency.html" class="block text-slate-400 hover:text-white transition">15. Concurrency</a></li>
+                    <li><a href="16_async_runtime.html" class="block text-slate-400 hover:text-white transition">16. Async Runtime</a></li>
+                    <li><a href="17_async_io_http.html" class="block text-slate-400 hover:text-white transition">17. Async I/O & HTTP</a></li>
+                    <li><a href="18_reflection.html" class="block text-slate-400 hover:text-white transition">18. Reflection & Eval</a></li>
+                    <li><a href="19_debugging_profiling.html" class="block text-slate-400 hover:text-white transition">19. Debugging & Profiling</a></li>
+                    <li><a href="20_html_templating.html" class="block text-slate-400 hover:text-white transition">20. HTML Templating</a></li>
+                    <li><a href="21_mutability.html" class="block text-slate-400 hover:text-white transition">21. Mutability</a></li>
+                    <li><a href="22_complete_web_app.html" class="block text-slate-400 hover:text-white transition">22. Complete Web App</a></li>
+                    <li><a href="23_ffi.html" class="block text-slate-400 hover:text-white transition">23. FFI & Extensions</a></li>
+                    <li><a href="24_command_line.html" class="block text-slate-400 hover:text-white transition">24. Command Line</a></li>
+                    <li><a href="25_reactive_records.html" class="block text-slate-400 hover:text-white transition">25. Reactive Records</a></li>
+                    <li><a href="26_logging.html" class="block text-blue-400 font-medium">26. Logging</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Logging</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Good logging is essential for understanding what your application is doing, debugging issues, and monitoring production systems. Nostos provides a comprehensive logging library with support for multiple output destinations, log levels, and even custom loggers. In this chapter, you'll learn how to effectively use logging in your Nostos applications.
+                </p>
+
+                <!-- Getting Started -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Getting Started</h2>
+                <p class="text-slate-400 mb-4">
+                    To use the logging library, import it with <code class="bg-slate-800 px-2 py-1 rounded">use stdlib.logging.*</code>. This gives you access to all the logging types and functions. Let's start with the simplest example:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.logging.*
+
+main() = {
+    # Create a console logger
+    logger = newConsoleLogger()
+
+    # Log some messages at different levels
+    logInfo(logger, "Application started")
+    logDebug(logger, "Initializing components...")
+    logWarn(logger, "Configuration file not found, using defaults")
+    logError(logger, "Failed to connect to database")
+
+    # Always flush to ensure output is written
+    consoleFlush(logger)
+
+    0
+}
+</code></pre>
+                </div>
+                <p class="text-slate-400 mb-6">
+                    Running this produces formatted output with timestamps and log levels:
+                </p>
+                <div class="bg-slate-800 rounded-lg p-4 mb-8 font-mono text-sm text-green-400 overflow-x-auto">
+<pre>[2026-01-15 14:32:01.234] [INFO] Application started
+[2026-01-15 14:32:01.235] [DEBUG] Initializing components...
+[2026-01-15 14:32:01.235] [WARN] Configuration file not found, using defaults
+[2026-01-15 14:32:01.236] [ERROR] Failed to connect to database</pre>
+                </div>
+
+                <!-- Log Levels -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Understanding Log Levels</h2>
+                <p class="text-slate-400 mb-4">
+                    The logging library provides five log levels, ordered from least to most severe. Each level has a specific purpose:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Log levels are defined as a variant type
+type LogLevel = LDebug | LInfo | LWarn | LError | LFatal
+</code></pre>
+                </div>
+                <div class="overflow-x-auto mb-8">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="border-b border-slate-700">
+                                <th class="py-3 px-4 text-white font-semibold">Level</th>
+                                <th class="py-3 px-4 text-white font-semibold">Priority</th>
+                                <th class="py-3 px-4 text-white font-semibold">When to Use</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-slate-400">
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4"><code class="text-blue-400">LDebug</code></td>
+                                <td class="py-3 px-4">0 (lowest)</td>
+                                <td class="py-3 px-4">Detailed information for debugging. Typically disabled in production.</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4"><code class="text-green-400">LInfo</code></td>
+                                <td class="py-3 px-4">1</td>
+                                <td class="py-3 px-4">General information about application progress and state changes.</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4"><code class="text-yellow-400">LWarn</code></td>
+                                <td class="py-3 px-4">2</td>
+                                <td class="py-3 px-4">Something unexpected happened, but the application can continue.</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4"><code class="text-orange-400">LError</code></td>
+                                <td class="py-3 px-4">3</td>
+                                <td class="py-3 px-4">An error occurred that prevented an operation from completing.</td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 px-4"><code class="text-red-400">LFatal</code></td>
+                                <td class="py-3 px-4">4 (highest)</td>
+                                <td class="py-3 px-4">A critical error that requires immediate attention or causes shutdown.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Filtering by Level -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Filtering Logs by Level</h2>
+                <p class="text-slate-400 mb-4">
+                    In development, you often want to see all log messages. In production, you typically only want warnings and errors. You can set a minimum log level when creating a logger:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.logging.*
+
+main() = {
+    # Create a logger that only shows warnings and above
+    logger = newConsoleLoggerWithLevel(LWarn)
+
+    # These will be filtered out (below minimum level)
+    logDebug(logger, "This debug message won't appear")
+    logInfo(logger, "This info message won't appear either")
+
+    # These will be shown (at or above minimum level)
+    logWarn(logger, "This warning will appear")
+    logError(logger, "This error will appear")
+    logFatal(logger, "This fatal message will appear")
+
+    consoleFlush(logger)
+    0
+}
+</code></pre>
+                </div>
+                <p class="text-slate-400 mb-6">
+                    Output:
+                </p>
+                <div class="bg-slate-800 rounded-lg p-4 mb-8 font-mono text-sm text-green-400 overflow-x-auto">
+<pre>[2026-01-15 14:35:12.100] [WARN] This warning will appear
+[2026-01-15 14:35:12.101] [ERROR] This error will appear
+[2026-01-15 14:35:12.101] [FATAL] This fatal message will appear</pre>
+                </div>
+
+                <!-- Adding Source Context -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Adding Source Context</h2>
+                <p class="text-slate-400 mb-4">
+                    In larger applications, it's helpful to know which component or module generated a log message. Use the <code class="bg-slate-800 px-2 py-1 rounded">*From</code> variants to add a source identifier:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.logging.*
+
+main() = {
+    logger = newConsoleLogger()
+
+    # Log with source identifiers
+    logInfoFrom(logger, "Database", "Connection pool initialized with 10 connections")
+    logInfoFrom(logger, "HTTP", "Server listening on port 8080")
+    logWarnFrom(logger, "Cache", "Cache miss rate above 50%")
+    logErrorFrom(logger, "Auth", "Invalid token received from client 192.168.1.100")
+
+    consoleFlush(logger)
+    0
+}
+</code></pre>
+                </div>
+                <p class="text-slate-400 mb-6">
+                    Output with source tags:
+                </p>
+                <div class="bg-slate-800 rounded-lg p-4 mb-8 font-mono text-sm text-green-400 overflow-x-auto">
+<pre>[2026-01-15 14:40:00.100] [INFO] [Database] Connection pool initialized with 10 connections
+[2026-01-15 14:40:00.101] [INFO] [HTTP] Server listening on port 8080
+[2026-01-15 14:40:00.102] [WARN] [Cache] Cache miss rate above 50%
+[2026-01-15 14:40:00.103] [ERROR] [Auth] Invalid token received from client 192.168.1.100</pre>
+                </div>
+
+                <!-- Logging to stderr -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Logging to stderr</h2>
+                <p class="text-slate-400 mb-4">
+                    Sometimes you want to separate log output from regular program output. The <code class="bg-slate-800 px-2 py-1 rounded">StderrLogger</code> writes to standard error instead of standard output:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.logging.*
+
+main() = {
+    # Create a stderr logger (useful for separating logs from program output)
+    logger = newStderrLogger()
+
+    # Log to stderr
+    stderrLog(logger, makeEntry(LInfo, "This goes to stderr"))
+    stderrLog(logger, makeEntry(LError, "Errors also go to stderr"))
+
+    stderrFlush(logger)
+
+    # Regular output still goes to stdout
+    println("This goes to stdout")
+
+    0
+}
+</code></pre>
+                </div>
+                <p class="text-slate-400 mb-6">
+                    This is particularly useful when running programs in pipelines, as you can redirect logs separately from program output.
+                </p>
+
+                <!-- File Logging -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Logging to Files</h2>
+                <p class="text-slate-400 mb-4">
+                    For long-running applications, you'll want to persist logs to files. The <code class="bg-slate-800 px-2 py-1 rounded">FileLogger</code> appends log entries to a file:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.logging.*
+
+main() = {
+    # Create a file logger - logs are appended to the file
+    logger = newFileLogger("/var/log/myapp.log")
+
+    # Log some messages
+    fileLogInfo(logger, "Application started")
+    fileLogInfo(logger, "Processing request from user 42")
+    fileLogWarn(logger, "Response time exceeded 500ms")
+    fileLogError(logger, "Failed to write to cache")
+
+    # File is automatically flushed after each write
+    fileFlush(logger)
+
+    println("Logs written to /var/log/myapp.log")
+    0
+}
+</code></pre>
+                </div>
+                <p class="text-slate-400 mb-4">
+                    You can also set a minimum log level for file loggers:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.logging.*
+
+main() = {
+    # Only log warnings and above to file
+    logger = newFileLoggerWithLevel("/var/log/myapp-errors.log", LWarn)
+
+    fileLogDebug(logger, "Debug - won't be written")
+    fileLogInfo(logger, "Info - won't be written")
+    fileLogWarn(logger, "Warning - will be written")
+    fileLogError(logger, "Error - will be written")
+
+    0
+}
+</code></pre>
+                </div>
+
+                <!-- Rotating File Logger -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Log Rotation</h2>
+                <p class="text-slate-400 mb-4">
+                    Log files can grow very large over time. The <code class="bg-slate-800 px-2 py-1 rounded">RotatingFileLogger</code> automatically rotates log files when they reach a certain size, keeping a specified number of backup files:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.logging.*
+
+main() = {
+    # Create a rotating file logger
+    # - Path: /var/log/myapp.log
+    # - Max size: 10MB (10 * 1024 * 1024 bytes)
+    # - Keep 5 backup files
+    maxSize = 10 * 1024 * 1024  # 10 MB
+    maxBackups = 5
+
+    logger = newRotatingFileLogger("/var/log/myapp.log", maxSize, maxBackups)
+
+    # Log messages as usual
+    rotatingLogInfo(logger, "Application started")
+    rotatingLogInfo(logger, "Processing data...")
+
+    # When myapp.log reaches 10MB:
+    # - myapp.log.5 is deleted (if exists)
+    # - myapp.log.4 -> myapp.log.5
+    # - myapp.log.3 -> myapp.log.4
+    # - myapp.log.2 -> myapp.log.3
+    # - myapp.log.1 -> myapp.log.2
+    # - myapp.log   -> myapp.log.1
+    # - New myapp.log is created
+
+    0
+}
+</code></pre>
+                </div>
+                <p class="text-slate-400 mb-4">
+                    The rotation scheme keeps your most recent logs while automatically cleaning up old ones:
+                </p>
+                <div class="bg-slate-800 rounded-lg p-4 mb-8 font-mono text-sm text-slate-300 overflow-x-auto">
+<pre>/var/log/
+  myapp.log       # Current log file
+  myapp.log.1     # Previous log file (most recent backup)
+  myapp.log.2     # Older backup
+  myapp.log.3     # Even older backup
+  myapp.log.4     # ...
+  myapp.log.5     # Oldest backup (will be deleted on next rotation)</pre>
+                </div>
+
+                <!-- Working with Log Entries Directly -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Working with Log Entries Directly</h2>
+                <p class="text-slate-400 mb-4">
+                    For more control, you can create and format log entries manually using <code class="bg-slate-800 px-2 py-1 rounded">makeEntry</code> and <code class="bg-slate-800 px-2 py-1 rounded">formatEntry</code>:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.logging.*
+
+main() = {
+    # Create a log entry manually
+    entry = makeEntry(LInfo, "User logged in")
+
+    # The entry contains:
+    # - level: LInfo
+    # - message: "User logged in"
+    # - timestamp: current time in milliseconds
+    # - source: "" (empty)
+
+    # Create an entry with a source
+    entryWithSource = makeEntryFrom(LWarn, "Disk space low", "Storage")
+
+    # Format entries as strings
+    formatted = formatEntry(entry)
+    println(formatted)
+    # Output: [2026-01-15 14:50:00.123] [INFO] User logged in
+
+    formattedWithSource = formatEntry(entryWithSource)
+    println(formattedWithSource)
+    # Output: [2026-01-15 14:50:00.124] [WARN] [Storage] Disk space low
+
+    0
+}
+</code></pre>
+                </div>
+
+                <!-- The LogEntry Type -->
+                <h2 class="text-2xl font-semibold text-white mb-4">The LogEntry Type</h2>
+                <p class="text-slate-400 mb-4">
+                    Understanding the <code class="bg-slate-800 px-2 py-1 rounded">LogEntry</code> type helps when building custom logging solutions:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># The LogEntry record type
+type LogEntry = {
+    level: LogLevel,     # The severity level
+    message: String,     # The log message
+    timestamp: Int,      # Unix timestamp in milliseconds
+    source: String       # Optional source identifier (empty string if not set)
+}
+
+# Example: Create a custom log entry
+customEntry = LogEntry(
+    LError,
+    "Connection timeout after 30 seconds",
+    Time.now(),
+    "NetworkClient"
+)
+
+# Access fields
+println("Level: " ++ levelToString(customEntry.level))   # "ERROR"
+println("Message: " ++ customEntry.message)
+println("Source: " ++ customEntry.source)                # "NetworkClient"
+</code></pre>
+                </div>
+
+                <!-- Creating Custom Loggers -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Creating Custom Loggers</h2>
+                <p class="text-slate-400 mb-4">
+                    The logging library provides a <code class="bg-slate-800 px-2 py-1 rounded">Logger</code> trait that you can implement to create custom loggers. This is useful when you need special formatting, filtering, or output destinations.
+                </p>
+
+                <h3 class="text-xl font-semibold text-white mb-3 mt-6">Example: A Prefix Logger</h3>
+                <p class="text-slate-400 mb-4">
+                    Let's create a custom logger that adds a configurable prefix to all messages:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.logging.*
+
+# Define our custom logger type
+type PrefixLogger = { prefix: String, minLevel: LogLevel }
+
+# Constructor function
+newPrefixLogger(prefix) = PrefixLogger(prefix, LDebug)
+
+# Implement the Logger trait
+PrefixLogger: Logger
+    log(self, entry: LogEntry) -> () = {
+        if levelPriority(entry.level) >= levelPriority(self.minLevel) then
+            println("[" ++ self.prefix ++ "] " ++ formatEntry(entry))
+        else ()
+    }
+    flush(self) -> () = flushStdout()
+end
+
+main() = {
+    # Create loggers for different components
+    dbLogger = newPrefixLogger("DATABASE")
+    httpLogger = newPrefixLogger("HTTP-SERVER")
+
+    # Use the loggers with method syntax
+    dbLogger.log(makeEntry(LInfo, "Connected to PostgreSQL"))
+    dbLogger.log(makeEntry(LDebug, "Executing query: SELECT * FROM users"))
+
+    httpLogger.log(makeEntry(LInfo, "Listening on port 8080"))
+    httpLogger.log(makeEntry(LWarn, "Slow response: 2500ms"))
+
+    dbLogger.flush()
+    httpLogger.flush()
+
+    0
+}
+</code></pre>
+                </div>
+                <p class="text-slate-400 mb-6">
+                    Output:
+                </p>
+                <div class="bg-slate-800 rounded-lg p-4 mb-8 font-mono text-sm text-green-400 overflow-x-auto">
+<pre>[DATABASE] [2026-01-15 15:00:00.100] [INFO] Connected to PostgreSQL
+[DATABASE] [2026-01-15 15:00:00.101] [DEBUG] Executing query: SELECT * FROM users
+[HTTP-SERVER] [2026-01-15 15:00:00.102] [INFO] Listening on port 8080
+[HTTP-SERVER] [2026-01-15 15:00:00.103] [WARN] Slow response: 2500ms</pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3 mt-6">Example: A JSON Logger</h3>
+                <p class="text-slate-400 mb-4">
+                    Here's a more advanced example that outputs logs as JSON for easy parsing by log aggregation tools:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.logging.*
+use stdlib.json.*
+
+# JSON logger type
+type JsonLogger = { minLevel: LogLevel, includeTimestamp: Bool }
+
+newJsonLogger() = JsonLogger(LDebug, true)
+newJsonLoggerWithOptions(minLevel, includeTimestamp) = JsonLogger(minLevel, includeTimestamp)
+
+# Implement the Logger trait
+JsonLogger: Logger
+    log(self, entry: LogEntry) -> () = {
+        if levelPriority(entry.level) >= levelPriority(self.minLevel) then {
+            # Build JSON object
+            obj = %{
+                "level": levelToString(entry.level),
+                "message": entry.message
+            }
+
+            # Optionally add timestamp
+            objWithTs = if self.includeTimestamp then
+                obj.put("timestamp", entry.timestamp)
+            else obj
+
+            # Add source if present
+            finalObj = if entry.source != "" then
+                objWithTs.put("source", entry.source)
+            else objWithTs
+
+            println(toJson(finalObj))
+        } else ()
+    }
+    flush(self) -> () = flushStdout()
+end
+
+main() = {
+    logger = newJsonLogger()
+
+    logger.log(makeEntry(LInfo, "Server started"))
+    logger.log(makeEntryFrom(LError, "Connection refused", "Database"))
+
+    logger.flush()
+    0
+}
+</code></pre>
+                </div>
+                <p class="text-slate-400 mb-6">
+                    Output (JSON format, one object per line):
+                </p>
+                <div class="bg-slate-800 rounded-lg p-4 mb-8 font-mono text-sm text-green-400 overflow-x-auto">
+<pre>{"level":"INFO","message":"Server started","timestamp":1737039600100}
+{"level":"ERROR","message":"Connection refused","timestamp":1737039600101,"source":"Database"}</pre>
+                </div>
+
+                <!-- Best Practices -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Best Practices</h2>
+                <p class="text-slate-400 mb-4">
+                    Follow these guidelines to make your logging more effective:
+                </p>
+
+                <h3 class="text-xl font-semibold text-white mb-3 mt-6">1. Choose the Right Log Level</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># GOOD: Appropriate levels
+logDebug(logger, "Cache key: user_42_profile")     # Implementation details
+logInfo(logger, "User 42 logged in")                # Normal events
+logWarn(logger, "API rate limit at 80%")            # Potential issues
+logError(logger, "Payment processing failed")       # Actual failures
+logFatal(logger, "Database connection lost")        # Critical failures
+
+# BAD: Inappropriate levels
+logError(logger, "User clicked button")  # This is INFO at most
+logDebug(logger, "Server crashed!")      # This should be FATAL
+</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3 mt-6">2. Include Relevant Context</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># GOOD: Includes useful context
+logInfo(logger, "Order #12345 processed for user 42, total: $99.99")
+logError(logger, "Failed to send email to user@example.com: timeout after 30s")
+
+# BAD: Missing context
+logInfo(logger, "Order processed")    # Which order? For whom?
+logError(logger, "Email failed")      # To whom? Why?
+</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3 mt-6">3. Use Source Identifiers in Large Applications</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># GOOD: Easy to filter and trace
+logInfoFrom(logger, "OrderService", "Processing order #12345")
+logInfoFrom(logger, "PaymentGateway", "Charging card ending in 4242")
+logInfoFrom(logger, "EmailService", "Sending confirmation to user@example.com")
+
+# When something goes wrong, you can easily trace the flow:
+# [OrderService] Processing order #12345
+# [PaymentGateway] Charging card ending in 4242
+# [PaymentGateway] ERROR: Card declined
+# [OrderService] Order #12345 failed: payment declined
+</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3 mt-6">4. Configure Different Levels for Different Environments</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.logging.*
+
+# Get log level from environment or configuration
+getLogLevel(env) = match env {
+    "development" -> LDebug    # Show everything in dev
+    "staging"     -> LInfo     # Info and above in staging
+    "production"  -> LWarn     # Only warnings and errors in prod
+    _             -> LInfo     # Default to info
+}
+
+main() = {
+    env = getEnv("APP_ENV").getOrElse("development")
+    level = getLogLevel(env)
+
+    logger = newConsoleLoggerWithLevel(level)
+
+    logDebug(logger, "Detailed debug info")  # Only in development
+    logInfo(logger, "Server starting...")     # Development + staging
+    logWarn(logger, "High memory usage")      # All environments
+    logError(logger, "Request failed")        # All environments
+
+    consoleFlush(logger)
+    0
+}
+</code></pre>
+                </div>
+
+                <!-- Complete Example -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Complete Example: Application with Multiple Loggers</h2>
+                <p class="text-slate-400 mb-4">
+                    Here's a complete example showing how to set up logging for a real application with both console and file output:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.logging.*
+
+# Application logger that writes to both console and rotating file
+type AppLogger = {
+    console: ConsoleLogger,
+    file: RotatingFileLogger,
+    appName: String
+}
+
+newAppLogger(appName, logPath) = {
+    console = newConsoleLoggerWithLevel(LInfo)
+    file = newRotatingFileLoggerWithLevel(
+        logPath,
+        LDebug,           # File gets all levels
+        5 * 1024 * 1024,  # 5 MB max size
+        3                  # Keep 3 backups
+    )
+    AppLogger(console, file, appName)
+}
+
+# Log to both console and file
+appLog(logger, entry) = {
+    # Add app name as source if not already set
+    entryWithSource = if entry.source == "" then
+        LogEntry(entry.level, entry.message, entry.timestamp, logger.appName)
+    else entry
+
+    # Log to console (respects its level filter)
+    consoleLog(logger.console, entryWithSource)
+
+    # Log to file (respects its level filter)
+    rotatingFileLog(logger.file, entryWithSource)
+}
+
+appFlush(logger) = {
+    consoleFlush(logger.console)
+    rotatingFileFlush(logger.file)
+}
+
+# Convenience functions
+appDebug(logger, msg) = appLog(logger, makeEntry(LDebug, msg))
+appInfo(logger, msg) = appLog(logger, makeEntry(LInfo, msg))
+appWarn(logger, msg) = appLog(logger, makeEntry(LWarn, msg))
+appError(logger, msg) = appLog(logger, makeEntry(LError, msg))
+
+main() = {
+    # Initialize application logger
+    logger = newAppLogger("MyApp", "/var/log/myapp/app.log")
+
+    appInfo(logger, "Application starting...")
+    appDebug(logger, "Loading configuration from /etc/myapp/config.json")
+    appInfo(logger, "Configuration loaded successfully")
+
+    appDebug(logger, "Connecting to database...")
+    appInfo(logger, "Database connection established")
+
+    appInfo(logger, "Starting HTTP server on port 8080")
+    appWarn(logger, "Running in development mode - not for production use")
+
+    # Simulate some work
+    appDebug(logger, "Processing incoming request: GET /api/users")
+    appInfo(logger, "Request completed in 45ms")
+
+    appInfo(logger, "Shutting down gracefully...")
+    appFlush(logger)
+
+    0
+}
+</code></pre>
+                </div>
+                <p class="text-slate-400 mb-6">
+                    Console output (INFO and above only):
+                </p>
+                <div class="bg-slate-800 rounded-lg p-4 mb-6 font-mono text-sm text-green-400 overflow-x-auto">
+<pre>[2026-01-15 16:00:00.100] [INFO] [MyApp] Application starting...
+[2026-01-15 16:00:00.102] [INFO] [MyApp] Configuration loaded successfully
+[2026-01-15 16:00:00.104] [INFO] [MyApp] Database connection established
+[2026-01-15 16:00:00.105] [INFO] [MyApp] Starting HTTP server on port 8080
+[2026-01-15 16:00:00.106] [WARN] [MyApp] Running in development mode - not for production use
+[2026-01-15 16:00:00.108] [INFO] [MyApp] Request completed in 45ms
+[2026-01-15 16:00:00.109] [INFO] [MyApp] Shutting down gracefully...</pre>
+                </div>
+                <p class="text-slate-400 mb-6">
+                    File output (includes DEBUG):
+                </p>
+                <div class="bg-slate-800 rounded-lg p-4 mb-8 font-mono text-sm text-green-400 overflow-x-auto">
+<pre>[2026-01-15 16:00:00.100] [INFO] [MyApp] Application starting...
+[2026-01-15 16:00:00.101] [DEBUG] [MyApp] Loading configuration from /etc/myapp/config.json
+[2026-01-15 16:00:00.102] [INFO] [MyApp] Configuration loaded successfully
+[2026-01-15 16:00:00.103] [DEBUG] [MyApp] Connecting to database...
+[2026-01-15 16:00:00.104] [INFO] [MyApp] Database connection established
+[2026-01-15 16:00:00.105] [INFO] [MyApp] Starting HTTP server on port 8080
+[2026-01-15 16:00:00.106] [WARN] [MyApp] Running in development mode - not for production use
+[2026-01-15 16:00:00.107] [DEBUG] [MyApp] Processing incoming request: GET /api/users
+[2026-01-15 16:00:00.108] [INFO] [MyApp] Request completed in 45ms
+[2026-01-15 16:00:00.109] [INFO] [MyApp] Shutting down gracefully...</pre>
+                </div>
+
+                <!-- Summary -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Summary</h2>
+                <p class="text-slate-400 mb-4">
+                    In this chapter, you learned how to:
+                </p>
+                <ul class="list-disc list-inside text-slate-400 mb-8 space-y-2">
+                    <li>Use the built-in <code class="bg-slate-800 px-1 rounded">ConsoleLogger</code>, <code class="bg-slate-800 px-1 rounded">StderrLogger</code>, <code class="bg-slate-800 px-1 rounded">FileLogger</code>, and <code class="bg-slate-800 px-1 rounded">RotatingFileLogger</code></li>
+                    <li>Understand and use the five log levels: <code class="bg-slate-800 px-1 rounded">LDebug</code>, <code class="bg-slate-800 px-1 rounded">LInfo</code>, <code class="bg-slate-800 px-1 rounded">LWarn</code>, <code class="bg-slate-800 px-1 rounded">LError</code>, <code class="bg-slate-800 px-1 rounded">LFatal</code></li>
+                    <li>Filter logs by setting a minimum level</li>
+                    <li>Add source context to log messages for easier debugging</li>
+                    <li>Implement custom loggers using the <code class="bg-slate-800 px-1 rounded">Logger</code> trait</li>
+                    <li>Follow best practices for effective logging</li>
+                </ul>
+
+                <div class="bg-blue-900/30 border border-blue-800 rounded-lg p-6 mb-8">
+                    <h3 class="text-lg font-semibold text-blue-400 mb-2">Quick Reference</h3>
+                    <div class="text-slate-400 font-mono text-sm">
+                        <p class="mb-2"><code>use stdlib.logging.*</code> - Import the logging library</p>
+                        <p class="mb-2"><code>newConsoleLogger()</code> - Create console logger</p>
+                        <p class="mb-2"><code>newFileLogger(path)</code> - Create file logger</p>
+                        <p class="mb-2"><code>newRotatingFileLogger(path, maxSize, maxBackups)</code> - Create rotating logger</p>
+                        <p class="mb-2"><code>logInfo(logger, msg)</code> - Log at INFO level</p>
+                        <p class="mb-2"><code>logInfoFrom(logger, source, msg)</code> - Log with source</p>
+                        <p><code>consoleFlush(logger)</code> - Flush output</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Navigation Buttons -->
+            <div class="flex justify-between border-t border-slate-800 pt-8">
+                <a href="25_reactive_records.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
+                    Previous: Reactive Records
+                </a>
+                <span class="text-slate-600">
+                    End of Tutorial
+                </span>
+            </div>
+        </main>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script src="../js/tutorial-sidebar.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>
+</html>
