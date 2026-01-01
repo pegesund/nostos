@@ -1,0 +1,38 @@
+# expect: 0
+
+# Test global logging with mvar for runtime log level changes
+
+use stdlib.logging.*
+
+# Store log level in mvar for runtime changes
+mvar logLevel: LogLevel = LDebug
+
+# Custom global logger that checks mvar level
+globalLog(level, message) = {
+    minLevel = logLevel
+    if levelPriority(level) >= levelPriority(minLevel) then
+        println(formatEntry(makeEntry(level, message)))
+    else ()
+}
+
+setLevel(level) = {
+    logLevel = level
+}
+
+main() = {
+    # Debug should be visible at debug level
+    globalLog(LDebug, "Debug visible")
+    globalLog(LInfo, "Info visible")
+
+    # Change to warn level
+    setLevel(LWarn)
+
+    # Debug and info should now be filtered
+    globalLog(LDebug, "Debug filtered")
+    globalLog(LInfo, "Info filtered")
+    globalLog(LWarn, "Warn visible")
+    globalLog(LError, "Error visible")
+
+    flushStdout()
+    0
+}

@@ -1,0 +1,39 @@
+# expect: 0
+
+# Test that records in MVars have correct field access
+
+type Config = { level: Int, name: String }
+
+mvar config: Config = Config(1, "default")
+
+getLevel() = {
+    c = config
+    c.level
+}
+
+getName() = {
+    c = config
+    c.name
+}
+
+setConfig(lvl, n) = {
+    config = Config(lvl, n)
+}
+
+main() = {
+    # Initial values
+    l1 = getLevel()
+    n1 = getName()
+
+    if l1 != 1 then 1 else
+    if n1 != "default" then 2 else {
+        # Update config
+        setConfig(5, "updated")
+
+        l2 = getLevel()
+        n2 = getName()
+
+        if l2 != 5 then 3 else
+        if n2 != "updated" then 4 else 0
+    }
+}

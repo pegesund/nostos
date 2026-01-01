@@ -552,6 +552,98 @@ main() = {
 {"level":"ERROR","message":"Connection refused","timestamp":1737039600101,"source":"Database"}</pre>
                 </div>
 
+                <!-- Global Logging with MVar -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Global Logging with MVar</h2>
+                <p class="text-slate-400 mb-4">
+                    Sometimes you need a global logger whose configuration can be changed at runtime. You can use
+                    <code class="bg-slate-800 px-2 py-1 rounded">mvar</code> (mutable variables) to hold the log level
+                    or a logger record that can be updated dynamically:
+                </p>
+
+                <h3 class="text-xl font-semibold text-white mb-3 mt-6">Simple: Just the Log Level</h3>
+                <p class="text-slate-400 mb-4">
+                    The simplest approach is to store just the log level in an mvar:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.logging.*
+
+# Store log level in mvar for runtime changes
+mvar logLevel: LogLevel = LDebug
+
+# Global logger that checks the mvar
+globalLog(level, message) = {
+    minLevel = logLevel
+    if levelPriority(level) >= levelPriority(minLevel) then
+        println(formatEntry(makeEntry(level, message)))
+    else ()
+}
+
+setGlobalLogLevel(level) = {
+    logLevel = level
+}
+
+main() = {
+    globalLog(LDebug, "Starting up")      # Visible
+    globalLog(LInfo, "Ready")              # Visible
+
+    # Change level at runtime
+    setGlobalLogLevel(LWarn)
+
+    globalLog(LDebug, "Debug info")        # Filtered out
+    globalLog(LWarn, "Warning!")           # Visible
+    globalLog(LError, "Error occurred")    # Visible
+
+    flushStdout()
+    0
+}
+</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3 mt-6">Advanced: Logger Record in MVar</h3>
+                <p class="text-slate-400 mb-4">
+                    For more control, you can store an entire logger record in an mvar. This lets you change
+                    multiple settings at once:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.logging.*
+
+# Define a logger configuration type
+type GlobalLogger = { minLevel: LogLevel }
+
+# Store the logger config in an mvar
+mvar logger: GlobalLogger = GlobalLogger(LDebug)
+
+globalLog(level, message) = {
+    cfg = logger
+    if levelPriority(level) >= levelPriority(cfg.minLevel) then
+        println(formatEntry(makeEntry(level, message)))
+    else ()
+}
+
+setLogLevel(level) = {
+    logger = GlobalLogger(level)
+}
+
+main() = {
+    globalLog(LInfo, "Application started")
+    globalLog(LDebug, "Debug details")
+
+    # Change configuration
+    setLogLevel(LError)
+
+    globalLog(LWarn, "This is filtered")
+    globalLog(LError, "This is visible")
+
+    0
+}
+</code></pre>
+                </div>
+                <p class="text-slate-400 mb-8">
+                    Using mvar for global logging state is useful in concurrent applications where multiple
+                    processes need to share the same log level configuration. The mvar provides thread-safe
+                    access to the shared state.
+                </p>
+
                 <!-- Best Practices -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Best Practices</h2>
                 <p class="text-slate-400 mb-4">

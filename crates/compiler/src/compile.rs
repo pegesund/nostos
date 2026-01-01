@@ -2239,7 +2239,18 @@ impl Compiler {
             // Record constructor: TypeName { field1: val1, field2: val2 }
             // or positional: TypeName(val1, val2)
             Expr::Record(type_name, fields, _) => {
+                // Look up the type definition to get actual field names
+                let type_field_names: Option<Vec<String>> = self.types.get(&type_name.node)
+                    .and_then(|info| {
+                        if let TypeInfoKind::Record { fields, .. } = &info.kind {
+                            Some(fields.iter().map(|(name, _)| name.clone()).collect())
+                        } else {
+                            None
+                        }
+                    });
+
                 let mut field_values = Vec::new();
+                let mut positional_idx = 0;
                 for field in fields {
                     match field {
                         RecordField::Named(name, ref val) => {
@@ -2247,9 +2258,13 @@ impl Compiler {
                             field_values.push((name.node.clone(), value));
                         }
                         RecordField::Positional(ref val) => {
-                            // Use empty string for positional fields (index-based)
+                            // Use actual field name from type definition, or fallback to empty
+                            let field_name = type_field_names.as_ref()
+                                .and_then(|names| names.get(positional_idx).cloned())
+                                .unwrap_or_default();
                             let value = self.eval_const_expr(val)?;
-                            field_values.push((String::new(), value));
+                            field_values.push((field_name, value));
+                            positional_idx += 1;
                         }
                     }
                 }
