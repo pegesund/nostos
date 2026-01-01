@@ -1,0 +1,26 @@
+# expect: 1
+# Test that RHtmlResult.changedIds contains IDs of reactive records modified during render
+
+use stdlib.rhtml
+
+reactive Counter = { value: Int }
+
+listLen(xs) = match xs {
+    [] -> 0
+    [_ | rest] -> 1 + listLen(rest)
+}
+
+main() = {
+    counter = Counter(0)
+
+    # Render that modifies counter during the render
+    result = RHtml(
+        div([
+            # Modify counter during render
+            { counter.value = 42; span("modified") }
+        ])
+    )
+
+    # changedIds should contain counter's ID
+    listLen(result.changedIds)
+}

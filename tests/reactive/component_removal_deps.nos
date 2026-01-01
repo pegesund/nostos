@@ -1,0 +1,54 @@
+# expect: true
+# Test: When a component is removed, its deps entries are also cleaned
+
+use stdlib.rhtml
+
+reactive State = { showChild: Bool }
+reactive Counter = { value: Int }
+
+listContainsStr(list, s) = match list {
+    [] -> false
+    [x | rest] -> if x == s then true else listContainsStr(rest, s)
+}
+
+# Check if any deps list contains the component name
+anyDepsContain(deps, keys, name) = match keys {
+    [] -> false
+    [key | rest] -> {
+        components = Map.get(deps, key)
+        if listContainsStr(components, name) then true
+        else anyDepsContain(deps, rest, name)
+    }
+}
+
+main() = {
+    state = State(true)
+    counter = Counter(0)
+    counterId = reactiveId(counter)
+
+    # Initial render - child reads counter.value
+    result1 = RHtml(div([
+        component("parent", () => RHtml(div([
+            if state.showChild then
+                component("child", () => RHtml(span("Count: " ++ show(counter.value))))
+            else
+                span("No child")
+        ])))
+    ]))
+
+    # Verify child is in deps for counter
+    childInDepsBefore = anyDepsContain(result1.deps, [counterId], "child")
+
+    # Remove child
+    state.showChild = false
+    changedIds = Reactive.getChangedRecordIds()
+    result2 = updateState(result1, changedIds)
+
+    # Verify child is NOT in deps anymore
+    childInDepsAfter = anyDepsContain(result2.deps, [counterId], "child")
+
+    # Before: in deps, After: not in deps
+    if childInDepsBefore then
+        if childInDepsAfter then false else true
+    else false
+}

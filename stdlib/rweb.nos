@@ -1,0 +1,336 @@
+# RWeb - Reactive Web Framework
+#
+# WebSocket-based reactive UI with process-per-session.
+# Each client connection spawns a dedicated session process
+# that holds reactive state and pushes updates.
+#
+# Key concept: Action handlers just MUTATE reactive records.
+# The VM automatically tracks which records changed, finds affected
+# components via the deps map, and re-renders them.
+#
+# Usage:
+#   use stdlib.rweb
+#   use stdlib.rhtml
+#
+#   reactive Counter = { value: Int }
+#
+#   initState() = Counter(0)
+#
+#   myPage(counter: Counter) = RHtml(
+#       div([
+#           component("display", () => RHtml(
+#               span("Count: " ++ show(counter.value))
+#           )),
+#           button([attr("data-action", "increment")], "+1")
+#       ])
+#   )
+#
+#   # Action handler just mutates - no return value needed!
+#   # VM tracks changes automatically via Reactive.getChangedRecordIds()
+#   handleAction(action, params, counter) = match action {
+#       "increment" -> counter.value = counter.value + 1
+#       _ -> ()
+#   }
+#
+#   main() = startRWeb(8080, "My App", initState, myPage, handleAction)
+
+use stdlib.server
+use stdlib.rhtml
+
+# --- Client JavaScript ---
+
+clientJs() = "
+<script>
+(function() {
+    var ws = null;
+    var reconnectDelay = 1000;
+
+    function connect() {
+        var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(protocol + '//' + location.host + '/ws');
+
+        ws.onopen = function() {
+            console.log('RWeb connected');
+            reconnectDelay = 1000;
+        };
+
+        ws.onmessage = function(e) {
+            var data = JSON.parse(e.data);
+            if (data.type === 'update') {
+                // Update component HTML
+                var el = document.getElementById(data.component);
+                if (el) {
+                    el.outerHTML = data.html;
+                    bindEvents();
+                }
+            } else if (data.type === 'full') {
+                // Full page update
+                document.getElementById('rweb-root').innerHTML = data.html;
+                bindEvents();
+            }
+        };
+
+        ws.onclose = function() {
+            console.log('RWeb disconnected, reconnecting...');
+            setTimeout(connect, reconnectDelay);
+            reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+        };
+
+        ws.onerror = function(e) {
+            console.error('RWeb error', e);
+        };
+    }
+
+    function sendAction(action, params) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ action: action, params: params || {} }));
+        }
+    }
+
+    function bindEvents() {
+        // Bind click handlers for data-action elements
+        document.querySelectorAll('[data-action]').forEach(function(el) {
+            if (!el._rweb_bound) {
+                el._rweb_bound = true;
+                el.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    var action = el.getAttribute('data-action');
+                    var params = {};
+                    // Collect data-param-* attributes
+                    for (var i = 0; i < el.attributes.length; i++) {
+                        var attr = el.attributes[i];
+                        if (attr.name.startsWith('data-param-')) {
+                            params[attr.name.substring(11)] = attr.value;
+                        }
+                    }
+                    sendAction(action, params);
+                });
+            }
+        });
+
+        // Bind form submissions
+        document.querySelectorAll('form[data-action]').forEach(function(form) {
+            if (!form._rweb_bound) {
+                form._rweb_bound = true;
+                form.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    var action = form.getAttribute('data-action');
+                    var params = {};
+                    new FormData(form).forEach(function(v, k) { params[k] = v; });
+                    sendAction(action, params);
+                });
+            }
+        });
+
+        // Bind change handlers for data-onchange elements
+        document.querySelectorAll('[data-onchange]').forEach(function(el) {
+            if (!el._rweb_bound) {
+                el._rweb_bound = true;
+                el.addEventListener('change', function(e) {
+                    var action = el.getAttribute('data-onchange');
+                    sendAction(action, { value: el.value });
+                });
+            }
+        });
+    }
+
+    // Expose sendAction globally for custom use
+    window.rweb = { sendAction: sendAction };
+
+    // Connect on page load
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            bindEvents();
+            connect();
+        });
+    } else {
+        bindEvents();
+        connect();
+    }
+})();
+</script>
+"
+
+# --- HTML Page Template ---
+
+pageTemplate(title, content) =
+    "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>" ++ title ++ "</title>\n</head>\n<body>\n<div id=\"rweb-root\">" ++ content ++ "</div>\n" ++ clientJs() ++ "\n</body>\n</html>"
+
+# --- Session Process ---
+
+# Session process main loop
+# Holds: appState (user's reactive records), renderResult (current render state)
+# actionHandler receives: (action, params, appState) -> ()
+#   Just mutates reactive records directly - no return value needed
+#   The VM automatically tracks which records were modified
+sessionLoop(ws, appState, renderResult: RHtmlResult, pageRenderer, actionHandler) = {
+    result = try {
+        msgJson = WebSocket.recv(ws)
+
+        # Parse action from JSON: { "action": "name", "params": {...} }
+        (action, params) = parseActionMessage(msgJson)
+
+        # Call user's action handler - just mutates reactive records
+        actionHandler(action, params, appState)
+
+        # Get record IDs that were modified during action handler
+        changedIds = Reactive.getChangedRecordIds()
+
+        # Find affected components using deps map
+        affected = affectedComponentsMulti(renderResult.deps, changedIds)
+
+        # Filter to outermost (don't re-render children if parent re-renders)
+        componentsToUpdate = filterOutermost(affected, renderResult.components)
+
+        # Re-render affected components and send updates
+        sendComponentUpdates(ws, componentsToUpdate, renderResult.renderers)
+
+        # Update render state with new deps from re-rendered components
+        newRenderResult = updateState(renderResult, changedIds)
+
+        (true, newRenderResult)
+    } catch { (kind, msg) -> {
+        # Log error but keep connection alive unless it's a connection error
+        if kind == "websocket" then (false, renderResult)
+        else {
+            println("RWeb action error: " ++ msg)
+            (true, renderResult)
+        }
+    } }
+
+    match result {
+        (true, newState) -> sessionLoop(ws, appState, newState, pageRenderer, actionHandler)
+        (false, _) -> WebSocket.close(ws)
+    }
+}
+
+# Parse JSON action message
+parseActionMessage(json) = {
+    # Simple JSON parsing for { "action": "name", "params": {...} }
+    # For now, just extract action name - params parsing TODO
+    action = extractJsonString(json, "action")
+    (action, %{})
+}
+
+# Extract string value from JSON by key (simple implementation)
+extractJsonString(json, key) = {
+    searchFor = "\"" ++ key ++ "\""
+    startIdx = findSubstring(json, searchFor, 0)
+    if startIdx < 0 then ""
+    else {
+        # Find the colon after key
+        colonIdx = findSubstring(json, ":", startIdx)
+        # Find the opening quote of value
+        quoteStart = findSubstring(json, "\"", colonIdx + 1)
+        # Find closing quote
+        quoteEnd = findSubstring(json, "\"", quoteStart + 1)
+        if quoteEnd > quoteStart then
+            String.substring(json, quoteStart + 1, quoteEnd)
+        else ""
+    }
+}
+
+# Find substring starting from index
+findSubstring(str, needle, startFrom) = {
+    chars = String.chars(str)
+    needleChars = String.chars(needle)
+    findSubstringHelper(chars, needleChars, startFrom, 0)
+}
+
+findSubstringHelper(chars, needle, startFrom, idx) = match chars {
+    [] -> -1
+    [c | rest] ->
+        if idx < startFrom then findSubstringHelper(rest, needle, startFrom, idx + 1)
+        else if matchesAt(chars, needle) then idx
+        else findSubstringHelper(rest, needle, startFrom, idx + 1)
+}
+
+matchesAt(chars, needle) = match needle {
+    [] -> true
+    [n | nrest] -> match chars {
+        [] -> false
+        [c | crest] -> if c == n then matchesAt(crest, nrest) else false
+    }
+}
+
+# Send component updates via WebSocket
+sendComponentUpdates(ws, componentNames, renderers) = match componentNames {
+    [] -> ()
+    [name | rest] -> {
+        if Map.contains(renderers, name) then {
+            renderFn = Map.get(renderers, name)
+            result = renderFn()
+            html = renderRHtml(result)
+            msg = "{\"type\":\"update\",\"component\":\"" ++ escapeJsonString(name) ++ "\",\"html\":\"" ++ escapeJsonString(html) ++ "\"}"
+            WebSocket.send(ws, msg)
+        } else ()
+        sendComponentUpdates(ws, rest, renderers)
+    }
+}
+
+# Escape string for JSON
+escapeJsonString(s) = escapeJsonChars(String.chars(s))
+
+escapeJsonChars(chars) = match chars {
+    [] -> ""
+    [c | rest] -> escapeJsonChar(c) ++ escapeJsonChars(rest)
+}
+
+escapeJsonChar(c) = match c {
+    '"' -> "\\\""
+    '\\' -> "\\\\"
+    '\n' -> "\\n"
+    '\r' -> "\\r"
+    '\t' -> "\\t"
+    _ -> String.from_chars([c])
+}
+
+# --- Request Handler ---
+
+# Handle HTTP requests
+handleRequest(req, title, initState, pageRenderer, actionHandler) = {
+    if req.path == "/" then {
+        # Serve initial HTML page
+        state = initState()
+        result = pageRenderer(state)
+        html = renderRHtml(result)
+        respondHtml(req, pageTemplate(title, html))
+    }
+    else if req.path == "/ws" && req.isWebSocket then {
+        # WebSocket upgrade - spawn session process
+        ws = WebSocket.accept(req.id)
+        appState = initState()
+        renderResult = pageRenderer(appState)
+
+        # Send initial full page
+        html = renderRHtml(renderResult)
+        WebSocket.send(ws, "{\"type\":\"full\",\"html\":\"" ++ escapeJsonString(html) ++ "\"}")
+
+        # Enter session loop (this process becomes the session)
+        sessionLoop(ws, appState, renderResult, pageRenderer, actionHandler)
+    }
+    else respond404(req)
+}
+
+# --- Main Entry Point ---
+
+# Start the reactive web server
+# initState: () -> YourStateType - creates initial reactive state for this session
+# pageRenderer: (state) -> RHtmlResult - renders the page with components
+# actionHandler: (action, params, state) -> () - handles actions by mutating reactive records
+#   No return value needed - VM tracks changes via Reactive.getChangedRecordIds()
+startRWeb(port, title, initState, pageRenderer, actionHandler) = {
+    server = Server.bind(port)
+    println("RWeb server started on http://localhost:" ++ show(port))
+    println("WebSocket endpoint: ws://localhost:" ++ show(port) ++ "/ws")
+    acceptLoop(server, title, initState, pageRenderer, actionHandler)
+}
+
+acceptLoop(server, title, initState, pageRenderer, actionHandler) = {
+    ok = try {
+        req = Server.accept(server)
+        spawn { handleRequest(req, title, initState, pageRenderer, actionHandler) }
+        true
+    } catch { _ -> false }
+    if ok then acceptLoop(server, title, initState, pageRenderer, actionHandler) else ()
+}

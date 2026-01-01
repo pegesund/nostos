@@ -20,7 +20,18 @@ type ComponentTree =
 # deps: reactive record ID -> component names that read it
 # components: component hierarchy
 # renderers: component name -> render function (returns RHtmlResult)
-type RHtmlResult = { tree: RNode, deps: Map[Int, List[String]], components: List[ComponentTree], renderers: Map[String, () -> RHtmlResult] }
+# changedIds: reactive record IDs that were modified during this render
+type RHtmlResult = { tree: RNode, deps: Map[Int, List[String]], components: List[ComponentTree], renderers: Map[String, () -> RHtmlResult], changedIds: List[Int] }
+
+# === wrapNode helper ===
+# Creates an RHtmlResult from an RNode (for internal use)
+# Users should use RHtml(...) macro which handles tag name transformation
+
+wrapNode(node: RNode) = RHtmlResult(tree: node, deps: %{}, components: [], renderers: %{}, changedIds: [])
+
+# === Attribute helper ===
+
+attr(name: String, value: String) = (name, value)
 
 # === Text and special ===
 
@@ -38,12 +49,18 @@ component(name: String, renderFn: () -> RHtmlResult) = Component(name)
 
 div(children: List[RNode]) = Element("div", [], children)
 div(str: String) = Element("div", [], [Text(str)])
+div(attrs: List[(String, String)], children: List[RNode]) = Element("div", attrs, children)
+div(attrs: List[(String, String)], str: String) = Element("div", attrs, [Text(str)])
 
 span(children: List[RNode]) = Element("span", [], children)
 span(str: String) = Element("span", [], [Text(str)])
+span(attrs: List[(String, String)], children: List[RNode]) = Element("span", attrs, children)
+span(attrs: List[(String, String)], str: String) = Element("span", attrs, [Text(str)])
 
 p(children: List[RNode]) = Element("p", [], children)
 p(str: String) = Element("p", [], [Text(str)])
+p(attrs: List[(String, String)], children: List[RNode]) = Element("p", attrs, children)
+p(attrs: List[(String, String)], str: String) = Element("p", attrs, [Text(str)])
 
 h1(children: List[RNode]) = Element("h1", [], children)
 h1(str: String) = Element("h1", [], [Text(str)])
@@ -56,6 +73,8 @@ h3(str: String) = Element("h3", [], [Text(str)])
 
 button(children: List[RNode]) = Element("button", [], children)
 button(str: String) = Element("button", [], [Text(str)])
+button(attrs: List[(String, String)], children: List[RNode]) = Element("button", attrs, children)
+button(attrs: List[(String, String)], str: String) = Element("button", attrs, [Text(str)])
 
 ul(children: List[RNode]) = Element("ul", [], children)
 ol(children: List[RNode]) = Element("ol", [], children)
@@ -77,6 +96,7 @@ footer(children: List[RNode]) = Element("footer", [], children)
 section(children: List[RNode]) = Element("section", [], children)
 article(children: List[RNode]) = Element("article", [], children)
 form(children: List[RNode]) = Element("form", [], children)
+form(attrs: List[(String, String)], children: List[RNode]) = Element("form", attrs, children)
 
 html(children: List[RNode]) = Element("html", [], children)
 headEl(children: List[RNode]) = Element("head", [], children)
@@ -368,6 +388,67 @@ removeFromDeps(deps, toRemove, keys, acc) = match keys {
     }
 }
 
+# === Component Cleanup (for removed subcomponents) ===
+
+# Collect all component names from a tree (including descendants)
+collectComponentNames(trees, acc) = match trees {
+    [] -> acc
+    [CNode(name, children) | rest] -> {
+        withName = [name | acc]
+        withChildren = collectComponentNames(children, withName)
+        collectComponentNames(rest, withChildren)
+    }
+}
+
+# Get old children for a component from the component tree
+getOldChildren(componentName, trees) = match trees {
+    [] -> []
+    [CNode(name, children) | rest] ->
+        if name == componentName then children
+        else {
+            # Check in children recursively
+            found = getOldChildren(componentName, children)
+            match found {
+                [] -> getOldChildren(componentName, rest)
+                _ -> found
+            }
+        }
+}
+
+# Find components that were removed (in old but not in new)
+findRemovedNames(oldNames, newNames, acc) = match oldNames {
+    [] -> acc
+    [name | rest] ->
+        if listContainsStr(newNames, name) then findRemovedNames(rest, newNames, acc)
+        else findRemovedNames(rest, newNames, [name | acc])
+}
+
+# Remove keys from a map
+removeFromMap(map, keysToRemove) = match keysToRemove {
+    [] -> map
+    [key | rest] -> removeFromMap(Map.remove(map, key), rest)
+}
+
+# Find all removed components when re-rendering a list of components
+# Returns list of all component names that should be cleaned up
+findAllRemovedComponents(reRendered, componentTree, acc) = match reRendered {
+    [] -> acc
+    [(name, result) | rest] -> {
+        # Get old children from original tree
+        oldChildren = getOldChildren(name, componentTree)
+        oldNames = collectComponentNames(oldChildren, [])
+
+        # Get new children from re-rendered result
+        newChildren = result.components
+        newNames = collectComponentNames(newChildren, [])
+
+        # Find names in old but not in new
+        removed = findRemovedNames(oldNames, newNames, [])
+
+        findAllRemovedComponents(rest, componentTree, unionStrLists(acc, removed))
+    }
+}
+
 # Merge all deps and renderers from re-rendered results
 mergeAllResults(baseDeps, baseRenderers, reRendered) = match reRendered {
     [] -> (baseDeps, baseRenderers)
@@ -383,11 +464,26 @@ updateState(state, changedRecordIds) = {
     affected = affectedComponentsMulti(state.deps, changedRecordIds)
     outermost = filterOutermost(affected, state.components)
     reRendered = reRenderComponents(outermost, state.renderers, [])
-    cleanedDeps = removeFromDeps(state.deps, affected, Map.keys(state.deps), %{})
-    (mergedDeps, mergedRenderers) = mergeAllResults(cleanedDeps, state.renderers, reRendered)
+
+    # Find components that were removed during re-render
+    removedComponents = findAllRemovedComponents(reRendered, state.components, [])
+
+    # Components to clean from deps: affected + removed
+    allToClean = unionStrLists(affected, removedComponents)
+    cleanedDeps = removeFromDeps(state.deps, allToClean, Map.keys(state.deps), %{})
+
+    # Remove stale renderers for removed components
+    cleanedRenderers = removeFromMap(state.renderers, removedComponents)
+
+    # Merge new deps and renderers from re-rendered results
+    (mergedDeps, mergedRenderers) = mergeAllResults(cleanedDeps, cleanedRenderers, reRendered)
+
+    # Update component tree
     childrenMap = buildChildrenMap(reRendered, %{})
     newComponents = updateTrees(state.components, childrenMap)
+
     # Use record update syntax to create new RHtmlResult with updated fields
-    stdlib.rhtml.RHtmlResult(state, deps: mergedDeps, components: newComponents, renderers: mergedRenderers)
+    # changedIds is cleared since we just processed these changes
+    RHtmlResult(state, deps: mergedDeps, components: newComponents, renderers: mergedRenderers, changedIds: [])
 }
 

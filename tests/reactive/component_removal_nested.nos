@@ -1,0 +1,41 @@
+# expect: true
+# Test: When a component with nested children is removed, all descendants are cleaned
+
+use stdlib.rhtml
+
+reactive State = { showChild: Bool }
+
+main() = {
+    state = State(true)
+
+    # Initial render - parent has child which has grandchild
+    result1 = RHtml(div([
+        component("parent", () => RHtml(div([
+            if state.showChild then
+                component("child", () => RHtml(div([
+                    component("grandchild", () => RHtml(span("I am grandchild")))
+                ])))
+            else
+                span("No child")
+        ])))
+    ]))
+
+    # Verify all renderers exist
+    hasChild = Map.contains(result1.renderers, "child")
+    hasGrandchild = Map.contains(result1.renderers, "grandchild")
+    allExistBefore = hasChild && hasGrandchild
+
+    # Now hide the child (and grandchild with it)
+    state.showChild = false
+    changedIds = Reactive.getChangedRecordIds()
+
+    # Update state
+    result2 = updateState(result1, changedIds)
+
+    # Verify both child and grandchild renderers are removed
+    hasChildAfter = Map.contains(result2.renderers, "child")
+    hasGrandchildAfter = Map.contains(result2.renderers, "grandchild")
+    noneExistAfter = if hasChildAfter then false else if hasGrandchildAfter then false else true
+
+    allExistBefore && noneExistAfter
+}

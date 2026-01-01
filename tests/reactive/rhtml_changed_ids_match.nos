@@ -1,0 +1,26 @@
+# expect: true
+# Test that RHtmlResult.changedIds contains the correct reactive record ID
+
+use stdlib.rhtml
+
+reactive Counter = { value: Int }
+
+listContainsInt(list, n) = match list {
+    [] -> false
+    [x | rest] -> if x == n then true else listContainsInt(rest, n)
+}
+
+main() = {
+    counter = Counter(0)
+    counterId = reactiveId(counter)
+
+    # Render that modifies counter during the render
+    result = RHtml(
+        div([
+            { counter.value = 42; span("modified") }
+        ])
+    )
+
+    # changedIds should contain counter's ID
+    listContainsInt(result.changedIds, counterId)
+}

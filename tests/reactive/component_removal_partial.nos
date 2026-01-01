@@ -1,0 +1,43 @@
+# expect: true
+# Test: Partial removal - some children removed, others kept
+
+use stdlib.rhtml
+
+reactive State = { showB: Bool }
+
+main() = {
+    state = State(true)
+
+    # Initial render - parent has children A, B, C
+    result1 = RHtml(div([
+        component("parent", () => RHtml(div([
+            component("childA", () => RHtml(span("A"))),
+            if state.showB then
+                component("childB", () => RHtml(span("B")))
+            else
+                span("no B"),
+            component("childC", () => RHtml(span("C")))
+        ])))
+    ]))
+
+    # Verify all exist
+    hasA1 = Map.contains(result1.renderers, "childA")
+    hasB1 = Map.contains(result1.renderers, "childB")
+    hasC1 = Map.contains(result1.renderers, "childC")
+
+    # Hide B
+    state.showB = false
+    changedIds = Reactive.getChangedRecordIds()
+    result2 = updateState(result1, changedIds)
+
+    # A and C should still exist, B should be gone
+    hasA2 = Map.contains(result2.renderers, "childA")
+    hasB2 = Map.contains(result2.renderers, "childB")
+    hasC2 = Map.contains(result2.renderers, "childC")
+
+    # Before: all exist, After: A and C exist, B gone
+    allBefore = hasA1 && hasB1 && hasC1
+    correctAfter = hasA2 && hasC2 && (if hasB2 then false else true)
+
+    allBefore && correctAfter
+}

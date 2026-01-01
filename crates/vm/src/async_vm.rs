@@ -71,6 +71,9 @@ pub struct ReactiveRenderContext {
     /// Components queued for re-render due to reactive record changes.
     pub pending_rerenders: Vec<String>,
 
+    /// Record IDs that were modified (for Reactive.getChangedRecordIds).
+    pub changed_record_ids: Vec<u64>,
+
     /// Stack for building component tree during render.
     /// Each entry is (component_name, children_so_far).
     pub component_tree_stack: Vec<(String, Vec<ComponentTreeNode>)>,
@@ -3325,6 +3328,12 @@ impl AsyncProcess {
 
                         // Queue dependent components for re-render
                         let record_id = rec.id;
+
+                        // Track this record as changed
+                        if !self.reactive_context.changed_record_ids.contains(&record_id) {
+                            self.reactive_context.changed_record_ids.push(record_id);
+                        }
+
                         if let Some(deps) = self.reactive_context.dependencies.get(&record_id) {
                             for comp_id in deps {
                                 if !self.reactive_context.pending_rerenders.contains(comp_id) {
@@ -7363,9 +7372,22 @@ impl AsyncProcess {
                 set_reg!(dst, GcValue::List(list));
             }
 
+            GetChangedRecordIds(dst) => {
+                // Move changed record IDs out and clear the list
+                // Essential for action handler flow - mutations outside render context
+                let changed = std::mem::take(&mut self.reactive_context.changed_record_ids);
+                // Convert to GcValue list of ints
+                let items: Vec<GcValue> = changed.into_iter()
+                    .map(|id| GcValue::Int64(id as i64))
+                    .collect();
+                let list = self.heap.make_list(items);
+                set_reg!(dst, GcValue::List(list));
+            }
+
             ClearReactiveDependencies => {
                 self.reactive_context.dependencies.clear();
                 self.reactive_context.pending_rerenders.clear();
+                self.reactive_context.changed_record_ids.clear();
             }
 
             ClearComponentDeps(id_reg) => {
@@ -7515,14 +7537,22 @@ impl AsyncProcess {
                 }
                 let renderers_map = self.heap.alloc_map(renderers_entries);
 
+                // Get changed record IDs and clear the list
+                let changed = std::mem::take(&mut self.reactive_context.changed_record_ids);
+                let changed_items: Vec<GcValue> = changed.into_iter()
+                    .map(|id| GcValue::Int64(id as i64))
+                    .collect();
+                let changed_list = self.heap.make_list(changed_items);
+
                 // Decrement nesting depth
                 self.reactive_context.nesting_depth = self.reactive_context.nesting_depth.saturating_sub(1);
 
-                // Return tuple (deps, components, renderers)
+                // Return tuple (deps, components, renderers, changedIds)
                 let tuple_ptr = self.heap.alloc_tuple(vec![
                     GcValue::Map(deps_map),
                     components,
                     GcValue::Map(renderers_map),
+                    GcValue::List(changed_list),
                 ]);
                 set_reg!(dst, GcValue::Tuple(tuple_ptr));
             }

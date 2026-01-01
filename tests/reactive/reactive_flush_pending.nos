@@ -1,0 +1,19 @@
+# expect: [display]
+# Test that Reactive.flushPending returns affected components after write
+
+reactive Counter = { value: Int }
+
+main() = {
+    counter = Counter(0)
+
+    # Simulate rendering a component that reads counter.value
+    RenderStack.push("display")
+    _ = counter.value  # This registers dependency: counter.id -> "display"
+    RenderStack.pop()
+
+    # Mutate the reactive record
+    counter.value = 42
+
+    # Flush should return ["display"] since it depends on counter
+    Reactive.flushPending()
+}

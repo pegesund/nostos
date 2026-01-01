@@ -1,0 +1,16 @@
+# expect: []
+# Test flushPending returns empty when no components depend on changed record
+
+reactive Counter = { value: Int }
+
+main() = {
+    counter = Counter(0)
+
+    # No component reads counter (no RenderStack.push/pop)
+
+    # Mutate counter
+    counter.value = 42
+
+    # Should be empty - no dependencies registered
+    Reactive.flushPending()
+}

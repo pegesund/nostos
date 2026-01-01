@@ -1,0 +1,29 @@
+# expect: true
+# Test: Re-render with same children - nothing should be removed
+
+use stdlib.rhtml
+
+reactive State = { counter: Int }
+
+main() = {
+    state = State(0)
+
+    # Initial render - parent has child
+    result1 = RHtml(div([
+        component("parent", () => RHtml(div([
+            component("child", () => RHtml(span("Count: " ++ show(state.counter))))
+        ])))
+    ]))
+
+    hasChildBefore = Map.contains(result1.renderers, "child")
+
+    # Change counter (child should re-render but NOT be removed)
+    state.counter = 42
+    changedIds = Reactive.getChangedRecordIds()
+    result2 = updateState(result1, changedIds)
+
+    hasChildAfter = Map.contains(result2.renderers, "child")
+
+    # Child should exist both before and after
+    hasChildBefore && hasChildAfter
+}

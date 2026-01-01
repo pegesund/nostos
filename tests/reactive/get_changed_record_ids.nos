@@ -1,0 +1,23 @@
+# expect: true
+# Test Reactive.getChangedRecordIds() returns IDs of modified records
+
+reactive Counter = { value: Int }
+
+listContainsInt(list, n) = match list {
+    [] -> false
+    [x | rest] -> if x == n then true else listContainsInt(rest, n)
+}
+
+main() = {
+    counter = Counter(0)
+    counterId = reactiveId(counter)
+
+    # Mutate outside of render context (like an action handler would)
+    counter.value = 42
+
+    # Get changed record IDs
+    changedIds = Reactive.getChangedRecordIds()
+
+    # Should contain counter's ID
+    listContainsInt(changedIds, counterId)
+}

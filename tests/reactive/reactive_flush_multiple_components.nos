@@ -1,0 +1,30 @@
+# expect: 2
+# Test multiple components depending on same reactive record
+
+reactive Counter = { value: Int }
+
+listLen(xs) = match xs {
+    [] -> 0
+    [_ | rest] -> 1 + listLen(rest)
+}
+
+main() = {
+    counter = Counter(0)
+
+    # Component A reads counter
+    RenderStack.push("compA")
+    _ = counter.value
+    RenderStack.pop()
+
+    # Component B also reads counter
+    RenderStack.push("compB")
+    _ = counter.value
+    RenderStack.pop()
+
+    # Mutate counter
+    counter.value = 42
+
+    # Both components should be in pending
+    pending = Reactive.flushPending()
+    listLen(pending)
+}

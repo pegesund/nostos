@@ -1,0 +1,20 @@
+# expect: []
+# Test that RHtmlResult.changedIds is empty when no reactive records are modified
+
+use stdlib.rhtml
+
+reactive Counter = { value: Int }
+
+main() = {
+    counter = Counter(0)
+
+    # Render that only reads counter, doesn't modify
+    result = RHtml(
+        div([
+            span(show(counter.value))
+        ])
+    )
+
+    # changedIds should be empty
+    result.changedIds
+}

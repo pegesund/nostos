@@ -1313,6 +1313,10 @@ pub enum Instruction {
     /// Get pending re-renders and clear the list: dst = Reactive.flushPending()
     /// Returns List[String] of component IDs that need re-rendering
     FlushPendingRerenders(Reg),
+    /// Get changed record IDs and clear the list: dst = Reactive.getChangedRecordIds()
+    /// Returns List[Int] of reactive record IDs that were modified since last call
+    /// Essential for action handler flow - mutations outside render context
+    GetChangedRecordIds(Reg),
     /// Clear all reactive dependencies: Reactive.clearDependencies()
     ClearReactiveDependencies,
     /// Clear dependencies for specific component: Reactive.clearComponentDeps(componentId)

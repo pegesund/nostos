@@ -1,0 +1,38 @@
+# expect: true
+# Test: When a component is removed during re-render, its renderer is cleaned up
+
+use stdlib.rhtml
+
+reactive State = { showChild: Bool }
+
+main() = {
+    state = State(true)
+
+    # Initial render - parent component reads state.showChild and conditionally includes child
+    result1 = RHtml(div([
+        component("parent", () => RHtml(div([
+            if state.showChild then
+                component("child", () => RHtml(span("I am child")))
+            else
+                span("No child")
+        ])))
+    ]))
+
+    # Verify child renderer exists
+    hasChildBefore = Map.contains(result1.renderers, "child")
+
+    # Now hide the child
+    state.showChild = false
+    changedIds = Reactive.getChangedRecordIds()
+
+    # Update state - parent re-renders and child should be removed
+    result2 = updateState(result1, changedIds)
+
+    # Verify child renderer is removed
+    hasChildAfter = Map.contains(result2.renderers, "child")
+
+    # Before: true, After: false
+    if hasChildBefore then
+        if hasChildAfter then false else true
+    else false
+}

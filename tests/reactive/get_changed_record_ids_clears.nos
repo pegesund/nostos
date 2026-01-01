@@ -1,0 +1,17 @@
+# expect: []
+# Test that Reactive.getChangedRecordIds() clears after returning
+
+reactive Counter = { value: Int }
+
+main() = {
+    counter = Counter(0)
+
+    # Mutate
+    counter.value = 42
+
+    # First call gets the changes
+    _ = Reactive.getChangedRecordIds()
+
+    # Second call should be empty (list was cleared)
+    Reactive.getChangedRecordIds()
+}

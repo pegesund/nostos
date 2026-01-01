@@ -4119,22 +4119,24 @@ impl Compiler {
                         let transformed_arg = self.transform_rhtml_expr(inner_expr);
                         let tree_reg = self.compile_expr_tail(&transformed_arg, false)?;
 
-                        // 3. Finish render context - returns (deps, components, renderers) tuple
+                        // 3. Finish render context - returns (deps, components, renderers, changedIds) tuple
                         let context_reg = self.alloc_reg();
                         self.chunk.emit(Instruction::RenderContextFinish(context_reg), line);
 
-                        // 4. Extract deps, components, and renderers from tuple
+                        // 4. Extract deps, components, renderers, and changedIds from tuple
                         let deps_reg = self.alloc_reg();
                         self.chunk.emit(Instruction::GetTupleField(deps_reg, context_reg, 0), line);
                         let components_reg = self.alloc_reg();
                         self.chunk.emit(Instruction::GetTupleField(components_reg, context_reg, 1), line);
                         let renderers_reg = self.alloc_reg();
                         self.chunk.emit(Instruction::GetTupleField(renderers_reg, context_reg, 2), line);
+                        let changed_ids_reg = self.alloc_reg();
+                        self.chunk.emit(Instruction::GetTupleField(changed_ids_reg, context_reg, 3), line);
 
-                        // 5. Construct RHtmlResult { tree, deps, components, renderers }
+                        // 5. Construct RHtmlResult { tree, deps, components, renderers, changedIds }
                         let dst = self.alloc_reg();
                         let type_idx = self.chunk.add_constant(Value::String(Arc::new("stdlib.rhtml.RHtmlResult".to_string())));
-                        self.chunk.emit(Instruction::MakeRecord(dst, type_idx, vec![tree_reg, deps_reg, components_reg, renderers_reg].into()), line);
+                        self.chunk.emit(Instruction::MakeRecord(dst, type_idx, vec![tree_reg, deps_reg, components_reg, renderers_reg, changed_ids_reg].into()), line);
 
                         return Ok(dst);
                     }
@@ -4651,6 +4653,11 @@ impl Compiler {
                             self.chunk.emit(Instruction::FlushPendingRerenders(dst), line);
                             return Ok(dst);
                         }
+                        "Reactive.getChangedRecordIds" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::GetChangedRecordIds(dst), line);
+                            return Ok(dst);
+                        }
                         "Reactive.clearDependencies" if args.is_empty() => {
                             self.chunk.emit(Instruction::ClearReactiveDependencies, line);
                             let dst = self.alloc_reg();
@@ -5133,6 +5140,11 @@ impl Compiler {
                         "Reactive.flushPending" if args.is_empty() => {
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FlushPendingRerenders(dst), line);
+                            return Ok(dst);
+                        }
+                        "Reactive.getChangedRecordIds" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::GetChangedRecordIds(dst), line);
                             return Ok(dst);
                         }
                         "Reactive.clearDependencies" if args.is_empty() => {
@@ -6922,22 +6934,24 @@ impl Compiler {
                 let transformed_arg = self.transform_rhtml_expr(&args[0]);
                 let tree_reg = self.compile_expr_tail(&transformed_arg, false)?;
 
-                // 3. Finish render context - returns (deps, components, renderers) tuple
+                // 3. Finish render context - returns (deps, components, renderers, changedIds) tuple
                 let context_reg = self.alloc_reg();
                 self.chunk.emit(Instruction::RenderContextFinish(context_reg), line);
 
-                // 4. Extract deps, components, and renderers from tuple
+                // 4. Extract deps, components, renderers, and changedIds from tuple
                 let deps_reg = self.alloc_reg();
                 self.chunk.emit(Instruction::GetTupleField(deps_reg, context_reg, 0), line);
                 let components_reg = self.alloc_reg();
                 self.chunk.emit(Instruction::GetTupleField(components_reg, context_reg, 1), line);
                 let renderers_reg = self.alloc_reg();
                 self.chunk.emit(Instruction::GetTupleField(renderers_reg, context_reg, 2), line);
+                let changed_ids_reg = self.alloc_reg();
+                self.chunk.emit(Instruction::GetTupleField(changed_ids_reg, context_reg, 3), line);
 
-                // 5. Construct RHtmlResult { tree, deps, components, renderers }
+                // 5. Construct RHtmlResult { tree, deps, components, renderers, changedIds }
                 let dst = self.alloc_reg();
                 let type_idx = self.chunk.add_constant(Value::String(Arc::new("stdlib.rhtml.RHtmlResult".to_string())));
-                self.chunk.emit(Instruction::MakeRecord(dst, type_idx, vec![tree_reg, deps_reg, components_reg, renderers_reg].into()), line);
+                self.chunk.emit(Instruction::MakeRecord(dst, type_idx, vec![tree_reg, deps_reg, components_reg, renderers_reg, changed_ids_reg].into()), line);
 
                 return Ok(dst);
             }
@@ -13159,19 +13173,10 @@ impl Compiler {
             Expr::Call(func, type_args, args, span) => {
                 let new_func = if let Expr::Var(ident) = func.as_ref() {
                     if Self::RHTML_SCOPED_NAMES.contains(&ident.node.as_str()) {
-                        // Transform `div` to `stdlib.rhtml.div`
+                        // Transform `div` to `stdlib.rhtml.div` as a qualified name
                         let fn_span = ident.span;
-                        let stdlib_var = Expr::Var(Spanned::new("stdlib".to_string(), fn_span));
-                        let rhtml_access = Expr::FieldAccess(
-                            Box::new(stdlib_var),
-                            Spanned::new("rhtml".to_string(), fn_span),
-                            fn_span,
-                        );
-                        Expr::FieldAccess(
-                            Box::new(rhtml_access),
-                            ident.clone(),
-                            fn_span,
-                        )
+                        let qualified_name = format!("stdlib.rhtml.{}", ident.node);
+                        Expr::Var(Spanned::new(qualified_name, fn_span))
                     } else {
                         func.as_ref().clone()
                     }
