@@ -2106,3 +2106,176 @@ main() = {
 }
 ```
 
+## Reactive Records
+
+Reactive records are mutable records whose field changes are tracked by the runtime. They're used primarily with RWeb for building reactive web applications.
+
+### Defining Reactive Records
+```nos
+reactive Counter = { value: Int }
+reactive User = { name: String, age: Int }
+```
+
+### Creating and Mutating
+```nos
+counter = Counter(0)
+counter.value = counter.value + 1  # Mutation tracked
+
+user = User("Alice", 30)
+user.name = "Bob"  # Also tracked
+```
+
+### Reactive Tracking
+The runtime tracks which reactive records were modified:
+```nos
+# After mutations, get the list of changed record IDs
+changedIds = Reactive.getChangedRecordIds()  # Returns List[Int]
+```
+
+## RWeb - Reactive Web Framework
+
+RWeb is a WebSocket-based reactive UI framework. Each client connection gets its own session process with reactive state.
+
+### Basic Structure
+```nos
+use stdlib.rweb
+use stdlib.rhtml
+
+reactive Counter = { value: Int }
+
+session() = {
+    counter = Counter(0)
+
+    (
+        # Render function - returns RHtml
+        () => RHtml(div([
+            h1("Counter"),
+            component("display", () => RHtml(
+                span("Count: " ++ show(counter.value))
+            )),
+            button([attr("data-action", "inc")], "+"),
+            button([attr("data-action", "dec")], "-")
+        ])),
+
+        # Action handler - mutates reactive state
+        (action, params) => match action {
+            "inc" -> { counter.value = counter.value + 1 }
+            "dec" -> { counter.value = counter.value - 1 }
+            _ -> ()
+        }
+    )
+}
+
+main() = startRWeb(8080, "My Counter", session)
+```
+
+### Key Concepts
+
+**Components**: Wrap dynamic content in `component(name, renderFn)` for granular updates:
+```nos
+component("user-info", () => RHtml(
+    div("Name: " ++ user.name)
+))
+```
+
+**Actions**: Buttons trigger actions via `data-action` attribute:
+```nos
+button([attr("data-action", "save")], "Save")
+```
+
+**Action Parameters**: Pass data with `data-param-*` attributes:
+```nos
+button([attr("data-action", "delete"), attr("data-param-id", "123")], "Delete")
+# Handler receives: (action="delete", params={id: "123"})
+```
+
+### HTML Elements (rhtml module)
+
+```nos
+use stdlib.rhtml
+
+# Basic elements
+div("content")
+span("text")
+h1("heading")
+p("paragraph")
+button([attr("data-action", "click")], "Click me")
+
+# With attributes
+div([attr("class", "container"), attr("id", "main")], [
+    h1("Title"),
+    p("Content")
+])
+
+# Form elements
+input([attr("type", "text"), attr("name", "username")])
+form([attr("data-action", "submit")], [
+    input([attr("name", "email")]),
+    button([], "Submit")
+])
+```
+
+### Architecture
+
+```
+Browser                          Server (Nostos)
+   │                                   │
+   │◄─────── Initial HTML ─────────────│
+   │                                   │
+   │◄═══════ WebSocket ═══════════════►│
+   │                                   │
+   │ click button                      │
+   │────── {action: "inc"} ───────────►│
+   │                                   │ update reactive state
+   │◄───── {component HTML} ───────────│ re-render affected components
+   │ morph DOM                         │
+```
+
+### Session Lifecycle
+- Each WebSocket connection spawns a session process
+- Session holds reactive state in closures
+- On action: mutate state → detect changes → re-render affected components → push updates
+- On disconnect: process exits, GC cleans up
+
+### Example: Todo App with Filtering
+```nos
+use stdlib.rweb
+use stdlib.rhtml
+
+reactive Item = { text: String, done: Bool }
+reactive Filter = { value: String }
+
+session() = {
+    item1 = Item("", false)
+    filter = Filter("all")
+
+    (
+        () => RHtml(div([
+            component("filter-display", () => RHtml(
+                div("Filter: " ++ filter.value)
+            )),
+            button([attr("data-action", "filter-all")], "All"),
+            button([attr("data-action", "filter-done")], "Done"),
+
+            component("item1", () => RHtml({
+                show = item1.text != "" && (filter.value == "all" ||
+                       (filter.value == "done" && item1.done))
+                if show then
+                    div(item1.text ++ if item1.done then " [DONE]" else "")
+                else div([])
+            }))
+        ])),
+
+        (action, params) => match action {
+            "filter-all" -> { filter.value = "all" }
+            "filter-done" -> { filter.value = "done" }
+            "add" -> { item1.text = "New item" }
+            "toggle" -> { item1.done = !item1.done }
+            _ -> ()
+        }
+    )
+}
+
+main() = startRWeb(8080, "Todo", session)
+```
+
