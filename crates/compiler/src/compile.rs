@@ -1128,6 +1128,9 @@ impl Compiler {
         }
 
         // First pass: compile all functions
+        // Collect function info for type validation later (fn_name -> (fn_def, imports, source_name, source))
+        let mut pending_fn_info: Vec<(String, FnDef, HashMap<String, String>, String, Arc<String>)> = Vec::new();
+
         for (fn_def, module_path, imports, line_starts, source, source_name) in pending {
             let saved_path = self.module_path.clone();
             let saved_imports = self.imports.clone();
@@ -1141,6 +1144,9 @@ impl Compiler {
             } else {
                 format!("{}.{}", module_path.join("."), fn_def.name.node)
             };
+
+            // Store for type validation
+            pending_fn_info.push((fn_name.clone(), fn_def.clone(), imports.clone(), source_name.clone(), source.clone()));
 
             self.module_path = module_path;
             // Merge imports instead of replacing, to be safe.
@@ -1164,6 +1170,39 @@ impl Compiler {
         // Clear pending data now that we've processed them
         self.pending_functions.clear();
         self.pending_fn_signatures.clear();
+
+        // Validate parameter type annotations for functions compiled in THIS pass
+        // This catches undefined types like `greet(p: Person)` where Person doesn't exist
+        for (fn_name, fn_def, imports, source_name, source) in pending_fn_info {
+            // Temporarily set imports for this function so validate_type_expr can check imported types
+            let saved_imports = std::mem::replace(&mut self.imports, imports);
+
+            // Get the module path from the function name (e.g., "stdlib.rhtml.wrapNode" -> ["stdlib", "rhtml"])
+            let module_path: Vec<String> = fn_name.split('.')
+                .take(fn_name.matches('.').count())  // All but the last segment
+                .map(|s| s.to_string())
+                .collect();
+            let saved_path = std::mem::replace(&mut self.module_path, module_path);
+
+            if let Some(clause) = fn_def.clauses.first() {
+                for param in &clause.params {
+                    if let Some(ty_expr) = &param.ty {
+                        if let Some(err) = self.validate_type_expr(ty_expr, &fn_name) {
+                            errors.push((fn_name.clone(), err, source_name.clone(), source.clone()));
+                        }
+                    }
+                }
+                // Also check return type annotation
+                if let Some(ret_ty) = &clause.return_type {
+                    if let Some(err) = self.validate_type_expr(ret_ty, &fn_name) {
+                        errors.push((fn_name.clone(), err, source_name.clone(), source.clone()));
+                    }
+                }
+            }
+
+            self.imports = saved_imports;
+            self.module_path = saved_path;
+        }
 
         // Second pass: re-run HM inference for functions with type variables in their signatures
         // This handles cases like bar23() = bar() + 1 where bar was compiled after bar23's first inference
@@ -2071,8 +2110,87 @@ impl Compiler {
             "Float" | "Float32" | "Float64" |
             "Bool" | "Char" | "String" | "BigInt" | "Decimal" |
             "List" | "Array" | "Set" | "Map" | "IO" | "Pid" | "Ref" |
+            "Int64Array" | "Float64Array" | "Float32Array" | "Buffer" |
             "()" | "Unit" | "Never"
         )
+    }
+
+    /// Validate a type expression and return an error if the type is unknown.
+    /// Returns None if the type is valid, Some(error) if not.
+    fn validate_type_expr(&self, ty: &nostos_syntax::TypeExpr, _fn_name: &str) -> Option<CompileError> {
+        use nostos_syntax::TypeExpr;
+        match ty {
+            TypeExpr::Name(ident) => {
+                let name = &ident.node;
+                // Skip built-in types
+                if self.is_builtin_type_name(name) {
+                    return None;
+                }
+                // Skip single-letter type params (lowercase like 'a' or uppercase like 'T')
+                if name.len() == 1 && name.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
+                    return None;
+                }
+                // Skip Self (used in trait methods)
+                if name == "Self" {
+                    return None;
+                }
+                // Check if it's a registered type
+                let qualified = self.qualify_name(name);
+                if self.types.contains_key(&qualified) || self.types.contains_key(name) {
+                    return None;
+                }
+                // Check if it's imported from another module
+                for (_alias, imported_module) in &self.imports {
+                    let qualified_in_module = format!("{}.{}", imported_module, name);
+                    if self.types.contains_key(&qualified_in_module) {
+                        return None;
+                    }
+                }
+                // Type not found - report error
+                Some(CompileError::UnknownType {
+                    name: name.clone(),
+                    span: ident.span.clone(),
+                })
+            }
+            TypeExpr::Generic(base, params) => {
+                // Check the base type
+                if let Some(err) = self.validate_type_expr(&TypeExpr::Name(base.clone()), _fn_name) {
+                    return Some(err);
+                }
+                // Check all type parameters
+                for param in params {
+                    if let Some(err) = self.validate_type_expr(param, _fn_name) {
+                        return Some(err);
+                    }
+                }
+                None
+            }
+            TypeExpr::Function(params, ret) => {
+                for param in params {
+                    if let Some(err) = self.validate_type_expr(param, _fn_name) {
+                        return Some(err);
+                    }
+                }
+                self.validate_type_expr(ret, _fn_name)
+            }
+            TypeExpr::Tuple(elements) => {
+                for elem in elements {
+                    if let Some(err) = self.validate_type_expr(elem, _fn_name) {
+                        return Some(err);
+                    }
+                }
+                None
+            }
+            TypeExpr::Record(fields) => {
+                for (_field_name, field_type) in fields {
+                    if let Some(err) = self.validate_type_expr(field_type, _fn_name) {
+                        return Some(err);
+                    }
+                }
+                None
+            }
+            TypeExpr::Unit => None,
+        }
     }
 
     fn type_expr_name(&self, ty: &nostos_syntax::TypeExpr) -> String {
