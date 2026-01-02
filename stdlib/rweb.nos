@@ -173,6 +173,21 @@ pageTemplate(title, content) =
 
 # --- Session Process ---
 
+# Helper to check if list is empty
+listIsEmpty(xs) = match xs {
+    [] -> true
+    _ -> false
+}
+
+# Send full page update via WebSocket
+sendFullPageUpdate(ws, renderPage) = {
+    newResult = renderPage()
+    html = renderRHtml(newResult)
+    msg = "{\"type\":\"full\",\"html\":\"" ++ escapeJsonString(html) ++ "\"}"
+    WebSocket.send(ws, msg)
+    newResult
+}
+
 # Session process main loop
 # renderResult: current render state with deps, components, renderers
 # renderPage: () -> RHtmlResult - renders the page (captures state via closure)
@@ -196,11 +211,16 @@ sessionLoop(ws, renderResult: RHtmlResult, renderPage, onAction) = {
         # Filter to outermost (don't re-render children if parent re-renders)
         componentsToUpdate = filterOutermost(affected, renderResult.components)
 
-        # Re-render affected components and send updates
-        sendComponentUpdates(ws, componentsToUpdate, renderResult.renderers)
-
-        # Update render state with new deps from re-rendered components
-        newRenderResult = updateState(renderResult, changedIds)
+        # If there are changes but no components to update, do a full page re-render
+        # This handles the case where the app doesn't use component() wrappers
+        newRenderResult = if !listIsEmpty(changedIds) && listIsEmpty(componentsToUpdate) then {
+            sendFullPageUpdate(ws, renderPage)
+        } else {
+            # Re-render affected components and send updates
+            sendComponentUpdates(ws, componentsToUpdate, renderResult.renderers)
+            # Update render state with new deps from re-rendered components
+            updateState(renderResult, changedIds)
+        }
 
         (true, newRenderResult)
     } catch { (kind, msg) -> {
