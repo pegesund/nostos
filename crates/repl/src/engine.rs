@@ -2941,6 +2941,23 @@ impl ReplEngine {
         Compiler::get_builtin_doc(name).map(String::from)
     }
 
+    /// Get function parameter details for signature help.
+    /// Returns Vec of (param_name, param_type, is_optional, default_value_preview).
+    pub fn get_function_params(&self, name: &str) -> Option<Vec<(String, String, bool, Option<String>)>> {
+        // Try user-defined functions first
+        if let Some(params) = self.compiler.get_function_params(name) {
+            return Some(params);
+        }
+        // Try imported names (local alias -> qualified name)
+        if let Some(qualified) = self.compiler.get_prelude_imports().get(name) {
+            if let Some(params) = self.compiler.get_function_params(qualified) {
+                return Some(params);
+            }
+        }
+        // No param info for builtins (they have signature strings instead)
+        None
+    }
+
     /// Check if a function is public (exported)
     pub fn is_function_public(&self, name: &str) -> bool {
         // Try direct check
@@ -13500,5 +13517,40 @@ end
         println!("\n--- Variant construction ---");
         let result = engine.eval("x: MString = String");
         println!("x: MString = String result: {:?}", result);
+    }
+
+    #[test]
+    fn test_get_function_params_basic() {
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        // Define a function with typed params
+        engine.eval("add(x: Int, y: Int) = x + y");
+
+        let params = engine.get_function_params("add");
+        println!("Params for add: {:?}", params);
+        assert!(params.is_some(), "Should find params for add");
+        let params = params.unwrap();
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].0, "x");  // name
+        assert_eq!(params[0].1, "Int"); // type
+        assert!(!params[0].2);         // not optional
+        assert_eq!(params[1].0, "y");
+        assert_eq!(params[1].1, "Int");
+    }
+
+    #[test]
+    fn test_get_function_params_with_defaults() {
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        // Define a function with default params
+        engine.eval("greet(name: String, times = 1) = name");
+
+        let params = engine.get_function_params("greet");
+        println!("Params for greet: {:?}", params);
+        assert!(params.is_some(), "Should find params for greet");
+        let params = params.unwrap();
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].0, "name");
+        assert!(!params[0].2);           // not optional
+        assert_eq!(params[1].0, "times");
+        assert!(params[1].2);            // is optional (has default)
     }
 }

@@ -145,6 +145,44 @@ struct AutocompleteState {
 /// Maximum visible items in autocomplete popup
 const AC_MAX_VISIBLE: usize = 10;
 
+/// Signature help state (shows function parameters when typing '(')
+struct SignatureHelpState {
+    /// Whether signature help popup is visible
+    active: bool,
+    /// Function name being called
+    function_name: String,
+    /// Parameter info: (name, type, is_optional, default_preview)
+    params: Vec<(String, String, bool, Option<String>)>,
+    /// Full signature string (for builtins that don't have param details)
+    signature: Option<String>,
+    /// Current parameter index (based on comma count)
+    current_param: usize,
+    /// Stack of nested calls (to handle nested parens)
+    call_stack: Vec<(String, usize)>,  // (function_name, paren_position)
+}
+
+impl SignatureHelpState {
+    fn new() -> Self {
+        Self {
+            active: false,
+            function_name: String::new(),
+            params: Vec::new(),
+            signature: None,
+            current_param: 0,
+            call_stack: Vec::new(),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.active = false;
+        self.function_name.clear();
+        self.params.clear();
+        self.signature = None;
+        self.current_param = 0;
+        self.call_stack.clear();
+    }
+}
+
 impl AutocompleteState {
     fn new() -> Self {
         Self {
@@ -227,6 +265,8 @@ pub struct ReplPanel {
     autocomplete: Autocomplete,
     /// Autocomplete state
     ac_state: AutocompleteState,
+    /// Signature help state
+    sig_help: SignatureHelpState,
     /// History navigation index (None = current edit buffer)
     history_index: Option<usize>,
     /// Stashed current input when navigating history
@@ -264,6 +304,7 @@ impl ReplPanel {
             autocomplete,
 
             ac_state: AutocompleteState::new(),
+            sig_help: SignatureHelpState::new(),
             history_index: None,
             stash_current: None,
             command_history: Self::load_history_from_disk(),
@@ -694,6 +735,14 @@ impl ReplPanel {
         line.insert(byte_idx, c);
         self.cursor.0 += 1;
 
+        // Handle signature help triggers
+        match c {
+            '(' => self.trigger_signature_help(),
+            ',' => self.update_signature_help_param(),
+            ')' => self.close_signature_help(),
+            _ => {}
+        }
+
         // Update autocomplete after each character
         self.update_autocomplete();
     }
@@ -715,8 +764,43 @@ impl ReplPanel {
             let char_count = line.chars().count();
             if self.cursor.0 <= char_count {
                 let byte_idx = Self::char_to_byte_idx(line, self.cursor.0 - 1);
-                let c = line[byte_idx..].chars().next().unwrap();
-                line.replace_range(byte_idx..byte_idx + c.len_utf8(), "");
+                let deleted_char = line[byte_idx..].chars().next().unwrap();
+                line.replace_range(byte_idx..byte_idx + deleted_char.len_utf8(), "");
+
+                // Update signature help based on deleted character
+                match deleted_char {
+                    '(' => {
+                        // Deleted opening paren - close signature help or pop stack
+                        if self.sig_help.call_stack.is_empty() {
+                            self.sig_help.reset();
+                        } else if let Some((func_name, _)) = self.sig_help.call_stack.pop() {
+                            // Restore parent call
+                            let eng = self.engine.borrow();
+                            if let Some(params) = eng.get_function_params(&func_name) {
+                                self.sig_help.function_name = func_name;
+                                self.sig_help.params = params;
+                                self.sig_help.signature = None;
+                                self.sig_help.current_param = 0;
+                            } else {
+                                self.sig_help.reset();
+                            }
+                        }
+                    }
+                    ',' => {
+                        // Deleted comma - decrement param index
+                        if self.sig_help.active && self.sig_help.current_param > 0 {
+                            self.sig_help.current_param -= 1;
+                        }
+                    }
+                    ')' => {
+                        // Deleted closing paren - might need to reactivate
+                        self.update_signature_help_context();
+                    }
+                    _ => {
+                        // For other chars, validate context is still valid
+                        self.update_signature_help_context();
+                    }
+                }
             }
             self.cursor.0 -= 1;
             self.update_autocomplete();
@@ -726,6 +810,7 @@ impl ReplPanel {
             self.cursor.0 = self.line_char_count(self.cursor.1);
             self.current.input[self.cursor.1].push_str(&current_line);
             self.ac_state.reset();
+            self.sig_help.reset();
         }
     }
 
@@ -738,9 +823,11 @@ impl ReplPanel {
                 line.replace_range(byte_idx..byte_idx + c.len_utf8(), "");
             }
             self.update_autocomplete();
+            self.update_signature_help_context();
         } else if self.cursor.1 < self.current.input.len() - 1 {
             let next_line = self.current.input.remove(self.cursor.1 + 1);
             self.current.input[self.cursor.1].push_str(&next_line);
+            self.update_signature_help_context();
         }
     }
 
@@ -779,6 +866,167 @@ impl ReplPanel {
             self.ac_state.context = Some(context);
         } else {
             self.ac_state.reset();
+        }
+    }
+
+    /// Trigger signature help when '(' is typed
+    fn trigger_signature_help(&mut self) {
+        let line = &self.current.input[self.cursor.1];
+        // Get text before cursor (before the '(' we just inserted)
+        let before_paren = &line[..Self::char_to_byte_idx(line, self.cursor.0.saturating_sub(1))];
+
+        // Extract the function name before the '('
+        // Look for identifier chars going backwards
+        let func_name: String = before_paren
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+
+        if func_name.is_empty() {
+            return;
+        }
+
+        // Try to get function params
+        let eng = self.engine.borrow();
+
+        // First try detailed params
+        if let Some(params) = eng.get_function_params(&func_name) {
+            // Push current call to stack if we're already in a call
+            if self.sig_help.active {
+                self.sig_help.call_stack.push((
+                    self.sig_help.function_name.clone(),
+                    self.cursor.0,
+                ));
+            }
+
+            self.sig_help.active = true;
+            self.sig_help.function_name = func_name;
+            self.sig_help.params = params;
+            self.sig_help.signature = None;
+            self.sig_help.current_param = 0;
+        } else if let Some(sig) = eng.get_function_signature(&func_name) {
+            // Fall back to signature string for builtins
+            if self.sig_help.active {
+                self.sig_help.call_stack.push((
+                    self.sig_help.function_name.clone(),
+                    self.cursor.0,
+                ));
+            }
+
+            self.sig_help.active = true;
+            self.sig_help.function_name = func_name;
+            self.sig_help.params.clear();
+            self.sig_help.signature = Some(sig);
+            self.sig_help.current_param = 0;
+        }
+    }
+
+    /// Update current parameter position when ',' is typed
+    fn update_signature_help_param(&mut self) {
+        if self.sig_help.active {
+            self.sig_help.current_param += 1;
+        }
+    }
+
+    /// Update signature help context - check if we're still inside a function call
+    fn update_signature_help_context(&mut self) {
+        if !self.sig_help.active {
+            return;
+        }
+
+        // Check if we're still inside a function call by counting parens
+        let line = &self.current.input[self.cursor.1];
+        let before_cursor = &line[..Self::char_to_byte_idx(line, self.cursor.0)];
+
+        let mut paren_depth = 0;
+        let mut comma_count = 0;
+        let mut last_open_paren_pos = None;
+
+        for (i, c) in before_cursor.chars().enumerate() {
+            match c {
+                '(' => {
+                    paren_depth += 1;
+                    last_open_paren_pos = Some(i);
+                    comma_count = 0;  // Reset comma count for new call
+                }
+                ')' => {
+                    paren_depth -= 1;
+                    if paren_depth < 0 {
+                        paren_depth = 0;
+                    }
+                }
+                ',' if paren_depth > 0 => {
+                    comma_count += 1;
+                }
+                _ => {}
+            }
+        }
+
+        if paren_depth <= 0 {
+            // Not inside any function call
+            self.sig_help.reset();
+        } else {
+            // Update current param based on comma count
+            self.sig_help.current_param = comma_count;
+
+            // If we lost track of the function, try to recover it
+            if let Some(paren_pos) = last_open_paren_pos {
+                let before_paren = &before_cursor[..paren_pos];
+                let func_name: String = before_paren
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect();
+
+                if !func_name.is_empty() && func_name != self.sig_help.function_name {
+                    // Function changed, update params
+                    let eng = self.engine.borrow();
+                    if let Some(params) = eng.get_function_params(&func_name) {
+                        self.sig_help.function_name = func_name;
+                        self.sig_help.params = params;
+                        self.sig_help.signature = None;
+                    } else if let Some(sig) = eng.get_function_signature(&func_name) {
+                        self.sig_help.function_name = func_name;
+                        self.sig_help.params.clear();
+                        self.sig_help.signature = Some(sig);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Close signature help when ')' is typed
+    fn close_signature_help(&mut self) {
+        if !self.sig_help.active {
+            return;
+        }
+
+        // Pop from call stack if there's a nested call
+        if let Some((func_name, _paren_pos)) = self.sig_help.call_stack.pop() {
+            // Restore parent call's state
+            let eng = self.engine.borrow();
+            if let Some(params) = eng.get_function_params(&func_name) {
+                self.sig_help.function_name = func_name;
+                self.sig_help.params = params;
+                self.sig_help.signature = None;
+                // Re-count commas to find current param (simplified: just reset)
+                self.sig_help.current_param = 0;
+            } else if let Some(sig) = eng.get_function_signature(&func_name) {
+                self.sig_help.function_name = func_name;
+                self.sig_help.params.clear();
+                self.sig_help.signature = Some(sig);
+                self.sig_help.current_param = 0;
+            }
+        } else {
+            // No more nested calls, close signature help
+            self.sig_help.reset();
         }
     }
 
@@ -1017,6 +1265,63 @@ impl ReplPanel {
             }
         }
     }
+
+    /// Draw the signature help popup (shows function parameters)
+    fn draw_signature_help(&self, printer: &Printer, cursor_screen_y: usize) {
+        if !self.sig_help.active {
+            return;
+        }
+
+        let prompt_width = 4;
+        let popup_y = if cursor_screen_y > 0 { cursor_screen_y - 1 } else { cursor_screen_y + 1 };
+        let cursor_x = prompt_width + self.cursor.0.saturating_sub(self.scroll_offset.0);
+
+        // Build the signature display string
+        let display = if !self.sig_help.params.is_empty() {
+            // We have detailed param info
+            let mut parts = Vec::new();
+            for (i, (name, ty, is_opt, default)) in self.sig_help.params.iter().enumerate() {
+                let param_str = if *is_opt {
+                    if let Some(_default) = default {
+                        format!("{} = ...", name)
+                    } else {
+                        format!("{}?", name)
+                    }
+                } else {
+                    format!("{}: {}", name, ty)
+                };
+
+                // Highlight current param
+                if i == self.sig_help.current_param {
+                    parts.push(format!("[{}]", param_str));
+                } else {
+                    parts.push(param_str);
+                }
+            }
+            format!("{}({})", self.sig_help.function_name, parts.join(", "))
+        } else if let Some(ref sig) = self.sig_help.signature {
+            // Fall back to signature string for builtins
+            format!("{} :: {}", self.sig_help.function_name, sig)
+        } else {
+            return;
+        };
+
+        let popup_width = display.len().min(printer.size.x.saturating_sub(2));
+        let popup_x = cursor_x.min(printer.size.x.saturating_sub(popup_width));
+
+        // Draw background
+        let bg_style = Style::from(ColorStyle::new(
+            Color::Rgb(220, 220, 255),
+            Color::Rgb(50, 50, 80)
+        ));
+
+        let display_truncated: String = display.chars().take(popup_width).collect();
+        let padded = format!("{:width$}", display_truncated, width = popup_width);
+
+        printer.with_style(bg_style, |p| {
+            p.print((popup_x, popup_y), &padded);
+        });
+    }
 }
 
 impl View for ReplPanel {
@@ -1135,7 +1440,10 @@ impl View for ReplPanel {
             }
         }
 
-        // Draw autocomplete popup
+        // Draw signature help (above cursor)
+        self.draw_signature_help(printer, cursor_screen_y);
+
+        // Draw autocomplete popup (below cursor)
         self.draw_autocomplete(printer, cursor_screen_y);
 
         // Draw scrollbar if needed
