@@ -1,0 +1,72 @@
+# RWeb multi-route test server
+# Start this, then run routes_test.nos with Selenium
+
+use stdlib.rweb
+use stdlib.rhtml
+use stdlib.server.respondHtml
+
+reactive Counter = { value: Int }
+
+# Home page - reactive with counter
+homeSession() = {
+    c = Counter(value: 0)
+    (
+        () => RHtml(div([
+            h1("Home Page", attrs: [("data-testid", "home-title")]),
+            component("counter", () => RHtml(
+                span("Count: " ++ show(c.value), dataTestid: "home-count")
+            )),
+            button("+1", dataAction: "increment", dataTestid: "home-increment")
+        ])),
+        (action, params) => match action {
+            "increment" -> { c.value = c.value + 1 }
+            _ -> ()
+        }
+    )
+}
+
+# Dashboard page - reactive with different counter
+dashboardSession() = {
+    c = Counter(value: 100)
+    (
+        () => RHtml(div([
+            h1("Dashboard", attrs: [("data-testid", "dash-title")]),
+            component("total", () => RHtml(
+                span("Total: $" ++ show(c.value), dataTestid: "dash-total")
+            )),
+            button("Add $10", dataAction: "add", dataTestid: "dash-add"),
+            button("Reset", dataAction: "reset", dataTestid: "dash-reset")
+        ])),
+        (action, params) => match action {
+            "add" -> { c.value = c.value + 10 }
+            "reset" -> { c.value = 0 }
+            _ -> ()
+        }
+    )
+}
+
+# About page - plain HTML
+aboutHandler(req) = respondHtml(req, 
+    "<html><body><h1 data-testid=\"about-title\">About Us</h1><p data-testid=\"about-text\">This is a plain HTML page.</p></body></html>"
+)
+
+# Resolver functions
+reactiveResolver(path) = match path {
+    "/" -> Some(homeSession)
+    "/dashboard" -> Some(dashboardSession)
+    _ -> None()
+}
+
+plainResolver(path) = match path {
+    "/about" -> Some(aboutHandler)
+    _ -> None()
+}
+
+main() = {
+    println("Starting multi-route RWeb test server on port 8098...")
+    println("Routes:")
+    println("  / (reactive) - Home with counter")
+    println("  /dashboard (reactive) - Dashboard with total")
+    println("  /about (plain) - About page")
+    startRWebWithRoutes(8098, "Multi-Route Test", reactiveResolver, plainResolver)
+}

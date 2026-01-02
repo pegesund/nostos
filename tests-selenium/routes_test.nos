@@ -1,0 +1,114 @@
+# Selenium test for RWeb multi-route support
+# Tests: 2 reactive routes (/, /dashboard) and 1 plain HTML route (/about)
+#
+# To run:
+#   1. Start ChromeDriver: chromedriver --port=4444
+#   2. Start the server: ./target/release/nostos tests-selenium/rweb_routes_test.nos
+#   3. Run this test: ./target/release/nostos tests-selenium/routes_test.nos
+
+runTest(name, got, expected) = {
+    println("Test: " ++ name)
+    println("  Got: " ++ got)
+    result = String.contains(got, expected)
+    if result then println("  [PASS]") else println("  [FAIL] Expected: " ++ expected)
+    if result then 1 else 0
+}
+
+main() = {
+    println("=== Nostos Selenium Test: Multi-Route RWeb ===")
+    println("")
+
+    # Connect to ChromeDriver
+    println("Connecting to ChromeDriver...")
+    driver = Selenium.connect("http://localhost:4444")
+    println("Connected!")
+    println("")
+
+    # ==========================================
+    # Test 1: Home page (reactive route /)
+    # ==========================================
+    println("--- Testing Home Page (/) ---")
+    Selenium.goto(driver, "http://localhost:8098/")
+    Selenium.waitFor(driver, "[data-testid='home-title']", 5000)
+    
+    title1 = Selenium.text(driver, "[data-testid='home-title']")
+    t1 = runTest("Home page title", title1, "Home Page")
+    
+    count1 = Selenium.text(driver, "[data-testid='home-count']")
+    t2 = runTest("Home initial count", count1, "Count: 0")
+    
+    # Increment counter
+    Selenium.click(driver, "[data-testid='home-increment']")
+    sleep(500)
+    Selenium.click(driver, "[data-testid='home-increment']")
+    sleep(500)
+    count2 = Selenium.text(driver, "[data-testid='home-count']")
+    t3 = runTest("Home after 2 increments", count2, "Count: 2")
+    println("")
+
+    # ==========================================
+    # Test 2: Dashboard page (reactive route /dashboard)
+    # ==========================================
+    println("--- Testing Dashboard Page (/dashboard) ---")
+    Selenium.goto(driver, "http://localhost:8098/dashboard")
+    Selenium.waitFor(driver, "[data-testid='dash-title']", 5000)
+    
+    title2 = Selenium.text(driver, "[data-testid='dash-title']")
+    t4 = runTest("Dashboard title", title2, "Dashboard")
+    
+    total1 = Selenium.text(driver, "[data-testid='dash-total']")
+    t5 = runTest("Dashboard initial total", total1, "Total: $100")
+    
+    # Add $10 twice
+    Selenium.click(driver, "[data-testid='dash-add']")
+    sleep(500)
+    Selenium.click(driver, "[data-testid='dash-add']")
+    sleep(500)
+    total2 = Selenium.text(driver, "[data-testid='dash-total']")
+    t6 = runTest("Dashboard after adding $20", total2, "Total: $120")
+    
+    # Reset
+    Selenium.click(driver, "[data-testid='dash-reset']")
+    sleep(500)
+    total3 = Selenium.text(driver, "[data-testid='dash-total']")
+    t7 = runTest("Dashboard after reset", total3, "Total: $0")
+    println("")
+
+    # ==========================================
+    # Test 3: About page (plain HTML route /about)
+    # ==========================================
+    println("--- Testing About Page (/about) ---")
+    Selenium.goto(driver, "http://localhost:8098/about")
+    Selenium.waitFor(driver, "[data-testid='about-title']", 5000)
+    
+    title3 = Selenium.text(driver, "[data-testid='about-title']")
+    t8 = runTest("About page title", title3, "About Us")
+    
+    text3 = Selenium.text(driver, "[data-testid='about-text']")
+    t9 = runTest("About page text", text3, "plain HTML")
+    println("")
+
+    # ==========================================
+    # Test 4: Verify home page state is independent (new session)
+    # ==========================================
+    println("--- Testing Route Independence ---")
+    Selenium.goto(driver, "http://localhost:8098/")
+    Selenium.waitFor(driver, "[data-testid='home-count']", 5000)
+    
+    # New session should start at 0 (previous session was different WebSocket)
+    count3 = Selenium.text(driver, "[data-testid='home-count']")
+    t10 = runTest("New home session starts at 0", count3, "Count: 0")
+    println("")
+
+    # Close the browser
+    println("Closing browser...")
+    Selenium.close(driver)
+
+    # Summary
+    passed = t1 + t2 + t3 + t4 + t5 + t6 + t7 + t8 + t9 + t10
+    println("")
+    println("=== Test Summary ===")
+    println("Passed: " ++ show(passed) ++ " / 10")
+
+    if passed == 10 then 0 else 1
+}

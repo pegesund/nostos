@@ -32,7 +32,7 @@
 #
 #   main() = startRWeb(8080, "My App", session)
 
-use stdlib.server.{serve, respondHtml, respond404}
+use stdlib.server.{serve, respondHtml, respond404, getParam}
 use stdlib.rhtml
 
 # --- Client JavaScript ---
@@ -350,4 +350,215 @@ pub startRWeb(port, title, sessionSetup) = {
     println("RWeb server started on http://localhost:" ++ show(port))
     println("WebSocket endpoint: ws://localhost:" ++ show(port) ++ "/ws")
     serve(port, req => rwebHandleRequest(req, title, sessionSetup))
+}
+
+# --- Multi-Route Support ---
+
+# Client JavaScript that passes current path to WebSocket
+clientJsWithRoutes() = "
+<script>
+(function() {
+    var ws = null;
+    var reconnectDelay = 1000;
+
+    function connect() {
+        var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(protocol + '//' + location.host + '/ws?path=' + encodeURIComponent(location.pathname));
+
+        ws.onopen = function() {
+            console.log('RWeb connected for path: ' + location.pathname);
+            reconnectDelay = 1000;
+        };
+
+        ws.onmessage = function(e) {
+            var data = JSON.parse(e.data);
+            if (data.type === 'update') {
+                var el = document.getElementById(data.component);
+                if (el) {
+                    el.outerHTML = data.html;
+                    bindEvents();
+                }
+            } else if (data.type === 'full') {
+                document.getElementById('rweb-root').innerHTML = data.html;
+                bindEvents();
+            }
+        };
+
+        ws.onclose = function() {
+            console.log('RWeb disconnected, reconnecting...');
+            setTimeout(connect, reconnectDelay);
+            reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+        };
+
+        ws.onerror = function(e) {
+            console.error('RWeb error', e);
+        };
+    }
+
+    function sendAction(action, params) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ action: action, params: params || {} }));
+        }
+    }
+
+    function bindEvents() {
+        document.querySelectorAll('[data-action]').forEach(function(el) {
+            if (!el._rweb_bound) {
+                el._rweb_bound = true;
+                el.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    var action = el.getAttribute('data-action');
+                    var params = {};
+                    for (var i = 0; i < el.attributes.length; i++) {
+                        var attr = el.attributes[i];
+                        if (attr.name.startsWith('data-param-')) {
+                            params[attr.name.substring(11)] = attr.value;
+                        }
+                    }
+                    sendAction(action, params);
+                });
+            }
+        });
+
+        document.querySelectorAll('form[data-action]').forEach(function(form) {
+            if (!form._rweb_bound) {
+                form._rweb_bound = true;
+                form.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    var action = form.getAttribute('data-action');
+                    var params = {};
+                    new FormData(form).forEach(function(v, k) { params[k] = v; });
+                    sendAction(action, params);
+                });
+            }
+        });
+
+        document.querySelectorAll('[data-onchange]').forEach(function(el) {
+            if (!el._rweb_bound) {
+                el._rweb_bound = true;
+                el.addEventListener('change', function(e) {
+                    var action = el.getAttribute('data-onchange');
+                    sendAction(action, { value: el.value });
+                });
+            }
+        });
+    }
+
+    window.rweb = { sendAction: sendAction };
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            bindEvents();
+            connect();
+        });
+    } else {
+        bindEvents();
+        connect();
+    }
+})();
+</script>
+"
+
+# Page template for routed pages
+pageTemplateWithRoutes(title, content) =
+    "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>" ++ title ++ "</title>\n</head>\n<body>\n<div id=\"rweb-root\">" ++ content ++ "</div>\n" ++ clientJsWithRoutes() ++ "\n</body>\n</html>"
+
+# Request handler with routing support using resolver functions
+# reactiveResolver: String -> Option[() -> (RenderFn, ActionHandler)] - resolves reactive pages
+# plainResolver: String -> Option[Request -> ()] - resolves plain HTML handlers
+rwebHandleRequestWithRoutes(req, title, reactiveResolver, plainResolver) = {
+    # WebSocket upgrade - check path query param for which session to create
+    if req.path == "/ws" && req.isWebSocket then {
+        pagePath = getParam(req.queryParams, "path")
+        actualPath = if pagePath == "" then "/" else pagePath
+
+        match reactiveResolver(actualPath) {
+            Some(sessionSetup) -> {
+                # Accept WebSocket FIRST before any IO
+                ws = WebSocket.accept(req.id)
+
+                pid = self()
+                println("[RWeb] Session started: pid=" ++ show(pid) ++ " path=" ++ actualPath)
+
+                (renderPage, onAction) = sessionSetup()
+                renderResult = renderPage()
+
+                # Send initial full page HTML
+                html = renderRHtml(renderResult)
+                msg = "{\"type\":\"full\",\"html\":\"" ++ escapeJsonString(html) ++ "\"}"
+                WebSocket.send(ws, msg)
+
+                # Enter session loop (persistent process)
+                sessionLoop(ws, renderResult, renderPage, onAction)
+
+                # Session ended
+                gcResult = Gc.collect()
+                stats = Gc.stats()
+                println("[RWeb] Session ended: pid=" ++ show(pid) ++
+                        " | gc collected=" ++ show(gcResult.collected) ++
+                        " live=" ++ show(stats.live) ++
+                        " totalAllocated=" ++ show(stats.totalAllocated) ++
+                        " totalFreed=" ++ show(stats.totalFreed))
+            }
+            None() -> respond404(req)
+        }
+    }
+    # Check reactive routes - serve initial HTML
+    else match reactiveResolver(req.path) {
+        Some(sessionSetup) -> {
+            (renderPage, _) = sessionSetup()
+            result = renderPage()
+            html = renderRHtml(result)
+            respondHtml(req, pageTemplateWithRoutes(title, html))
+        }
+        None() -> {
+            # Check plain routes - call handler directly
+            match plainResolver(req.path) {
+                Some(handler) -> handler(req)
+                None() -> respond404(req)
+            }
+        }
+    }
+}
+
+# Start RWeb server with multiple routes using resolver functions
+#
+# reactiveResolver: String -> Option[() -> (RenderFn, ActionHandler)]
+#   A function that takes a path and returns Some(sessionSetup) or None()
+#   sessionSetup: () -> (renderPage, onAction)
+#
+# plainResolver: String -> Option[Request -> ()]
+#   A function that takes a path and returns Some(handler) or None()
+#   handler: Request -> ()
+#
+# Example:
+#   homeSession() = {
+#       counter = Counter(value: 0)
+#       (
+#           () => RHtml(div([h1("Home"), span(show(counter.value))])),
+#           (action, params) => ()
+#       )
+#   }
+#
+#   purchaseSession() = { ... }
+#
+#   aboutHandler(req) = respondHtml(req, "<h1>About Us</h1>")
+#
+#   reactiveResolver(path) = match path {
+#       "/" -> Some(homeSession)
+#       "/purchase" -> Some(purchaseSession)
+#       _ -> None()
+#   }
+#
+#   plainResolver(path) = match path {
+#       "/about" -> Some(aboutHandler)
+#       _ -> None()
+#   }
+#
+#   main() = startRWebWithRoutes(8080, "My App", reactiveResolver, plainResolver)
+#
+pub startRWebWithRoutes(port, title, reactiveResolver, plainResolver) = {
+    println("RWeb server with routes started on http://localhost:" ++ show(port))
+    println("WebSocket endpoint: ws://localhost:" ++ show(port) ++ "/ws?path=<path>")
+    serve(port, req => rwebHandleRequestWithRoutes(req, title, reactiveResolver, plainResolver))
 }
