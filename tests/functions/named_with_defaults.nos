@@ -1,0 +1,52 @@
+# expect: 0
+# Test combining named parameters with default values
+
+# Function with multiple optional params
+greet(name, greeting = "Hello", punctuation = "!") = 
+    greeting ++ ", " ++ name ++ punctuation
+
+# Test 1: All positional
+test1() = greet("World", "Hi", "?") == "Hi, World?"
+
+# Test 2: Skip middle param using named arg for last
+test2() = greet("World", punctuation: "?") == "Hello, World?"
+
+# Test 3: Use named arg to override default
+test3() = greet("World", greeting: "Hey") == "Hey, World!"
+
+# Test 4: Mix positional and named with defaults
+test4() = greet("World", "Hi", punctuation: "...") == "Hi, World..."
+
+# Test 5: Only required arg, all defaults
+test5() = greet("World") == "Hello, World!"
+
+# Test 6: Named args in different order with defaults
+test6() = greet(punctuation: "!!!", name: "You", greeting: "Yo") == "Yo, You!!!"
+
+# Test 7: Named args skipping optional ones
+test7() = greet(name: "Friend") == "Hello, Friend!"
+
+# Function with all optional params
+makeRange(start = 0, stop = 10, step = 1) = (start, stop, step)
+
+# Test 8: Named args for specific optional params
+test8() = makeRange(stop: 5) == (0, 5, 1)
+
+# Test 9: Named args overriding defaults
+test9() = makeRange(step: 2, stop: 20) == (0, 20, 2)
+
+# Test 10: Named args with some positional
+test10() = makeRange(5, step: 3) == (5, 10, 3)
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), 
+               test6(), test7(), test8(), test9(), test10()]
+    failed = results.filter(r => !r)
+    if length(failed) > 0 then {
+        println("Failed: " ++ show(length(failed)) ++ " tests")
+        1
+    } else {
+        println("All named + default param tests passed!")
+        0
+    }
+}
