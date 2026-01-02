@@ -1,10 +1,10 @@
 # expect: <a href="https://example.com">Link</a>
-# HTML attributes work correctly
+# HTML attributes work correctly with named parameters
 
 use stdlib.html.{Html, render}
 
 main() = {
-    # a(attrs, str) uses the overloaded a(attrs: List[(String, String)], str: String) variant
-    page = Html(a([("href", "https://example.com")], "Link"))
+    # a(str, href: ...) uses named parameter syntax
+    page = Html(a("Link", href: "https://example.com"))
     render(page)
 }

@@ -22,9 +22,9 @@ sessionSetup() = {
             ])
         )),
         div([
-            button([attr("data-action", "inc")], "+"),
-            button([attr("data-action", "dec")], "-"),
-            button([attr("data-action", "reset")], "Reset")
+            button("+", dataAction: "inc"),
+            button("-", dataAction: "dec"),
+            button("Reset", dataAction: "reset")
         ])
     ]))
 

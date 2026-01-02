@@ -1,0 +1,43 @@
+# expect: 0
+# Edge cases for named + default params
+
+# Complex default expressions
+addWithDefault(a, b = 10 * 2) = a + b
+test1() = addWithDefault(5) == 25
+
+# Default that uses arithmetic
+double(x, multiplier = 2) = x * multiplier
+test2() = double(5) == 10
+test3() = double(5, 3) == 15
+test4() = double(5, multiplier: 4) == 20
+
+# String default
+wrap(text, prefix = "[", suffix = "]") = prefix ++ text ++ suffix
+test5() = wrap("hello") == "[hello]"
+test6() = wrap("hello", "<", ">") == "<hello>"
+test7() = wrap("hello", suffix: "!") == "[hello!"
+
+# List default
+appendDefault(lst, item = 0) = lst ++ [item]
+test8() = appendDefault([1,2,3]) == [1,2,3,0]
+test9() = appendDefault([1,2,3], 99) == [1,2,3,99]
+
+# Tuple default
+makePair(x, default = (0, 0)) = (x, default)
+test10() = makePair(5) == (5, (0, 0))
+test11() = makePair(5, (1, 1)) == (5, (1, 1))
+
+# Boolean default
+check(value, invert = false) = if invert then !value else value
+test12() = check(true) == true
+test13() = check(true, true) == false
+test14() = check(true, invert: true) == false
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14()]
+    passed = results.filter(r => r)
+    println("Passed: " ++ show(length(passed)) ++ "/14 edge case tests")
+    if length(passed) == 14 then 0 else 1
+}

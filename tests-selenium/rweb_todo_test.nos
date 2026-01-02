@@ -22,74 +22,74 @@ session() = {
 
             # Stats component
             component("stats", () => RHtml(
-                div([attr("data-testid", "stats")], [
-                    span([attr("data-testid", "total-count")], "Total: " ++ show(
+                div([
+                    span("Total: " ++ show(
                         (if item1.text != "" then 1 else 0) +
                         (if item2.text != "" then 1 else 0) +
                         (if item3.text != "" then 1 else 0)
-                    )),
+                    ), dataTestid: "total-count"),
                     span(" | "),
-                    span([attr("data-testid", "completed-count")], "Done: " ++ show(
+                    span("Done: " ++ show(
                         (if item1.done then 1 else 0) +
                         (if item2.done then 1 else 0) +
                         (if item3.done then 1 else 0)
-                    ))
-                ])
+                    ), dataTestid: "completed-count")
+                ], dataTestid: "stats")
             )),
 
             # Filter buttons
             div([
-                button([attr("data-action", "filter-all"), attr("data-testid", "filter-all")], "All"),
-                button([attr("data-action", "filter-active"), attr("data-testid", "filter-active")], "Active"),
-                button([attr("data-action", "filter-done"), attr("data-testid", "filter-done")], "Done")
+                button("All", dataAction: "filter-all", dataTestid: "filter-all"),
+                button("Active", dataAction: "filter-active", dataTestid: "filter-active"),
+                button("Done", dataAction: "filter-done", dataTestid: "filter-done")
             ]),
 
             # Current filter
             component("filter-display", () => RHtml(
-                div([attr("data-testid", "current-filter")], "Filter: " ++ filter.value)
+                div("Filter: " ++ filter.value, dataTestid: "current-filter")
             )),
 
             # Add buttons
             div([
-                button([attr("data-action", "add-1"), attr("data-testid", "add-1")], "Add Item 1"),
-                button([attr("data-action", "add-2"), attr("data-testid", "add-2")], "Add Item 2"),
-                button([attr("data-action", "add-3"), attr("data-testid", "add-3")], "Add Item 3")
+                button("Add Item 1", dataAction: "add-1", dataTestid: "add-1"),
+                button("Add Item 2", dataAction: "add-2", dataTestid: "add-2"),
+                button("Add Item 3", dataAction: "add-3", dataTestid: "add-3")
             ]),
 
             # Item 1 component - respects filter
             component("item1", () => RHtml({
-                show = item1.text != "" && (filter.value == "all" || (filter.value == "done" && item1.done) || (filter.value == "active" && !item1.done))
-                if show then
-                    div([attr("data-testid", "item-1")], [
+                showItem = item1.text != "" && (filter.value == "all" || (filter.value == "done" && item1.done) || (filter.value == "active" && !item1.done))
+                if showItem then
+                    div([
                         span(item1.text ++ if item1.done then " [DONE]" else ""),
-                        button([attr("data-action", "toggle-1"), attr("data-testid", "toggle-1")], "Toggle"),
-                        button([attr("data-action", "delete-1"), attr("data-testid", "delete-1")], "X")
-                    ])
-                else div([attr("data-testid", "item-1-empty")], [])
+                        button("Toggle", dataAction: "toggle-1", dataTestid: "toggle-1"),
+                        button("X", dataAction: "delete-1", dataTestid: "delete-1")
+                    ], dataTestid: "item-1")
+                else div([], dataTestid: "item-1-empty")
             })),
 
             # Item 2 component - respects filter
             component("item2", () => RHtml({
-                show = item2.text != "" && (filter.value == "all" || (filter.value == "done" && item2.done) || (filter.value == "active" && !item2.done))
-                if show then
-                    div([attr("data-testid", "item-2")], [
+                showItem = item2.text != "" && (filter.value == "all" || (filter.value == "done" && item2.done) || (filter.value == "active" && !item2.done))
+                if showItem then
+                    div([
                         span(item2.text ++ if item2.done then " [DONE]" else ""),
-                        button([attr("data-action", "toggle-2"), attr("data-testid", "toggle-2")], "Toggle"),
-                        button([attr("data-action", "delete-2"), attr("data-testid", "delete-2")], "X")
-                    ])
-                else div([attr("data-testid", "item-2-empty")], [])
+                        button("Toggle", dataAction: "toggle-2", dataTestid: "toggle-2"),
+                        button("X", dataAction: "delete-2", dataTestid: "delete-2")
+                    ], dataTestid: "item-2")
+                else div([], dataTestid: "item-2-empty")
             })),
 
             # Item 3 component - respects filter
             component("item3", () => RHtml({
-                show = item3.text != "" && (filter.value == "all" || (filter.value == "done" && item3.done) || (filter.value == "active" && !item3.done))
-                if show then
-                    div([attr("data-testid", "item-3")], [
+                showItem = item3.text != "" && (filter.value == "all" || (filter.value == "done" && item3.done) || (filter.value == "active" && !item3.done))
+                if showItem then
+                    div([
                         span(item3.text ++ if item3.done then " [DONE]" else ""),
-                        button([attr("data-action", "toggle-3"), attr("data-testid", "toggle-3")], "Toggle"),
-                        button([attr("data-action", "delete-3"), attr("data-testid", "delete-3")], "X")
-                    ])
-                else div([attr("data-testid", "item-3-empty")], [])
+                        button("Toggle", dataAction: "toggle-3", dataTestid: "toggle-3"),
+                        button("X", dataAction: "delete-3", dataTestid: "delete-3")
+                    ], dataTestid: "item-3")
+                else div([], dataTestid: "item-3-empty")
             }))
         ])),
 

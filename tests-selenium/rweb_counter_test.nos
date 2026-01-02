@@ -14,15 +14,15 @@ session() = {
         () => RHtml(div([
             h1("RWeb Counter Test"),
             component("display", () => RHtml(
-                div([attr("data-testid", "count")], [
+                div([
                     span("Count: "),
                     span(show(counter.value))
-                ])
+                ], dataTestid: "count")
             )),
             div([
-                button([attr("data-action", "inc"), attr("data-testid", "increment")], "+"),
-                button([attr("data-action", "dec"), attr("data-testid", "decrement")], "-"),
-                button([attr("data-action", "reset"), attr("data-testid", "reset")], "Reset")
+                button("+", dataAction: "inc", dataTestid: "increment"),
+                button("-", dataAction: "dec", dataTestid: "decrement"),
+                button("Reset", dataAction: "reset", dataTestid: "reset")
             ])
         ])),
         # onAction

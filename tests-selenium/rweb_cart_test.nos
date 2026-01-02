@@ -16,38 +16,38 @@ session() = {
         () => RHtml(div([
             h1("Shopping Cart"),
             component("item-a", () => RHtml(
-                div([attr("data-testid", "a-row")], [
+                div([
                     span("Item A ($10): "),
-                    button([attr("data-action", "dec-a"), attr("data-testid", "dec-a")], "-"),
-                    span([attr("data-testid", "qty-a")], " " ++ show(qtyA.value) ++ " "),
-                    button([attr("data-action", "inc-a"), attr("data-testid", "inc-a")], "+"),
-                    span([attr("data-testid", "subtotal-a")], " = $" ++ show(qtyA.value * 10))
-                ])
+                    button("-", dataAction: "dec-a", dataTestid: "dec-a"),
+                    span(" " ++ show(qtyA.value) ++ " ", dataTestid: "qty-a"),
+                    button("+", dataAction: "inc-a", dataTestid: "inc-a"),
+                    span(" = $" ++ show(qtyA.value * 10), dataTestid: "subtotal-a")
+                ], dataTestid: "a-row")
             )),
             component("item-b", () => RHtml(
-                div([attr("data-testid", "b-row")], [
+                div([
                     span("Item B ($25): "),
-                    button([attr("data-action", "dec-b"), attr("data-testid", "dec-b")], "-"),
-                    span([attr("data-testid", "qty-b")], " " ++ show(qtyB.value) ++ " "),
-                    button([attr("data-action", "inc-b"), attr("data-testid", "inc-b")], "+"),
-                    span([attr("data-testid", "subtotal-b")], " = $" ++ show(qtyB.value * 25))
-                ])
+                    button("-", dataAction: "dec-b", dataTestid: "dec-b"),
+                    span(" " ++ show(qtyB.value) ++ " ", dataTestid: "qty-b"),
+                    button("+", dataAction: "inc-b", dataTestid: "inc-b"),
+                    span(" = $" ++ show(qtyB.value * 25), dataTestid: "subtotal-b")
+                ], dataTestid: "b-row")
             )),
             component("totals", () => RHtml(
-                div([attr("data-testid", "totals")], [
-                    div([attr("data-testid", "subtotal")], "Subtotal: $" ++ show(qtyA.value * 10 + qtyB.value * 25)),
-                    div([attr("data-testid", "discount-display")], "Discount: " ++ show(discount.value) ++ "%"),
-                    div([attr("data-testid", "total")], "Total: $" ++ show((qtyA.value * 10 + qtyB.value * 25) * (100 - discount.value) / 100))
-                ])
+                div([
+                    div("Subtotal: $" ++ show(qtyA.value * 10 + qtyB.value * 25), dataTestid: "subtotal"),
+                    div("Discount: " ++ show(discount.value) ++ "%", dataTestid: "discount-display"),
+                    div("Total: $" ++ show((qtyA.value * 10 + qtyB.value * 25) * (100 - discount.value) / 100), dataTestid: "total")
+                ], dataTestid: "totals")
             )),
             div([
-                button([attr("data-action", "discount-10"), attr("data-testid", "discount-10")], "10%"),
-                button([attr("data-action", "discount-50"), attr("data-testid", "discount-50")], "50%")
+                button("10%", dataAction: "discount-10", dataTestid: "discount-10"),
+                button("50%", dataAction: "discount-50", dataTestid: "discount-50")
             ]),
             component("summary", () => RHtml(
-                div([attr("data-testid", "summary")], "Items: " ++ show(qtyA.value + qtyB.value))
+                div("Items: " ++ show(qtyA.value + qtyB.value), dataTestid: "summary")
             )),
-            button([attr("data-action", "clear"), attr("data-testid", "clear-cart")], "Clear")
+            button("Clear", dataAction: "clear", dataTestid: "clear-cart")
         ])),
         (action, params) => match action {
             "inc-a" -> { qtyA.value = qtyA.value + 1 }

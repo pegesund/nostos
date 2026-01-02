@@ -19,13 +19,13 @@ session() = {
         () => RHtml(div([
             h1("External Function Test"),
             component("display", () => RHtml(
-                div([attr("data-testid", "count")], "Count: " ++ show(counter.value))
+                div("Count: " ++ show(counter.value), dataTestid: "count")
             )),
             div([
-                button([attr("data-action", "inc"), attr("data-testid", "inc")], "+"),
-                button([attr("data-action", "dec"), attr("data-testid", "dec")], "-"),
-                button([attr("data-action", "add5"), attr("data-testid", "add5")], "+5"),
-                button([attr("data-action", "reset"), attr("data-testid", "reset")], "Reset")
+                button("+", dataAction: "inc", dataTestid: "inc"),
+                button("-", dataAction: "dec", dataTestid: "dec"),
+                button("+5", dataAction: "add5", dataTestid: "add5"),
+                button("Reset", dataAction: "reset", dataTestid: "reset")
             ])
         ])),
 
