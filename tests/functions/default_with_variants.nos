@@ -1,0 +1,42 @@
+# expect: 0
+# Default parameters with variant types
+
+type Option[T] = Some(T) | None
+type Result[T, E] = Ok(T) | Err(E)
+type Color = Red | Green | Blue | Custom(Int, Int, Int)
+
+# Return variant with defaults
+getColor(r = 255, g = 0, b = 0) = Custom(r, g, b)
+test1() = getColor() == Custom(255, 0, 0)
+test2() = getColor(0) == Custom(0, 0, 0)
+test3() = getColor(0, 255) == Custom(0, 255, 0)
+test4() = getColor(0, 0, 255) == Custom(0, 0, 255)
+test5() = getColor(g: 128, b: 64) == Custom(255, 128, 64)
+
+# Optional with default variant
+withDefault(opt, def = 0) = match opt {
+    Some(x) -> x
+    None -> def
+}
+test6() = withDefault(Some(42)) == 42
+test7() = withDefault(None) == 0
+test8() = withDefault(None, 99) == 99
+test9() = withDefault(None, def: -1) == -1
+
+# Result handling with defaults
+handleResult(res, errVal = "error") = match res {
+    Ok(x) -> show(x)
+    Err(_) -> errVal
+}
+test10() = handleResult(Ok(42)) == "42"
+test11() = handleResult(Err("oops")) == "error"
+test12() = handleResult(Err("oops"), "failed") == "failed"
+test13() = handleResult(Err("oops"), errVal: "custom") == "custom"
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13()]
+    passed = results.filter(r => r)
+    if length(passed) == 13 then 0 else 1
+}

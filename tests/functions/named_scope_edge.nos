@@ -1,0 +1,53 @@
+# expect: 0
+# Scope edge cases with named/default params
+
+# Function reference in default
+helper(x) = x * x
+withFnDefault(f = helper) = f(5)
+test1() = withFnDefault() == 25
+test2() = withFnDefault(x => x + 1) == 6
+
+# Closure over default
+makeMultiplier(factor = 2) = x => x * factor
+test3() = makeMultiplier()(5) == 10
+test4() = makeMultiplier(3)(5) == 15
+
+# Let binding with computation
+compute(x = 0) = {
+    y = x + 10
+    z = y * 2
+    z
+}
+test5() = compute() == 20
+test6() = compute(5) == 30
+
+# Recursive with defaults
+recSum(n = 0, acc = 10) =
+    if n <= 0 then acc
+    else recSum(n - 1, acc + n)
+
+test7() = recSum() == 10
+test8() = recSum(3) == 16  # 10 + 3 + 2 + 1
+
+# Closure referencing param
+makeAdder(base = 0) = x => base + x
+test9() = makeAdder()(5) == 5
+test10() = makeAdder(10)(5) == 15
+test11() = makeAdder(base: 100)(1) == 101
+
+# Param in block computation
+transform(n = 1) = {
+    doubled = n * 2
+    tripled = n * 3
+    doubled + tripled
+}
+test12() = transform() == 5   # 2 + 3
+test13() = transform(10) == 50  # 20 + 30
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13()]
+    passed = results.filter(r => r)
+    if length(passed) == 13 then 0 else 1
+}

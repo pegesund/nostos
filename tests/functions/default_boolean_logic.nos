@@ -1,0 +1,52 @@
+# expect: 0
+# Boolean logic in defaults
+
+# Simple boolean defaults
+isEnabled(flag = true) = flag
+test1() = isEnabled() == true
+test2() = isEnabled(false) == false
+
+isDisabled(flag = false) = flag
+test3() = isDisabled() == false
+test4() = isDisabled(true) == true
+
+# Boolean expressions in defaults
+withAnd(x = true && true) = x
+test5() = withAnd() == true
+
+withOr(x = false || true) = x
+test6() = withOr() == true
+
+withNot(x = !false) = x
+test7() = withNot() == true
+
+# Complex boolean expressions
+complex(flag = true && (false || true)) = flag
+test8() = complex() == true
+
+# Comparison in defaults
+withComparison(threshold = 10 > 5) = threshold
+test9() = withComparison() == true
+
+withEqual(check = 5 == 5) = check
+test10() = withEqual() == true
+
+# Conditional with boolean default
+choose(useFirst = true, a = 1, b = 2) = if useFirst then a else b
+test11() = choose() == 1
+test12() = choose(false) == 2
+test13() = choose(useFirst: false, a: 10, b: 20) == 20
+test14() = choose(true, 100, 200) == 100
+
+# Boolean function default
+checkAll(pred = _ => true, lst = [1, 2, 3]) = lst.filter(pred)
+test15() = checkAll() == [1, 2, 3]
+test16() = checkAll(x => x > 1) == [2, 3]
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(), test7(),
+               test8(), test9(), test10(), test11(), test12(), test13(),
+               test14(), test15(), test16()]
+    passed = results.filter(r => r)
+    if length(passed) == 16 then 0 else 1
+}

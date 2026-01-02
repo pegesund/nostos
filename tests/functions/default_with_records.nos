@@ -1,0 +1,38 @@
+# expect: 0
+# Default parameters with records
+
+type Point = { x: Int, y: Int }
+type Config = { port: Int, host: String, debug: Bool }
+
+# Function returning record with defaults
+makePoint(x = 0, y = 0) = Point(x, y)
+test1() = makePoint() == Point(0, 0)
+test2() = makePoint(10) == Point(10, 0)
+test3() = makePoint(10, 20) == Point(10, 20)
+test4() = makePoint(x: 5, y: 10) == Point(5, 10)
+test5() = makePoint(y: 20) == Point(0, 20)
+
+# Function with record param and default
+movePoint(p, dx = 0, dy = 0) = Point(p.x + dx, p.y + dy)
+test6() = movePoint(Point(5, 5)) == Point(5, 5)
+test7() = movePoint(Point(5, 5), 10) == Point(15, 5)
+test8() = movePoint(Point(5, 5), 10, 20) == Point(15, 25)
+test9() = movePoint(Point(5, 5), dy: 10) == Point(5, 15)
+test10() = movePoint(p: Point(1, 1), dx: 2, dy: 3) == Point(3, 4)
+
+# Record with defaults
+makeConfig(port = 8080, host = "localhost", debug = false) =
+    Config(port, host, debug)
+
+test11() = makeConfig().port == 8080
+test12() = makeConfig(port: 3000).port == 3000
+test13() = makeConfig(debug: true).debug == true
+test14() = makeConfig(host: "0.0.0.0", port: 443).host == "0.0.0.0"
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14()]
+    passed = results.filter(r => r)
+    if length(passed) == 14 then 0 else 1
+}

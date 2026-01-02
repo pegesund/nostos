@@ -1,0 +1,55 @@
+# expect: 0
+# State machine simulation with named/default params
+
+type State = Idle | Running | Paused | Stopped
+
+# State transition with defaults
+transition(state, action = "none") = match (state, action) {
+    (Idle, "start") -> Running
+    (Running, "pause") -> Paused
+    (Running, "stop") -> Stopped
+    (Paused, "resume") -> Running
+    (Paused, "stop") -> Stopped
+    (_, "reset") -> Idle
+    (s, _) -> s  # No change for unknown actions
+}
+
+test1() = transition(Idle) == Idle
+test2() = transition(Idle, "start") == Running
+test3() = transition(Running, "pause") == Paused
+test4() = transition(Paused, "resume") == Running
+test5() = transition(Running, "stop") == Stopped
+test6() = transition(action: "reset", state: Stopped) == Idle
+
+# Run actions using list recursion
+runActions(initialState, actions = []) =
+    if length(actions) == 0 then initialState
+    else runActions(transition(initialState, head(actions)), tail(actions))
+
+test7() = runActions(Idle) == Idle
+test8() = runActions(Idle, ["start"]) == Running
+test9() = runActions(Idle, ["start", "pause"]) == Paused
+test10() = runActions(Idle, ["start", "pause", "resume", "stop"]) == Stopped
+test11() = runActions(actions: ["start", "stop"], initialState: Idle) == Stopped
+
+# State checker with default expected state
+isState(current, expected = Idle) = match (current, expected) {
+    (Idle, Idle) -> true
+    (Running, Running) -> true
+    (Paused, Paused) -> true
+    (Stopped, Stopped) -> true
+    (_, _) -> false
+}
+
+test12() = isState(Idle) == true
+test13() = isState(Running) == false
+test14() = isState(Running, Running) == true
+test15() = isState(Paused, expected: Paused) == true
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14(), test15()]
+    passed = results.filter(r => r)
+    if length(passed) == 15 then 0 else 1
+}

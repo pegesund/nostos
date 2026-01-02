@@ -1,0 +1,50 @@
+# expect: 0
+# Functions where ALL parameters have defaults
+
+# Single optional param
+greet(name = "World") = "Hello, " ++ name ++ "!"
+test1() = greet() == "Hello, World!"
+test2() = greet("Alice") == "Hello, Alice!"
+test3() = greet(name: "Bob") == "Hello, Bob!"
+
+# Two optional params
+rangeLen(start = 0, stop = 10) = stop - start
+test4() = rangeLen() == 10
+test5() = rangeLen(5) == 5
+test6() = rangeLen(5, 20) == 15
+test7() = rangeLen(start: 10) == 0
+test8() = rangeLen(stop: 100) == 100
+test9() = rangeLen(stop: 50, start: 25) == 25
+
+# Three optional params
+format(prefix = "[", content = "text", suffix = "]") =
+    prefix ++ content ++ suffix
+test10() = format() == "[text]"
+test11() = format("<") == "<text]"
+test12() = format("<", "data", ">") == "<data>"
+test13() = format(content: "info") == "[info]"
+test14() = format(suffix: "}", prefix: "{") == "{text}"
+test15() = format(content: "x", prefix: "(", suffix: ")") == "(x)"
+
+# Four optional params
+config(host = "localhost", port = 8080, ssl = false, timeout = 30) =
+    (host, port, ssl, timeout)
+test16() = config() == ("localhost", 8080, false, 30)
+test17() = config("0.0.0.0") == ("0.0.0.0", 8080, false, 30)
+test18() = config(port: 443, ssl: true) == ("localhost", 443, true, 30)
+test19() = config(timeout: 60, host: "api.example.com") == ("api.example.com", 8080, false, 60)
+
+# All optional with complex defaults
+compute(a = 1 + 1, b = 2 * 2, c = 3 * 3) = a + b + c
+test20() = compute() == 15  # 2 + 4 + 9 = 15
+test21() = compute(10) == 23  # 10 + 4 + 9 = 23
+test22() = compute(c: 1) == 7  # 2 + 4 + 1 = 7
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(),
+               test7(), test8(), test9(), test10(), test11(), test12(),
+               test13(), test14(), test15(), test16(), test17(), test18(),
+               test19(), test20(), test21(), test22()]
+    passed = results.filter(r => r)
+    if length(passed) == 22 then 0 else 1
+}

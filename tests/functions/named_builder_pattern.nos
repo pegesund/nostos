@@ -1,0 +1,48 @@
+# expect: 0
+# Builder pattern simulation with named/default params
+
+type Request = { method: String, url: String, body: String }
+
+# Build request with all optional params
+buildRequest(method = "GET", url = "/", body = "") = Request(method, url, body)
+
+test1() = buildRequest().method == "GET"
+test2() = buildRequest().url == "/"
+test3() = buildRequest(method: "POST").method == "POST"
+test4() = buildRequest(url: "/api/users").url == "/api/users"
+test5() = buildRequest(body: "data").body == "data"
+
+# Full request build
+test6() = buildRequest("POST", "/api/data", "payload").method == "POST"
+test7() = buildRequest("POST", "/api/data", "payload").url == "/api/data"
+
+# Query builder
+type Query = { table: String, limit: Int }
+
+buildQuery(table = "users", limit = 100) = Query(table, limit)
+
+test8() = buildQuery().table == "users"
+test9() = buildQuery(table: "orders").table == "orders"
+test10() = buildQuery(limit: 10).limit == 10
+test11() = buildQuery("products", 50).table == "products"
+test12() = buildQuery("products", 50).limit == 50
+
+# Config builder
+type Config = { host: String, port: Int, debug: Bool }
+
+buildConfig(host = "localhost", port = 8080, debug = false) = Config(host, port, debug)
+
+test13() = buildConfig().host == "localhost"
+test14() = buildConfig().port == 8080
+test15() = buildConfig(port: 443).port == 443
+test16() = buildConfig(debug: true).debug == true
+test17() = buildConfig("0.0.0.0", 3000, true).host == "0.0.0.0"
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14(), test15(),
+               test16(), test17()]
+    passed = results.filter(r => r)
+    if length(passed) == 17 then 0 else 1
+}

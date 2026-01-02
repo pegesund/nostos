@@ -1,0 +1,49 @@
+# expect: 0
+# Map/reduce operations with named/default params
+
+# Map with default transform
+mapWith(lst, f = x => x) = lst.map(f)
+
+test1() = mapWith([1, 2, 3]) == [1, 2, 3]
+test2() = mapWith([1, 2, 3], x => x * 2) == [2, 4, 6]
+test3() = mapWith(f: x => x + 10, lst: [1, 2]) == [11, 12]
+
+# Filter with default predicate
+filterWith(lst, pred = _ => true) = lst.filter(pred)
+
+test4() = filterWith([1, 2, 3, 4, 5]) == [1, 2, 3, 4, 5]
+test5() = filterWith([1, 2, 3, 4, 5], x => x > 2) == [3, 4, 5]
+test6() = filterWith(pred: x => x % 2 == 0, lst: [1, 2, 3, 4]) == [2, 4]
+
+# Reduce with default init and op
+reduceWith(lst, init = 0, op = (a, b) => a + b) = lst.fold(init, op)
+
+test7() = reduceWith([1, 2, 3, 4]) == 10
+test8() = reduceWith([1, 2, 3, 4], 100) == 110
+test9() = reduceWith([1, 2, 3, 4], 1, (a, b) => a * b) == 24
+
+# Pipeline with defaults
+pipeline(lst, mapFn = x => x, filterFn = _ => true, init = 0) =
+    lst.map(mapFn).filter(filterFn).fold(init, (a, b) => a + b)
+
+test10() = pipeline([1, 2, 3, 4, 5]) == 15
+test11() = pipeline([1, 2, 3, 4, 5], x => x * 2) == 30
+test12() = pipeline([1, 2, 3, 4, 5], filterFn: x => x > 2) == 12  # 3+4+5
+test13() = pipeline([1, 2, 3], mapFn: x => x * 10, init: 1000) == 1060
+
+# Take/drop with defaults
+takeN(lst, n = 1) = lst.take(n)
+dropN(lst, n = 1) = lst.drop(n)
+
+test14() = takeN([1, 2, 3, 4, 5]) == [1]
+test15() = takeN([1, 2, 3, 4, 5], 3) == [1, 2, 3]
+test16() = dropN([1, 2, 3, 4, 5]) == [2, 3, 4, 5]
+test17() = dropN([1, 2, 3, 4, 5], n: 3) == [4, 5]
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(),
+               test7(), test8(), test9(), test10(), test11(), test12(),
+               test13(), test14(), test15(), test16(), test17()]
+    passed = results.filter(r => r)
+    if length(passed) == 17 then 0 else 1
+}

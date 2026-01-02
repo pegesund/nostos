@@ -1,0 +1,56 @@
+# expect: 0
+# Named/default params with pattern matching
+
+type Option[T] = Some(T) | None
+type Either[L, R] = Left(L) | Right(R)
+
+# Pattern match with default
+unwrap(opt, def = 0) = match opt {
+    Some(x) -> x
+    None -> def
+}
+test1() = unwrap(Some(42)) == 42
+test2() = unwrap(None) == 0
+test3() = unwrap(None, 99) == 99
+test4() = unwrap(None, def: -1) == -1
+
+# Multiple match arms with defaults
+either(e, leftDefault = "left", rightDefault = "right") = match e {
+    Left(x) -> leftDefault ++ ": " ++ show(x)
+    Right(x) -> rightDefault ++ ": " ++ show(x)
+}
+test5() = either(Left(1)) == "left: 1"
+test6() = either(Right(2)) == "right: 2"
+test7() = either(Left(1), "L") == "L: 1"
+test8() = either(Right(2), rightDefault: "R") == "R: 2"
+
+# Match in default expression
+type Status = Ok | Error(String)
+
+checkStatus(s, onErr = "default error") = match s {
+    Ok -> "ok"
+    Error(_) -> onErr
+}
+test9() = checkStatus(Ok) == "ok"
+test10() = checkStatus(Error("fail")) == "default error"
+test11() = checkStatus(Error("fail"), "custom") == "custom"
+
+# List processing with defaults (using recursion)
+processList(lst, emptyVal = 0, singleMul = 1) =
+    if length(lst) == 0 then emptyVal
+    else if length(lst) == 1 then head(lst) * singleMul
+    else head(lst) + processList(tail(lst), emptyVal, singleMul)
+
+test12() = processList([]) == 0
+test13() = processList([5]) == 5
+test14() = processList([1, 2, 3]) == 6
+test15() = processList([], 42) == 42
+test16() = processList([5], singleMul: 2) == 10
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(),
+               test7(), test8(), test9(), test10(), test11(), test12(),
+               test13(), test14(), test15(), test16()]
+    passed = results.filter(r => r)
+    if length(passed) == 16 then 0 else 1
+}

@@ -1,0 +1,45 @@
+# expect: 0
+# Default parameters in recursive functions
+
+# Factorial with optional accumulator
+factorial(n, acc = 1) = if n <= 1 then acc else factorial(n - 1, acc * n)
+test1() = factorial(5) == 120
+test2() = factorial(5, 2) == 240
+test3() = factorial(0) == 1
+
+# Sum with starting value
+sumFrom(n, total = 0) = if n <= 0 then total else sumFrom(n - 1, total + n)
+test4() = sumFrom(5) == 15
+test5() = sumFrom(5, 10) == 25
+
+# Count down with step
+countdown(n, step = 1, acc = []) =
+    if n <= 0 then acc else countdown(n - step, step, acc ++ [n])
+test6() = countdown(5) == [5, 4, 3, 2, 1]
+test7() = countdown(6, 2) == [6, 4, 2]
+test8() = countdown(5, step: 2) == [5, 3, 1]
+
+# Fibonacci with memoization base
+fibWithBase(n, a = 0, b = 1) =
+    if n == 0 then a
+    else if n == 1 then b
+    else fibWithBase(n - 1, b, a + b)
+test9() = fibWithBase(10) == 55
+test10() = fibWithBase(5, 1, 1) == 8
+test11() = fibWithBase(6, a: 2, b: 3) == 34
+
+# Range with optional bounds
+buildRange(start, stop, step = 1, acc = []) =
+    if start >= stop then acc
+    else buildRange(start + step, stop, step, acc ++ [start])
+test12() = buildRange(0, 5) == [0, 1, 2, 3, 4]
+test13() = buildRange(0, 10, 2) == [0, 2, 4, 6, 8]
+test14() = buildRange(1, 6, step: 2) == [1, 3, 5]
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14()]
+    passed = results.filter(r => r)
+    if length(passed) == 14 then 0 else 1
+}

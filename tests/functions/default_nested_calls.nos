@@ -1,0 +1,36 @@
+# expect: 0
+# Default parameters with nested function calls
+
+addDef(a, b = 10) = a + b
+mulDef(x, y = 2) = x * y
+
+# Nested calls using defaults
+test1() = addDef(mulDef(5)) == 20
+test2() = mulDef(addDef(3)) == 26
+test3() = addDef(addDef(1)) == 21
+
+# Nested calls with override
+test4() = addDef(mulDef(5, 3)) == 25
+test5() = mulDef(addDef(3, 7)) == 20
+
+# Named in nested
+test6() = addDef(a: mulDef(x: 4)) == 18
+test7() = addDef(b: mulDef(3, y: 5), a: 10) == 25
+
+# Deep nesting
+test8() = addDef(addDef(addDef(1))) == 31
+test9() = mulDef(mulDef(mulDef(2))) == 16
+
+# Mixed nested
+triple(a, b = 1, c = 1) = a * b + c
+test10() = triple(triple(2)) == 4
+test11() = triple(triple(2, 3), c: 10) == 17
+test12() = triple(a: triple(1, b: 2), b: triple(1), c: 5) == 11  # 3 * 2 + 5
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12()]
+    passed = results.filter(r => r)
+    if length(passed) == 12 then 0 else 1
+}

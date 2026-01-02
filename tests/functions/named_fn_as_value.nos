@@ -1,0 +1,60 @@
+# expect: 0
+# Functions with defaults used as first-class values
+
+# Basic function with defaults
+addDefault(a = 0, b = 0) = a + b
+
+# Pass function reference (calling with explicit args)
+applyBoth(f, x, y) = f(x, y)
+test1() = applyBoth(addDefault, 3, 4) == 7
+
+# Store in variable and call
+test2() = {
+    f = addDefault
+    f(5, 10)
+} == 15
+
+# Function returning function with defaults
+makeAdder(base = 0) = x => base + x
+
+test3() = makeAdder(5)(10) == 15
+test4() = makeAdder()(7) == 7
+
+# Higher-order with defaults
+twice(f = x => x, x = 0) = f(f(x))
+
+test5() = twice() == 0
+test6() = twice(x => x + 1) == 2
+test7() = twice(x => x + 1, 5) == 7
+test8() = twice(x: 10) == 10
+
+# Compose functions with defaults
+compose(f = x => x, g = x => x) = x => f(g(x))
+
+test9() = compose()(5) == 5
+test10() = compose(x => x + 1)(5) == 6
+test11() = compose(x => x * 2, x => x + 1)(5) == 12
+test12() = compose(f: x => x - 1)(10) == 9
+
+# Map with function having defaults
+mapWithFn(lst, f = x => x) = lst.map(f)
+
+test13() = mapWithFn([1, 2, 3], x => x * 2) == [2, 4, 6]
+test14() = mapWithFn([1, 2, 3]) == [1, 2, 3]
+
+# Closure capturing default-valued param
+makeCounter(start = 0) = {
+    incr = x => start + x
+    incr
+}
+
+test15() = makeCounter()(5) == 5
+test16() = makeCounter(10)(5) == 15
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14(), test15(), test16()]
+    passed = results.filter(r => r)
+    if length(passed) == 16 then 0 else 1
+}

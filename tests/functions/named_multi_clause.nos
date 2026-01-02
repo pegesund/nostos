@@ -1,0 +1,66 @@
+# expect: 0
+# Multiple clauses-like patterns with defaults (using match)
+
+type Option[T] = Some(T) | None
+
+# Fibonacci using match
+fib(n, memo = []) = match n {
+    0 -> (0, memo)
+    1 -> (1, memo)
+    _ -> {
+        (a, _) = fib(n - 1, memo)
+        (b, _) = fib(n - 2, memo)
+        (a + b, memo)
+    }
+}
+
+test1() = fib(0) == (0, [])
+test2() = fib(1) == (1, [])
+test3() = fib(5) == (5, [])
+test4() = fib(10) == (55, [])
+
+# List sum using recursion
+sumList(lst, acc = 0) =
+    if length(lst) == 0 then acc
+    else sumList(tail(lst), acc + head(lst))
+
+test5() = sumList([]) == 0
+test6() = sumList([1, 2, 3]) == 6
+test7() = sumList([1, 2, 3], 10) == 16
+test8() = sumList([], acc: 100) == 100
+
+# Process option
+processOpt(opt, def = 0) = match opt {
+    None -> def
+    Some(x) -> x + def
+}
+
+test9() = processOpt(None) == 0
+test10() = processOpt(Some(5)) == 5
+test11() = processOpt(None, 42) == 42
+test12() = processOpt(Some(10), 5) == 15
+test13() = processOpt(Some(10), def: 20) == 30
+
+# Tuple operations
+first(pair, mul = 1) = {
+    (a, _) = pair
+    a * mul
+}
+second(pair, mul = 1) = {
+    (_, b) = pair
+    b * mul
+}
+
+test14() = first((5, 10)) == 5
+test15() = first((5, 10), 2) == 10
+test16() = second((5, 10)) == 10
+test17() = second((5, 10), mul: 3) == 30
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14(), test15(),
+               test16(), test17()]
+    passed = results.filter(r => r)
+    if length(passed) == 17 then 0 else 1
+}

@@ -1,0 +1,61 @@
+# expect: 0
+# Special values as defaults and with named params
+
+type Option[T] = Some(T) | None
+
+# None as default
+withNone(opt = None) = match opt {
+    Some(x) -> x
+    None -> -1
+}
+test1() = withNone() == -1
+test2() = withNone(Some(42)) == 42
+test3() = withNone(opt: Some(100)) == 100
+
+# Empty list as default
+withEmptyList(lst = []) = length(lst)
+test4() = withEmptyList() == 0
+test5() = withEmptyList([1, 2, 3]) == 3
+test6() = withEmptyList(lst: [1]) == 1
+
+# Empty string as default
+withEmptyString(s = "") = if s == "" then "empty" else s
+test7() = withEmptyString() == "empty"
+test8() = withEmptyString("hello") == "hello"
+test9() = withEmptyString(s: "world") == "world"
+
+# Void-like pattern (returning a sentinel value)
+doAction(x = 0) = {
+    _ = x  # Use x
+    0  # Return sentinel
+}
+test10() = doAction() == 0
+test11() = doAction(5) == 0
+
+# Recursive type default
+type List2[T] = Nil | Cons(T, List2[T])
+
+withNil(lst = Nil) = match lst {
+    Nil -> 0
+    Cons(h, _) -> h
+}
+test12() = withNil() == 0
+test13() = withNil(Cons(5, Nil)) == 5
+test14() = withNil(lst: Cons(10, Cons(20, Nil))) == 10
+
+# Boolean edge cases
+withBooleans(a = true, b = false, c = true) = (a && c) || b
+test15() = withBooleans() == true
+test16() = withBooleans(false) == false
+test17() = withBooleans(false, true) == true
+test18() = withBooleans(a: false, c: false) == false
+test19() = withBooleans(b: true) == true
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14(), test15(),
+               test16(), test17(), test18(), test19()]
+    passed = results.filter(r => r)
+    if length(passed) == 19 then 0 else 1
+}

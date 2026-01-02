@@ -1,0 +1,49 @@
+# expect: 0
+# Named params with UFCS method-style calls
+
+# Basic method-style call
+double(x) = x * 2
+test1() = 5.double() == 10
+
+# Method with named params
+add(x, amount) = x + amount
+test2() = 10.add(amount: 5) == 15
+test3() = 10.add(5) == 15
+
+# Method with defaults
+multiply(x, factor = 2) = x * factor
+test4() = 5.multiply() == 10
+test5() = 5.multiply(3) == 15
+test6() = 5.multiply(factor: 4) == 20
+
+# Chained methods with defaults
+addDefault(x, n = 1) = x + n
+mulDefault(x, n = 2) = x * n
+test7() = 5.addDefault().mulDefault() == 12  # (5+1)*2 = 12
+test8() = 5.addDefault(2).mulDefault() == 14  # (5+2)*2 = 14
+test9() = 5.addDefault().mulDefault(3) == 18  # (5+1)*3 = 18
+
+# Named params in chain
+test10() = 5.addDefault(n: 5).mulDefault(n: 3) == 30  # (5+5)*3 = 30
+
+# Method returning function
+makeScaler(base, scale = 1) = x => (base + x) * scale
+test11() = {
+    f = 10.makeScaler()
+    f(5)
+} == 15
+test12() = {
+    f = 10.makeScaler(2)
+    f(5)
+} == 30
+test13() = {
+    f = 10.makeScaler(scale: 3)
+    f(5)
+} == 45
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(),
+               test7(), test8(), test9(), test10(), test11(), test12(), test13()]
+    passed = results.filter(r => r)
+    if length(passed) == 13 then 0 else 1
+}

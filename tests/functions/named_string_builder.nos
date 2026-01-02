@@ -1,0 +1,54 @@
+# expect: 0
+# String building with named/default params
+
+# Recursive join
+joinStrs(lst, sep = ", ") =
+    if length(lst) == 0 then ""
+    else if length(lst) == 1 then head(lst)
+    else head(lst) ++ sep ++ joinStrs(tail(lst), sep)
+
+test1() = joinStrs(["a", "b", "c"]) == "a, b, c"
+test2() = joinStrs(["a", "b", "c"], "-") == "a-b-c"
+test3() = joinStrs(["x"], ":") == "x"
+test4() = joinStrs([], "_") == ""
+test5() = joinStrs(sep: " | ", lst: ["1", "2"]) == "1 | 2"
+
+# Wrap with configurable delimiters
+wrap(s, left = "(", right = ")") = left ++ s ++ right
+test6() = wrap("hello") == "(hello)"
+test7() = wrap("hello", "[", "]") == "[hello]"
+test8() = wrap("hello", right: ">", left: "<") == "<hello>"
+test9() = wrap("x", left: "<<") == "<<x)"
+
+# Repeat string recursively
+repeatStr(s, n) =
+    if n <= 0 then ""
+    else if n == 1 then s
+    else s ++ repeatStr(s, n - 1)
+
+test10() = repeatStr("a", 3) == "aaa"
+test11() = repeatStr("xy", 2) == "xyxy"
+test12() = repeatStr("z", 1) == "z"
+
+# Format number with defaults
+formatNum(n, prefix = "", suffix = "") = prefix ++ show(n) ++ suffix
+
+test13() = formatNum(42) == "42"
+test14() = formatNum(42, "$") == "$42"
+test15() = formatNum(42, suffix: "!") == "42!"
+test16() = formatNum(7, prefix: "#", suffix: ".") == "#7."
+
+# Quote string (renamed from quote to avoid keyword conflict)
+wrapQuote(s, qChar = "\"") = qChar ++ s ++ qChar
+test17() = wrapQuote("hello") == "\"hello\""
+test18() = wrapQuote("test", "'") == "'test'"
+test19() = wrapQuote("x", qChar: "`") == "`x`"
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14(), test15(),
+               test16(), test17(), test18(), test19()]
+    passed = results.filter(r => r)
+    if length(passed) == 19 then 0 else 1
+}

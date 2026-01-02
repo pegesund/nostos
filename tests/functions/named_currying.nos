@@ -1,0 +1,47 @@
+# expect: 0
+# Currying and partial application with named/default params
+
+# Manual currying with defaults
+add(a = 0) = b => a + b
+test1() = add()(5) == 5
+test2() = add(10)(5) == 15
+test3() = add(a: 20)(5) == 25
+
+# Curried multiply
+multiply(a = 1) = b => c => a * b * c
+test4() = multiply()(2)(3) == 6
+test5() = multiply(2)(3)(4) == 24
+test6() = multiply(a: 10)(2)(3) == 60
+
+# Partial application builder
+partial2(f, a = 0) = b => f(a, b)
+partial3(f, a = 0, b = 0) = c => f(a, b, c)
+
+sum2(x, y) = x + y
+sum3(x, y, z) = x + y + z
+
+test7() = partial2(sum2)(5) == 5
+test8() = partial2(sum2, 10)(5) == 15
+test9() = partial3(sum3)(10) == 10
+test10() = partial3(sum3, 5)(10) == 15
+test11() = partial3(sum3, 5, 10)(15) == 30
+test12() = partial3(sum3, a: 100, b: 200)(300) == 600
+
+# Compose with currying
+composeF(f = x => x) = g => x => f(g(x))
+test13() = composeF()(x => x + 1)(5) == 6
+test14() = composeF(x => x * 2)(x => x + 1)(5) == 12
+test15() = composeF(f: x => x * 10)(x => x + 1)(5) == 60
+
+# Flip argument order
+flip(f = (a, b) => a - b) = (a, b) => f(b, a)
+test16() = flip()( 3, 10) == 7  # 10 - 3
+test17() = flip((a, b) => a / b)(2, 10) == 5  # 10 / 2
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(),
+               test7(), test8(), test9(), test10(), test11(), test12(),
+               test13(), test14(), test15(), test16(), test17()]
+    passed = results.filter(r => r)
+    if length(passed) == 17 then 0 else 1
+}

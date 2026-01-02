@@ -1,0 +1,44 @@
+# expect: 0
+# String defaults with escapes and special chars
+
+# Basic escape sequences
+withNewline(s = "line1\nline2") = s
+test1() = withNewline() == "line1\nline2"
+
+withTab(s = "col1\tcol2") = s
+test2() = withTab() == "col1\tcol2"
+
+# Quotes in strings
+withQuotes(s = "say \"hello\"") = s
+test3() = withQuotes() == "say \"hello\""
+
+# Backslash
+withBackslash(s = "path\\to\\file") = s
+test4() = withBackslash() == "path\\to\\file"
+
+# Empty string default
+withEmpty(prefix = "", suffix = "") = prefix ++ "text" ++ suffix
+test5() = withEmpty() == "text"
+test6() = withEmpty("[") == "[text"
+test7() = withEmpty("[", "]") == "[text]"
+test8() = withEmpty(suffix: "!") == "text!"
+
+# Unicode in defaults
+withUnicode(emoji = "👍") = "Status: " ++ emoji
+test9() = withUnicode() == "Status: 👍"
+test10() = withUnicode("✓") == "Status: ✓"
+
+# Multi-line string concept (via explicit newlines)
+multiLine(header = "===\nHeader\n===") = header ++ "\nBody"
+test11() = length(multiLine()) > 10
+
+# Concatenation in default
+withConcat(s = "hello" ++ " " ++ "world") = s
+test12() = withConcat() == "hello world"
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(),
+               test7(), test8(), test9(), test10(), test11(), test12()]
+    passed = results.filter(r => r)
+    if length(passed) == 12 then 0 else 1
+}

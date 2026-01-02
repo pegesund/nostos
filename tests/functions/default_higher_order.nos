@@ -1,0 +1,36 @@
+# expect: 0
+# Default parameters with higher-order functions
+
+# Function with default function param
+applyOrId(x, f = y => y) = f(x)
+test1() = applyOrId(5) == 5
+test2() = applyOrId(5, x => x * 2) == 10
+test3() = applyOrId(5, f: x => x + 1) == 6
+
+# Default transform function
+transform(lst, mapper = x => x) = lst.map(mapper)
+test4() = transform([1, 2, 3]) == [1, 2, 3]
+test5() = transform([1, 2, 3], x => x * 2) == [2, 4, 6]
+test6() = transform([1, 2, 3], mapper: x => x + 10) == [11, 12, 13]
+
+# Multiple function defaults
+combine(x, f = n => n, g = n => n) = g(f(x))
+test7() = combine(5) == 5
+test8() = combine(5, n => n + 1) == 6
+test9() = combine(5, n => n * 2, n => n + 3) == 13
+test10() = combine(5, g: n => n * 10) == 50
+test11() = combine(5, f: n => n + 5, g: n => n * 2) == 20
+
+# Fold with default initial value
+reduce(lst, op, init = 0) = lst.fold(init, op)
+test12() = reduce([1, 2, 3], (a, b) => a + b) == 6
+test13() = reduce([1, 2, 3], (a, b) => a + b, 10) == 16
+test14() = reduce([1, 2, 3], (a, b) => a * b, init: 1) == 6
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14()]
+    passed = results.filter(r => r)
+    if length(passed) == 14 then 0 else 1
+}

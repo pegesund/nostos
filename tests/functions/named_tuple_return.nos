@@ -1,0 +1,46 @@
+# expect: 0
+# Tuples with named/default params
+
+# Return tuple with defaults
+makePair(a = 0, b = 0) = (a, b)
+test1() = makePair() == (0, 0)
+test2() = makePair(5) == (5, 0)
+test3() = makePair(5, 10) == (5, 10)
+test4() = makePair(b: 20) == (0, 20)
+test5() = makePair(a: 3, b: 7) == (3, 7)
+test6() = makePair(b: 7, a: 3) == (3, 7)
+
+# Triple with defaults
+makeTriple(a = 1, b = 2, c = 3) = (a, b, c)
+test7() = makeTriple() == (1, 2, 3)
+test8() = makeTriple(10) == (10, 2, 3)
+test9() = makeTriple(b: 20) == (1, 20, 3)
+test10() = makeTriple(c: 30, a: 10) == (10, 2, 30)
+
+# Nested tuples
+makeNested(outer = (0, 0), inner = (1, 1)) = (outer, inner)
+test11() = makeNested() == ((0, 0), (1, 1))
+test12() = makeNested((5, 5)) == ((5, 5), (1, 1))
+test13() = makeNested(inner: (9, 9)) == ((0, 0), (9, 9))
+
+# Tuple destructuring with defaults
+sumPair(pair = (0, 0)) = {
+    (a, b) = pair
+    a + b
+}
+test14() = sumPair() == 0
+test15() = sumPair((3, 4)) == 7
+
+# Return tuple with mixed types
+mixedPair(n = 42, s = "hello") = (n, s)
+test16() = mixedPair() == (42, "hello")
+test17() = mixedPair(100) == (100, "hello")
+test18() = mixedPair(s: "world") == (42, "world")
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(),
+               test7(), test8(), test9(), test10(), test11(), test12(),
+               test13(), test14(), test15(), test16(), test17(), test18()]
+    passed = results.filter(r => r)
+    if length(passed) == 18 then 0 else 1
+}

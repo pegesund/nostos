@@ -1,0 +1,47 @@
+# expect: 0
+# Mixed calling styles: positional, named, and defaults
+
+# Three params: first required, rest optional
+mixed3(a, b = 10, c = 20) = a + b + c
+
+# All positional
+test1() = mixed3(1, 2, 3) == 6
+# Only required
+test2() = mixed3(5) == 35  # 5 + 10 + 20
+# Required + one optional
+test3() = mixed3(5, 15) == 40  # 5 + 15 + 20
+# Required + named
+test4() = mixed3(5, c: 30) == 45  # 5 + 10 + 30
+test5() = mixed3(5, b: 25) == 50  # 5 + 25 + 20
+# All named
+test6() = mixed3(a: 1, b: 2, c: 3) == 6
+test7() = mixed3(c: 3, b: 2, a: 1) == 6
+# Mixed positional and named
+test8() = mixed3(1, 2, c: 3) == 6
+test9() = mixed3(1, b: 2, c: 3) == 6
+
+# Four params: two required, two optional
+mixed4(a, b, c = 100, d = 200) = a + b + c + d
+
+test10() = mixed4(1, 2) == 303  # 1 + 2 + 100 + 200
+test11() = mixed4(1, 2, 3) == 206  # 1 + 2 + 3 + 200
+test12() = mixed4(1, 2, 3, 4) == 10
+test13() = mixed4(1, 2, d: 4) == 107  # 1 + 2 + 100 + 4
+test14() = mixed4(1, 2, c: 3) == 206  # 1 + 2 + 3 + 200
+test15() = mixed4(a: 1, b: 2, d: 4) == 107
+test16() = mixed4(d: 4, c: 3, b: 2, a: 1) == 10
+
+# First optional, rest required
+firstOpt(a = 0, b, c) = a + b + c
+test17() = firstOpt(b: 2, c: 3) == 5  # 0 + 2 + 3
+test18() = firstOpt(1, b: 2, c: 3) == 6
+test19() = firstOpt(a: 10, b: 20, c: 30) == 60
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14(), test15(),
+               test16(), test17(), test18(), test19()]
+    passed = results.filter(r => r)
+    if length(passed) == 19 then 0 else 1
+}

@@ -1,0 +1,48 @@
+# expect: 0
+# Complex lambda expressions as defaults
+
+# Simple lambda default
+applyFunc(x, f = y => y * 2) = f(x)
+test1() = applyFunc(5) == 10
+test2() = applyFunc(5, y => y + 1) == 6
+test3() = applyFunc(5, f: y => y * 3) == 15
+
+# Multi-arg lambda default
+combine(a, b, f = (x, y) => x + y) = f(a, b)
+test4() = combine(3, 4) == 7
+test5() = combine(3, 4, (x, y) => x * y) == 12
+test6() = combine(3, 4, f: (x, y) => x - y) == -1
+
+# Lambda with body block as default
+transform(lst, mapper = x => { result = x * 2; result }) = lst.map(mapper)
+test7() = transform([1, 2, 3]) == [2, 4, 6]
+test8() = transform([1, 2, 3], x => x + 10) == [11, 12, 13]
+
+# Nested lambda calls in default
+compose(f = x => x, g = x => x) = x => g(f(x))
+test9() = {
+    h = compose()
+    h(42)
+} == 42
+test10() = {
+    h = compose(x => x + 1)
+    h(5)
+} == 6
+test11() = {
+    h = compose(x => x * 2, x => x + 1)
+    h(5)
+} == 11
+
+# Lambda returning lambda as default
+makeFunc(wrap = f => f) = wrap(x => x * 2)
+test12() = {
+    f = makeFunc()
+    f(5)
+} == 10
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(),
+               test7(), test8(), test9(), test10(), test11(), test12()]
+    passed = results.filter(r => r)
+    if length(passed) == 12 then 0 else 1
+}

@@ -1,0 +1,38 @@
+# expect: 0
+# Combined named parameters and defaults
+
+# Skip middle optional
+greet(name, greeting = "Hello", punct = "!") = greeting ++ " " ++ name ++ punct
+
+test1() = greet("World") == "Hello World!"
+test2() = greet("World", punct: "?") == "Hello World?"
+test3() = greet("World", greeting: "Hi") == "Hi World!"
+test4() = greet(name: "World", punct: "...") == "Hello World..."
+test5() = greet(punct: "!", name: "Alice", greeting: "Hey") == "Hey Alice!"
+
+# All optional with named
+config(port = 8080, host = "localhost", debug = false) =
+    (host, port, debug)
+
+test6() = config() == ("localhost", 8080, false)
+test7() = config(port: 3000) == ("localhost", 3000, false)
+test8() = config(debug: true) == ("localhost", 8080, true)
+test9() = config(host: "0.0.0.0", debug: true) == ("0.0.0.0", 8080, true)
+test10() = config(debug: true, port: 443, host: "example.com") == ("example.com", 443, true)
+
+# Mix positional, named, with defaults
+format(value, prefix = "[", suffix = "]", sep = ":") =
+    prefix ++ show(value) ++ sep ++ suffix
+
+test11() = format(42) == "[42:]"
+test12() = format(42, suffix: ">") == "[42:>"
+test13() = format(42, "<", suffix: ">") == "<42:>"
+test14() = format(42, sep: "=") == "[42=]"
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14()]
+    passed = results.filter(r => r)
+    if length(passed) == 14 then 0 else 1
+}

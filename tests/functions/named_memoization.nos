@@ -1,0 +1,40 @@
+# expect: 0
+# Memoization-like patterns with named/default params
+
+# Fibonacci with accumulator (pseudo-memoization)
+fibMemo(n, a = 0, b = 1) =
+    if n == 0 then a
+    else if n == 1 then b
+    else fibMemo(n - 1, b, a + b)
+
+test1() = fibMemo(0) == 0
+test2() = fibMemo(1) == 1
+test3() = fibMemo(10) == 55
+test4() = fibMemo(15) == 610
+test5() = fibMemo(n: 5) == 5
+test6() = fibMemo(5, 1, 1) == 8  # Start with different initial values
+
+# Sum with running total
+runningSum(lst, total = 0) =
+    if length(lst) == 0 then total
+    else runningSum(tail(lst), total + head(lst))
+
+test7() = runningSum([]) == 0
+test8() = runningSum([1, 2, 3, 4, 5]) == 15
+test9() = runningSum([1, 2, 3], 10) == 16
+test10() = runningSum(total: 100, lst: [1, 2, 3]) == 106
+
+# Product with running value
+runningProduct(lst, total = 1) =
+    if length(lst) == 0 then total
+    else runningProduct(tail(lst), total * head(lst))
+
+test11() = runningProduct([2, 3, 4]) == 24
+test12() = runningProduct([2, 3], 10) == 60
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(),
+               test7(), test8(), test9(), test10(), test11(), test12()]
+    passed = results.filter(r => r)
+    if length(passed) == 12 then 0 else 1
+}

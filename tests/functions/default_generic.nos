@@ -1,0 +1,39 @@
+# expect: 0
+# Generic functions with default parameters
+
+type Option[T] = Some(T) | None
+
+# Generic identity with default
+identity[T](x: T, transform = x => x) = transform(x)
+test1() = identity(5) == 5
+test2() = identity(5, x => x * 2) == 10
+test3() = identity("hello") == "hello"
+test4() = identity("hello", s => s ++ "!") == "hello!"
+
+# Generic list operations with defaults
+getOr[T](opt: Option[T], def: T) = match opt {
+    Some(x) -> x
+    None -> def
+}
+test5() = getOr(Some(42), 0) == 42
+test6() = getOr(None, 99) == 99
+
+# Default value from list
+firstOr[T](lst: List[T], def: T) =
+    if length(lst) == 0 then def else head(lst)
+test7() = firstOr([1, 2, 3], 0) == 1
+test8() = firstOr([], 42) == 42
+test9() = firstOr(["a", "b"], "x") == "a"
+
+# Generic with multiple type params
+pair[A, B](a: A, b: B, swap = false) = if swap then (b, a) else (a, b)
+test10() = pair(1, "x") == (1, "x")
+test11() = pair(1, "x", true) == ("x", 1)
+test12() = pair(1, "x", swap: true) == ("x", 1)
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(),
+               test7(), test8(), test9(), test10(), test11(), test12()]
+    passed = results.filter(r => r)
+    if length(passed) == 12 then 0 else 1
+}

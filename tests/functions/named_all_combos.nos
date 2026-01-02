@@ -1,0 +1,36 @@
+# expect: 0
+# All combinations of named parameter orders
+
+# 2 params - all orderings
+f2(a, b) = a * 10 + b
+test1() = f2(a: 1, b: 2) == 12
+test2() = f2(b: 2, a: 1) == 12
+
+# 3 params - all orderings (6 combinations)
+f3(a, b, c) = a * 100 + b * 10 + c
+test3() = f3(a: 1, b: 2, c: 3) == 123
+test4() = f3(a: 1, c: 3, b: 2) == 123
+test5() = f3(b: 2, a: 1, c: 3) == 123
+test6() = f3(b: 2, c: 3, a: 1) == 123
+test7() = f3(c: 3, a: 1, b: 2) == 123
+test8() = f3(c: 3, b: 2, a: 1) == 123
+
+# Mix of positional and named
+test9() = f3(1, b: 2, c: 3) == 123
+test10() = f3(1, c: 3, b: 2) == 123
+test11() = f3(1, 2, c: 3) == 123
+
+# 4 params - selected orderings
+f4(a, b, c, d) = a * 1000 + b * 100 + c * 10 + d
+test12() = f4(a: 1, b: 2, c: 3, d: 4) == 1234
+test13() = f4(d: 4, c: 3, b: 2, a: 1) == 1234
+test14() = f4(c: 3, a: 1, d: 4, b: 2) == 1234
+test15() = f4(1, 2, d: 4, c: 3) == 1234
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14(), test15()]
+    passed = results.filter(r => r)
+    if length(passed) == 15 then 0 else 1
+}

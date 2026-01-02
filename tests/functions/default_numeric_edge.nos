@@ -1,0 +1,48 @@
+# expect: 0
+# Numeric edge cases in defaults
+
+# Negative numbers
+withNegative(x = -42) = x * 2
+test1() = withNegative() == -84
+test2() = withNegative(10) == 20
+test3() = withNegative(-10) == -20
+
+# Zero
+withZero(x = 0) = x + 1
+test4() = withZero() == 1
+test5() = withZero(99) == 100
+
+# Float edge cases
+withFloat(x = 0.0) = x + 1.0
+test6() = withFloat() == 1.0
+test7() = withFloat(0.5) == 1.5
+
+withNegFloat(x = -0.5) = x * 2.0
+test8() = withNegFloat() == -1.0
+
+# Large numbers
+withLarge(x = 1000000) = x / 1000
+test9() = withLarge() == 1000
+test10() = withLarge(5000000) == 5000
+
+# Arithmetic in defaults
+withArithmetic(x = 10 + 20 * 3) = x  # 10 + 60 = 70
+test11() = withArithmetic() == 70
+
+withParenArithmetic(x = (10 + 20) * 3) = x  # 30 * 3 = 90
+test12() = withParenArithmetic() == 90
+
+# Division in default
+withDiv(x = 100 / 4) = x
+test13() = withDiv() == 25
+
+# Modulo in default
+withMod(x = 17 % 5) = x
+test14() = withMod() == 2
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(), test7(),
+               test8(), test9(), test10(), test11(), test12(), test13(), test14()]
+    passed = results.filter(r => r)
+    if length(passed) == 14 then 0 else 1
+}

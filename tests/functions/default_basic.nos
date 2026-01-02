@@ -1,0 +1,37 @@
+# expect: 0
+# Basic default parameter tests
+
+# Single optional param
+inc(x, by = 1) = x + by
+test1() = inc(5) == 6
+test2() = inc(5, 10) == 15
+
+# Two optional params
+add3(a, b = 0, c = 0) = a + b + c
+test3() = add3(5) == 5
+test4() = add3(5, 3) == 8
+test5() = add3(5, 3, 2) == 10
+
+# All optional
+makeTriple(a = 1, b = 2, c = 3) = (a, b, c)
+test6() = makeTriple() == (1, 2, 3)
+test7() = makeTriple(10) == (10, 2, 3)
+test8() = makeTriple(10, 20) == (10, 20, 3)
+test9() = makeTriple(10, 20, 30) == (10, 20, 30)
+
+# Different default types
+withBool(x, flag = true) = if flag then x else -x
+test10() = withBool(5) == 5
+test11() = withBool(5, false) == -5
+
+withString(base, suffix = "!") = base ++ suffix
+test12() = withString("hello") == "hello!"
+test13() = withString("hello", "?") == "hello?"
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13()]
+    passed = results.filter(r => r)
+    if length(passed) == 13 then 0 else 1
+}

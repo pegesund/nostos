@@ -1,0 +1,52 @@
+# expect: 0
+# Mutual recursion with defaults
+
+# Even/odd with defaults
+isEven(n, count = 0) =
+    if n == 0 then count
+    else isOdd(n - 1, count + 1)
+
+isOdd(n, count = 0) =
+    if n == 0 then count
+    else isEven(n - 1, count + 1)
+
+test1() = isEven(4) == 4
+test2() = isEven(5) == 5
+test3() = isOdd(4) == 4
+test4() = isOdd(5) == 5
+
+# Pass count through
+test5() = isEven(4, 10) == 14
+test6() = isOdd(3, 100) == 103
+
+# Named params in recursive calls
+pingPong(n, acc = 0) =
+    if n <= 0 then acc
+    else pong(n - 1, acc: acc + 1)
+
+pong(n, acc = 0) =
+    if n <= 0 then acc
+    else pingPong(n - 1, acc: acc + 2)
+
+test7() = pingPong(4) == 6   # ping->pong->ping->pong, 1+2+1+2=6
+test8() = pingPong(4, 10) == 16
+test9() = pong(3) == 5       # pong->ping->pong, 2+1+2=5
+
+# Factorial style mutual
+fact(n, mul = 1) =
+    if n <= 1 then mul
+    else factHelper(n, mul)
+
+factHelper(n, mul = 1) =
+    fact(n - 1, mul: mul * n)
+
+test10() = fact(5) == 120
+test11() = fact(5, 2) == 240  # Start with mul=2
+test12() = fact(0) == 1
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(),
+               test7(), test8(), test9(), test10(), test11(), test12()]
+    passed = results.filter(r => r)
+    if length(passed) == 12 then 0 else 1
+}

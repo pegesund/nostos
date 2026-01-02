@@ -1,0 +1,67 @@
+# expect: 0
+# Operator precedence in default expressions
+
+# Basic arithmetic precedence
+withAdd(x = 1 + 2 * 3) = x  # Should be 1 + 6 = 7
+test1() = withAdd() == 7
+
+withMul(x = (1 + 2) * 3) = x  # Should be 3 * 3 = 9
+test2() = withMul() == 9
+
+# Comparison and boolean
+withCmp(x = 5 > 3 && 2 < 4) = x
+test3() = withCmp() == true
+
+withOr(x = false || true && true) = x
+test4() = withOr() == true
+
+# Negation
+withNeg(x = -5 + 10) = x
+test5() = withNeg() == 5
+
+withNot(x = !false && true) = x
+test6() = withNot() == true
+
+# String concatenation vs other ops
+withConcat(s = "a" ++ "b" ++ "c") = s
+test7() = withConcat() == "abc"
+
+# Mixed numeric
+withMixed(x = 10 / 2 + 3 * 4 - 1) = x  # 5 + 12 - 1 = 16
+test8() = withMixed() == 16
+
+# Modulo
+withMod(x = 17 % 5 + 2) = x  # 2 + 2 = 4
+test9() = withMod() == 4
+
+# Nested parens
+withNested(x = ((1 + 2) * (3 + 4))) = x  # 3 * 7 = 21
+test10() = withNested() == 21
+
+# Comparison chain (if supported)
+withChain(x = 1 < 2 && 2 < 3) = x
+test11() = withChain() == true
+
+# Equality
+withEq(x = 5 == 5 && 3 != 4) = x
+test12() = withEq() == true
+
+# Complex boolean
+complex(x = (1 < 2 || 3 > 4) && (5 == 5 || 6 != 6)) = x
+test13() = complex() == true
+
+# Division and multiplication
+divMul(x = 100 / 10 / 2 * 3) = x  # (100/10)/2*3 = 5*3 = 15
+test14() = divMul() == 15
+
+# Subtraction associativity
+subAssoc(x = 10 - 5 - 2) = x  # (10-5)-2 = 3
+test15() = subAssoc() == 3
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14(), test15()]
+    passed = results.filter(r => r)
+    if length(passed) == 15 then 0 else 1
+}

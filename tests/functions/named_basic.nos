@@ -1,0 +1,36 @@
+# expect: 0
+# Basic named parameter tests
+
+# Two params
+add(a, b) = a + b
+
+test1() = add(a: 1, b: 2) == 3
+test2() = add(b: 10, a: 5) == 15
+
+# Three params
+triple(x, y, z) = x + y * z
+
+test3() = triple(x: 1, y: 2, z: 3) == 7
+test4() = triple(z: 3, y: 2, x: 1) == 7
+test5() = triple(y: 2, z: 3, x: 1) == 7
+
+# Mix positional and named
+test6() = triple(1, y: 2, z: 3) == 7
+test7() = triple(1, 2, z: 3) == 7
+test8() = add(1, b: 2) == 3
+
+# Four params
+quad(a, b, c, d) = a + b + c + d
+
+test9() = quad(a: 1, b: 2, c: 3, d: 4) == 10
+test10() = quad(d: 4, c: 3, b: 2, a: 1) == 10
+test11() = quad(1, 2, c: 3, d: 4) == 10
+test12() = quad(1, b: 2, c: 3, d: 4) == 10
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12()]
+    passed = results.filter(r => r)
+    if length(passed) == 12 then 0 else 1
+}

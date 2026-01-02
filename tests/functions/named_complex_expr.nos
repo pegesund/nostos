@@ -1,0 +1,54 @@
+# expect: 0
+# Complex expressions as arguments to named params
+
+# Arithmetic expression as named arg
+add(a, b) = a + b
+test1() = add(a: 2 + 3, b: 4 * 5) == 25
+test2() = add(b: 10 - 3, a: 2 * 2) == 11
+
+# Function call as named arg
+double(x) = x * 2
+triple(x) = x * 3
+combine(a, b) = a + b
+test3() = combine(a: double(5), b: triple(3)) == 19
+test4() = combine(b: double(10), a: triple(2)) == 26
+
+# List operations as named args
+sumList(lst) = lst.fold(0, (a, b) => a + b)
+process(input, output) = input + output
+test5() = process(input: sumList([1, 2, 3]), output: sumList([4, 5])) == 15
+test6() = process(output: length([1, 2, 3, 4]), input: 10) == 14
+
+# Conditional as named arg
+choose(val, factor) = val * factor
+test7() = choose(val: if true then 5 else 10, factor: 2) == 10
+test8() = choose(factor: if false then 1 else 3, val: 4) == 12
+
+# String operations as named args
+formatStr(prefix, suffix) = prefix ++ suffix
+test9() = formatStr(prefix: "hello" ++ " ", suffix: "world" ++ "!") == "hello world!"
+test10() = formatStr(suffix: show(42), prefix: "value: ") == "value: 42"
+
+# Nested function with defaults as arg
+withDefault(x, y = 0) = x + y
+outer(a, b) = a * b
+test11() = outer(a: withDefault(5), b: 3) == 15
+test12() = outer(b: withDefault(2, 3), a: 4) == 20
+
+# Lambda as named arg expression
+applyFn(f, x) = f(x)
+test13() = applyFn(f: y => y * 2, x: 5) == 10
+test14() = applyFn(x: 10, f: y => y + 1) == 11
+
+# Boolean expressions as named args
+check(cond, val) = if cond then val else -val
+test15() = check(cond: 5 > 3, val: 10) == 10
+test16() = check(val: 20, cond: 1 == 2) == -20
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(),
+               test7(), test8(), test9(), test10(), test11(), test12(),
+               test13(), test14(), test15(), test16()]
+    passed = results.filter(r => r)
+    if length(passed) == 16 then 0 else 1
+}

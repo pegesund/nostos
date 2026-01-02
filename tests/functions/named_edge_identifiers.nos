@@ -1,0 +1,50 @@
+# expect: 0
+# Edge cases with identifier names for params
+
+# Short single-letter names
+f(a = 1, b = 2) = a + b
+test1() = f() == 3
+test2() = f(a: 10) == 12
+test3() = f(b: 20) == 21
+
+# Longer descriptive names
+calculateWithOffset(baseValue = 0, offsetAmount = 10, multiplierFactor = 1) =
+    (baseValue + offsetAmount) * multiplierFactor
+
+test4() = calculateWithOffset() == 10
+test5() = calculateWithOffset(baseValue: 5) == 15
+test6() = calculateWithOffset(offsetAmount: 20) == 20
+test7() = calculateWithOffset(multiplierFactor: 2) == 20
+test8() = calculateWithOffset(baseValue: 10, offsetAmount: 5, multiplierFactor: 3) == 45
+
+# Names with numbers (if allowed)
+process1(input1 = 0, input2 = 0) = input1 + input2
+test9() = process1() == 0
+test10() = process1(input1: 5, input2: 10) == 15
+
+# Underscore prefix (if allowed)
+withUnderscore(_private = 10, public = 20) = _private + public
+test11() = withUnderscore() == 30
+test12() = withUnderscore(_private: 5) == 25
+test13() = withUnderscore(public: 50) == 60
+
+# Mixed case names
+mixedCase(firstName = "John", lastName = "Doe") = firstName ++ " " ++ lastName
+test14() = mixedCase() == "John Doe"
+test15() = mixedCase(firstName: "Jane") == "Jane Doe"
+test16() = mixedCase(lastName: "Smith") == "John Smith"
+test17() = mixedCase(lastName: "Smith", firstName: "Jane") == "Jane Smith"
+
+# Names similar to keywords (but not actual keywords)
+notKeyword(iff = 1, thenn = 2, elsee = 3) = iff + thenn + elsee
+test18() = notKeyword() == 6
+test19() = notKeyword(iff: 10, thenn: 20, elsee: 30) == 60
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14(), test15(),
+               test16(), test17(), test18(), test19()]
+    passed = results.filter(r => r)
+    if length(passed) == 19 then 0 else 1
+}

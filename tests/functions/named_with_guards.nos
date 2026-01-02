@@ -1,0 +1,54 @@
+# expect: 0
+# Using guards with functions that have defaults (guards defined separately)
+
+# Abs using match instead of guards
+abs(n, negate = false) =
+    if negate then -n
+    else if n < 0 then -n
+    else n
+
+test1() = abs(5) == 5
+test2() = abs(-5) == 5
+test3() = abs(5, true) == -5
+test4() = abs(-5, negate: true) == 5
+
+# Classify using conditional
+classify(n, offset = 0) =
+    if n + offset < 0 then "negative"
+    else if n + offset == 0 then "zero"
+    else "positive"
+
+test5() = classify(-5) == "negative"
+test6() = classify(0) == "zero"
+test7() = classify(5) == "positive"
+test8() = classify(-5, 5) == "zero"
+test9() = classify(-5, offset: 10) == "positive"
+
+type Option[T] = Some(T) | None
+
+# Get value using match
+getValue(opt, def = 0) = match opt {
+    Some(x) -> x
+    None -> def
+}
+
+test10() = getValue(Some(42)) == 42
+test11() = getValue(None) == 0
+test12() = getValue(None, 99) == 99
+
+# Factorial with conditional
+factorial(n, acc = 1) =
+    if n <= 1 then acc
+    else factorial(n - 1, acc * n)
+
+test13() = factorial(5) == 120
+test14() = factorial(5, 2) == 240
+test15() = factorial(0) == 1
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14(), test15()]
+    passed = results.filter(r => r)
+    if length(passed) == 15 then 0 else 1
+}

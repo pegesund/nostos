@@ -1,0 +1,50 @@
+# expect: 0
+# Named/default params compatibility with stdlib functions
+
+# Using stdlib functions as defaults
+withMapDefault(lst = [1, 2, 3], mapper = x => x) = lst.map(mapper)
+test1() = withMapDefault() == [1, 2, 3]
+test2() = withMapDefault([4, 5, 6]) == [4, 5, 6]
+test3() = withMapDefault(mapper: x => x * 2) == [2, 4, 6]
+
+# Filter with default predicate
+withFilterDefault(lst = [1, 2, 3, 4, 5], pred = _ => true) = lst.filter(pred)
+test4() = withFilterDefault() == [1, 2, 3, 4, 5]
+test5() = withFilterDefault(pred: x => x > 2) == [3, 4, 5]
+
+# Fold with defaults
+withFoldDefault(lst = [1, 2, 3], init = 0, op = (a, b) => a + b) = lst.fold(init, op)
+test6() = withFoldDefault() == 6
+test7() = withFoldDefault(init: 100) == 106
+test8() = withFoldDefault(op: (a, b) => a * b, init: 1) == 6
+
+# String operations with defaults
+withStringOps(s = "hello", prefix = "", suffix = "") = prefix ++ s ++ suffix
+test9() = withStringOps() == "hello"
+test10() = withStringOps(prefix: "[") == "[hello"
+test11() = withStringOps(suffix: "]") == "hello]"
+
+# Length with default
+checkLen(lst = [], minLen = 0) = length(lst) >= minLen
+test12() = checkLen() == true
+test13() = checkLen([1, 2, 3]) == true
+test14() = checkLen(minLen: 5) == false
+test15() = checkLen([1, 2, 3, 4, 5], 5) == true
+
+# Take/drop with defaults
+takeDefault(lst, n = 1) = lst.take(n)
+dropDefault(lst, n = 1) = lst.drop(n)
+
+test16() = takeDefault([1, 2, 3, 4, 5]) == [1]
+test17() = takeDefault([1, 2, 3, 4, 5], 3) == [1, 2, 3]
+test18() = dropDefault([1, 2, 3, 4, 5]) == [2, 3, 4, 5]
+test19() = dropDefault([1, 2, 3, 4, 5], n: 2) == [3, 4, 5]
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14(), test15(),
+               test16(), test17(), test18(), test19()]
+    passed = results.filter(r => r)
+    if length(passed) == 19 then 0 else 1
+}

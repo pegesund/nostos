@@ -1,0 +1,46 @@
+# expect: 0
+# List operations with defaults
+
+# Empty list default
+appendTo(lst = [], item = 0) = lst ++ [item]
+test1() = appendTo() == [0]
+test2() = appendTo([1, 2]) == [1, 2, 0]
+test3() = appendTo([1], 99) == [1, 99]
+test4() = appendTo(item: 42) == [42]
+
+# Non-empty list default
+withList(lst = [1, 2, 3]) = length(lst)
+test5() = withList() == 3
+test6() = withList([1, 2, 3, 4, 5]) == 5
+test7() = withList([]) == 0
+
+# List comprehension-like with defaults
+mapWith(lst = [1, 2, 3], f = x => x) = lst.map(f)
+test8() = mapWith() == [1, 2, 3]
+test9() = mapWith([4, 5, 6]) == [4, 5, 6]
+test10() = mapWith(f: x => x * 2) == [2, 4, 6]
+test11() = mapWith([10, 20], x => x + 1) == [11, 21]
+
+# Filter with default predicate
+filterWith(lst = [1, 2, 3, 4, 5], pred = _ => true) = lst.filter(pred)
+test12() = filterWith() == [1, 2, 3, 4, 5]
+test13() = filterWith(pred: x => x > 2) == [3, 4, 5]
+test14() = filterWith([10, 20, 30], x => x > 15) == [20, 30]
+
+# Nested list default
+nested(lst = [[1], [2, 3]]) = length(lst)
+test15() = nested() == 2
+test16() = nested([[1, 2], [3, 4], [5]]) == 3
+
+# Take/drop with defaults
+takeN(lst, n = 2) = lst.take(n)
+test17() = takeN([1, 2, 3, 4, 5]) == [1, 2]
+test18() = takeN([1, 2, 3, 4, 5], 3) == [1, 2, 3]
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(),
+               test7(), test8(), test9(), test10(), test11(), test12(),
+               test13(), test14(), test15(), test16(), test17(), test18()]
+    passed = results.filter(r => r)
+    if length(passed) == 18 then 0 else 1
+}

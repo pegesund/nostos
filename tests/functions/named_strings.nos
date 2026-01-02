@@ -1,0 +1,26 @@
+# expect: 0
+# Named parameters with strings
+
+concat2(s1, s2) = s1 ++ s2
+test1() = concat2(s1: "hello", s2: "world") == "helloworld"
+test2() = concat2(s2: "world", s1: "hello") == "helloworld"
+
+concat3(a, b, c) = a ++ b ++ c
+test3() = concat3(a: "a", b: "b", c: "c") == "abc"
+test4() = concat3(c: "c", b: "b", a: "a") == "abc"
+
+# With separators
+joinWith(left, sep, right) = left ++ sep ++ right
+test5() = joinWith(left: "hello", sep: ", ", right: "world") == "hello, world"
+test6() = joinWith(sep: "-", left: "a", right: "b") == "a-b"
+
+# Mix positional and named
+test7() = concat3("x", b: "y", c: "z") == "xyz"
+test8() = joinWith("start", sep: ":", right: "end") == "start:end"
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8()]
+    passed = results.filter(r => r)
+    if length(passed) == 8 then 0 else 1
+}

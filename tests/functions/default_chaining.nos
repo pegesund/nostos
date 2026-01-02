@@ -1,0 +1,37 @@
+# expect: 0
+# Default parameters with method-style chaining
+
+# List operations with defaults
+mapOr(lst, f = x => x) = lst.map(f)
+test1() = [1, 2, 3].mapOr() == [1, 2, 3]
+test2() = [1, 2, 3].mapOr(x => x * 2) == [2, 4, 6]
+test3() = [1, 2, 3].mapOr(f: x => x + 10) == [11, 12, 13]
+
+filterOr(lst, p = _ => true) = lst.filter(p)
+test4() = [1, 2, 3, 4].filterOr() == [1, 2, 3, 4]
+test5() = [1, 2, 3, 4].filterOr(x => x > 2) == [3, 4]
+test6() = [1, 2, 3, 4].filterOr(p: x => x % 2 == 0) == [2, 4]
+
+# Chaining with defaults
+process(lst, mapFn = x => x, filterFn = _ => true) =
+    lst.map(mapFn).filter(filterFn)
+test7() = [1, 2, 3, 4].process() == [1, 2, 3, 4]
+test8() = [1, 2, 3, 4].process(x => x * 2) == [2, 4, 6, 8]
+test9() = [1, 2, 3, 4].process(filterFn: x => x > 2) == [3, 4]
+test10() = [1, 2, 3, 4].process(x => x * 2, x => x > 4) == [6, 8]
+
+# String operations with defaults
+wrap(s, left = "", right = "") = left ++ s ++ right
+test11() = "hello".wrap() == "hello"
+test12() = "hello".wrap("[") == "[hello"
+test13() = "hello".wrap("[", "]") == "[hello]"
+test14() = "hello".wrap(right: "!") == "hello!"
+test15() = "hello".wrap(left: "<", right: ">") == "<hello>"
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14(), test15()]
+    passed = results.filter(r => r)
+    if length(passed) == 15 then 0 else 1
+}

@@ -1,0 +1,66 @@
+# expect: 0
+# Default parameters interact with closures
+
+# Closure captures default value
+makeAdder(n = 10) = x => x + n
+test1() = {
+    add10 = makeAdder()
+    add10(5)
+} == 15
+test2() = {
+    add20 = makeAdder(20)
+    add20(5)
+} == 25
+test3() = {
+    add5 = makeAdder(n: 5)
+    add5(10)
+} == 15
+
+# Multiple closures from same function
+test4() = {
+    f = makeAdder()
+    g = makeAdder(100)
+    f(1) + g(1)
+} == 112
+
+# Nested closures with defaults
+makeMultiplierAdder(mul = 2, add = 0) = x => x * mul + add
+test5() = {
+    f = makeMultiplierAdder()
+    f(5)
+} == 10
+test6() = {
+    f = makeMultiplierAdder(3)
+    f(5)
+} == 15
+test7() = {
+    f = makeMultiplierAdder(add: 10)
+    f(5)
+} == 20
+test8() = {
+    f = makeMultiplierAdder(mul: 4, add: 3)
+    f(2)
+} == 11
+
+# Returning function with defaults
+composer(f = x => x, g = x => x) = x => g(f(x))
+test9() = {
+    id = composer()
+    id(42)
+} == 42
+test10() = {
+    double = composer(x => x * 2)
+    double(5)
+} == 10
+test11() = {
+    addThenDouble = composer(x => x + 1, x => x * 2)
+    addThenDouble(5)
+} == 12
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11()]
+    passed = results.filter(r => r)
+    if length(passed) == 11 then 0 else 1
+}

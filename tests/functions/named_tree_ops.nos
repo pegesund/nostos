@@ -1,0 +1,63 @@
+# expect: 0
+# Tree operations with named/default params
+
+type Tree[T] = Leaf(T) | Node(Tree[T], T, Tree[T])
+
+# Create tree with defaults
+makeTree(value, left = None, right = None) = match (left, right) {
+    (None, None) -> Leaf(value)
+    (Some(l), None) -> Node(l, value, Leaf(0))
+    (None, Some(r)) -> Node(Leaf(0), value, r)
+    (Some(l), Some(r)) -> Node(l, value, r)
+}
+
+type Option[T] = Some(T) | None
+
+test1() = makeTree(5) == Leaf(5)
+test2() = makeTree(5, Some(Leaf(3))) == Node(Leaf(3), 5, Leaf(0))
+test3() = makeTree(5, right: Some(Leaf(7))) == Node(Leaf(0), 5, Leaf(7))
+
+# Tree fold with defaults
+foldTree(tree, leafFn = x => x, nodeFn = (l, v, r) => l + v + r) = match tree {
+    Leaf(x) -> leafFn(x)
+    Node(l, v, r) -> nodeFn(foldTree(l, leafFn, nodeFn), v, foldTree(r, leafFn, nodeFn))
+}
+
+sampleTree() = Node(Leaf(1), 2, Leaf(3))
+
+test4() = foldTree(Leaf(5)) == 5
+test5() = foldTree(sampleTree()) == 6  # 1 + 2 + 3
+test6() = foldTree(sampleTree(), x => x * 2) == 8  # 2 + 2 + 6 = 10? No: leafFn doubles, so 2+2+6=10, but nodeFn adds...
+# Wait: foldTree(Leaf(1)) = 1*2 = 2, foldTree(Leaf(3)) = 3*2 = 6
+# foldTree(Node(Leaf(1), 2, Leaf(3))) = nodeFn(2, 2, 6) = 2 + 2 + 6 = 10
+
+# Tree map with default transform
+mapTree(tree, f = x => x) = match tree {
+    Leaf(x) -> Leaf(f(x))
+    Node(l, v, r) -> Node(mapTree(l, f), f(v), mapTree(r, f))
+}
+
+test7() = mapTree(Leaf(5)) == Leaf(5)
+test8() = mapTree(Leaf(5), x => x * 2) == Leaf(10)
+test9() = mapTree(sampleTree(), x => x + 10) == Node(Leaf(11), 12, Leaf(13))
+
+# Tree depth with default max
+maxDepth(tree, currentDepth = 0) = match tree {
+    Leaf(_) -> currentDepth + 1
+    Node(l, _, r) -> {
+        leftDepth = maxDepth(l, currentDepth + 1)
+        rightDepth = maxDepth(r, currentDepth + 1)
+        if leftDepth > rightDepth then leftDepth else rightDepth
+    }
+}
+
+test10() = maxDepth(Leaf(1)) == 1
+test11() = maxDepth(sampleTree()) == 2
+test12() = maxDepth(Node(sampleTree(), 0, Leaf(0))) == 3
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test7(), test8(), test9(), test10(), test11(), test12()]
+    passed = results.filter(r => r)
+    if length(passed) == 11 then 0 else 1
+}

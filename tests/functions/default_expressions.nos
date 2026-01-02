@@ -1,0 +1,41 @@
+# expect: 0
+# Default values with complex expressions
+
+# Arithmetic in defaults
+addWithCalc(a, b = 5 * 2) = a + b
+test1() = addWithCalc(10) == 20
+test2() = addWithCalc(10, 5) == 15
+
+# Multiple arithmetic defaults
+calc(x, a = 10 + 5, b = 2 * 3) = x + a + b
+test3() = calc(1) == 22
+test4() = calc(1, 5) == 12
+test5() = calc(1, 5, 4) == 10
+
+# String concatenation in defaults
+greet(name, prefix = "Hello" ++ " ") = prefix ++ name
+test6() = greet("World") == "Hello World"
+
+# List in defaults
+append(lst, items = [0]) = lst ++ items
+test7() = append([1, 2]) == [1, 2, 0]
+test8() = append([1, 2], [3, 4]) == [1, 2, 3, 4]
+
+# Tuple in defaults
+pair(x, def = (0, 0)) = (x, def)
+test9() = pair(1) == (1, (0, 0))
+test10() = pair(1, (2, 3)) == (1, (2, 3))
+
+# Nested arithmetic
+complex(a, b = (10 - 5) * 2, c = 100 / 4) = a + b + c
+test11() = complex(0) == 35
+test12() = complex(0, 0) == 25
+test13() = complex(0, 0, 0) == 0
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13()]
+    passed = results.filter(r => r)
+    if length(passed) == 13 then 0 else 1
+}

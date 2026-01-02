@@ -1,0 +1,69 @@
+# expect: 0
+# Validation functions with named/default params
+
+type ValidationResult = Valid | Invalid(String)
+
+# Check bounds with defaults
+checkBounds(value, min = 0, max = 100, fieldName = "value") =
+    if value < min then Invalid(fieldName ++ " too small")
+    else if value > max then Invalid(fieldName ++ " too large")
+    else Valid
+
+test1() = checkBounds(50) == Valid
+test2() = checkBounds(-1) == Invalid("value too small")
+test3() = checkBounds(101) == Invalid("value too large")
+test4() = checkBounds(50, min: 60) == Invalid("value too small")
+test5() = checkBounds(150, max: 200) == Valid
+test6() = checkBounds(-5, fieldName: "age") == Invalid("age too small")
+
+# Check string length with defaults
+checkLength(s, minLen = 1, maxLen = 100, fieldName = "string") =
+    if length(s) < minLen then Invalid(fieldName ++ " too short")
+    else if length(s) > maxLen then Invalid(fieldName ++ " too long")
+    else Valid
+
+test7() = checkLength("hello") == Valid
+test8() = checkLength("") == Invalid("string too short")
+test9() = checkLength("hi", minLen: 5) == Invalid("string too short")
+test10() = checkLength("hello", maxLen: 3) == Invalid("string too long")
+test11() = checkLength("", fieldName: "name", minLen: 1) == Invalid("name too short")
+
+# Check if valid
+isValid(result) = match result {
+    Valid -> true
+    Invalid(_) -> false
+}
+
+# Combine validations
+validateAll(results = []) =
+    if length(results) == 0 then Valid
+    else {
+        invalids = results.filter(r => !isValid(r))
+        if length(invalids) == 0 then Valid
+        else head(invalids)
+    }
+
+test12() = validateAll() == Valid
+test13() = validateAll([Valid, Valid]) == Valid
+test14() = validateAll([Valid, Invalid("error"), Valid]) == Invalid("error")
+
+# Validate record-like data
+validatePerson(age = 0, name = "", email = "") = {
+    ageCheck = checkBounds(age, 0, 150, "age")
+    nameCheck = checkLength(name, 1, 50, "name")
+    emailCheck = checkLength(email, 5, 100, "email")
+    validateAll([ageCheck, nameCheck, emailCheck])
+}
+
+test15() = validatePerson(25, "Alice", "alice@example.com") == Valid
+test16() = validatePerson(name: "Bob", age: 30, email: "bob@x.com") == Valid
+test17() = validatePerson(-1, "Test", "test@test.com") == Invalid("age too small")
+test18() = validatePerson(age: 25, name: "", email: "test@test.com") == Invalid("name too short")
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(),
+               test7(), test8(), test9(), test10(), test11(), test12(),
+               test13(), test14(), test15(), test16(), test17(), test18()]
+    passed = results.filter(r => r)
+    if length(passed) == 18 then 0 else 1
+}

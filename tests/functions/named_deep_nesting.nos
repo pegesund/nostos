@@ -1,0 +1,69 @@
+# expect: 0
+# Deeply nested function calls with named/default params
+
+# Level 1
+l1(a = 1) = a * 10
+test1() = l1() == 10
+test2() = l1(5) == 50
+
+# Level 2 calling level 1
+l2(b = 2) = l1() + b
+test3() = l2() == 12  # 10 + 2
+test4() = l2(8) == 18  # 10 + 8
+
+# Level 3 calling level 2
+l3(c = 3) = l2() + c
+test5() = l3() == 15  # 12 + 3
+test6() = l3(c: 7) == 19  # 12 + 7
+
+# All nested with custom params
+l1Custom(a = 1) = a * 10
+l2Custom(a = 1, b = 2) = l1Custom(a) + b
+l3Custom(a = 1, b = 2, c = 3) = l2Custom(a, b) + c
+
+test7() = l3Custom() == 15  # (1*10) + 2 + 3
+test8() = l3Custom(2) == 25  # (2*10) + 2 + 3
+test9() = l3Custom(2, 5) == 28  # (2*10) + 5 + 3
+test10() = l3Custom(2, 5, 10) == 35  # (2*10) + 5 + 10
+test11() = l3Custom(a: 3, c: 1) == 33  # (3*10) + 2 + 1
+
+# Deeply nested expressions
+deep(x = 1) = x
+deeper(x = deep()) = x
+deepest(x = deeper()) = x
+
+test12() = deepest() == 1
+test13() = deepest(5) == 5
+test14() = deepest(x: deep(10)) == 10
+
+# Recursive nesting
+nest(n = 3, acc = 0) =
+    if n <= 0 then acc
+    else nest(n - 1, acc + n)
+
+test15() = nest() == 6  # 3 + 2 + 1
+test16() = nest(5) == 15  # 5 + 4 + 3 + 2 + 1
+test17() = nest(n: 4, acc: 10) == 20  # 10 + 4 + 3 + 2 + 1
+
+# Chain of defaults
+chain(a = 1, b = a + 1, c = b + 1, d = c + 1) = a + b + c + d
+# Wait, this may not work if params can't reference each other
+# Let me use simpler approach
+
+chain2(a = 1) = {
+    b = a + 1
+    c = b + 1
+    d = c + 1
+    a + b + c + d
+}
+test18() = chain2() == 10  # 1 + 2 + 3 + 4
+test19() = chain2(10) == 46  # 10 + 11 + 12 + 13
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14(), test15(),
+               test16(), test17(), test18(), test19()]
+    passed = results.filter(r => r)
+    if length(passed) == 19 then 0 else 1
+}

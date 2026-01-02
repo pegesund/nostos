@@ -1,0 +1,36 @@
+# expect: 0
+# Test record literals as default values
+
+type Point = { x: Int, y: Int }
+type Config = { port: Int, host: String }
+
+# Record constructor as default
+origin() = Point(0, 0)
+withOrigin(offset = origin()) = offset.x + offset.y
+test1() = withOrigin() == 0
+test2() = withOrigin(Point(5, 10)) == 15
+
+# Inline record constructor as default
+moveBy(p, delta = Point(1, 1)) = Point(p.x + delta.x, p.y + delta.y)
+test3() = moveBy(Point(0, 0)) == Point(1, 1)
+test4() = moveBy(Point(5, 5), Point(10, 10)) == Point(15, 15)
+test5() = moveBy(Point(0, 0), delta: Point(2, 3)) == Point(2, 3)
+
+# Multiple record defaults
+combine(a = Point(0, 0), b = Point(1, 1)) = Point(a.x + b.x, a.y + b.y)
+test6() = combine() == Point(1, 1)
+test7() = combine(Point(5, 5)) == Point(6, 6)
+test8() = combine(b: Point(10, 10)) == Point(10, 10)
+test9() = combine(a: Point(3, 3), b: Point(7, 7)) == Point(10, 10)
+
+# Accessing record fields in default
+getX(p = Point(42, 0)) = p.x
+test10() = getX() == 42
+test11() = getX(Point(100, 0)) == 100
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(), test11()]
+    passed = results.filter(r => r)
+    if length(passed) == 11 then 0 else 1
+}

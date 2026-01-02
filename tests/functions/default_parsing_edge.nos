@@ -1,0 +1,49 @@
+# expect: 0
+# Parsing edge cases for default parameters
+
+# Default with parentheses
+withParens(x, y = (3)) = x + y
+test1() = withParens(10) == 13
+test2() = withParens(10, 5) == 15
+
+# Default value usage
+withVal(x, y = 5) = x + y
+test3() = withVal(10, -5) == 5
+test4() = withVal(10) == 15
+
+# Default with boolean
+withBool(x, flag = true) = if flag then x else 0 - x
+test5() = withBool(5) == 5
+test6() = withBool(5, false) == -5
+
+# Default with string containing special chars
+withStr(s, suffix = "!@#") = s ++ suffix
+test7() = withStr("test") == "test!@#"
+
+# Default with list literal
+withList(x, lst = [1, 2, 3]) = [x] ++ lst
+test8() = withList(0) == [0, 1, 2, 3]
+test9() = withList(0, []) == [0]
+
+# Default with float
+withFloat(x, f = 2.0) = x + f
+test10() = withFloat(1.0) == 3.0
+test11() = withFloat(1.0, 1.0) == 2.0
+
+# Multiple defaults with simple values
+multiDefault(a, b = 5, c = 6) = a + b + c
+test12() = multiDefault(1) == 12
+test13() = multiDefault(1, 0, 0) == 1
+
+# String default
+strDefault(a, d = "xy") = a ++ d
+test14() = strDefault("a") == "axy"
+test15() = strDefault("a", "z") == "az"
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12(), test13(), test14(), test15()]
+    passed = results.filter(r => r)
+    if length(passed) == 15 then 0 else 1
+}

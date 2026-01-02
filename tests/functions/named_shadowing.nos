@@ -1,0 +1,44 @@
+# expect: 0
+# Shadowing behavior with named/default params
+
+# Param shadows nothing - just uses default
+withDefault(val = 50) = val
+test1() = withDefault() == 50
+test2() = withDefault(25) == 25
+
+# Shadowing in closure
+makeShadower(n = 1) = {
+    m = n * 10   # Use different variable name
+    x => x + m
+}
+test3() = makeShadower()(5) == 15  # n=1 -> m=10, 5+10=15
+test4() = makeShadower(3)(5) == 35 # n=3 -> m=30, 5+30=35
+
+# Multiple defaults
+multiDefaults(a = 1, b = 2, c = 3) = a + b + c
+test5() = multiDefaults() == 6
+test6() = multiDefaults(10, 20, 30) == 60
+test7() = multiDefaults(c: 100) == 103  # 1 + 2 + 100
+
+# Param used in local computation
+computeVal(a = 10) = {
+    doubled = a * 2
+    tripled = a * 3
+    doubled + tripled
+}
+test8() = computeVal() == 50     # 20 + 30
+test9() = computeVal(5) == 25   # 10 + 15
+
+# Closure capturing param with default
+makeMultiplier(factor = 2) = x => x * factor
+test10() = makeMultiplier()(5) == 10
+test11() = makeMultiplier(3)(5) == 15
+test12() = makeMultiplier(factor: 10)(3) == 30
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(),
+               test6(), test7(), test8(), test9(), test10(),
+               test11(), test12()]
+    passed = results.filter(r => r)
+    if length(passed) == 12 then 0 else 1
+}
