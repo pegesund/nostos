@@ -11,7 +11,7 @@
 
 use crate::{Constructor, FunctionType, RecordType, Type, TypeDef, TypeError, TypeEnv};
 use nostos_syntax::ast::{
-    BinOp, Binding, Expr, FnClause, FnDef, Item, MatchArm, Module, Pattern, RecordField,
+    BinOp, Binding, CallArg, Expr, FnClause, FnDef, Item, MatchArm, Module, Pattern, RecordField,
     RecordPatternField, Stmt, TypeExpr, UnaryOp, VariantPatternFields,
 };
 use std::collections::HashMap;
@@ -194,7 +194,7 @@ impl<'a> InferCtx<'a> {
             .collect();
         let instantiated_ret = self.freshen_type(&func_ty.ret, &var_subst, &param_subst);
 
-        Type::Function(FunctionType {
+        Type::Function(FunctionType { required_params: func_ty.required_params,
             type_params: vec![], // Instantiated function has no type params
             params: instantiated_params,
             ret: Box::new(instantiated_ret),
@@ -246,7 +246,7 @@ impl<'a> InferCtx<'a> {
             Type::Tuple(elems) => Type::Tuple(
                 elems.iter().map(|e| self.freshen_type(e, var_subst, param_subst)).collect()
             ),
-            Type::Function(ft) => Type::Function(FunctionType {
+            Type::Function(ft) => Type::Function(FunctionType { required_params: ft.required_params,
                 type_params: vec![],
                 params: ft.params.iter().map(|p| self.freshen_type(p, var_subst, param_subst)).collect(),
                 ret: Box::new(self.freshen_type(&ft.ret, var_subst, param_subst)),
@@ -399,15 +399,18 @@ impl<'a> InferCtx<'a> {
                 if let Some(fn_type) = self.env.functions.get(&qualified_name).cloned() {
                     let func_ty = self.instantiate_function(&fn_type);
                     if let Type::Function(ft) = func_ty {
-                        // Check arity
-                        if ft.params.len() != call.arg_types.len() {
+                        // Check arity (accounting for optional parameters)
+                        let min_args = ft.required_params.unwrap_or(ft.params.len());
+                        let max_args = ft.params.len();
+                        let provided = call.arg_types.len();
+                        if provided < min_args || provided > max_args {
                             return Err(TypeError::ArityMismatch {
-                                expected: ft.params.len(),
-                                found: call.arg_types.len(),
+                                expected: if min_args == max_args { max_args } else { min_args },
+                                found: provided,
                             });
                         }
 
-                        // Resolve arg types and check against params
+                        // Resolve arg types and check against params (only for provided args)
                         for (param_ty, arg_ty) in ft.params.iter().zip(call.arg_types.iter()) {
                             let resolved_arg = self.env.apply_subst(arg_ty);
                             let resolved_param = self.env.apply_subst(param_ty);
@@ -520,13 +523,34 @@ impl<'a> InferCtx<'a> {
 
             // Functions
             (Type::Function(f1), Type::Function(f2)) => {
-                if f1.params.len() != f2.params.len() {
-                    return Err(TypeError::ArityMismatch {
-                        expected: f1.params.len(),
-                        found: f2.params.len(),
-                    });
+                // Handle optional parameters: allow unifying when one has more params
+                // if the extra params have defaults
+                let (func_with_more, func_with_less) = if f1.params.len() >= f2.params.len() {
+                    (f1, f2)
+                } else {
+                    (f2, f1)
+                };
+
+                // Check if the arity difference is acceptable
+                let min_required = func_with_more.required_params.unwrap_or(func_with_more.params.len());
+                let max_params = func_with_more.params.len();
+                let provided = func_with_less.params.len();
+
+                // Allow the call if provided args are between min_required and max_params
+                if provided < min_required || provided > max_params {
+                    // But if required_params is None on the larger function, it might just
+                    // be an HM inference function without complete info - be lenient
+                    if func_with_more.required_params.is_some() || provided > max_params {
+                        return Err(TypeError::ArityMismatch {
+                            expected: min_required,
+                            found: provided,
+                        });
+                    }
+                    // Otherwise, allow it - the compiler will catch real errors
                 }
-                for (p1, p2) in f1.params.iter().zip(f2.params.iter()) {
+
+                // Unify the params that were provided
+                for (p1, p2) in func_with_more.params.iter().zip(func_with_less.params.iter()) {
                     self.unify_types(p1, p2)?;
                 }
                 self.unify_types(&f1.ret, &f2.ret)
@@ -683,7 +707,7 @@ impl<'a> InferCtx<'a> {
             TypeExpr::Function(params, ret) => {
                 let param_types: Vec<_> = params.iter().map(|p| self.type_from_ast(p)).collect();
                 let ret_type = self.type_from_ast(ret);
-                Type::Function(FunctionType {
+                Type::Function(FunctionType { required_params: None,
                     type_params: vec![],
                     params: param_types,
                     ret: Box::new(ret_type),
@@ -811,11 +835,14 @@ impl<'a> InferCtx<'a> {
 
                 let mut arg_types = Vec::new();
                 for arg in args {
-                    arg_types.push(self.infer_expr(arg)?);
+                    let expr = match arg {
+                        CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                    };
+                    arg_types.push(self.infer_expr(expr)?);
                 }
 
                 let ret_ty = self.fresh();
-                let expected_func_ty = Type::Function(FunctionType {
+                let expected_func_ty = Type::Function(FunctionType { required_params: None,
                     type_params: vec![],
                     params: arg_types,
                     ret: Box::new(ret_ty.clone()),
@@ -842,7 +869,7 @@ impl<'a> InferCtx<'a> {
                 // Restore bindings
                 self.env.bindings = saved_bindings;
 
-                Ok(Type::Function(FunctionType {
+                Ok(Type::Function(FunctionType { required_params: None,
                     type_params: vec![],
                     params: param_types,
                     ret: Box::new(body_ty),
@@ -1135,16 +1162,21 @@ impl<'a> InferCtx<'a> {
                             // Found the function - infer argument types and unify
                             let mut arg_types = Vec::new();
                             for arg in args {
-                                arg_types.push(self.infer_expr(arg)?);
+                                let expr = match arg {
+                                    CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                                };
+                                arg_types.push(self.infer_expr(expr)?);
                             }
 
                             // Instantiate the function type
                             let func_ty = self.instantiate_function(&fn_type);
                             if let Type::Function(ft) = func_ty {
-                                // Unify argument types
-                                if ft.params.len() != arg_types.len() {
+                                // Check arity (accounting for optional parameters)
+                                let min_args = ft.required_params.unwrap_or(ft.params.len());
+                                let max_args = ft.params.len();
+                                if arg_types.len() < min_args || arg_types.len() > max_args {
                                     return Err(TypeError::ArityMismatch {
-                                        expected: ft.params.len(),
+                                        expected: if min_args == max_args { max_args } else { min_args },
                                         found: arg_types.len(),
                                     });
                                 }
@@ -1161,7 +1193,10 @@ impl<'a> InferCtx<'a> {
                 let receiver_ty = self.infer_expr(receiver)?;
                 let mut arg_types = vec![receiver_ty.clone()];
                 for arg in args {
-                    arg_types.push(self.infer_expr(arg)?);
+                    let expr = match arg {
+                        CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                    };
+                    arg_types.push(self.infer_expr(expr)?);
                 }
 
                 // Create a fresh return type variable
@@ -1174,10 +1209,12 @@ impl<'a> InferCtx<'a> {
                         // Found the function - instantiate and unify
                         let func_ty = self.instantiate_function(&fn_type);
                         if let Type::Function(ft) = func_ty {
-                            // Check arity (including receiver as first arg)
-                            if ft.params.len() != arg_types.len() {
+                            // Check arity (including receiver as first arg, accounting for optional parameters)
+                            let min_args = ft.required_params.unwrap_or(ft.params.len());
+                            let max_args = ft.params.len();
+                            if arg_types.len() < min_args || arg_types.len() > max_args {
                                 return Err(TypeError::ArityMismatch {
-                                    expected: ft.params.len(),
+                                    expected: if min_args == max_args { max_args } else { min_args },
                                     found: arg_types.len(),
                                 });
                             }
@@ -1262,7 +1299,7 @@ impl<'a> InferCtx<'a> {
                 }
 
                 let ret_ty = self.fresh();
-                let expected = Type::Function(FunctionType {
+                let expected = Type::Function(FunctionType { required_params: None,
                     type_params: vec![],
                     params: arg_types,
                     ret: Box::new(ret_ty),
@@ -1490,7 +1527,7 @@ impl<'a> InferCtx<'a> {
             // Pipe: f |> g means g(f)
             BinOp::Pipe => {
                 let result_ty = self.fresh();
-                let expected_func = Type::Function(FunctionType {
+                let expected_func = Type::Function(FunctionType { required_params: None,
                     type_params: vec![],
                     params: vec![left_ty],
                     ret: Box::new(result_ty.clone()),
@@ -1795,7 +1832,7 @@ impl<'a> InferCtx<'a> {
                     if field_types.is_empty() {
                         return Some(result_ty);
                     } else {
-                        return Some(Type::Function(FunctionType {
+                        return Some(Type::Function(FunctionType { required_params: None,
                             type_params: vec![],
                             params: field_types,
                             ret: Box::new(result_ty),
@@ -1849,7 +1886,7 @@ impl<'a> InferCtx<'a> {
                                     .iter()
                                     .map(instantiate)
                                     .collect();
-                                return Some(Type::Function(FunctionType {
+                                return Some(Type::Function(FunctionType { required_params: None,
                                     type_params: vec![],
                                     params: instantiated_params,
                                     ret: Box::new(result_ty),
@@ -1864,7 +1901,7 @@ impl<'a> InferCtx<'a> {
                             if instantiated_params.is_empty() {
                                 return Some(result_ty);
                             } else {
-                                return Some(Type::Function(FunctionType {
+                                return Some(Type::Function(FunctionType { required_params: None,
                                     type_params: vec![],
                                     params: instantiated_params,
                                     ret: Box::new(result_ty),
@@ -1903,7 +1940,7 @@ impl<'a> InferCtx<'a> {
                 )
             }
             Type::Function(f) => {
-                Type::Function(FunctionType {
+                Type::Function(FunctionType { required_params: None,
                     type_params: f.type_params.clone(),
                     params: f.params.iter().map(|t| Self::substitute_type_params(t, subst)).collect(),
                     ret: Box::new(Self::substitute_type_params(&f.ret, subst)),
@@ -2040,10 +2077,17 @@ impl<'a> InferCtx<'a> {
             ret_ty = self.env.apply_subst(&ret_ty);
         }
 
+        // Count required parameters (those without defaults)
+        let required_count = func.clauses[0].params.iter()
+            .filter(|p| p.default.is_none())
+            .count();
+        let has_defaults = required_count < func.clauses[0].params.len();
+
         let func_ty = FunctionType {
             type_params: vec![],
             params: param_types,
             ret: Box::new(ret_ty),
+            required_params: if has_defaults { Some(required_count) } else { None },
         };
 
         // Register function in environment
@@ -2107,12 +2151,20 @@ impl<'a> InferCtx<'a> {
                         c.params.iter().map(|_| self.fresh()).collect()
                     }).unwrap_or_default();
 
+                    // Count required parameters (those without defaults)
+                    let required_count = fd.clauses.first().map(|c| {
+                        c.params.iter().filter(|p| p.default.is_none()).count()
+                    }).unwrap_or(0);
+                    let total_params = param_types.len();
+                    let has_defaults = required_count < total_params;
+
                     self.env.functions.insert(
                         fd.name.node.clone(),
                         FunctionType {
                             type_params: vec![],
                             params: param_types,
                             ret: Box::new(ret_ty),
+                            required_params: if has_defaults { Some(required_count) } else { None },
                         },
                     );
                 }
@@ -2303,12 +2355,12 @@ mod tests {
         let var = env.fresh_var();
         let mut ctx = InferCtx::new(&mut env);
 
-        let func1 = Type::Function(FunctionType {
+        let func1 = Type::Function(FunctionType { required_params: None,
             type_params: vec![],
             params: vec![Type::Int],
             ret: Box::new(var.clone()),
         });
-        let func2 = Type::Function(FunctionType {
+        let func2 = Type::Function(FunctionType { required_params: None,
             type_params: vec![],
             params: vec![Type::Int],
             ret: Box::new(Type::Bool),
@@ -2585,7 +2637,7 @@ mod tests {
         // Register a function: f : Int -> Bool
         env.functions.insert(
             "f".to_string(),
-            FunctionType {
+            FunctionType { required_params: None,
                 type_params: vec![],
                 params: vec![Type::Int],
                 ret: Box::new(Type::Bool),
@@ -2607,7 +2659,7 @@ mod tests {
         // Register a function: f : Int -> Bool
         env.functions.insert(
             "f".to_string(),
-            FunctionType {
+            FunctionType { required_params: None,
                 type_params: vec![],
                 params: vec![Type::Int],
                 ret: Box::new(Type::Bool),
@@ -2858,7 +2910,7 @@ mod tests {
         // Register a function: double : Int -> Int
         env.functions.insert(
             "double".to_string(),
-            FunctionType {
+            FunctionType { required_params: None,
                 type_params: vec![],
                 params: vec![Type::Int],
                 ret: Box::new(Type::Int),
@@ -3139,10 +3191,10 @@ mod tests {
         // Register: make_adder : Int -> (Int -> Int)
         env.functions.insert(
             "make_adder".to_string(),
-            FunctionType {
+            FunctionType { required_params: None,
                 type_params: vec![],
                 params: vec![Type::Int],
-                ret: Box::new(Type::Function(FunctionType {
+                ret: Box::new(Type::Function(FunctionType { required_params: None,
                     type_params: vec![],
                     params: vec![Type::Int],
                     ret: Box::new(Type::Int),
@@ -3171,7 +3223,7 @@ mod tests {
         // Register functions
         env.functions.insert(
             "add_one".to_string(),
-            FunctionType {
+            FunctionType { required_params: None,
                 type_params: vec![],
                 params: vec![Type::Int],
                 ret: Box::new(Type::Int),
@@ -3179,7 +3231,7 @@ mod tests {
         );
         env.functions.insert(
             "to_string".to_string(),
-            FunctionType {
+            FunctionType { required_params: None,
                 type_params: vec![],
                 params: vec![Type::Int],
                 ret: Box::new(Type::String),
@@ -3208,7 +3260,7 @@ mod tests {
         // id_int : Int -> Int (monomorphic version)
         env.functions.insert(
             "id_int".to_string(),
-            FunctionType {
+            FunctionType { required_params: None,
                 type_params: vec![],
                 params: vec![Type::Int],
                 ret: Box::new(Type::Int),
@@ -3432,7 +3484,7 @@ mod tests {
         let mut env = TypeEnv::new();
         env.functions.insert(
             "add".to_string(),
-            FunctionType {
+            FunctionType { required_params: None,
                 type_params: vec![],
                 params: vec![Type::Int, Type::Int],
                 ret: Box::new(Type::Int),

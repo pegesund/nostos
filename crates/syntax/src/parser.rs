@@ -960,8 +960,16 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         // For call args, allow newlines around commas
         let call_nl = just(Token::Newline).repeated();
         let call_comma = call_nl.clone().ignore_then(just(Token::Comma)).then_ignore(call_nl.clone());
-        let call_args = call_nl.clone()
-            .ignore_then(expr.clone())
+
+        // Call argument: either `name: expr` (named) or just `expr` (positional)
+        let call_arg = call_nl.clone().ignore_then(choice((
+            ident()
+                .then_ignore(just(Token::Colon))
+                .then(call_nl.clone().ignore_then(expr.clone()))
+                .map(|(name, val)| CallArg::Named(name, val)),
+            expr.clone().map(CallArg::Positional),
+        )));
+        let call_args = call_arg
             .separated_by(call_comma.clone())
             .then_ignore(call_nl.clone())
             .delimited_by(just(Token::LParen), just(Token::RParen));
@@ -1218,8 +1226,8 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
 /// Helper enum for postfix operations during parsing.
 #[derive(Clone)]
 enum PostfixOp {
-    Call(Vec<TypeExpr>, Vec<Expr>),  // (type_args, value_args)
-    MethodCall(Ident, Vec<Expr>),
+    Call(Vec<TypeExpr>, Vec<CallArg>),  // (type_args, value_args) - supports named args
+    MethodCall(Ident, Vec<CallArg>),    // supports named args
     FieldAccess(Ident),
     Index(Expr),
     Try,
@@ -1326,11 +1334,13 @@ fn type_params() -> impl Parser<Token, Vec<TypeParam>, Error = Simple<Token>> + 
         .map(|params| params.unwrap_or_default())
 }
 
-/// Parser for function parameter (pattern with optional type).
+/// Parser for function parameter (pattern with optional type and default value).
+/// Syntax: `pattern`, `pattern: Type`, `pattern = default`, `pattern: Type = default`
 fn fn_param() -> impl Parser<Token, FnParam, Error = Simple<Token>> + Clone {
     pattern()
         .then(just(Token::Colon).ignore_then(type_expr()).or_not())
-        .map(|(pattern, ty)| FnParam { pattern, ty })
+        .then(just(Token::Eq).ignore_then(expr()).or_not())
+        .map(|((pattern, ty), default)| FnParam { pattern, ty, default })
 }
 
 /// Parser for a function definition.
@@ -1568,7 +1578,8 @@ fn trait_def() -> impl Parser<Token, TraitDef, Error = Simple<Token>> + Clone {
 
     let method_param = pattern()
         .then(just(Token::Colon).ignore_then(type_expr()).or_not())
-        .map(|(pattern, ty)| FnParam { pattern, ty });
+        .then(just(Token::Eq).ignore_then(expr()).or_not())
+        .map(|((pattern, ty), default)| FnParam { pattern, ty, default });
 
     let method = nl.clone()
         .ignore_then(method_name())

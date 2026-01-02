@@ -223,11 +223,14 @@ pub struct FnClause {
     pub span: Span,
 }
 
-/// A function parameter (pattern with optional type).
+/// A function parameter (pattern with optional type and default value).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FnParam {
     pub pattern: Pattern,
     pub ty: Option<TypeExpr>,
+    /// Optional default value for this parameter.
+    /// Parameters with defaults can be omitted in calls.
+    pub default: Option<Expr>,
 }
 
 // =============================================================================
@@ -416,9 +419,11 @@ pub enum Expr {
     UnaryOp(UnaryOp, Box<Expr>, Span),
     /// Function call: `f(x, y)` or with type args: `f[T](x, y)`
     /// Fields: (callee, type_args, value_args, span)
-    Call(Box<Expr>, Vec<TypeExpr>, Vec<Expr>, Span),
+    /// Supports named arguments: `f(x: 1, y: 2)`
+    Call(Box<Expr>, Vec<TypeExpr>, Vec<CallArg>, Span),
     /// Method call: `x.f(y)`
-    MethodCall(Box<Expr>, Ident, Vec<Expr>, Span),
+    /// Supports named arguments: `x.f(a: 1, b: 2)`
+    MethodCall(Box<Expr>, Ident, Vec<CallArg>, Span),
     /// Field access: `point.x`
     FieldAccess(Box<Expr>, Ident, Span),
     /// Index access: `arr[i]`
@@ -607,6 +612,15 @@ pub enum RecordField {
     /// Positional: `Point(3.0, 4.0)`
     Positional(Expr),
     /// Named: `Point(x: 3.0, y: 4.0)`
+    Named(Ident, Expr),
+}
+
+/// An argument in a function call.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CallArg {
+    /// Positional: `f(1, 2, 3)`
+    Positional(Expr),
+    /// Named: `f(x: 1, y: 2)`
     Named(Ident, Expr),
 }
 
@@ -945,7 +959,11 @@ impl FnDef {
                 Expr::Call(func, _, args, _) => {
                     collect_constraints(func, parent);
                     for arg in args {
-                        collect_constraints(arg, parent);
+                        match arg {
+                            CallArg::Positional(e) | CallArg::Named(_, e) => {
+                                collect_constraints(e, parent);
+                            }
+                        }
                     }
                 }
                 Expr::Lambda(_, body, _) => {
@@ -997,7 +1015,11 @@ impl FnDef {
                 Expr::Call(f, _, args, _) => {
                     collect_vars_inner(f, vars);
                     for arg in args {
-                        collect_vars_inner(arg, vars);
+                        match arg {
+                            CallArg::Positional(e) | CallArg::Named(_, e) => {
+                                collect_vars_inner(e, vars);
+                            }
+                        }
                     }
                 }
                 Expr::FieldAccess(e, _, _) => collect_vars_inner(e, vars),

@@ -1,0 +1,56 @@
+# expect: 0
+# Test optional parameters with default values
+
+# Basic function with one optional param
+greet(name, greeting = "Hello") = greeting ++ ", " ++ name ++ "!"
+
+# Test 1: Call with both args
+test1() = greet("World", "Hi") == "Hi, World!"
+
+# Test 2: Call with only required arg (uses default)
+test2() = greet("World") == "Hello, World!"
+
+# Multiple optional params
+makeRange(start = 0, stop = 10, step = 1) = {
+    # Just return the params as a tuple for testing
+    (start, stop, step)
+}
+
+# Test 3: All defaults
+test3() = makeRange() == (0, 10, 1)
+
+# Test 4: Override first param only
+test4() = makeRange(5) == (5, 10, 1)
+
+# Test 5: Override first two params
+test5() = makeRange(5, 20) == (5, 20, 1)
+
+# Test 6: Override all params
+test6() = makeRange(5, 20, 2) == (5, 20, 2)
+
+# Test 7: Named params with defaults - skip middle param
+test7() = makeRange(start: 1, step: 3) == (1, 10, 3)
+
+# Test 8: Named params - override just the last one
+test8() = makeRange(step: 5) == (0, 10, 5)
+
+# Test 9: Mix positional and named with defaults
+test9() = makeRange(2, step: 4) == (2, 10, 4)
+
+# Optional with expression as default
+increment(x, amount = 1 + 0) = x + amount
+
+# Test 10: Expression default
+test10() = increment(5) == 6
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(), test7(), test8(), test9(), test10()]
+    failed = results.filter(r => !r)
+    if length(failed) > 0 then {
+        println("Failed: " ++ show(length(failed)) ++ " tests")
+        1
+    } else {
+        println("All optional param tests passed!")
+        0
+    }
+}

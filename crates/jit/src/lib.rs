@@ -3153,7 +3153,7 @@ mod tests {
             doc: None,
             signature: None,
             param_types: vec![],
-            return_type: None,
+            return_type: None, required_params: None,
         }
     }
 
@@ -3184,7 +3184,7 @@ mod tests {
             doc: None,
             signature: None,
             param_types: vec![],
-            return_type: None,
+            return_type: None, required_params: None,
         }
     }
 
@@ -3275,7 +3275,7 @@ mod tests {
             doc: None,
             signature: None,
             param_types: vec![],
-            return_type: None,
+            return_type: None, required_params: None,
         }
     }
 
@@ -3398,7 +3398,7 @@ mod tests {
             doc: None,
             signature: None,
             param_types: vec![],
-            return_type: None,
+            return_type: None, required_params: None,
         }
     }
 
@@ -3477,7 +3477,7 @@ mod tests {
             doc: None,
             signature: None,
             param_types: vec![],
-            return_type: None,
+            return_type: None, required_params: None,
         }
     }
 
@@ -3590,7 +3590,7 @@ mod tests {
             doc: None,
             signature: None,
             param_types: vec![],
-            return_type: None,
+            return_type: None, required_params: None,
         }
     }
 
@@ -3675,7 +3675,7 @@ mod tests {
             doc: None,
             signature: None,
             param_types: vec![],
-            return_type: None,
+            return_type: None, required_params: None,
         }
     }
 
@@ -3786,7 +3786,7 @@ mod tests {
             doc: None,
             signature: None,
             param_types: vec![],
-            return_type: None,
+            return_type: None, required_params: None,
         }
     }
 

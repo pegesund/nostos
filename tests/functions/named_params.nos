@@ -1,0 +1,41 @@
+# expect: 0
+# Test named parameters in function calls
+
+# Basic function with multiple params
+add(x, y, z) = x + y + z
+
+# Test 1: All positional (existing behavior)
+test1() = add(1, 2, 3) == 6
+
+# Test 2: All named (any order)
+test2() = add(x: 1, y: 2, z: 3) == 6
+
+# Test 3: Named in different order
+test3() = add(z: 3, x: 1, y: 2) == 6
+
+# Test 4: Mixed positional then named
+test4() = add(1, z: 3, y: 2) == 6
+
+# Test 5: Function with typed params
+greet(name: String, times: Int) = name ++ show(times)
+test5() = greet(name: "hi", times: 3) == "hi3"
+
+# Test 6: Named params with expressions
+test6() = add(x: 1 + 0, y: 1 + 1, z: 1 + 2) == 6
+
+# Test 7: Verify reordering actually works (subtraction is not commutative)
+sub(x, y, z) = x - y - z
+# sub(100, 10, 1) = 89, sub(1, 100, 10) = -109
+test7() = sub(z: 1, x: 100, y: 10) == 89
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5(), test6(), test7()]
+    failed = results.filter(r => !r)
+    if length(failed) > 0 then {
+        println("Failed: " ++ show(length(failed)) ++ " tests")
+        1
+    } else {
+        println("All named param tests passed!")
+        0
+    }
+}
