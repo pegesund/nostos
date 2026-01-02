@@ -346,7 +346,7 @@ rwebHandleRequest(req, title, sessionSetup) = {
 #   Returns a tuple of:
 #   - renderPage: () -> RHtmlResult - renders the page
 #   - onAction: (action, params) -> () - handles actions by mutating reactive records
-startRWeb(port, title, sessionSetup) = {
+pub startRWeb(port, title, sessionSetup) = {
     println("RWeb server started on http://localhost:" ++ show(port))
     println("WebSocket endpoint: ws://localhost:" ++ show(port) ++ "/ws")
     serve(port, req => rwebHandleRequest(req, title, sessionSetup))
