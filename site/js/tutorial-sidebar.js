@@ -28,6 +28,7 @@ const tutorialChapters = [
     { num: 24, file: "24_command_line.html", title: "Command Line" },
     { num: 25, file: "25_reactive_records.html", title: "Reactive Records" },
     { num: 26, file: "26_logging.html", title: "Logging" },
+    { num: 27, file: "27_selenium.html", title: "Selenium WebDriver" },
 ];
 
 function generateTutorialSidebar() {
