@@ -163,8 +163,8 @@ body(children: List[RNode], class = "", id = "", style = "", attrs = []) =
 
 # --- Form elements ---
 
-form(children: List[RNode], action = "", method = "", class = "", id = "", attrs = []) =
-    Element("form", buildAttrs([("action", action), ("method", method), ("class", class), ("id", id)], attrs), children)
+form(children: List[RNode], action = "", method = "", class = "", id = "", dataAction = "", attrs = []) =
+    Element("form", buildAttrs([("action", action), ("method", method), ("class", class), ("id", id), ("data-action", dataAction)], attrs), children)
 
 button(children: List[RNode], btnType = "", class = "", id = "", onclick = "", disabled = "", dataAction = "", dataTestid = "", attrs = []) =
     Element("button", buildAttrs([("type", btnType), ("class", class), ("id", id), ("onclick", onclick), ("disabled", disabled), ("data-action", dataAction), ("data-testid", dataTestid)], attrs), children)
@@ -176,11 +176,11 @@ label(children: List[RNode], forId = "", class = "", id = "", attrs = []) =
 label(str: String, forId = "", class = "", id = "", attrs = []) =
     Element("label", buildAttrs([("for", forId), ("class", class), ("id", id)], attrs), [Text(str)])
 
-textarea(str: String, name = "", placeholder = "", rows = "", cols = "", class = "", id = "", attrs = []) =
-    Element("textarea", buildAttrs([("name", name), ("placeholder", placeholder), ("rows", rows), ("cols", cols), ("class", class), ("id", id)], attrs), [Text(str)])
+textarea(str: String, name = "", placeholder = "", rows = "", cols = "", class = "", id = "", dataOnchange = "", dataOninput = "", attrs = []) =
+    Element("textarea", buildAttrs([("name", name), ("placeholder", placeholder), ("rows", rows), ("cols", cols), ("class", class), ("id", id), ("data-onchange", dataOnchange), ("data-oninput", dataOninput)], attrs), [Text(str)])
 
-select(children: List[RNode], name = "", class = "", id = "", attrs = []) =
-    Element("select", buildAttrs([("name", name), ("class", class), ("id", id)], attrs), children)
+select(children: List[RNode], name = "", class = "", id = "", dataOnchange = "", dataTestid = "", attrs = []) =
+    Element("select", buildAttrs([("name", name), ("class", class), ("id", id), ("data-onchange", dataOnchange), ("data-testid", dataTestid)], attrs), children)
 
 option(str: String, value = "", selected = "", attrs = []) =
     Element("option", buildAttrs([("value", value), ("selected", selected)], attrs), [Text(str)])
@@ -208,8 +208,8 @@ hr(class = "", id = "", attrs = []) =
 img(src = "", alt = "", width = "", height = "", class = "", id = "", attrs = []) =
     Element("img", buildAttrs([("src", src), ("alt", alt), ("width", width), ("height", height), ("class", class), ("id", id)], attrs), [])
 
-input(inputType = "", name = "", value = "", placeholder = "", class = "", id = "", checked = "", disabled = "", readonly = "", attrs = []) =
-    Element("input", buildAttrs([("type", inputType), ("name", name), ("value", value), ("placeholder", placeholder), ("class", class), ("id", id), ("checked", checked), ("disabled", disabled), ("readonly", readonly)], attrs), [])
+input(inputType = "", name = "", value = "", placeholder = "", class = "", id = "", checked = "", disabled = "", readonly = "", dataOnchange = "", dataOninput = "", dataTestid = "", attrs = []) =
+    Element("input", buildAttrs([("type", inputType), ("name", name), ("value", value), ("placeholder", placeholder), ("class", class), ("id", id), ("checked", checked), ("disabled", disabled), ("readonly", readonly), ("data-onchange", dataOnchange), ("data-oninput", dataOninput), ("data-testid", dataTestid)], attrs), [])
 
 meta(name = "", content = "", charset = "", attrs = []) =
     Element("meta", buildAttrs([("name", name), ("content", content), ("charset", charset)], attrs), [])

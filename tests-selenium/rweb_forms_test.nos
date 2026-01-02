@@ -1,0 +1,74 @@
+# RWeb Forms Test Server
+# Tests: form submission, input change, checkbox, select
+
+use stdlib.rweb
+use stdlib.rhtml.{div, h1, h3, hr, p, label, form, button, input, select, option, RHtml, component, renderRNode}
+
+reactive FormData = { name: String, email: String }
+reactive CheckData = { agree: String }
+reactive SelectData = { country: String }
+reactive SearchData = { text: String }
+
+session() = {
+    form = FormData(name: "", email: "")
+    check = CheckData(agree: "false")
+    sel = SelectData(country: "")
+    search = SearchData(text: "")
+
+    (
+        () => RHtml(div([
+            h1("Form Elements Test", attrs: [("data-testid", "title")]),
+            component("results", () => RHtml(div([
+                p("Name: " ++ form.name, attrs: [("data-testid", "result-name")]),
+                p("Email: " ++ form.email, attrs: [("data-testid", "result-email")]),
+                p("Agree: " ++ check.agree, attrs: [("data-testid", "result-agree")]),
+                p("Country: " ++ sel.country, attrs: [("data-testid", "result-country")]),
+                p("Search: " ++ search.text, attrs: [("data-testid", "result-search")])
+            ]))),
+            hr(),
+            formSection(),
+            hr(),
+            checkboxSection(),
+            hr(),
+            selectSection(),
+            hr(),
+            searchSection()
+        ])),
+        (action, params) => handleAction(action, params, form, check, sel, search)
+    )
+}
+
+formSection() = form([
+    div([label("Name: "), input(inputType: "text", name: "name", dataTestid: "input-name")]),
+    div([label("Email: "), input(inputType: "email", name: "email", dataTestid: "input-email")]),
+    button("Submit", btnType: "submit", dataTestid: "submit-form")
+], dataAction: "formSubmit")
+
+checkboxSection() = div([
+    input(inputType: "checkbox", name: "agree", dataOnchange: "checkboxChange", dataTestid: "checkbox-agree"),
+    label(" I agree")
+])
+
+selectSection() = select([
+    option("Select...", value: ""),
+    option("USA", value: "usa"),
+    option("UK", value: "uk")
+], name: "country", dataOnchange: "selectChange", dataTestid: "select-country")
+
+searchSection() = input(inputType: "text", placeholder: "Search...", dataOninput: "searchInput", dataTestid: "input-search")
+
+handleAction(action, params, form, check, sel, search) = match action {
+    "formSubmit" -> {
+        form.name = Map.get(params, "name")
+        form.email = Map.get(params, "email")
+    }
+    "checkboxChange" -> { check.agree = Map.get(params, "checked") }
+    "selectChange" -> { sel.country = Map.get(params, "value") }
+    "searchInput" -> { search.text = Map.get(params, "value") }
+    _ -> ()
+}
+
+main() = {
+    println("Starting forms test server on port 8096...")
+    startRWeb(8096, "Forms Test", session)
+}

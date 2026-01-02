@@ -1,0 +1,81 @@
+# Selenium test for RWeb Forms
+# Tests: form submission, checkbox, select, real-time input
+#
+# To run:
+#   1. Start ChromeDriver: chromedriver --port=4444
+#   2. Start the server: ./target/release/nostos tests-selenium/rweb_forms_test.nos
+#   3. Run this test: ./target/release/nostos tests-selenium/forms_test.nos
+
+runTest(name, got, expected) = {
+    println("Test: " ++ name)
+    println("  Got: " ++ got)
+    result = String.contains(got, expected)
+    if result then println("  [PASS]") else println("  [FAIL] Expected: " ++ expected)
+    if result then 1 else 0
+}
+
+main() = {
+    println("=== Nostos Selenium Test: RWeb Forms ===")
+    println("")
+
+    driver = Selenium.connect("http://localhost:4444")
+    println("Connected to ChromeDriver")
+
+    Selenium.goto(driver, "http://localhost:8096")
+    Selenium.waitFor(driver, "[data-testid='title']", 5000)
+    sleep(1000)  # Wait for WebSocket to connect
+    println("Page loaded")
+    println("")
+
+    # Test 1: Form submission
+    println("--- Testing Form Submission ---")
+    Selenium.sendKeys(driver, "[data-testid='input-name']", "John Doe")
+    sleep(500)
+    Selenium.sendKeys(driver, "[data-testid='input-email']", "john@example.com")
+    sleep(500)
+    Selenium.click(driver, "[data-testid='submit-form']")
+    sleep(1000)
+
+    name1 = Selenium.text(driver, "[data-testid='result-name']")
+    t1 = runTest("Form name", name1, "John Doe")
+
+    email1 = Selenium.text(driver, "[data-testid='result-email']")
+    t2 = runTest("Form email", email1, "john@example.com")
+    println("")
+
+    # Test 2: Checkbox
+    println("--- Testing Checkbox ---")
+    agree1 = Selenium.text(driver, "[data-testid='result-agree']")
+    t3 = runTest("Checkbox initial", agree1, "false")
+
+    Selenium.click(driver, "[data-testid='checkbox-agree']")
+    sleep(1000)
+    agree2 = Selenium.text(driver, "[data-testid='result-agree']")
+    t4 = runTest("Checkbox after click", agree2, "true")
+    println("")
+
+    # Test 3: Select dropdown
+    println("--- Testing Select ---")
+    # Use JavaScript to set select value since Selenium.select is not a builtin
+    Selenium.executeJs(driver, "document.querySelector('[data-testid=\"select-country\"]').value = 'uk'; document.querySelector('[data-testid=\"select-country\"]').dispatchEvent(new Event('change', { bubbles: true }))")
+    sleep(1000)
+    country1 = Selenium.text(driver, "[data-testid='result-country']")
+    t5 = runTest("Select UK", country1, "uk")
+    println("")
+
+    # Test 4: Real-time input
+    println("--- Testing Real-time Input ---")
+    Selenium.sendKeys(driver, "[data-testid='input-search']", "hello")
+    sleep(1000)
+    search1 = Selenium.text(driver, "[data-testid='result-search']")
+    t6 = runTest("Real-time search", search1, "hello")
+    println("")
+
+    Selenium.close(driver)
+
+    passed = t1 + t2 + t3 + t4 + t5 + t6
+    println("=== Test Summary ===")
+    println("Passed: " ++ show(passed) ++ " / 6")
+
+    if passed == 6 then 0 else 1
+}

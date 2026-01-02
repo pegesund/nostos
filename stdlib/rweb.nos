@@ -34,6 +34,7 @@
 
 use stdlib.server.{serve, respondHtml, respond404, getParam}
 use stdlib.rhtml
+use stdlib.json.{jsonParse, Null, Bool, Number, Object, String}
 
 # --- Client JavaScript ---
 
@@ -86,8 +87,8 @@ clientJs() = "
     }
 
     function bindEvents() {
-        // Bind click handlers for data-action elements
-        document.querySelectorAll('[data-action]').forEach(function(el) {
+        // Bind click handlers for data-action elements (excluding forms)
+        document.querySelectorAll('[data-action]:not(form)').forEach(function(el) {
             if (!el._rweb_bound) {
                 el._rweb_bound = true;
                 el.addEventListener('click', function(e) {
@@ -122,10 +123,26 @@ clientJs() = "
 
         // Bind change handlers for data-onchange elements
         document.querySelectorAll('[data-onchange]').forEach(function(el) {
-            if (!el._rweb_bound) {
-                el._rweb_bound = true;
+            if (!el._rweb_change_bound) {
+                el._rweb_change_bound = true;
                 el.addEventListener('change', function(e) {
                     var action = el.getAttribute('data-onchange');
+                    var params = { value: el.value };
+                    // For checkbox/radio, also send checked state
+                    if (el.type === 'checkbox' || el.type === 'radio') {
+                        params.checked = el.checked ? 'true' : 'false';
+                    }
+                    sendAction(action, params);
+                });
+            }
+        });
+
+        // Bind input handlers for data-oninput elements (real-time)
+        document.querySelectorAll('[data-oninput]').forEach(function(el) {
+            if (!el._rweb_input_bound) {
+                el._rweb_input_bound = true;
+                el.addEventListener('input', function(e) {
+                    var action = el.getAttribute('data-oninput');
                     sendAction(action, { value: el.value });
                 });
             }
@@ -209,12 +226,49 @@ sessionLoop(ws, renderResult: RHtmlResult, renderPage, onAction) = {
     }
 }
 
-# Parse JSON action message
-parseActionMessage(json) = {
-    # Simple JSON parsing for { "action": "name", "params": {...} }
-    # For now, just extract action name - params parsing TODO
-    action = extractJsonString(json, "action")
-    (action, %{})
+# Convert Json value to string
+jsonValueToString(json) = match json {
+    String(s) -> s
+    Number(n) -> show(n)
+    Bool(true) -> "true"
+    Bool(false) -> "false"
+    Null -> ""
+    _ -> ""
+}
+
+# Convert Json Object pairs to Map[String, String]
+jsonPairsToMap(pairs, acc) = match pairs {
+    [] -> acc
+    [(key, value) | rest] -> jsonPairsToMap(rest, Map.insert(acc, key, jsonValueToString(value)))
+}
+
+# Find a field in Json Object
+jsonGetField(json, key) = match json {
+    Object(pairs) -> jsonFindField(pairs, key)
+    _ -> Null
+}
+
+jsonFindField(pairs, key) = match pairs {
+    [] -> Null
+    [(k, v) | rest] -> if k == key then v else jsonFindField(rest, key)
+}
+
+# Parse JSON action message: { "action": "name", "params": {...} }
+parseActionMessage(jsonStr) = {
+    json = jsonParse(jsonStr)
+
+    # Extract action name
+    actionJson = jsonGetField(json, "action")
+    action = jsonValueToString(actionJson)
+
+    # Extract params object and convert to Map[String, String]
+    paramsJson = jsonGetField(json, "params")
+    params = match paramsJson {
+        Object(pairs) -> jsonPairsToMap(pairs, %{})
+        _ -> %{}
+    }
+
+    (action, params)
 }
 
 # Extract string value from JSON by key (simple implementation)
@@ -402,7 +456,8 @@ clientJsWithRoutes() = "
     }
 
     function bindEvents() {
-        document.querySelectorAll('[data-action]').forEach(function(el) {
+        // Bind click handlers for data-action elements (excluding forms)
+        document.querySelectorAll('[data-action]:not(form)').forEach(function(el) {
             if (!el._rweb_bound) {
                 el._rweb_bound = true;
                 el.addEventListener('click', function(e) {
@@ -420,6 +475,7 @@ clientJsWithRoutes() = "
             }
         });
 
+        // Bind form submissions
         document.querySelectorAll('form[data-action]').forEach(function(form) {
             if (!form._rweb_bound) {
                 form._rweb_bound = true;
@@ -434,10 +490,24 @@ clientJsWithRoutes() = "
         });
 
         document.querySelectorAll('[data-onchange]').forEach(function(el) {
-            if (!el._rweb_bound) {
-                el._rweb_bound = true;
+            if (!el._rweb_change_bound) {
+                el._rweb_change_bound = true;
                 el.addEventListener('change', function(e) {
                     var action = el.getAttribute('data-onchange');
+                    var params = { value: el.value };
+                    if (el.type === 'checkbox' || el.type === 'radio') {
+                        params.checked = el.checked ? 'true' : 'false';
+                    }
+                    sendAction(action, params);
+                });
+            }
+        });
+
+        document.querySelectorAll('[data-oninput]').forEach(function(el) {
+            if (!el._rweb_input_bound) {
+                el._rweb_input_bound = true;
+                el.addEventListener('input', function(e) {
+                    var action = el.getAttribute('data-oninput');
                     sendAction(action, { value: el.value });
                 });
             }
