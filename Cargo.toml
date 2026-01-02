@@ -70,6 +70,9 @@ parking_lot = "0.12"
 # Dynamic loading
 libloading = "0.8"
 
+# Selenium WebDriver
+thirtyfour = "0.32"
+
 # Internal crates
 nostos-syntax = { path = "crates/syntax" }
 nostos-compiler = { path = "crates/compiler" }

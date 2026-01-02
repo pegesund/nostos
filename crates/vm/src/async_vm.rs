@@ -6992,6 +6992,361 @@ impl AsyncProcess {
                 }
             }
 
+            // === Selenium WebDriver Operations ===
+            SeleniumConnect(dst, url_reg) => {
+                let url = match reg!(url_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::SeleniumConnect { webdriver_url: url, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    if let Some(gc_value) = self.handle_io_result(result, "selenium_error")? {
+                        set_reg!(dst, gc_value);
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            SeleniumGoto(dst, driver_reg, url_reg) => {
+                let driver_handle = match reg!(driver_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let url = match reg!(url_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::SeleniumGoto { driver_handle, url, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    if let Some(gc_value) = self.handle_io_result(result, "selenium_error")? {
+                        set_reg!(dst, gc_value);
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            SeleniumClick(dst, driver_reg, selector_reg) => {
+                let driver_handle = match reg!(driver_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let selector = match reg!(selector_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::SeleniumClick { driver_handle, selector, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    if let Some(gc_value) = self.handle_io_result(result, "selenium_error")? {
+                        set_reg!(dst, gc_value);
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            SeleniumText(dst, driver_reg, selector_reg) => {
+                let driver_handle = match reg!(driver_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let selector = match reg!(selector_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::SeleniumText { driver_handle, selector, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    if let Some(gc_value) = self.handle_io_result(result, "selenium_error")? {
+                        set_reg!(dst, gc_value);
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            SeleniumSendKeys(dst, driver_reg, selector_reg, text_reg) => {
+                let driver_handle = match reg!(driver_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let selector = match reg!(selector_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let text = match reg!(text_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::SeleniumSendKeys { driver_handle, selector, text, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    if let Some(gc_value) = self.handle_io_result(result, "selenium_error")? {
+                        set_reg!(dst, gc_value);
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            SeleniumExecuteJs(dst, driver_reg, script_reg) => {
+                let driver_handle = match reg!(driver_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let script = match reg!(script_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::SeleniumExecuteJs { driver_handle, script, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    if let Some(gc_value) = self.handle_io_result(result, "selenium_error")? {
+                        set_reg!(dst, gc_value);
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            SeleniumExecuteJsWithArgs(dst, driver_reg, script_reg, args_reg) => {
+                let driver_handle = match reg!(driver_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let script = match reg!(script_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let args = match reg!(args_reg) {
+                    GcValue::List(list) => {
+                        list.iter().map(|v| {
+                            match v {
+                                GcValue::String(ptr) => self.heap.get_string(*ptr).map(|s| s.data.clone()).unwrap_or_default(),
+                                GcValue::Int64(n) => n.to_string(),
+                                GcValue::Float64(n) => n.to_string(),
+                                GcValue::Bool(b) => b.to_string(),
+                                _ => String::new(),
+                            }
+                        }).collect()
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "List".to_string(),
+                        found: "non-list".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::SeleniumExecuteJsWithArgs { driver_handle, script, args, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    if let Some(gc_value) = self.handle_io_result(result, "selenium_error")? {
+                        set_reg!(dst, gc_value);
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            SeleniumWaitFor(dst, driver_reg, selector_reg, timeout_reg) => {
+                let driver_handle = match reg!(driver_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let selector = match reg!(selector_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let timeout_ms = match reg!(timeout_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::SeleniumWaitFor { driver_handle, selector, timeout_ms, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    if let Some(gc_value) = self.handle_io_result(result, "selenium_error")? {
+                        set_reg!(dst, gc_value);
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            SeleniumGetAttribute(dst, driver_reg, selector_reg, attr_reg) => {
+                let driver_handle = match reg!(driver_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let selector = match reg!(selector_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let attribute = match reg!(attr_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::SeleniumGetAttribute { driver_handle, selector, attribute, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    if let Some(gc_value) = self.handle_io_result(result, "selenium_error")? {
+                        set_reg!(dst, gc_value);
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            SeleniumExists(dst, driver_reg, selector_reg) => {
+                let driver_handle = match reg!(driver_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let selector = match reg!(selector_reg) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|s| s.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::SeleniumExists { driver_handle, selector, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    if let Some(gc_value) = self.handle_io_result(result, "selenium_error")? {
+                        set_reg!(dst, gc_value);
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            SeleniumClose(dst, driver_reg) => {
+                let driver_handle = match reg!(driver_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::SeleniumClose { driver_handle, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    if let Some(gc_value) = self.handle_io_result(result, "selenium_error")? {
+                        set_reg!(dst, gc_value);
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
             // === Time builtins ===
             TimeNow(dst) => {
                 use chrono::Utc;

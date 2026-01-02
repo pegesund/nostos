@@ -1225,6 +1225,31 @@ pub enum Instruction {
     /// Wait for notification: dst = Pg.awaitNotification(handle, timeout_ms)
     PgAwaitNotification(Reg, Reg, Reg),
 
+    // === Selenium WebDriver Operations ===
+    /// Connect to WebDriver: dst = Selenium.connect(webdriver_url)
+    /// Returns driver handle (Int)
+    SeleniumConnect(Reg, Reg),
+    /// Navigate to URL: dst = Selenium.goto(driver, url)
+    SeleniumGoto(Reg, Reg, Reg),
+    /// Click element by CSS selector: dst = Selenium.click(driver, selector)
+    SeleniumClick(Reg, Reg, Reg),
+    /// Get text content by CSS selector: dst = Selenium.text(driver, selector)
+    SeleniumText(Reg, Reg, Reg),
+    /// Send keys to element: dst = Selenium.sendKeys(driver, selector, text)
+    SeleniumSendKeys(Reg, Reg, Reg, Reg),
+    /// Execute JavaScript: dst = Selenium.executeJs(driver, script)
+    SeleniumExecuteJs(Reg, Reg, Reg),
+    /// Execute JavaScript with args: dst = Selenium.executeJsWithArgs(driver, script, args)
+    SeleniumExecuteJsWithArgs(Reg, Reg, Reg, Reg),
+    /// Wait for element: dst = Selenium.waitFor(driver, selector, timeout_ms)
+    SeleniumWaitFor(Reg, Reg, Reg, Reg),
+    /// Get element attribute: dst = Selenium.getAttribute(driver, selector, attr)
+    SeleniumGetAttribute(Reg, Reg, Reg, Reg),
+    /// Check if element exists: dst = Selenium.exists(driver, selector)
+    SeleniumExists(Reg, Reg, Reg),
+    /// Close WebDriver: dst = Selenium.close(driver)
+    SeleniumClose(Reg, Reg),
+
     // === Time builtins ===
     /// Get current UTC timestamp in milliseconds: dst = Time.now()
     TimeNow(Reg),

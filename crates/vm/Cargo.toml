@@ -41,6 +41,9 @@ native-tls = { workspace = true }
 serde_json = { workspace = true }
 futures = { workspace = true }
 
+# Selenium WebDriver
+thirtyfour = { workspace = true }
+
 # Extensions
 nostos-extension = { workspace = true }
 libloading = { workspace = true }

@@ -371,6 +371,19 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Pg.notify", signature: "Int -> String -> String -> ()", doc: "Send notification: notify(handle, channel, payload)" },
     BuiltinInfo { name: "Pg.awaitNotification", signature: "Int -> Int -> Option (String, String)", doc: "Wait for notification with timeout(ms), returns Some((channel, payload)) or None" },
 
+    // === Selenium WebDriver Functions ===
+    BuiltinInfo { name: "Selenium.connect", signature: "String -> Int", doc: "Connect to WebDriver, returns driver handle: connect(webdriver_url)" },
+    BuiltinInfo { name: "Selenium.goto", signature: "Int -> String -> ()", doc: "Navigate to URL: goto(driver, url)" },
+    BuiltinInfo { name: "Selenium.click", signature: "Int -> String -> ()", doc: "Click element by CSS selector: click(driver, selector)" },
+    BuiltinInfo { name: "Selenium.text", signature: "Int -> String -> String", doc: "Get text content by CSS selector: text(driver, selector)" },
+    BuiltinInfo { name: "Selenium.sendKeys", signature: "Int -> String -> String -> ()", doc: "Send keys to element: sendKeys(driver, selector, text)" },
+    BuiltinInfo { name: "Selenium.executeJs", signature: "Int -> String -> String", doc: "Execute JavaScript: executeJs(driver, script)" },
+    BuiltinInfo { name: "Selenium.executeJsWithArgs", signature: "Int -> String -> List[String] -> String", doc: "Execute JavaScript with args: executeJsWithArgs(driver, script, args)" },
+    BuiltinInfo { name: "Selenium.waitFor", signature: "Int -> String -> Int -> Bool", doc: "Wait for element: waitFor(driver, selector, timeout_ms)" },
+    BuiltinInfo { name: "Selenium.getAttribute", signature: "Int -> String -> String -> String", doc: "Get attribute: getAttribute(driver, selector, attr)" },
+    BuiltinInfo { name: "Selenium.exists", signature: "Int -> String -> Bool", doc: "Check if element exists: exists(driver, selector)" },
+    BuiltinInfo { name: "Selenium.close", signature: "Int -> ()", doc: "Close WebDriver: close(driver)" },
+
     // === UUID Functions ===
     BuiltinInfo { name: "Uuid.v4", signature: "() -> String", doc: "Generate a random UUID v4" },
     BuiltinInfo { name: "Uuid.isValid", signature: "String -> Bool", doc: "Check if string is a valid UUID" },
@@ -907,6 +920,7 @@ impl Compiler {
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
             "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array", "Buffer",
             "Runtime", "WebSocket", "RenderStack", "RenderContext", "Reactive", "Gc",
+            "Selenium",
         ].iter().map(|s| s.to_string()).collect();
 
         let mut this = Self {
@@ -1421,6 +1435,7 @@ impl Compiler {
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
             "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array", "Buffer",
             "Runtime", "WebSocket", "RenderStack", "RenderContext", "Reactive", "Gc",
+            "Selenium",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -4634,6 +4649,86 @@ impl Compiler {
                             self.chunk.emit(Instruction::PgAwaitNotification(dst, handle_reg, timeout_reg), line);
                             return Ok(dst);
                         }
+                        // Selenium WebDriver builtins
+                        "Selenium.connect" if args.len() == 1 => {
+                            let url_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumConnect(dst, url_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.goto" if args.len() == 2 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let url_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumGoto(dst, driver_reg, url_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.click" if args.len() == 2 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumClick(dst, driver_reg, selector_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.text" if args.len() == 2 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumText(dst, driver_reg, selector_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.sendKeys" if args.len() == 3 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let text_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumSendKeys(dst, driver_reg, selector_reg, text_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.executeJs" if args.len() == 2 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let script_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumExecuteJs(dst, driver_reg, script_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.executeJsWithArgs" if args.len() == 3 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let script_reg = self.compile_expr_tail(&args[1], false)?;
+                            let args_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumExecuteJsWithArgs(dst, driver_reg, script_reg, args_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.waitFor" if args.len() == 3 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let timeout_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumWaitFor(dst, driver_reg, selector_reg, timeout_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.getAttribute" if args.len() == 3 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let attr_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumGetAttribute(dst, driver_reg, selector_reg, attr_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.exists" if args.len() == 2 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumExists(dst, driver_reg, selector_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.close" if args.len() == 1 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumClose(dst, driver_reg), line);
+                            return Ok(dst);
+                        }
                         // Time builtins
                         "Time.now" if args.is_empty() => {
                             let dst = self.alloc_reg();
@@ -5567,6 +5662,86 @@ impl Compiler {
                             let timeout_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgAwaitNotification(dst, handle_reg, timeout_reg), line);
+                            return Ok(dst);
+                        }
+                        // Selenium WebDriver builtins
+                        "Selenium.connect" if args.len() == 1 => {
+                            let url_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumConnect(dst, url_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.goto" if args.len() == 2 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let url_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumGoto(dst, driver_reg, url_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.click" if args.len() == 2 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumClick(dst, driver_reg, selector_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.text" if args.len() == 2 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumText(dst, driver_reg, selector_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.sendKeys" if args.len() == 3 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let text_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumSendKeys(dst, driver_reg, selector_reg, text_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.executeJs" if args.len() == 2 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let script_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumExecuteJs(dst, driver_reg, script_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.executeJsWithArgs" if args.len() == 3 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let script_reg = self.compile_expr_tail(&args[1], false)?;
+                            let args_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumExecuteJsWithArgs(dst, driver_reg, script_reg, args_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.waitFor" if args.len() == 3 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let timeout_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumWaitFor(dst, driver_reg, selector_reg, timeout_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.getAttribute" if args.len() == 3 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let attr_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumGetAttribute(dst, driver_reg, selector_reg, attr_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.exists" if args.len() == 2 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumExists(dst, driver_reg, selector_reg), line);
+                            return Ok(dst);
+                        }
+                        "Selenium.close" if args.len() == 1 => {
+                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::SeleniumClose(dst, driver_reg), line);
                             return Ok(dst);
                         }
                         // Time builtins

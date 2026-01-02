@@ -24,6 +24,7 @@ use postgres_native_tls::MakeTlsConnector;
 use native_tls::TlsConnector;
 use deadpool_postgres::{Manager as PgPoolManager, Pool as PgPool, Runtime as DeadpoolRuntime, ManagerConfig, RecyclingMethod};
 use futures::{SinkExt, StreamExt};
+use thirtyfour::prelude::*;
 
 use crate::process::{IoResponseValue, PgValue};
 
@@ -545,6 +546,76 @@ pub enum IoRequest {
         response: IoResponse,
     },
 
+    // Selenium WebDriver operations
+    /// Connect to WebDriver
+    SeleniumConnect {
+        webdriver_url: String,
+        response: IoResponse,
+    },
+    /// Navigate to URL
+    SeleniumGoto {
+        driver_handle: u64,
+        url: String,
+        response: IoResponse,
+    },
+    /// Click element by CSS selector
+    SeleniumClick {
+        driver_handle: u64,
+        selector: String,
+        response: IoResponse,
+    },
+    /// Get text content by CSS selector
+    SeleniumText {
+        driver_handle: u64,
+        selector: String,
+        response: IoResponse,
+    },
+    /// Send keys to element
+    SeleniumSendKeys {
+        driver_handle: u64,
+        selector: String,
+        text: String,
+        response: IoResponse,
+    },
+    /// Execute JavaScript
+    SeleniumExecuteJs {
+        driver_handle: u64,
+        script: String,
+        response: IoResponse,
+    },
+    /// Execute JavaScript with args
+    SeleniumExecuteJsWithArgs {
+        driver_handle: u64,
+        script: String,
+        args: Vec<String>,
+        response: IoResponse,
+    },
+    /// Wait for element
+    SeleniumWaitFor {
+        driver_handle: u64,
+        selector: String,
+        timeout_ms: u64,
+        response: IoResponse,
+    },
+    /// Get element attribute
+    SeleniumGetAttribute {
+        driver_handle: u64,
+        selector: String,
+        attribute: String,
+        response: IoResponse,
+    },
+    /// Check if element exists
+    SeleniumExists {
+        driver_handle: u64,
+        selector: String,
+        response: IoResponse,
+    },
+    /// Close WebDriver
+    SeleniumClose {
+        driver_handle: u64,
+        response: IoResponse,
+    },
+
     // Shutdown
     Shutdown,
 }
@@ -677,6 +748,10 @@ impl IoRuntime {
         // Pending WebSocket upgrades (stores the OnUpgrade handle until accept is called)
         use hyper::upgrade::OnUpgrade;
         let pending_ws_upgrades: Arc<TokioMutex<HashMap<u64, OnUpgrade>>> = Arc::new(TokioMutex::new(HashMap::new()));
+
+        // Selenium WebDriver connections
+        let selenium_drivers: Arc<TokioMutex<HashMap<u64, WebDriver>>> = Arc::new(TokioMutex::new(HashMap::new()));
+        let mut next_selenium_handle: u64 = 1;
 
         while let Some(request) = request_rx.recv().await {
             match request {
@@ -2064,6 +2139,276 @@ impl IoRuntime {
                                 }
                                 Err(e) => {
                                     let _ = response.send(Err(IoError::PgError(format!("NOTIFY error: {}", e))));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                // === Selenium WebDriver Operations ===
+                IoRequest::SeleniumConnect { webdriver_url, response } => {
+                    let drivers = selenium_drivers.clone();
+                    let handle = next_selenium_handle;
+                    next_selenium_handle += 1;
+
+                    tokio::spawn(async move {
+                        match WebDriver::new(&webdriver_url, DesiredCapabilities::chrome()).await {
+                            Ok(driver) => {
+                                drivers.lock().await.insert(handle, driver);
+                                let _ = response.send(Ok(IoResponseValue::Int(handle as i64)));
+                            }
+                            Err(e) => {
+                                let _ = response.send(Err(IoError::IoError(format!("Selenium connect error: {}", e))));
+                            }
+                        }
+                    });
+                }
+
+                IoRequest::SeleniumGoto { driver_handle, url, response } => {
+                    let drivers = selenium_drivers.clone();
+
+                    tokio::spawn(async move {
+                        let drivers_guard = drivers.lock().await;
+                        if let Some(driver) = drivers_guard.get(&driver_handle) {
+                            match driver.goto(&url).await {
+                                Ok(_) => {
+                                    let _ = response.send(Ok(IoResponseValue::Unit));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::IoError(format!("Selenium goto error: {}", e))));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::SeleniumClick { driver_handle, selector, response } => {
+                    let drivers = selenium_drivers.clone();
+
+                    tokio::spawn(async move {
+                        let drivers_guard = drivers.lock().await;
+                        if let Some(driver) = drivers_guard.get(&driver_handle) {
+                            // Use JavaScript click for more reliable clicking
+                            let script = format!(
+                                r#"var el = document.querySelector("{}"); if (el) {{ el.click(); return true; }} return false;"#,
+                                selector.replace('"', r#"\""#)
+                            );
+                            match driver.execute(&script, vec![]).await {
+                                Ok(_) => {
+                                    let _ = response.send(Ok(IoResponseValue::Unit));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::IoError(format!("Selenium click error: {}", e))));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::SeleniumText { driver_handle, selector, response } => {
+                    let drivers = selenium_drivers.clone();
+
+                    tokio::spawn(async move {
+                        let drivers_guard = drivers.lock().await;
+                        if let Some(driver) = drivers_guard.get(&driver_handle) {
+                            let script = format!(
+                                r#"return document.querySelector("{}")?.textContent || ''"#,
+                                selector.replace('"', r#"\""#)
+                            );
+                            match driver.execute(&script, vec![]).await {
+                                Ok(result) => {
+                                    let text = result.json().as_str().unwrap_or("").to_string();
+                                    let _ = response.send(Ok(IoResponseValue::String(text)));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::IoError(format!("Selenium text error: {}", e))));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::SeleniumSendKeys { driver_handle, selector, text, response } => {
+                    let drivers = selenium_drivers.clone();
+
+                    tokio::spawn(async move {
+                        let drivers_guard = drivers.lock().await;
+                        if let Some(driver) = drivers_guard.get(&driver_handle) {
+                            match driver.find(By::Css(&selector)).await {
+                                Ok(elem) => {
+                                    match elem.send_keys(&text).await {
+                                        Ok(_) => {
+                                            let _ = response.send(Ok(IoResponseValue::Unit));
+                                        }
+                                        Err(e) => {
+                                            let _ = response.send(Err(IoError::IoError(format!("Selenium sendKeys error: {}", e))));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::IoError(format!("Selenium find error: {}", e))));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::SeleniumExecuteJs { driver_handle, script, response } => {
+                    let drivers = selenium_drivers.clone();
+
+                    tokio::spawn(async move {
+                        let drivers_guard = drivers.lock().await;
+                        if let Some(driver) = drivers_guard.get(&driver_handle) {
+                            match driver.execute(&script, vec![]).await {
+                                Ok(result) => {
+                                    let text = result.json().to_string();
+                                    let _ = response.send(Ok(IoResponseValue::String(text)));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::IoError(format!("Selenium executeJs error: {}", e))));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::SeleniumExecuteJsWithArgs { driver_handle, script, args, response } => {
+                    let drivers = selenium_drivers.clone();
+
+                    tokio::spawn(async move {
+                        let drivers_guard = drivers.lock().await;
+                        if let Some(driver) = drivers_guard.get(&driver_handle) {
+                            // Convert args to serde_json::Value
+                            let json_args: Vec<serde_json::Value> = args.iter()
+                                .map(|s| serde_json::Value::String(s.clone()))
+                                .collect();
+                            match driver.execute(&script, json_args).await {
+                                Ok(result) => {
+                                    let text = result.json().to_string();
+                                    let _ = response.send(Ok(IoResponseValue::String(text)));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::IoError(format!("Selenium executeJs error: {}", e))));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::SeleniumWaitFor { driver_handle, selector, timeout_ms, response } => {
+                    let drivers = selenium_drivers.clone();
+
+                    tokio::spawn(async move {
+                        let drivers_guard = drivers.lock().await;
+                        if let Some(driver) = drivers_guard.get(&driver_handle) {
+                            let timeout = std::time::Duration::from_millis(timeout_ms);
+                            let start = std::time::Instant::now();
+
+                            loop {
+                                let script = format!(
+                                    r#"return document.querySelector("{}") !== null"#,
+                                    selector.replace('"', r#"\""#)
+                                );
+                                match driver.execute(&script, vec![]).await {
+                                    Ok(result) => {
+                                        if result.json().as_bool().unwrap_or(false) {
+                                            let _ = response.send(Ok(IoResponseValue::Bool(true)));
+                                            return;
+                                        }
+                                    }
+                                    Err(_) => {}
+                                }
+
+                                if start.elapsed() >= timeout {
+                                    let _ = response.send(Ok(IoResponseValue::Bool(false)));
+                                    return;
+                                }
+
+                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::SeleniumGetAttribute { driver_handle, selector, attribute, response } => {
+                    let drivers = selenium_drivers.clone();
+
+                    tokio::spawn(async move {
+                        let drivers_guard = drivers.lock().await;
+                        if let Some(driver) = drivers_guard.get(&driver_handle) {
+                            let script = format!(
+                                r#"var el = document.querySelector("{}"); return el ? el.getAttribute("{}") : null"#,
+                                selector.replace('"', r#"\""#),
+                                attribute.replace('"', r#"\""#)
+                            );
+                            match driver.execute(&script, vec![]).await {
+                                Ok(result) => {
+                                    let text = result.json().as_str().unwrap_or("").to_string();
+                                    let _ = response.send(Ok(IoResponseValue::String(text)));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::IoError(format!("Selenium getAttribute error: {}", e))));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::SeleniumExists { driver_handle, selector, response } => {
+                    let drivers = selenium_drivers.clone();
+
+                    tokio::spawn(async move {
+                        let drivers_guard = drivers.lock().await;
+                        if let Some(driver) = drivers_guard.get(&driver_handle) {
+                            let script = format!(
+                                r#"return document.querySelector("{}") !== null"#,
+                                selector.replace('"', r#"\""#)
+                            );
+                            match driver.execute(&script, vec![]).await {
+                                Ok(result) => {
+                                    let exists = result.json().as_bool().unwrap_or(false);
+                                    let _ = response.send(Ok(IoResponseValue::Bool(exists)));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::IoError(format!("Selenium exists error: {}", e))));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::SeleniumClose { driver_handle, response } => {
+                    let drivers = selenium_drivers.clone();
+
+                    tokio::spawn(async move {
+                        let mut drivers_guard = drivers.lock().await;
+                        if let Some(driver) = drivers_guard.remove(&driver_handle) {
+                            match driver.quit().await {
+                                Ok(_) => {
+                                    let _ = response.send(Ok(IoResponseValue::Unit));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::IoError(format!("Selenium close error: {}", e))));
                                 }
                             }
                         } else {

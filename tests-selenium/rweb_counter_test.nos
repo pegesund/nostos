@@ -1,0 +1,38 @@
+# RWeb Counter for Selenium Testing
+# Uses data-testid attributes for element selection
+
+use stdlib.rweb
+use stdlib.rhtml
+
+reactive Counter = { value: Int }
+
+session() = {
+    counter = Counter(0)
+
+    (
+        # renderPage
+        () => RHtml(div([
+            h1("RWeb Counter Test"),
+            component("display", () => RHtml(
+                div([attr("data-testid", "count")], [
+                    span("Count: "),
+                    span(show(counter.value))
+                ])
+            )),
+            div([
+                button([attr("data-action", "inc"), attr("data-testid", "increment")], "+"),
+                button([attr("data-action", "dec"), attr("data-testid", "decrement")], "-"),
+                button([attr("data-action", "reset"), attr("data-testid", "reset")], "Reset")
+            ])
+        ])),
+        # onAction
+        (action, params) => match action {
+            "inc" -> { counter.value = counter.value + 1 }
+            "dec" -> { counter.value = counter.value - 1 }
+            "reset" -> { counter.value = 0 }
+            _ -> ()
+        }
+    )
+}
+
+main() = startRWeb(8095, "RWeb Counter Test", session)
