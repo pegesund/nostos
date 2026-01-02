@@ -181,6 +181,61 @@ main() = {
 }</code></pre>
                 </div>
 
+                <!-- onRead Callbacks -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Read Callbacks with onRead</h2>
+                <p class="text-slate-400 mb-4">
+                    In addition to change callbacks, you can register callbacks that fire whenever a field is <strong>read</strong>. This is useful for lazy loading, access tracking, or debugging which parts of your code access which fields.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">reactive Config = { apiKey: String, endpoint: String }
+
+main() = {
+    config = Config(apiKey: "secret-123", endpoint: "https://api.example.com")
+
+    # Register a read callback
+    config.onRead((fieldName, value) => {
+        println("Field '" ++ fieldName ++ "' was accessed")
+    })
+
+    # These reads trigger the callback
+    x = config.apiKey      # Field 'apiKey' was accessed
+    y = config.endpoint    # Field 'endpoint' was accessed
+}</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">
+                    Read callbacks receive the field name and its current value. Like change callbacks, they are synchronous and execute immediately when the field is accessed.
+                </p>
+
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Practical use case: Access tracking for debugging
+reactive UserData = { name: String, email: String, password: String }
+
+mvar accessLog: List[String] = []
+
+main() = {
+    user = UserData(name: "Alice", email: "alice@example.com", password: "secret")
+
+    # Track all field accesses
+    user.onRead((field, value) => {
+        accessLog = accessLog ++ [field]
+    })
+
+    # Some code that accesses fields...
+    println("Hello, " ++ user.name)
+    sendEmail(user.email)
+
+    # See which fields were accessed
+    println("Fields accessed: " ++ show(accessLog))
+    # Output: Fields accessed: ["name", "email"]
+    # Note: password was never accessed!
+}</code></pre>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <p class="text-slate-400 text-sm"><strong>Tip:</strong> Use <code>onRead</code> sparingly in production code as it adds overhead to every field access. It's most useful for debugging, auditing, and implementing lazy-loading patterns.</p>
+                </div>
+
                 <!-- Parent/Child Introspection -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Parent/Child Introspection</h2>
                 <p class="text-slate-400 mb-4">
@@ -312,6 +367,11 @@ main() = {
                                 <td class="py-3 px-4">Change callbacks</td>
                                 <td class="py-3 px-4">Not supported</td>
                                 <td class="py-3 px-4"><code>.onChange(callback)</code></td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4">Read callbacks</td>
+                                <td class="py-3 px-4">Not supported</td>
+                                <td class="py-3 px-4"><code>.onRead(callback)</code></td>
                             </tr>
                             <tr class="border-b border-slate-800">
                                 <td class="py-3 px-4">Parent tracking</td>
