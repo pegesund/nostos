@@ -93,7 +93,7 @@
                 </p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">use stdlib.rweb
-use stdlib.rhtml.{div, h1, p, button, RHtml}
+use stdlib.rhtml
 
 # Define reactive state - each session gets its own instance
 reactive Counter = { count: Int }
@@ -177,7 +177,7 @@ session: () -> (() -> RHtml | RHtmlResult, (String, Map[String, String]) -> ())
 
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">use stdlib.rweb
-use stdlib.rhtml.{div, h1, h3, p, button, RHtml, component, renderRNode}
+use stdlib.rhtml
 
 reactive State = { counter: Int, message: String }
 
@@ -235,7 +235,7 @@ main() = startRWeb(8080, "Component Demo", session)</code></pre>
                 <h3 class="text-xl font-semibold text-white mb-3">Form Submission</h3>
                 <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">use stdlib.rweb
-use stdlib.rhtml.{div, h1, p, form, input, button, label, RHtml}
+use stdlib.rhtml
 
 reactive FormData = { name: String, email: String }
 
@@ -285,7 +285,7 @@ main() = startRWeb(8080, "Form Demo", session)</code></pre>
                 <h3 class="text-xl font-semibold text-white mb-3">Checkboxes and Radio Buttons</h3>
                 <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">use stdlib.rweb
-use stdlib.rhtml.{div, h1, p, input, label, RHtml}
+use stdlib.rhtml
 
 reactive Prefs = { darkMode: Bool, newsletter: Bool }
 
@@ -330,7 +330,7 @@ main() = startRWeb(8080, "Checkbox Demo", session)</code></pre>
                 <h3 class="text-xl font-semibold text-white mb-3">Select Dropdowns</h3>
                 <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">use stdlib.rweb
-use stdlib.rhtml.{div, h1, p, select, option, RHtml}
+use stdlib.rhtml
 
 reactive Selection = { country: String }
 
@@ -367,7 +367,7 @@ main() = startRWeb(8080, "Select Demo", session)</code></pre>
                 </p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">use stdlib.rweb
-use stdlib.rhtml.{div, h1, p, input, RHtml}
+use stdlib.rhtml
 
 reactive Search = { query: String }
 
@@ -435,7 +435,7 @@ main() = startRWeb(8080, "Live Search", session)</code></pre>
 
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">use stdlib.rweb
-use stdlib.rhtml.{div, h1, p, a, button, RHtml, Html}
+use stdlib.rhtml
 
 # Route definitions
 # Each route can be:
@@ -510,7 +510,7 @@ main() = {
 
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">use stdlib.rweb
-use stdlib.rhtml.{div, h1, p, button, RHtml}
+use stdlib.rhtml
 
 reactive State = { selected: String }
 
@@ -546,7 +546,7 @@ main() = startRWeb(8080, "Item Selector", session)</code></pre>
 
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">use stdlib.rweb
-use stdlib.rhtml.{div, h1, h3, p, form, input, button, span, RHtml, component}
+use stdlib.rhtml
 use stdlib.list
 
 reactive Todo = { id: Int, text: String, done: Bool }
