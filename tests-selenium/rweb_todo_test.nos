@@ -1,0 +1,115 @@
+# RWeb Todo App for Selenium Testing
+# Tests: multiple reactive variables, filter state
+
+use stdlib.rweb
+use stdlib.rhtml
+
+reactive Item1 = { text: String, done: Bool }
+reactive Item2 = { text: String, done: Bool }
+reactive Item3 = { text: String, done: Bool }
+reactive Filter = { value: String }
+
+session() = {
+    item1 = Item1("", false)
+    item2 = Item2("", false)
+    item3 = Item3("", false)
+    filter = Filter("all")
+
+    (
+        # renderPage
+        () => RHtml(div([
+            h1("Todo List"),
+
+            # Stats component
+            component("stats", () => RHtml(
+                div([attr("data-testid", "stats")], [
+                    span([attr("data-testid", "total-count")], "Total: " ++ show(
+                        (if item1.text != "" then 1 else 0) +
+                        (if item2.text != "" then 1 else 0) +
+                        (if item3.text != "" then 1 else 0)
+                    )),
+                    span(" | "),
+                    span([attr("data-testid", "completed-count")], "Done: " ++ show(
+                        (if item1.done then 1 else 0) +
+                        (if item2.done then 1 else 0) +
+                        (if item3.done then 1 else 0)
+                    ))
+                ])
+            )),
+
+            # Filter buttons
+            div([
+                button([attr("data-action", "filter-all"), attr("data-testid", "filter-all")], "All"),
+                button([attr("data-action", "filter-active"), attr("data-testid", "filter-active")], "Active"),
+                button([attr("data-action", "filter-done"), attr("data-testid", "filter-done")], "Done")
+            ]),
+
+            # Current filter
+            component("filter-display", () => RHtml(
+                div([attr("data-testid", "current-filter")], "Filter: " ++ filter.value)
+            )),
+
+            # Add buttons
+            div([
+                button([attr("data-action", "add-1"), attr("data-testid", "add-1")], "Add Item 1"),
+                button([attr("data-action", "add-2"), attr("data-testid", "add-2")], "Add Item 2"),
+                button([attr("data-action", "add-3"), attr("data-testid", "add-3")], "Add Item 3")
+            ]),
+
+            # Item 1 component - respects filter
+            component("item1", () => RHtml({
+                show = item1.text != "" && (filter.value == "all" || (filter.value == "done" && item1.done) || (filter.value == "active" && !item1.done))
+                if show then
+                    div([attr("data-testid", "item-1")], [
+                        span(item1.text ++ if item1.done then " [DONE]" else ""),
+                        button([attr("data-action", "toggle-1"), attr("data-testid", "toggle-1")], "Toggle"),
+                        button([attr("data-action", "delete-1"), attr("data-testid", "delete-1")], "X")
+                    ])
+                else div([attr("data-testid", "item-1-empty")], [])
+            })),
+
+            # Item 2 component - respects filter
+            component("item2", () => RHtml({
+                show = item2.text != "" && (filter.value == "all" || (filter.value == "done" && item2.done) || (filter.value == "active" && !item2.done))
+                if show then
+                    div([attr("data-testid", "item-2")], [
+                        span(item2.text ++ if item2.done then " [DONE]" else ""),
+                        button([attr("data-action", "toggle-2"), attr("data-testid", "toggle-2")], "Toggle"),
+                        button([attr("data-action", "delete-2"), attr("data-testid", "delete-2")], "X")
+                    ])
+                else div([attr("data-testid", "item-2-empty")], [])
+            })),
+
+            # Item 3 component - respects filter
+            component("item3", () => RHtml({
+                show = item3.text != "" && (filter.value == "all" || (filter.value == "done" && item3.done) || (filter.value == "active" && !item3.done))
+                if show then
+                    div([attr("data-testid", "item-3")], [
+                        span(item3.text ++ if item3.done then " [DONE]" else ""),
+                        button([attr("data-action", "toggle-3"), attr("data-testid", "toggle-3")], "Toggle"),
+                        button([attr("data-action", "delete-3"), attr("data-testid", "delete-3")], "X")
+                    ])
+                else div([attr("data-testid", "item-3-empty")], [])
+            }))
+        ])),
+
+        # onAction
+        (action, params) => match action {
+            "add-1" -> { item1.text = "Buy groceries" }
+            "add-2" -> { item2.text = "Walk the dog" }
+            "add-3" -> { item3.text = "Read a book" }
+            "toggle-1" -> { item1.done = !item1.done }
+            "toggle-2" -> { item2.done = !item2.done }
+            "toggle-3" -> { item3.done = !item3.done }
+            "delete-1" -> { item1.text = ""; item1.done = false }
+            "delete-2" -> { item2.text = ""; item2.done = false }
+            "delete-3" -> { item3.text = ""; item3.done = false }
+            "filter-all" -> { filter.value = "all" }
+            "filter-active" -> { filter.value = "active" }
+            "filter-done" -> { filter.value = "done" }
+            _ -> ()
+        }
+    )
+}
+
+main() = startRWeb(8096, "RWeb Todo Test", session)

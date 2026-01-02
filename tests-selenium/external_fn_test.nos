@@ -1,0 +1,84 @@
+# Selenium test for RWeb External Function app
+# To run:
+#   1. Start ChromeDriver: chromedriver --port=4444
+#   2. Start the app: ./target/release/nostos tests-selenium/rweb_external_fn_test.nos
+#   3. Run this test: ./target/release/nostos tests-selenium/external_fn_test.nos
+
+runTest(name, got, expected) = {
+    println("Test: " ++ name)
+    println("  Got: " ++ got)
+    result = String.contains(got, expected)
+    if result then println("  [PASS]") else println("  [FAIL] Expected: " ++ expected)
+    if result then 1 else 0
+}
+
+main() = {
+    println("=== Nostos Selenium Test: External Function App ===")
+    println("")
+
+    # Connect to ChromeDriver
+    println("Connecting to ChromeDriver...")
+    driver = Selenium.connect("http://localhost:4444")
+    println("Connected!")
+
+    # Navigate to the external fn app
+    println("Navigating to external function app...")
+    Selenium.goto(driver, "http://localhost:8099")
+
+    # Wait for page to load
+    Selenium.waitFor(driver, "[data-testid='count']", 5000)
+    println("Page loaded!")
+    println("")
+
+    # Test 1: Initial count should be 0
+    text1 = Selenium.text(driver, "[data-testid='count']")
+    t1 = runTest("Initial count", text1, "Count: 0")
+
+    # Test 2: Increment via external function
+    println("")
+    Selenium.click(driver, "[data-testid='inc']")
+    sleep(500)
+    text2 = Selenium.text(driver, "[data-testid='count']")
+    t2 = runTest("After first increment", text2, "Count: 1")
+
+    # Test 3: Increment again
+    println("")
+    Selenium.click(driver, "[data-testid='inc']")
+    sleep(500)
+    text3 = Selenium.text(driver, "[data-testid='count']")
+    t3 = runTest("After second increment", text3, "Count: 2")
+
+    # Test 4: Add 5 via external function with parameter
+    println("")
+    Selenium.click(driver, "[data-testid='add5']")
+    sleep(500)
+    text4 = Selenium.text(driver, "[data-testid='count']")
+    t4 = runTest("After add5 (2+5=7)", text4, "Count: 7")
+
+    # Test 5: Decrement
+    println("")
+    Selenium.click(driver, "[data-testid='dec']")
+    sleep(500)
+    text5 = Selenium.text(driver, "[data-testid='count']")
+    t5 = runTest("After decrement (7-1=6)", text5, "Count: 6")
+
+    # Test 6: Reset
+    println("")
+    Selenium.click(driver, "[data-testid='reset']")
+    sleep(500)
+    text6 = Selenium.text(driver, "[data-testid='count']")
+    t6 = runTest("After reset", text6, "Count: 0")
+
+    # Close the browser
+    println("")
+    println("Closing browser...")
+    Selenium.close(driver)
+
+    # Summary
+    passed = t1 + t2 + t3 + t4 + t5 + t6
+    println("")
+    println("=== Test Summary ===")
+    println("Passed: " ++ show(passed) ++ " / 6")
+
+    if passed == 6 then 0 else 1
+}
