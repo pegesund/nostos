@@ -201,8 +201,6 @@ pub struct JitCompiler {
     module: JITModule,
     /// Cranelift codegen context (reusable)
     ctx: Context,
-    /// Function builder context (reusable)
-    builder_ctx: FunctionBuilderContext,
     /// Cache of compiled functions: (function_index, numeric_type) → compiled function
     cache: HashMap<(u16, NumericType), CompiledFunction>,
     /// Cache of compiled array functions: (function_index, element_type) → compiled function
@@ -257,7 +255,6 @@ impl JitCompiler {
         Ok(Self {
             module,
             ctx: Context::new(),
-            builder_ctx: FunctionBuilderContext::new(),
             cache: HashMap::new(),
             array_cache: HashMap::new(),
             loop_array_cache: HashMap::new(),
@@ -772,7 +769,10 @@ impl JitCompiler {
         self.ctx.func.name = UserFuncName::user(0, func_index as u32);
 
         {
-            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
+            // Use a fresh builder context for each compilation to avoid stale variable declarations
+            // from failed compilations (if we return Err before finalize(), the context is dirty)
+            let mut builder_ctx = FunctionBuilderContext::new();
+            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut builder_ctx);
 
             // Create entry block
             let entry_block = builder.create_block();
@@ -1438,7 +1438,9 @@ impl JitCompiler {
         self.ctx.func.name = UserFuncName::user(2, func_index as u32);
 
         {
-            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
+            // Use a fresh builder context for each compilation
+            let mut builder_ctx = FunctionBuilderContext::new();
+            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut builder_ctx);
 
             let entry_block = builder.create_block();
             builder.append_block_params_for_function_params(entry_block);
@@ -1842,7 +1844,9 @@ impl JitCompiler {
         self.ctx.func.name = UserFuncName::user(1, func_index as u32);
 
         {
-            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
+            // Use a fresh builder context for each compilation
+            let mut builder_ctx = FunctionBuilderContext::new();
+            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut builder_ctx);
 
             let entry_block = builder.create_block();
             builder.append_block_params_for_function_params(entry_block);
@@ -2444,7 +2448,9 @@ impl JitCompiler {
         self.ctx.func.name = UserFuncName::user(4, func_index as u32);
 
         {
-            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
+            // Use a fresh builder context for each compilation
+            let mut builder_ctx = FunctionBuilderContext::new();
+            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut builder_ctx);
 
             let entry_block = builder.create_block();
             builder.append_block_params_for_function_params(entry_block);
@@ -2643,7 +2649,9 @@ impl JitCompiler {
         self.ctx.func.name = UserFuncName::user(5, func_index as u32);
 
         {
-            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
+            // Use a fresh builder context for each compilation
+            let mut builder_ctx = FunctionBuilderContext::new();
+            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut builder_ctx);
 
             let entry_block = builder.create_block();
             builder.append_block_params_for_function_params(entry_block);
@@ -2759,7 +2767,9 @@ impl JitCompiler {
         self.ctx.func.name = UserFuncName::user(2, func_index as u32);
 
         {
-            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
+            // Use a fresh builder context for each compilation
+            let mut builder_ctx = FunctionBuilderContext::new();
+            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut builder_ctx);
 
             let entry_block = builder.create_block();
             builder.append_block_params_for_function_params(entry_block);
