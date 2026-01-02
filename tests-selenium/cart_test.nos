@@ -1,0 +1,80 @@
+# Selenium test for RWeb Cart app
+# To run:
+#   1. Start ChromeDriver: chromedriver --port=4444
+#   2. Start the cart app: ./target/release/nostos tests-selenium/rweb_cart_test.nos
+#   3. Run this test: ./target/release/nostos tests-selenium/cart_test.nos
+
+runTest(name, got, expected) = {
+    println("Test: " ++ name)
+    println("  Got: " ++ got)
+    result = String.contains(got, expected)
+    if result then println("  [PASS]") else println("  [FAIL] Expected: " ++ expected)
+    if result then 1 else 0
+}
+
+main() = {
+    println("=== Nostos Selenium Test: Cart App ===")
+    println("")
+
+    println("Connecting to ChromeDriver...")
+    driver = Selenium.connect("http://localhost:4444")
+    println("Connected!")
+
+    println("Navigating to cart app...")
+    Selenium.goto(driver, "http://localhost:8097")
+    Selenium.waitFor(driver, "[data-testid='qty-a']", 5000)
+    println("Page loaded!")
+    println("")
+
+    # Test 1: Initial qty is 0
+    t1 = runTest("Initial qty A", Selenium.text(driver, "[data-testid='qty-a']"), "0")
+
+    # Test 2: Add Item A twice
+    println("")
+    Selenium.click(driver, "[data-testid='inc-a']")
+    sleep(300)
+    Selenium.click(driver, "[data-testid='inc-a']")
+    sleep(300)
+    t2 = runTest("Qty A after 2 increments", Selenium.text(driver, "[data-testid='qty-a']"), "2")
+
+    # Test 3: Check subtotal A ($10 * 2 = $20)
+    println("")
+    t3 = runTest("Subtotal A (2 x $10)", Selenium.text(driver, "[data-testid='subtotal-a']"), "$20")
+
+    # Test 4: Add Item B (3 times)
+    println("")
+    Selenium.click(driver, "[data-testid='inc-b']")
+    sleep(300)
+    Selenium.click(driver, "[data-testid='inc-b']")
+    sleep(300)
+    Selenium.click(driver, "[data-testid='inc-b']")
+    sleep(300)
+    t4 = runTest("Subtotal B (3 x $25)", Selenium.text(driver, "[data-testid='subtotal-b']"), "$75")
+
+    # Test 5: Check total subtotal ($20 + $75 = $95)
+    println("")
+    t5 = runTest("Total subtotal", Selenium.text(driver, "[data-testid='subtotal']"), "$95")
+
+    # Test 6: Apply 50% discount ($95 * 50% = $47)
+    println("")
+    Selenium.click(driver, "[data-testid='discount-50']")
+    sleep(500)
+    t6 = runTest("Total with 50% discount", Selenium.text(driver, "[data-testid='total']"), "$47")
+
+    # Test 7: Clear cart
+    println("")
+    Selenium.click(driver, "[data-testid='clear-cart']")
+    sleep(500)
+    t7 = runTest("Subtotal after clear", Selenium.text(driver, "[data-testid='subtotal']"), "$0")
+
+    println("")
+    println("Closing browser...")
+    Selenium.close(driver)
+
+    passed = t1 + t2 + t3 + t4 + t5 + t6 + t7
+    println("")
+    println("=== Test Summary ===")
+    println("Passed: " ++ show(passed) ++ " / 7")
+
+    if passed == 7 then 0 else 1
+}
