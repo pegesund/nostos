@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reactive Web Framework (RWeb) - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75;
+        }
+        .hljs-function {
+            color: #e5c07b;
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/yourusername/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+
+        <!-- Sidebar (will be populated by JS) -->
+        <aside id="tutorial-sidebar" class="w-64 fixed top-16 h-[calc(100vh-4rem)] border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block pb-8">
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Reactive Web Framework (RWeb)</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    RWeb is Nostos's built-in reactive web framework that enables you to build interactive web applications with automatic UI updates. It combines <strong>reactive records</strong>, <strong>WebSocket communication</strong>, and <strong>server-side rendering</strong> to create a seamless developer experience without requiring a separate frontend framework.
+                </p>
+
+                <div class="bg-gradient-to-r from-blue-900/30 to-emerald-900/30 rounded-lg p-6 mb-8 border border-slate-700">
+                    <h3 class="text-lg font-semibold text-white mb-2">What Makes RWeb Special?</h3>
+                    <ul class="text-slate-300 space-y-2">
+                        <li><strong>Process per Session:</strong> Each browser session gets its own Nostos process with isolated state</li>
+                        <li><strong>Automatic Updates:</strong> Changes to reactive records automatically update the browser UI via WebSocket</li>
+                        <li><strong>Server-Side Logic:</strong> All application logic runs on the server - no JavaScript framework needed</li>
+                        <li><strong>Component-Based:</strong> Define reusable components that track their dependencies and re-render efficiently</li>
+                    </ul>
+                </div>
+
+                <!-- Prerequisites -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Prerequisites</h2>
+                <p class="text-slate-400 mb-4">
+                    Before learning RWeb, make sure you understand:
+                </p>
+                <ul class="list-disc list-inside text-slate-400 mb-8 space-y-2">
+                    <li><a href="25_reactive_records.html" class="text-blue-400 hover:underline">Reactive Records</a> - The foundation of RWeb state management</li>
+                    <li><a href="20_html_templating.html" class="text-blue-400 hover:underline">HTML Templating</a> - The rhtml module for building HTML</li>
+                </ul>
+
+                <!-- Getting Started -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Getting Started: A Simple Counter</h2>
+                <p class="text-slate-400 mb-4">
+                    Let's start with the classic counter example. This demonstrates the core concepts of RWeb:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.rweb
+use stdlib.rhtml.{div, h1, p, button, RHtml}
+
+# Define reactive state - each session gets its own instance
+reactive Counter = { count: Int }
+
+# Session function - called once per browser session
+session() = {
+    counter = Counter(count: 0)
+
+    # Return tuple: (render function, action handler)
+    (
+        # Render function - returns the UI
+        () => RHtml(div([
+            h1("Simple Counter"),
+            p("Count: " ++ show(counter.count)),
+            button("+1", dataAction: "increment"),
+            button("-1", dataAction: "decrement"),
+            button("Reset", dataAction: "reset")
+        ])),
+
+        # Action handler - processes user interactions
+        (action, params) => match action {
+            "increment" -> counter.count = counter.count + 1
+            "decrement" -> counter.count = counter.count - 1
+            "reset" -> counter.count = 0
+            _ -> ()
+        }
+    )
+}
+
+main() = {
+    println("Starting counter app on port 8080...")
+    startRWeb(8080, "Counter App", session)
+}</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">
+                    Run this with <code class="bg-slate-800 px-2 py-1 rounded">./target/release/nostos counter.nos</code> and open <code class="bg-slate-800 px-2 py-1 rounded">http://localhost:8080</code> in your browser.
+                </p>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <h4 class="text-white font-semibold mb-2">How It Works</h4>
+                    <ol class="text-slate-400 text-sm space-y-2 list-decimal list-inside">
+                        <li>When a browser connects, RWeb spawns a new process and calls your <code>session()</code> function</li>
+                        <li>The render function is called to generate the initial HTML</li>
+                        <li>When the user clicks a button with <code>dataAction</code>, a WebSocket message is sent to the server</li>
+                        <li>Your action handler receives the action name and modifies the reactive record</li>
+                        <li>RWeb detects the change and sends an updated HTML fragment back to the browser</li>
+                    </ol>
+                </div>
+
+                <!-- Understanding the Session Pattern -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Understanding the Session Pattern</h2>
+                <p class="text-slate-400 mb-4">
+                    The <code>session()</code> function is the heart of an RWeb application. It returns a tuple containing two functions:
+                </p>
+
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># The session function signature
+session: () -> (() -> RHtml | RHtmlResult, (String, Map[String, String]) -> ())
+
+# Breaking it down:
+# 1. render: () -> RHtml | RHtmlResult
+#    - Takes no arguments
+#    - Returns HTML (either simple RHtml or component-based RHtmlResult)
+#
+# 2. handler: (action, params) -> ()
+#    - action: String - the action name from dataAction/dataOnchange/etc
+#    - params: Map[String, String] - parameters sent with the action
+#    - Returns nothing (side effect: modifies reactive records)</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-8">
+                    The key insight is that your <strong>reactive record</strong> (like <code>Counter</code>) is captured in the closure. When the action handler modifies it, RWeb automatically detects the change and re-renders the affected parts of the UI.
+                </p>
+
+                <!-- Using Components -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Using Components for Efficient Updates</h2>
+                <p class="text-slate-400 mb-4">
+                    Simple RWeb apps re-render the entire page on every change. For larger apps, use <strong>components</strong> to update only the parts that changed:
+                </p>
+
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.rweb
+use stdlib.rhtml.{div, h1, h3, p, button, RHtml, component, renderRNode}
+
+reactive State = { counter: Int, message: String }
+
+session() = {
+    state = State(counter: 0, message: "Hello!")
+
+    (
+        () => RHtml(div([
+            h1("Component Demo"),
+
+            # This component only re-renders when state.counter changes
+            component("counter-display", () => RHtml(div([
+                h3("Counter"),
+                p("Value: " ++ show(state.counter)),
+                button("+", dataAction: "inc"),
+                button("-", dataAction: "dec")
+            ]))),
+
+            # This component only re-renders when state.message changes
+            component("message-display", () => RHtml(div([
+                h3("Message"),
+                p(state.message),
+                button("Change", dataAction: "changeMsg")
+            ])))
+        ])),
+
+        (action, params) => match action {
+            "inc" -> state.counter = state.counter + 1
+            "dec" -> state.counter = state.counter - 1
+            "changeMsg" -> state.message = "Updated at " ++ show(state.counter)
+            _ -> ()
+        }
+    )
+}
+
+main() = startRWeb(8080, "Component Demo", session)</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">
+                    The <code>component(id, renderFn)</code> function:
+                </p>
+                <ul class="list-disc list-inside text-slate-400 mb-8 space-y-2">
+                    <li><strong>id:</strong> A unique identifier for this component (becomes the HTML element's id)</li>
+                    <li><strong>renderFn:</strong> A function that returns RHtml for this component</li>
+                    <li><strong>Dependency tracking:</strong> RWeb tracks which reactive fields each component reads</li>
+                    <li><strong>Selective updates:</strong> Only components affected by a change are re-rendered</li>
+                </ul>
+
+                <!-- Form Handling -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Form Handling</h2>
+                <p class="text-slate-400 mb-4">
+                    RWeb supports various form elements with automatic WebSocket communication. Use named parameters to configure element behavior:
+                </p>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Form Submission</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.rweb
+use stdlib.rhtml.{div, h1, p, form, input, button, label, RHtml}
+
+reactive FormData = { name: String, email: String }
+
+session() = {
+    data = FormData(name: "", email: "")
+
+    (
+        () => RHtml(div([
+            h1("Registration Form"),
+
+            # Display submitted data
+            p("Name: " ++ data.name),
+            p("Email: " ++ data.email),
+
+            # The form with dataAction triggers on submit
+            form([
+                div([
+                    label("Name: "),
+                    input(inputType: "text", name: "name", placeholder: "Your name")
+                ]),
+                div([
+                    label("Email: "),
+                    input(inputType: "email", name: "email", placeholder: "you@example.com")
+                ]),
+                button("Submit", btnType: "submit")
+            ], dataAction: "submitForm")
+        ])),
+
+        (action, params) => match action {
+            "submitForm" -> {
+                # Form data is automatically collected into params
+                data.name = Map.get(params, "name")
+                data.email = Map.get(params, "email")
+            }
+            _ -> ()
+        }
+    )
+}
+
+main() = startRWeb(8080, "Form Demo", session)</code></pre>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <p class="text-slate-400 text-sm"><strong>Note:</strong> When a form with <code>dataAction</code> is submitted, RWeb automatically collects all form field values into the <code>params</code> map, keyed by the input's <code>name</code> attribute.</p>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Checkboxes and Radio Buttons</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.rweb
+use stdlib.rhtml.{div, h1, p, input, label, RHtml}
+
+reactive Prefs = { darkMode: Bool, newsletter: Bool }
+
+session() = {
+    prefs = Prefs(darkMode: false, newsletter: true)
+
+    (
+        () => RHtml(div([
+            h1("Preferences"),
+
+            p("Dark Mode: " ++ if prefs.darkMode then "ON" else "OFF"),
+            p("Newsletter: " ++ if prefs.newsletter then "Subscribed" else "Unsubscribed"),
+
+            div([
+                input(inputType: "checkbox", name: "darkMode", dataOnchange: "toggleDark"),
+                label(" Enable Dark Mode")
+            ]),
+            div([
+                input(inputType: "checkbox", name: "newsletter", dataOnchange: "toggleNews"),
+                label(" Subscribe to Newsletter")
+            ])
+        ])),
+
+        (action, params) => match action {
+            "toggleDark" -> {
+                # params.checked is "true" or "false" for checkboxes
+                checked = Map.get(params, "checked")
+                prefs.darkMode = checked == "true"
+            }
+            "toggleNews" -> {
+                checked = Map.get(params, "checked")
+                prefs.newsletter = checked == "true"
+            }
+            _ -> ()
+        }
+    )
+}
+
+main() = startRWeb(8080, "Checkbox Demo", session)</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Select Dropdowns</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.rweb
+use stdlib.rhtml.{div, h1, p, select, option, RHtml}
+
+reactive Selection = { country: String }
+
+session() = {
+    sel = Selection(country: "")
+
+    (
+        () => RHtml(div([
+            h1("Country Selector"),
+            p("Selected: " ++ if sel.country == "" then "None" else sel.country),
+
+            select([
+                option("Choose a country...", value: ""),
+                option("United States", value: "us"),
+                option("United Kingdom", value: "uk"),
+                option("Canada", value: "ca"),
+                option("Australia", value: "au")
+            ], name: "country", dataOnchange: "countryChanged")
+        ])),
+
+        (action, params) => match action {
+            "countryChanged" -> sel.country = Map.get(params, "value")
+            _ -> ()
+        }
+    )
+}
+
+main() = startRWeb(8080, "Select Demo", session)</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Real-Time Input (oninput)</h3>
+                <p class="text-slate-400 mb-4">
+                    For instant feedback as the user types, use <code>dataOninput</code> instead of <code>dataOnchange</code>:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.rweb
+use stdlib.rhtml.{div, h1, p, input, RHtml}
+
+reactive Search = { query: String }
+
+session() = {
+    search = Search(query: "")
+
+    (
+        () => RHtml(div([
+            h1("Live Search"),
+            input(inputType: "text", placeholder: "Type to search...", dataOninput: "search"),
+            p("Searching for: " ++ search.query),
+            p("Results: " ++ show(String.length(search.query)) ++ " characters typed")
+        ])),
+
+        (action, params) => match action {
+            "search" -> search.query = Map.get(params, "value")
+            _ -> ()
+        }
+    )
+}
+
+main() = startRWeb(8080, "Live Search", session)</code></pre>
+                </div>
+
+                <!-- Event Attributes Reference -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Event Attributes Reference</h2>
+                <div class="overflow-x-auto mb-8">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="border-b border-slate-700">
+                                <th class="py-3 px-4 text-slate-300">Attribute</th>
+                                <th class="py-3 px-4 text-slate-300">Elements</th>
+                                <th class="py-3 px-4 text-slate-300">Params Sent</th>
+                                <th class="py-3 px-4 text-slate-300">Use Case</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-slate-400">
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4"><code>dataAction</code></td>
+                                <td class="py-3 px-4">button, a, div, form</td>
+                                <td class="py-3 px-4">Click: data-param-* attrs<br>Form: all input values</td>
+                                <td class="py-3 px-4">Buttons, links, form submission</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4"><code>dataOnchange</code></td>
+                                <td class="py-3 px-4">input, select, textarea</td>
+                                <td class="py-3 px-4">value, checked (for checkbox/radio)</td>
+                                <td class="py-3 px-4">Form field changes (on blur or selection)</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4"><code>dataOninput</code></td>
+                                <td class="py-3 px-4">input, textarea</td>
+                                <td class="py-3 px-4">value</td>
+                                <td class="py-3 px-4">Real-time input feedback (every keystroke)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Multi-Route Applications -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Multi-Route Applications</h2>
+                <p class="text-slate-400 mb-4">
+                    For applications with multiple pages, use <code>startRWebWithRoutes</code> to define different routes:
+                </p>
+
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.rweb
+use stdlib.rhtml.{div, h1, p, a, button, RHtml, Html}
+
+# Route definitions
+# Each route can be:
+#   - Reactive: (path, session_fn) where session_fn returns (render, handler)
+#   - Static HTML: (path, "html", html_content)
+
+reactive HomeState = { count: Int }
+reactive DashState = { total: Int }
+
+homeSession() = {
+    state = HomeState(count: 0)
+    (
+        () => RHtml(div([
+            h1("Home"),
+            p("Counter: " ++ show(state.count)),
+            button("+", dataAction: "inc"),
+            a("Go to Dashboard", href: "/dashboard")
+        ])),
+        (action, _) => match action {
+            "inc" -> state.count = state.count + 1
+            _ -> ()
+        }
+    )
+}
+
+dashSession() = {
+    state = DashState(total: 100)
+    (
+        () => RHtml(div([
+            h1("Dashboard"),
+            p("Total: $" ++ show(state.total)),
+            button("Add $10", dataAction: "add10"),
+            a("Go to Home", href: "/")
+        ])),
+        (action, _) => match action {
+            "add10" -> state.total = state.total + 10
+            _ -> ()
+        }
+    )
+}
+
+# Static HTML page (no reactivity)
+aboutHtml = "<!DOCTYPE html><html><body><h1>About Us</h1><p>This is a static page.</p><a href='/'>Home</a></body></html>"
+
+routes(path) = match path {
+    "/" -> ("reactive", homeSession)
+    "/dashboard" -> ("reactive", dashSession)
+    "/about" -> ("html", aboutHtml)
+    _ -> ("404", ())  # 404 for unknown routes
+}
+
+main() = {
+    println("Starting multi-route app on port 8080...")
+    startRWebWithRoutes(8080, "Multi-Route App", routes)
+}</code></pre>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <h4 class="text-white font-semibold mb-2">Route Types</h4>
+                    <ul class="text-slate-400 text-sm space-y-2">
+                        <li><code>("reactive", sessionFn)</code> - A reactive page with WebSocket connection</li>
+                        <li><code>("html", htmlString)</code> - A static HTML page (no WebSocket)</li>
+                        <li><code>("404", ())</code> - Return 404 Not Found</li>
+                    </ul>
+                </div>
+
+                <!-- Passing Data Between Components -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Passing Data via Action Parameters</h2>
+                <p class="text-slate-400 mb-4">
+                    You can pass data from buttons using <code>data-param-*</code> attributes:
+                </p>
+
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.rweb
+use stdlib.rhtml.{div, h1, p, button, RHtml}
+
+reactive State = { selected: String }
+
+session() = {
+    state = State(selected: "none")
+
+    (
+        () => RHtml(div([
+            h1("Item Selector"),
+            p("Selected: " ++ state.selected),
+
+            # Each button passes its item ID
+            button("Apple", dataAction: "select", attrs: [("data-param-item", "apple")]),
+            button("Banana", dataAction: "select", attrs: [("data-param-item", "banana")]),
+            button("Cherry", dataAction: "select", attrs: [("data-param-item", "cherry")])
+        ])),
+
+        (action, params) => match action {
+            "select" -> state.selected = Map.get(params, "item")
+            _ -> ()
+        }
+    )
+}
+
+main() = startRWeb(8080, "Item Selector", session)</code></pre>
+                </div>
+
+                <!-- Complete Example: Todo App -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Complete Example: Todo Application</h2>
+                <p class="text-slate-400 mb-4">
+                    Here's a complete todo application demonstrating multiple reactive records, components, and various interactions:
+                </p>
+
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.rweb
+use stdlib.rhtml.{div, h1, h3, p, form, input, button, span, RHtml, component}
+use stdlib.list
+
+reactive Todo = { id: Int, text: String, done: Bool }
+reactive AppState = {
+    todos: List[Todo],
+    nextId: Int,
+    filter: String  # "all", "active", "done"
+}
+
+# Helper to create a todo item element
+todoItem(todo: Todo) = div([
+    span(
+        todo.text ++ if todo.done then " [DONE]" else "",
+        class: if todo.done then "line-through text-slate-500" else ""
+    ),
+    button("Toggle", dataAction: "toggle", attrs: [("data-param-id", show(todo.id))]),
+    button("Delete", dataAction: "delete", attrs: [("data-param-id", show(todo.id))])
+], class: "flex gap-2 items-center p-2 border-b border-slate-700")
+
+session() = {
+    state = AppState(todos: [], nextId: 1, filter: "all")
+
+    # Filter todos based on current filter setting
+    filteredTodos() = match state.filter {
+        "active" -> state.todos.filter(t => !t.done)
+        "done" -> state.todos.filter(t => t.done)
+        _ -> state.todos
+    }
+
+    (
+        () => RHtml(div([
+            h1("Todo App"),
+
+            # Add todo form
+            form([
+                input(inputType: "text", name: "text", placeholder: "What needs to be done?"),
+                button("Add", btnType: "submit")
+            ], dataAction: "addTodo"),
+
+            # Stats component
+            component("stats", () => RHtml(div([
+                p("Total: " ++ show(List.length(state.todos))),
+                p("Done: " ++ show(List.length(state.todos.filter(t => t.done))))
+            ]))),
+
+            # Filter buttons
+            div([
+                button("All", dataAction: "setFilter", attrs: [("data-param-filter", "all")]),
+                button("Active", dataAction: "setFilter", attrs: [("data-param-filter", "active")]),
+                button("Done", dataAction: "setFilter", attrs: [("data-param-filter", "done")]),
+                p("Filter: " ++ state.filter)
+            ]),
+
+            # Todo list component
+            component("todo-list", () => RHtml(div(
+                filteredTodos().map(todoItem)
+            )))
+        ])),
+
+        (action, params) => match action {
+            "addTodo" -> {
+                text = Map.get(params, "text")
+                if String.length(text) > 0 then {
+                    newTodo = Todo(id: state.nextId, text: text, done: false)
+                    state.todos = state.todos ++ [newTodo]
+                    state.nextId = state.nextId + 1
+                } else ()
+            }
+            "toggle" -> {
+                id = parseInt(Map.get(params, "id"))
+                state.todos = state.todos.map(t =>
+                    if t.id == id then { t.done = !t.done; t } else t
+                )
+            }
+            "delete" -> {
+                id = parseInt(Map.get(params, "id"))
+                state.todos = state.todos.filter(t => t.id != id)
+            }
+            "setFilter" -> state.filter = Map.get(params, "filter")
+            _ -> ()
+        }
+    )
+}
+
+main() = {
+    println("Starting Todo app on port 8080...")
+    startRWeb(8080, "Todo App", session)
+}</code></pre>
+                </div>
+
+                <!-- Best Practices -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Best Practices</h2>
+
+                <div class="space-y-6 mb-8">
+                    <div class="bg-slate-800/50 rounded-lg p-5 border border-slate-700">
+                        <h4 class="text-emerald-400 font-semibold mb-2">1. Use Components for Large UIs</h4>
+                        <p class="text-slate-400 text-sm">Wrap sections of your UI in <code>component()</code> to enable targeted updates. Each component tracks its dependencies and only re-renders when those specific reactive fields change.</p>
+                    </div>
+
+                    <div class="bg-slate-800/50 rounded-lg p-5 border border-slate-700">
+                        <h4 class="text-emerald-400 font-semibold mb-2">2. Keep Action Handlers Simple</h4>
+                        <p class="text-slate-400 text-sm">Action handlers should just update state. Put complex logic in helper functions. The handler runs synchronously, so keep it fast.</p>
+                    </div>
+
+                    <div class="bg-slate-800/50 rounded-lg p-5 border border-slate-700">
+                        <h4 class="text-emerald-400 font-semibold mb-2">3. Use Meaningful Component IDs</h4>
+                        <p class="text-slate-400 text-sm">Component IDs become HTML element IDs. Use descriptive names like <code>"user-profile"</code> or <code>"cart-summary"</code> rather than generic names.</p>
+                    </div>
+
+                    <div class="bg-slate-800/50 rounded-lg p-5 border border-slate-700">
+                        <h4 class="text-emerald-400 font-semibold mb-2">4. Separate Concerns with Multiple Records</h4>
+                        <p class="text-slate-400 text-sm">Use separate reactive records for different parts of your state. This makes dependencies clearer and can improve update efficiency.</p>
+                    </div>
+                </div>
+
+                <!-- Testing -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Testing RWeb Applications</h2>
+                <p class="text-slate-400 mb-4">
+                    RWeb applications can be tested using the Selenium WebDriver bindings. See the <a href="28_selenium.html" class="text-blue-400 hover:underline">Selenium chapter</a> for details. Here's a quick example:
+                </p>
+
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># test_counter.nos - Test for the counter app
+main() = {
+    driver = Selenium.connect("http://localhost:4444")
+    Selenium.goto(driver, "http://localhost:8080")
+    Selenium.waitFor(driver, "button", 5000)
+
+    # Test initial state
+    text = Selenium.text(driver, "p")
+    assert(String.contains(text, "Count: 0"))
+
+    # Test increment
+    Selenium.click(driver, "button")  # Click +1
+    sleep(500)
+    text = Selenium.text(driver, "p")
+    assert(String.contains(text, "Count: 1"))
+
+    Selenium.close(driver)
+    println("All tests passed!")
+    0
+}</code></pre>
+                </div>
+
+                <!-- Navigation -->
+                <div class="mt-12 pt-8 border-t border-slate-800 flex justify-between">
+                    <a href="25_reactive_records.html" class="text-slate-400 hover:text-white transition flex items-center">
+                        <span class="mr-2">&larr;</span> 25. Reactive Records
+                    </a>
+                    <a href="27_logging.html" class="text-slate-400 hover:text-white transition flex items-center">
+                        27. Logging <span class="ml-2">&rarr;</span>
+                    </a>
+                </div>
+
+            </div>
+        </main>
+
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script src="../js/tutorial-sidebar.js"></script>
+    <script>
+        hljs.registerLanguage('nostos', nostosLanguage);
+        hljs.highlightAll();
+    </script>
+
+</body>
+</html>
