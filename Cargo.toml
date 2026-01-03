@@ -82,3 +82,5 @@ nostos-repl = { path = "crates/repl" }
 nostos-cli = { path = "crates/cli" }
 nostos-jit = { path = "crates/jit" }
 nostos-extension = { path = "crates/extension" }
+[profile.release]
+debug = true

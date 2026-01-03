@@ -182,6 +182,14 @@ pub struct AsyncSharedState {
     /// Protected by tokio RwLock for async access.
     pub process_registry: TokioRwLock<HashMap<Pid, MailboxSender>>,
 
+    /// Process abort handles: Pid -> tokio AbortHandle.
+    /// Used to actually stop tasks when Process.kill is called.
+    pub process_abort_handles: TokioRwLock<HashMap<Pid, tokio::task::AbortHandle>>,
+
+    /// Process server handles: Pid -> Vec<server_handle>.
+    /// Used to close servers when a process is killed.
+    pub process_servers: TokioRwLock<HashMap<Pid, Vec<u64>>>,
+
     /// Debug counters for process lifecycle tracking
     pub spawned_count: AtomicU64,
     pub exited_count: AtomicU64,
@@ -1892,11 +1900,15 @@ impl AsyncProcess {
                 }
                 if self.frames.is_empty() {
                     return Ok(StepResult::Finished(value));
-                } else if let Some(ret_reg) = return_reg {
+                } else {
                     // Store return value in caller's return register
-                    // SAFETY: After pop, if frames is not empty, last frame exists
-                    let frame = self.frames.last_mut().unwrap();
-                    frame.registers[ret_reg as usize] = value;
+                    if let Some(ret_reg) = return_reg {
+                        // SAFETY: After pop, if frames is not empty, last frame exists
+                        let frame = self.frames.last_mut().unwrap();
+                        frame.registers[ret_reg as usize] = value;
+                    }
+                    // Must return to recompute cur_frame (frame was popped)
+                    return Ok(StepResult::Continue);
                 }
             }
 
@@ -2154,6 +2166,8 @@ impl AsyncProcess {
                     captures: Vec::new(),
                     return_reg: Some(*dst),
                 });
+                // Must return to recompute cur_frame (frame was pushed)
+                return Ok(StepResult::Continue);
             }
 
             // Call function/closure stored in a register
@@ -2225,6 +2239,8 @@ impl AsyncProcess {
                             captures: Vec::new(),
                             return_reg: Some(*dst),
                         });
+                        // Must return to recompute cur_frame (frame was pushed)
+                        return Ok(StepResult::Continue);
                     }
                     GcValue::Closure(ptr, _inline_op) => {
                         // Regular closure call (fast path already checked above)
@@ -2249,6 +2265,8 @@ impl AsyncProcess {
                             captures,
                             return_reg: Some(*dst),
                         });
+                        // Must return to recompute cur_frame (frame was pushed)
+                        return Ok(StepResult::Continue);
                     }
                     _ => return Err(RuntimeError::Panic(format!("Call: expected function or closure, got {:?}", callee))),
                 }
@@ -2400,7 +2418,7 @@ impl AsyncProcess {
             }
 
             ProcessKill(dst, pid_reg) => {
-                // Kill a process by unregistering it (its messages will fail)
+                // Kill a process by unregistering it AND aborting its task
                 let target_pid = match reg!(pid_reg) {
                     GcValue::Pid(p) => Pid(p),
                     _ => return Err(RuntimeError::Panic("ProcessKill: expected Pid".into())),
@@ -2410,8 +2428,25 @@ impl AsyncProcess {
                 let killed = if target_pid == self.pid {
                     false
                 } else {
-                    // Unregister the process - this effectively kills it
-                    // (its mailbox will be dropped, messages will fail)
+                    // First close any servers owned by this process to release ports
+                    let servers = self.shared.process_servers.write().await.remove(&target_pid);
+                    if let Some(server_handles) = servers {
+                        if let Some(sender) = &self.shared.io_sender {
+                            for handle in server_handles {
+                                let (tx, _rx) = tokio::sync::oneshot::channel();
+                                let request = crate::io_runtime::IoRequest::ServerClose { handle, response: tx };
+                                let _ = sender.send(request);
+                            }
+                        }
+                    }
+
+                    // Then abort the task so it actually stops running
+                    let abort_handle = self.shared.process_abort_handles.write().await.remove(&target_pid);
+                    if let Some(handle) = abort_handle {
+                        handle.abort();
+                    }
+
+                    // Then unregister the process (its mailbox will be dropped, messages will fail)
                     let mut registry = self.shared.process_registry.write().await;
                     registry.remove(&target_pid).is_some()
                 };
@@ -2968,6 +3003,8 @@ impl AsyncProcess {
                     captures: Vec::new(),
                     return_reg: Some(*dst),
                 });
+                // Must return to recompute cur_frame (frame was pushed)
+                return Ok(StepResult::Continue);
             }
             TailCallSelf(ref args) => {
                 // OPTIMIZATION: Reuse registers instead of allocating new Vec
@@ -3294,6 +3331,9 @@ impl AsyncProcess {
                                         captures,
                                         return_reg: None,
                                     });
+                                    // TODO: This callback pattern has a potential cur_frame staleness issue
+                                    // but the set_reg! below needs to run first, so we don't return here.
+                                    // The callback will run on next step() call after this instruction completes.
                                 }
                             }
 
@@ -3382,6 +3422,7 @@ impl AsyncProcess {
                                     captures,
                                     return_reg: None,
                                 });
+                                // TODO: Same callback cur_frame staleness issue as in GetField
                             }
                         }
 
@@ -4190,7 +4231,8 @@ impl AsyncProcess {
                 // Wrap with AssertSend because all underlying types are Send but the compiler
                 // can't prove it through async fn's opaque future types.
                 let func_name = func.name.clone();
-                tokio::spawn(AssertSend(async move {
+                let shared_for_cleanup = self.shared.clone();
+                let join_handle = tokio::spawn(AssertSend(async move {
                     if std::env::var("ASYNC_VM_DEBUG").is_ok() {
                         eprintln!("[AsyncVM] Spawned process {} running function: {}", child_pid.0, func_name);
                     }
@@ -4225,9 +4267,13 @@ impl AsyncProcess {
                     // Run the process
                     let _result = process.run().await;
 
-                    // Unregister on exit
+                    // Unregister on exit (cleanup abort handle too)
                     shared_clone.unregister_process(child_pid).await;
+                    shared_clone.process_abort_handles.write().await.remove(&child_pid);
                 }));
+
+                // Store the abort handle so Process.kill can actually stop the task
+                shared_for_cleanup.process_abort_handles.write().await.insert(child_pid, join_handle.abort_handle());
 
                 // Yield to allow the spawned task to start running
                 // This is critical for recursive spawns where parent immediately waits
@@ -4574,6 +4620,8 @@ impl AsyncProcess {
                             captures: Vec::new(),
                             return_reg,
                         });
+                        // Must return to recompute cur_frame (frame was replaced)
+                        return Ok(StepResult::Continue);
                     }
                     GcValue::Closure(ptr, _) => {
                         let closure = self.heap.get_closure(ptr)
@@ -4593,6 +4641,8 @@ impl AsyncProcess {
                             captures,
                             return_reg,
                         });
+                        // Must return to recompute cur_frame (frame was replaced)
+                        return Ok(StepResult::Continue);
                     }
                     _ => return Err(RuntimeError::TypeError {
                         expected: "Function or Closure".to_string(),
@@ -6028,6 +6078,11 @@ impl AsyncProcess {
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
                     if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
+                        // Track this server handle as owned by this process
+                        if let GcValue::Int64(handle) = gc_value {
+                            let mut servers = self.shared.process_servers.write().await;
+                            servers.entry(self.pid).or_insert_with(Vec::new).push(handle as u64);
+                        }
                         set_reg!(dst, gc_value);
                     }
                 } else {
@@ -9615,6 +9670,8 @@ impl AsyncVM {
             shutdown: AtomicBool::new(false),
             interrupt: AtomicBool::new(false),
             process_registry: TokioRwLock::new(HashMap::new()),
+            process_abort_handles: TokioRwLock::new(HashMap::new()),
+            process_servers: TokioRwLock::new(HashMap::new()),
             spawned_count: AtomicU64::new(0),
             exited_count: AtomicU64::new(0),
             mvars: HashMap::new(),

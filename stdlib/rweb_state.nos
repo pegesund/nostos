@@ -1,0 +1,3 @@
+# State for RWeb server tracking
+# Kept separate to avoid initialization issues
+pub mvar rwebLastServer: Option[Pid] = None()
