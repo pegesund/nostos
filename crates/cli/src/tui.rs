@@ -534,6 +534,24 @@ pub fn run_tui(args: &[String]) -> ExitCode {
     // SAFETY: This is set once at TUI startup before any threads are spawned
     unsafe { std::env::set_var("NOSTOS_INTERACTIVE", "1"); }
 
+    // Pre-validate any file arguments before starting TUI
+    // Use a temporary engine to check for both parse and type errors
+    for arg in args {
+        if !arg.starts_with('-') {
+            let path = std::path::Path::new(arg);
+            if !path.is_dir() && path.exists() {
+                // Create a temporary engine to validate the file
+                let config = ReplConfig::default();
+                let mut temp_engine = ReplEngine::new(config);
+                let _ = temp_engine.load_stdlib();
+                if let Err(e) = temp_engine.load_file(arg) {
+                    eprintln!("Error loading {}: {}", arg, e);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+    }
+
     // Use default cursive backend
     let mut siv = cursive::default();
 
@@ -630,7 +648,8 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         _ => {}
     }
 
-    // Load files or directories
+    // Load files or directories, track single files to open in editor
+    let mut single_file_to_open: Option<String> = None;
     for arg in args {
         if !arg.starts_with('-') {
             let path = std::path::Path::new(arg);
@@ -640,9 +659,14 @@ pub fn run_tui(args: &[String]) -> ExitCode {
                     eprintln!("Error loading directory {}: {}", arg, e);
                 }
             } else {
-                // Load single file
+                // Load single file - exit on error
                 if let Err(e) = engine.load_file(arg) {
                     eprintln!("Error loading {}: {}", arg, e);
+                    return ExitCode::FAILURE;
+                }
+                // Track module name to open in browser (derived from file stem)
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    single_file_to_open = Some(stem.to_string());
                 }
             }
         }
@@ -849,6 +873,12 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         // Poll REPL panels for TUI commands (like opening tutorial)
         poll_repl_panel_commands(s);
     });
+
+    // If a single file was passed as argument, open the browser at root
+    // so the user can see the module (named after the file)
+    if single_file_to_open.is_some() {
+        show_browser_dialog(&mut siv, engine.clone(), vec![]);
+    }
 
     siv.run();
     ExitCode::SUCCESS
