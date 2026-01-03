@@ -49,6 +49,22 @@ impl<F: Future> Future for AssertSend<F> {
 
 use crate::extensions::{ext_value_to_vm, vm_value_to_ext, ExtensionManager};
 
+/// Log debug message to file when ASYNC_VM_DEBUG is set.
+/// Logs to /tmp/nostos_debug.log
+#[allow(unused)]
+fn debug_log_to_file(msg: &str) {
+    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/nostos_debug.log")
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "{}", msg);
+        }
+    }
+}
+
 /// Reactive render context for tracking component dependencies during RHtml rendering.
 /// A node in the component tree
 #[derive(Debug, Clone)]
@@ -4249,9 +4265,7 @@ impl AsyncProcess {
                 let func_name = func.name.clone();
                 let shared_for_cleanup = self.shared.clone();
                 let spawn_task = AssertSend(async move {
-                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
-                        eprintln!("[AsyncVM] Spawned process {} running function: {}", child_pid.0, func_name);
-                    }
+                    debug_log_to_file(&format!("[AsyncVM] Spawned process {} running function: {}", child_pid.0, func_name));
                     // Create new process with pre-created mailbox
                     let mut process = AsyncProcess::new_with_mailbox(child_pid, shared_clone.clone(), mailbox_sender, mailbox_receiver);
 
@@ -4285,8 +4299,9 @@ impl AsyncProcess {
 
                     // Log errors from spawned processes (helps debug silent failures)
                     if let Err(ref e) = result {
-                        eprintln!("[AsyncVM] Spawned process {} error: {:?}", child_pid.0, e);
+                        debug_log_to_file(&format!("[AsyncVM] Spawned process {} error: {:?}", child_pid.0, e));
                     }
+                    debug_log_to_file(&format!("[AsyncVM] Spawned process {} finished", child_pid.0));
 
                     // Unregister on exit (cleanup abort handle too)
                     shared_clone.unregister_process(child_pid).await;
@@ -4297,9 +4312,7 @@ impl AsyncProcess {
                 // so they survive past individual eval calls. Otherwise use the current runtime.
                 let is_interactive = self.shared.interactive_mode.load(Ordering::SeqCst);
                 let has_spawn_handle = self.shared.spawn_runtime_handle.is_some();
-                if std::env::var("ASYNC_VM_DEBUG").is_ok() {
-                    eprintln!("[AsyncVM] Spawn: interactive={}, has_handle={}", is_interactive, has_spawn_handle);
-                }
+                debug_log_to_file(&format!("[AsyncVM] Spawn: interactive={}, has_handle={}", is_interactive, has_spawn_handle));
                 let join_handle = if let Some(ref handle) = self.shared.spawn_runtime_handle {
                     if is_interactive {
                         handle.spawn(spawn_task)
@@ -6116,20 +6129,14 @@ impl AsyncProcess {
                 };
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 if let Some(sender) = &self.shared.io_sender {
-                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
-                        eprintln!("[VM] ServerBind: sending request for port={} from pid={}", port, self.pid.0);
-                    }
+                    debug_log_to_file(&format!("[VM] ServerBind: sending request for port={} from pid={}", port, self.pid.0));
                     let request = IoRequest::ServerBind { port, response: tx };
                     if sender.send(request).is_err() {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
-                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
-                        eprintln!("[VM] ServerBind: waiting for response");
-                    }
+                    debug_log_to_file("[VM] ServerBind: waiting for response");
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
-                        eprintln!("[VM] ServerBind: got response");
-                    }
+                    debug_log_to_file("[VM] ServerBind: got response");
                     if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
                         // Track this server handle as owned by this process
                         if let GcValue::Int64(handle) = gc_value {
@@ -6153,20 +6160,14 @@ impl AsyncProcess {
                 };
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 if let Some(sender) = &self.shared.io_sender {
-                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
-                        eprintln!("[VM] ServerAccept: sending request from pid={}", self.pid.0);
-                    }
+                    debug_log_to_file(&format!("[VM] ServerAccept: sending request from pid={}", self.pid.0));
                     let request = IoRequest::ServerAccept { handle, response: tx };
                     if sender.send(request).is_err() {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
-                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
-                        eprintln!("[VM] ServerAccept: waiting for request from browser");
-                    }
+                    debug_log_to_file("[VM] ServerAccept: waiting for request from browser");
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
-                        eprintln!("[VM] ServerAccept: got request");
-                    }
+                    debug_log_to_file("[VM] ServerAccept: got request");
                     if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
                         set_reg!(dst, gc_value);
                     }
@@ -6283,20 +6284,14 @@ impl AsyncProcess {
                 };
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 if let Some(sender) = &self.shared.io_sender {
-                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
-                        eprintln!("[VM] WebSocketAccept: sending request for request_id={} from pid={}", request_id, self.pid.0);
-                    }
+                    debug_log_to_file(&format!("[VM] WebSocketAccept: sending request for request_id={} from pid={}", request_id, self.pid.0));
                     let request = IoRequest::WebSocketAccept { request_id, response: tx };
                     if sender.send(request).is_err() {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
-                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
-                        eprintln!("[VM] WebSocketAccept: waiting for connection");
-                    }
+                    debug_log_to_file("[VM] WebSocketAccept: waiting for connection");
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
-                        eprintln!("[VM] WebSocketAccept: got response");
-                    }
+                    debug_log_to_file("[VM] WebSocketAccept: got response");
                     match result {
                         Ok(IoResponseValue::Int(ws_handle)) => {
                             set_reg!(dst, GcValue::Int64(ws_handle));
