@@ -2549,7 +2549,11 @@ impl AsyncProcess {
                 if let Some(ref sender) = self.shared.output_sender {
                     let _ = sender.send(s.clone());
                 } else {
-                    println!("{}", s);
+                    // Lock stdout for synchronized, atomic line output
+                    use std::io::Write;
+                    let stdout = std::io::stdout();
+                    let mut handle = stdout.lock();
+                    let _ = writeln!(handle, "{}", s);
                 }
             }
 
@@ -2567,7 +2571,11 @@ impl AsyncProcess {
                     }
                 } else {
                     Self::debug_log(&format!("[Println] no output_sender, using stdout: {}", s));
-                    println!("{}", s);
+                    // Lock stdout for synchronized, atomic line output
+                    use std::io::Write;
+                    let stdout = std::io::stdout();
+                    let mut handle = stdout.lock();
+                    let _ = writeln!(handle, "{}", s);
                 }
             }
 
@@ -10149,8 +10157,12 @@ impl AsyncVM {
             name: "print".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
+                use std::io::Write;
                 let s = heap.display_value(&args[0]);
-                print!("{}", s);
+                let stdout = std::io::stdout();
+                let mut handle = stdout.lock();
+                let _ = write!(handle, "{}", s);
+                let _ = handle.flush();
                 Ok(GcValue::Unit)
             }),
         }));
@@ -10160,8 +10172,11 @@ impl AsyncVM {
             name: "println".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
+                use std::io::Write;
                 let s = heap.display_value(&args[0]);
-                println!("{}", s);
+                let stdout = std::io::stdout();
+                let mut handle = stdout.lock();
+                let _ = writeln!(handle, "{}", s);
                 Ok(GcValue::Unit)
             }),
         }));
