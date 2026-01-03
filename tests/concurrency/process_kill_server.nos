@@ -1,0 +1,62 @@
+# expect: 0
+# Test that Process.kill properly releases server ports
+
+use stdlib.server
+
+# Simple handler that just returns OK
+handler(req) = {
+    Server.respond(req, 200, [], "OK")
+}
+
+# Server process that binds to a port
+serverProcess(port) = {
+    server = Server.bind(port)
+    acceptLoop(server)
+}
+
+acceptLoop(server) = {
+    req = Server.accept(server)
+    spawn { handler(req) }
+    acceptLoop(server)
+}
+
+main() = {
+    port = 19876
+
+    # Start first server
+    pid1 = spawn { serverProcess(port) }
+    sleep(50)
+
+    # Verify it's alive
+    if Process.alive(pid1) == false then {
+        println("ERROR: First server should be alive")
+        1
+    } else {
+        # Kill the first server
+        Process.kill(pid1)
+        sleep(50)
+
+        # Verify it's dead
+        if Process.alive(pid1) then {
+            println("ERROR: First server should be dead after kill")
+            2
+        } else {
+            # Start second server on same port - should succeed because port was released
+            pid2 = spawn { serverProcess(port) }
+            sleep(50)
+
+            # Verify second server is alive (meaning port bind succeeded)
+            if Process.alive(pid2) == false then {
+                println("ERROR: Second server should be alive - port not released?")
+                3
+            } else {
+                # Clean up
+                Process.kill(pid2)
+                sleep(50)
+
+                # Success
+                0
+            }
+        }
+    }
+}
