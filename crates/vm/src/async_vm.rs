@@ -178,6 +178,14 @@ pub struct AsyncSharedState {
     /// Stops current execution but allows VM to be reused.
     pub interrupt: AtomicBool,
 
+    /// Interactive mode flag (true in REPL/TUI, false in script mode).
+    pub interactive_mode: AtomicBool,
+
+    /// Runtime handle for spawning long-lived processes.
+    /// In interactive mode, spawned processes use this handle instead of the
+    /// current runtime so they outlive individual eval calls.
+    pub spawn_runtime_handle: Option<tokio::runtime::Handle>,
+
     /// Process registry: Pid -> mailbox sender.
     /// Protected by tokio RwLock for async access.
     pub process_registry: TokioRwLock<HashMap<Pid, MailboxSender>>,
@@ -4232,7 +4240,7 @@ impl AsyncProcess {
                 // can't prove it through async fn's opaque future types.
                 let func_name = func.name.clone();
                 let shared_for_cleanup = self.shared.clone();
-                let join_handle = tokio::spawn(AssertSend(async move {
+                let spawn_task = AssertSend(async move {
                     if std::env::var("ASYNC_VM_DEBUG").is_ok() {
                         eprintln!("[AsyncVM] Spawned process {} running function: {}", child_pid.0, func_name);
                     }
@@ -4270,7 +4278,19 @@ impl AsyncProcess {
                     // Unregister on exit (cleanup abort handle too)
                     shared_clone.unregister_process(child_pid).await;
                     shared_clone.process_abort_handles.write().await.remove(&child_pid);
-                }));
+                });
+
+                // In interactive mode, use the long-lived IO runtime for spawned processes
+                // so they survive past individual eval calls. Otherwise use the current runtime.
+                let join_handle = if let Some(ref handle) = self.shared.spawn_runtime_handle {
+                    if self.shared.interactive_mode.load(Ordering::SeqCst) {
+                        handle.spawn(spawn_task)
+                    } else {
+                        tokio::spawn(spawn_task)
+                    }
+                } else {
+                    tokio::spawn(spawn_task)
+                };
 
                 // Store the abort handle so Process.kill can actually stop the task
                 shared_for_cleanup.process_abort_handles.write().await.insert(child_pid, join_handle.abort_handle());
@@ -4362,6 +4382,12 @@ impl AsyncProcess {
                 ];
                 let tuple = self.heap.alloc_tuple(values);
                 set_reg!(dst, GcValue::Tuple(tuple));
+            }
+
+            // === Runtime info ===
+            RuntimeIsInteractive(dst) => {
+                let is_interactive = self.shared.interactive_mode.load(Ordering::SeqCst);
+                set_reg!(dst, GcValue::Bool(is_interactive));
             }
 
             // === Type constructors ===
@@ -9649,6 +9675,7 @@ impl AsyncVM {
         // Create IO runtime for async operations
         let io_runtime = IoRuntime::new();
         let io_sender = io_runtime.request_sender();
+        let spawn_runtime_handle = io_runtime.runtime_handle();
 
         let shared = Arc::new(AsyncSharedState {
             functions: RwLock::new(HashMap::new()),
@@ -9669,6 +9696,8 @@ impl AsyncVM {
             jit_list_sum_tr_functions: RwLock::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
             interrupt: AtomicBool::new(false),
+            interactive_mode: AtomicBool::new(false),
+            spawn_runtime_handle: Some(spawn_runtime_handle),
             process_registry: TokioRwLock::new(HashMap::new()),
             process_abort_handles: TokioRwLock::new(HashMap::new()),
             process_servers: TokioRwLock::new(HashMap::new()),
@@ -9697,6 +9726,16 @@ impl AsyncVM {
             io_runtime: Some(io_runtime),
             config,
         }
+    }
+
+    /// Set interactive mode (true in REPL/TUI, false in script mode).
+    pub fn set_interactive_mode(&self, interactive: bool) {
+        self.shared.interactive_mode.store(interactive, Ordering::SeqCst);
+    }
+
+    /// Check if running in interactive mode.
+    pub fn is_interactive(&self) -> bool {
+        self.shared.interactive_mode.load(Ordering::SeqCst)
     }
 
     /// Register a function - safe to call during concurrent evals.

@@ -236,6 +236,7 @@ impl ReplEngine {
             ..Default::default()
         };
         let mut vm = AsyncVM::new(vm_config);
+        vm.set_interactive_mode(true);  // Enable interactive mode for REPL/TUI
         vm.register_default_natives();
         // Initialize compiler with native indices for CallNativeIdx optimization
         compiler.set_native_indices(vm.get_native_indices());

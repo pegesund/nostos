@@ -224,6 +224,9 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     // === Eval ===
     BuiltinInfo { name: "eval", signature: "String -> String", doc: "Evaluate code at runtime, returns result as string or error message" },
 
+    // === Runtime ===
+    BuiltinInfo { name: "Runtime.isInteractive", signature: "() -> Bool", doc: "Returns true if running in REPL/TUI mode, false in script mode" },
+
     // === External Process Execution ===
     // All Exec functions throw exceptions on error
     BuiltinInfo { name: "Exec.run", signature: "String -> [String] -> { exitCode: Int, stdout: String, stderr: String }", doc: "Run command and wait for completion, throws on error" },
@@ -5954,6 +5957,12 @@ impl Compiler {
                             self.chunk.emit(Instruction::GcStats(dst), line);
                             return Ok(dst);
                         }
+                        // === Runtime info ===
+                        "Runtime.isInteractive" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::RuntimeIsInteractive(dst), line);
+                            return Ok(dst);
+                        }
                         // === Panel (TUI) functions ===
                         "Panel.create" if args.len() == 1 => {
                             let title_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
@@ -7724,6 +7733,12 @@ impl Compiler {
                         // vmStats() - get process stats
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::VmStats(dst), line);
+                        return Ok(dst);
+                    }
+                    "Runtime.isInteractive" if arg_regs.is_empty() => {
+                        // Runtime.isInteractive() - check if in REPL/TUI mode
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::RuntimeIsInteractive(dst), line);
                         return Ok(dst);
                     }
                     "assert_eq" if arg_regs.len() == 2 => {
