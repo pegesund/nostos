@@ -530,6 +530,10 @@ struct TuiState {
 }
 
 pub fn run_tui(args: &[String]) -> ExitCode {
+    // Set interactive mode flag for Env.isInteractive()
+    // SAFETY: This is set once at TUI startup before any threads are spawned
+    unsafe { std::env::set_var("NOSTOS_INTERACTIVE", "1"); }
+
     // Use default cursive backend
     let mut siv = cursive::default();
 

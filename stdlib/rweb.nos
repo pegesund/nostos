@@ -706,3 +706,19 @@ pub startRWebBackground(port, title, sessionSetup) =
 
 pub startRWebWithRoutesBackground(port, title, reactiveResolver, plainResolver) =
     spawn { startRWebWithRoutes(port, title, reactiveResolver, plainResolver) }
+
+# Smart RWeb starters - auto-detect interactive mode
+# In TUI/REPL: runs in background with auto-restart
+# In script: runs in foreground (blocking)
+
+pub runRWeb(port, title, sessionSetup) =
+    if Env.isInteractive() then
+        restartRWebBackground(port, title, sessionSetup)
+    else
+        startRWeb(port, title, sessionSetup)
+
+pub runRWebWithRoutes(port, title, reactiveResolver, plainResolver) =
+    if Env.isInteractive() then
+        restartRWebWithRoutesBackground(port, title, reactiveResolver, plainResolver)
+    else
+        startRWebWithRoutes(port, title, reactiveResolver, plainResolver)
