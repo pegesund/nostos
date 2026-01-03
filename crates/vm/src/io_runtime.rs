@@ -1040,6 +1040,9 @@ impl IoRuntime {
 
                 // HTTP Server operations
                 IoRequest::ServerBind { port, response } => {
+                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                        eprintln!("[IO] ServerBind port={}", port);
+                    }
                     use axum::{
                         extract::Request,
                         routing::any,
@@ -1189,7 +1192,10 @@ impl IoRuntime {
                             }
 
                             // Send request to the Nostos process
-                            let _ = req_tx.send((request_id, method, path, headers, body, query_params, cookies, form_params, is_websocket));
+                            if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                                eprintln!("[IO] Axum handler: method={} path={} is_ws={} request_id={}", method, path, is_websocket, request_id);
+                            }
+                            let _ = req_tx.send((request_id, method.clone(), path.clone(), headers, body, query_params, cookies, form_params, is_websocket));
 
                             // Wait for response from Nostos
                             match resp_rx.await {
@@ -1211,7 +1217,11 @@ impl IoRuntime {
 
                                             // Spawn task to complete upgrade and store WebSocket
                                             let ws_conns = ws_conns.clone();
+                                            let debug_ws_upgrade = std::env::var("ASYNC_VM_DEBUG").is_ok();
                                             tokio::spawn(async move {
+                                                if debug_ws_upgrade {
+                                                    eprintln!("[IO] Starting WebSocket upgrade for request_id={}", request_id);
+                                                }
                                                 match upgrade.await {
                                                     Ok(upgraded) => {
                                                         // Create WebSocket from upgraded connection using tokio-tungstenite
@@ -1224,6 +1234,9 @@ impl IoRuntime {
                                                         ).await;
                                                         let (sender, receiver) = ws.split();
                                                         ws_conns.lock().await.insert(request_id, (sender, receiver));
+                                                        if debug_ws_upgrade {
+                                                            eprintln!("[IO] WebSocket connection stored for request_id={}", request_id);
+                                                        }
                                                     }
                                                     Err(e) => {
                                                         eprintln!("WebSocket upgrade failed: {}", e);
@@ -1283,6 +1296,9 @@ impl IoRuntime {
                 }
 
                 IoRequest::ServerAccept { handle, response } => {
+                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                        eprintln!("[IO] ServerAccept handle={}", handle);
+                    }
                     // Get the shared receiver for this server handle
                     let receivers = server_request_receivers.clone();
                     tokio::spawn(async move {
@@ -1299,6 +1315,9 @@ impl IoRuntime {
                                 let result = rx.lock().await.recv().await;
                                 match result {
                                     Some((request_id, method, path, headers, body, query_params, cookies, form_params, is_websocket)) => {
+                                        if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                                            eprintln!("[IO] ServerAccept returning request: method={} path={} is_ws={} request_id={}", method, path, is_websocket, request_id);
+                                        }
                                         let _ = response.send(Ok(IoResponseValue::ServerRequest {
                                             request_id,
                                             method,
@@ -1347,24 +1366,37 @@ impl IoRuntime {
 
                 // WebSocket operations
                 IoRequest::WebSocketAccept { request_id, response } => {
+                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                        eprintln!("[IO] WebSocketAccept request_id={}", request_id);
+                    }
                     // Send 101 response to trigger WebSocket upgrade
                     let mut pending = pending_responses.lock().await;
                     match pending.remove(&request_id) {
                         Some(resp_tx) => {
                             // Send empty 101 response - the axum handler will add WebSocket headers
+                            if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                                eprintln!("[IO] WebSocketAccept: sending 101 response for request_id={}", request_id);
+                            }
                             let _ = resp_tx.send((101, vec![], vec![]));
                             drop(pending);
 
                             // Wait for WebSocket connection to be established
                             let ws_conns = ws_connections.clone();
+                            let debug_enabled = std::env::var("ASYNC_VM_DEBUG").is_ok();
                             tokio::spawn(async move {
                                 // Poll for connection with timeout
-                                for _ in 0..100 {
+                                for i in 0..100 {
                                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                                     if ws_conns.lock().await.contains_key(&request_id) {
+                                        if debug_enabled {
+                                            eprintln!("[IO] WebSocketAccept: connection established for request_id={} after {}ms", request_id, (i+1)*10);
+                                        }
                                         let _ = response.send(Ok(IoResponseValue::Int(request_id as i64)));
                                         return;
                                     }
+                                }
+                                if debug_enabled {
+                                    eprintln!("[IO] WebSocketAccept: timeout waiting for connection request_id={}", request_id);
                                 }
                                 let _ = response.send(Err(IoError::IoError("WebSocket upgrade timeout".to_string())));
                             });

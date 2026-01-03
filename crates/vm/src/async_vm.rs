@@ -4281,7 +4281,12 @@ impl AsyncProcess {
                     });
 
                     // Run the process
-                    let _result = process.run().await;
+                    let result = process.run().await;
+
+                    // Log errors from spawned processes (helps debug silent failures)
+                    if let Err(ref e) = result {
+                        eprintln!("[AsyncVM] Spawned process {} error: {:?}", child_pid.0, e);
+                    }
 
                     // Unregister on exit (cleanup abort handle too)
                     shared_clone.unregister_process(child_pid).await;
@@ -4290,8 +4295,13 @@ impl AsyncProcess {
 
                 // In interactive mode, use the long-lived IO runtime for spawned processes
                 // so they survive past individual eval calls. Otherwise use the current runtime.
+                let is_interactive = self.shared.interactive_mode.load(Ordering::SeqCst);
+                let has_spawn_handle = self.shared.spawn_runtime_handle.is_some();
+                if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                    eprintln!("[AsyncVM] Spawn: interactive={}, has_handle={}", is_interactive, has_spawn_handle);
+                }
                 let join_handle = if let Some(ref handle) = self.shared.spawn_runtime_handle {
-                    if self.shared.interactive_mode.load(Ordering::SeqCst) {
+                    if is_interactive {
                         handle.spawn(spawn_task)
                     } else {
                         tokio::spawn(spawn_task)
@@ -6106,11 +6116,20 @@ impl AsyncProcess {
                 };
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 if let Some(sender) = &self.shared.io_sender {
+                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                        eprintln!("[VM] ServerBind: sending request for port={} from pid={}", port, self.pid.0);
+                    }
                     let request = IoRequest::ServerBind { port, response: tx };
                     if sender.send(request).is_err() {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
+                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                        eprintln!("[VM] ServerBind: waiting for response");
+                    }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                        eprintln!("[VM] ServerBind: got response");
+                    }
                     if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
                         // Track this server handle as owned by this process
                         if let GcValue::Int64(handle) = gc_value {
@@ -6134,11 +6153,20 @@ impl AsyncProcess {
                 };
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 if let Some(sender) = &self.shared.io_sender {
+                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                        eprintln!("[VM] ServerAccept: sending request from pid={}", self.pid.0);
+                    }
                     let request = IoRequest::ServerAccept { handle, response: tx };
                     if sender.send(request).is_err() {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
+                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                        eprintln!("[VM] ServerAccept: waiting for request from browser");
+                    }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                        eprintln!("[VM] ServerAccept: got request");
+                    }
                     if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
                         set_reg!(dst, gc_value);
                     }
@@ -6255,11 +6283,20 @@ impl AsyncProcess {
                 };
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 if let Some(sender) = &self.shared.io_sender {
+                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                        eprintln!("[VM] WebSocketAccept: sending request for request_id={} from pid={}", request_id, self.pid.0);
+                    }
                     let request = IoRequest::WebSocketAccept { request_id, response: tx };
                     if sender.send(request).is_err() {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
+                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                        eprintln!("[VM] WebSocketAccept: waiting for connection");
+                    }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    if std::env::var("ASYNC_VM_DEBUG").is_ok() {
+                        eprintln!("[VM] WebSocketAccept: got response");
+                    }
                     match result {
                         Ok(IoResponseValue::Int(ws_handle)) => {
                             set_reg!(dst, GcValue::Int64(ws_handle));
