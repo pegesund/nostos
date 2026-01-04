@@ -869,6 +869,91 @@ impl CodeEditor {
         self.sig_help.reset();
     }
 
+    /// Find matching bracket position for bracket at or before cursor
+    /// Returns (row, col) of matching bracket, or None if no match
+    fn find_matching_bracket(&self) -> Option<(usize, usize)> {
+        let line = &self.content[self.cursor.1];
+        let chars: Vec<char> = line.chars().collect();
+
+        // Check char at cursor position
+        let char_at_cursor = chars.get(self.cursor.0).copied();
+
+        // Determine bracket type and search direction
+        let (open, close, search_forward) = match char_at_cursor {
+            Some('(') => ('(', ')', true),
+            Some('[') => ('[', ']', true),
+            Some('{') => ('{', '}', true),
+            Some(')') => ('(', ')', false),
+            Some(']') => ('[', ']', false),
+            Some('}') => ('{', '}', false),
+            _ => return None,
+        };
+
+        if search_forward {
+            self.find_closing_bracket(self.cursor.1, self.cursor.0, open, close)
+        } else {
+            self.find_opening_bracket(self.cursor.1, self.cursor.0, open, close)
+        }
+    }
+
+    /// Search forward for closing bracket, starting after (row, col)
+    fn find_closing_bracket(&self, start_row: usize, start_col: usize, open: char, close: char) -> Option<(usize, usize)> {
+        let mut depth = 1;
+        let mut row = start_row;
+        let mut col = start_col + 1; // Start after the opening bracket
+
+        while row < self.content.len() {
+            let line: Vec<char> = self.content[row].chars().collect();
+
+            while col < line.len() {
+                let c = line[col];
+                if c == open {
+                    depth += 1;
+                } else if c == close {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((row, col));
+                    }
+                }
+                col += 1;
+            }
+
+            row += 1;
+            col = 0;
+        }
+        None
+    }
+
+    /// Search backward for opening bracket, starting before (row, col)
+    fn find_opening_bracket(&self, start_row: usize, start_col: usize, open: char, close: char) -> Option<(usize, usize)> {
+        let mut depth = 1;
+        let mut row = start_row;
+        let mut col = start_col;
+
+        loop {
+            if col > 0 {
+                col -= 1;
+                let line: Vec<char> = self.content[row].chars().collect();
+                let c = line[col];
+
+                if c == close {
+                    depth += 1;
+                } else if c == open {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((row, col));
+                    }
+                }
+            } else if row > 0 {
+                row -= 1;
+                col = self.content[row].chars().count();
+            } else {
+                break;
+            }
+        }
+        None
+    }
+
     fn insert_newline(&mut self) {
         let line = &mut self.content[self.cursor.1];
         let byte_idx = Self::char_to_byte_idx(line, self.cursor.0);
@@ -1403,6 +1488,35 @@ impl View for CodeEditor {
 
                     printer.with_style(style, |p| {
                         p.print((visible_start, screen_y), &visible_text);
+                    });
+                }
+            }
+        }
+
+        // Draw matching bracket highlight
+        if let Some((match_row, match_col)) = self.find_matching_bracket() {
+            let bracket_style = Style::from(ColorStyle::new(Color::Rgb(0, 0, 0), Color::Rgb(0, 255, 255))); // Cyan background
+
+            // Highlight the bracket at cursor
+            if self.cursor.1 >= scroll_y && self.cursor.1 < scroll_y + view_height {
+                if self.cursor.0 >= scroll_x && self.cursor.0 < scroll_x + view_width {
+                    let screen_x = self.cursor.0 - scroll_x;
+                    let screen_y = self.cursor.1 - scroll_y;
+                    let char_at_cursor = self.content[self.cursor.1].chars().nth(self.cursor.0).unwrap_or(' ');
+                    printer.with_style(bracket_style, |p| {
+                        p.print((screen_x, screen_y), &char_at_cursor.to_string());
+                    });
+                }
+            }
+
+            // Highlight the matching bracket
+            if match_row >= scroll_y && match_row < scroll_y + view_height {
+                if match_col >= scroll_x && match_col < scroll_x + view_width {
+                    let screen_x = match_col - scroll_x;
+                    let screen_y = match_row - scroll_y;
+                    let char_at_match = self.content[match_row].chars().nth(match_col).unwrap_or(' ');
+                    printer.with_style(bracket_style, |p| {
+                        p.print((screen_x, screen_y), &char_at_match.to_string());
                     });
                 }
             }
