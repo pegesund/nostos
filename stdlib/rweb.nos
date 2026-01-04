@@ -715,11 +715,18 @@ pub restartRWebWithRoutesBackground(port, title, reactiveResolver, plainResolver
 }
 
 # Simple version without auto-kill (user manages pid)
-pub startRWebBackground(port, title, sessionSetup) =
-    spawn { startRWeb(port, title, sessionSetup) }
+# Note: spawns serve directly to get correct server pid (not double-spawn)
+pub startRWebBackground(port, title, sessionSetup) = {
+    println("RWeb server started on http://localhost:" ++ show(port))
+    println("WebSocket endpoint: ws://localhost:" ++ show(port) ++ "/ws")
+    spawn { serve(port, req => rwebHandleRequest(req, title, sessionSetup)) }
+}
 
-pub startRWebWithRoutesBackground(port, title, reactiveResolver, plainResolver) =
-    spawn { startRWebWithRoutes(port, title, reactiveResolver, plainResolver) }
+pub startRWebWithRoutesBackground(port, title, reactiveResolver, plainResolver) = {
+    println("RWeb server with routes started on http://localhost:" ++ show(port))
+    println("WebSocket endpoint: ws://localhost:" ++ show(port) ++ "/ws?path=<path>")
+    spawn { serve(port, req => rwebHandleRequestWithRoutes(req, title, reactiveResolver, plainResolver)) }
+}
 
 # Smart RWeb starters - auto-detect interactive mode
 # In TUI/REPL: runs in background with auto-restart

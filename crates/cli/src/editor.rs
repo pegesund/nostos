@@ -488,6 +488,13 @@ impl CodeEditor {
             return;
         }
 
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                let _ = writeln!(f, "[editor.rs] check_parse called");
+            }
+        }
+
         self.last_check_content = content.clone();
 
         // Try to parse the content
@@ -542,12 +549,41 @@ impl CodeEditor {
             }
         };
 
-        match eng.check_module_compiles(&module_name, &content) {
+        // DEBUG: Write to file since TUI takes over terminal
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                let _ = writeln!(f, "[editor.rs] module_name={:?}, function_name={:?}, self.module_name={:?}",
+                    module_name, self.function_name, self.module_name);
+                let _ = writeln!(f, "[editor.rs] content:\n{}", content);
+            }
+        }
+
+        let result = eng.check_module_compiles(&module_name, &content);
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                let _ = writeln!(f, "[editor.rs] check_module_compiles returned: {:?}", result);
+            }
+        }
+        match result {
             Ok(()) => {
                 self.compile_status = CompileStatus::Ok;
+                {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                        let _ = writeln!(f, "[editor.rs] Setting compile_status = Ok");
+                    }
+                }
             }
             Err(error) => {
-                self.compile_status = CompileStatus::CompileError(error);
+                self.compile_status = CompileStatus::CompileError(error.clone());
+                {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                        let _ = writeln!(f, "[editor.rs] Setting CompileError: {}", error);
+                    }
+                }
             }
         }
 
