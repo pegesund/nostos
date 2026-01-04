@@ -859,9 +859,21 @@ impl CodeEditor {
             eprintln!("[AC]   - {} ({:?})", c.text, c.kind);
         }
 
-        // Only show popup if we have candidates and a non-empty prefix (or dot completion)
+        // Check if cursor is inside a function call (after '(' or ',')
+        // In this case, show completions even with empty prefix
+        let inside_function_call = if self.cursor.0 > 0 {
+            let before_cursor: String = line.chars().take(self.cursor.0).collect();
+            let trimmed = before_cursor.trim_end();
+            trimmed.ends_with('(') || trimmed.ends_with(',')
+        } else {
+            false
+        };
+
+        // Only show popup if we have candidates and a non-empty prefix (or dot completion, or inside function call)
         let show_popup = match &context {
-            CompletionContext::Identifier { prefix } => !prefix.is_empty() && !candidates.is_empty(),
+            CompletionContext::Identifier { prefix } => {
+                !candidates.is_empty() && (!prefix.is_empty() || inside_function_call)
+            }
             CompletionContext::ModuleMember { .. } => !candidates.is_empty(),
             CompletionContext::FieldAccess { .. } => !candidates.is_empty(),
             CompletionContext::FilePath { .. } => false, // File path completion not used in editor
