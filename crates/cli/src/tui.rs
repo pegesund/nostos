@@ -872,6 +872,8 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         poll_git_panel(s);
         // Poll REPL panels for TUI commands (like opening tutorial)
         poll_repl_panel_commands(s);
+        // Poll for inspect() entries and update inspector panel
+        poll_inspect_entries(s);
     });
 
     // If a single file was passed as argument, open the browser at root
@@ -957,25 +959,33 @@ fn poll_repl_evals(s: &mut Cursive) {
 }
 
 /// Poll for inspect entries and update the inspector panel if open.
-fn poll_inspect_entries(s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>) {
+fn poll_inspect_entries(s: &mut Cursive) {
+    // Check if inspector is open first to avoid unnecessary work
+    let inspector_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().inspector_open
+    }).unwrap_or(false);
+
+    if !inspector_open {
+        return;
+    }
+
+    // Get engine from TuiState
+    let engine = match s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().engine.clone()
+    }) {
+        Some(e) => e,
+        None => return,
+    };
+
     let entries = engine.borrow().drain_inspect_entries();
     if entries.is_empty() {
         return;
     }
 
-    // Check if inspector is open
-    let inspector_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
-        state.borrow().inspector_open
-    }).unwrap_or(false);
-
-    if inspector_open {
-        // Update the existing panel
-        s.call_on_name("inspector_panel", |panel: &mut InspectorPanel| {
-            panel.process_entries(entries);
-        });
-    }
-    // If inspector is closed, entries are simply discarded
-    // (they were already drained from the queue)
+    // Update the inspector panel
+    s.call_on_name("inspector_panel", |panel: &mut InspectorPanel| {
+        panel.process_entries(entries);
+    });
 }
 
 /// Sync breakpoints from engine to debug panel.
