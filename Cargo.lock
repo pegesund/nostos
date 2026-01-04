@@ -3429,6 +3429,7 @@ name = "tests-ws"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "rand 0.8.5",
  "serde_json",
  "tokio",
  "tokio-tungstenite 0.21.0",

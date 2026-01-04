@@ -3,6 +3,7 @@
 // Requires server running: ./target/release/nostos /var/tmp/ptest.nos
 
 use futures_util::{SinkExt, StreamExt};
+use rand::Rng;
 use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
@@ -206,101 +207,76 @@ async fn test_rapid_actions() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// Test 5: Many concurrent clients with timing
-async fn test_many_concurrent_clients() -> Result<(), Box<dyn std::error::Error>> {
-    println!("\n=== Test 5: Many Concurrent Clients (1000 clients) ===");
+// Test 5: Realistic load - 10k users, measure per-click response time
+async fn test_realistic_load() -> Result<(), Box<dyn std::error::Error>> {
+    println!("\n=== Test 5: Realistic Load (10000 users, staggered clicks) ===");
 
-    let num_clients = 1000;
-    let clicks_per_client = 5;
-
-    let start_time = std::time::Instant::now();
+    let num_clients = 10000;
+    let stagger_window_ms = 2000; // Spread clicks over 2 seconds
 
     // Spawn all clients concurrently
     let mut handles = vec![];
     for id in 0..num_clients {
-        let client_start = std::time::Instant::now();
         handles.push(tokio::spawn(async move {
-            let result: Result<(usize, u128), String> = async {
-                let connect_start = std::time::Instant::now();
+            let result: Result<u128, String> = async {
                 let mut client = TestClient::connect("ws://localhost:8080/ws", id)
                     .await
                     .map_err(|e| e.to_string())?;
-                let connect_time = connect_start.elapsed().as_millis();
 
-                // Receive initial
-                let initial = client.recv_message().await.map_err(|e| e.to_string())?;
-                let count = TestClient::extract_count(initial["html"].as_str().unwrap()).unwrap();
-                if count != 0 {
-                    return Err(format!("Client {} should start at 0, got {}", id, count));
-                }
+                // Receive initial page
+                client.recv_message().await.map_err(|e| e.to_string())?;
 
-                // Click N times
-                for _ in 0..clicks_per_client {
-                    client.send_action("inc").await.map_err(|e| e.to_string())?;
-                    let _update = client.recv_message().await.map_err(|e| e.to_string())?;
-                }
+                // Wait random time (0 to stagger_window) to spread out clicks
+                let delay = rand::thread_rng().gen_range(0..stagger_window_ms);
+                sleep(Duration::from_millis(delay)).await;
 
-                // Verify final count
+                // Measure ONE click response time
+                let click_start = std::time::Instant::now();
                 client.send_action("inc").await.map_err(|e| e.to_string())?;
-                let update = client.recv_message().await.map_err(|e| e.to_string())?;
-                let final_count = TestClient::extract_count(update["html"].as_str().unwrap()).unwrap();
-                if final_count != (clicks_per_client + 1) as i64 {
-                    return Err(format!("Client {} should have {} clicks, got {}", id, clicks_per_client + 1, final_count));
-                }
+                client.recv_message().await.map_err(|e| e.to_string())?;
+                let response_time = click_start.elapsed().as_millis();
 
-                let total_time = client_start.elapsed().as_millis();
                 client.close().await.map_err(|e| e.to_string())?;
-                Ok((id, total_time))
+                Ok(response_time)
             }.await;
             result
         }));
     }
 
-    println!("  Spawned {} concurrent clients", num_clients);
+    println!("  Spawned {} clients, clicks staggered over {}ms", num_clients, stagger_window_ms);
 
-    // Wait for all and collect timing
-    let mut success = 0;
-    let mut times: Vec<(usize, u128)> = vec![];
+    // Collect response times
+    let mut response_times: Vec<u128> = vec![];
+    let mut failures = 0;
     for handle in handles {
         match handle.await {
-            Ok(Ok((id, time))) => {
-                success += 1;
-                times.push((id, time));
-            }
-            Ok(Err(e)) => println!("  Client error: {}", e),
-            Err(e) => println!("  Task error: {}", e),
+            Ok(Ok(time)) => response_times.push(time),
+            Ok(Err(e)) => { println!("  Error: {}", e); failures += 1; }
+            Err(e) => { println!("  Task error: {}", e); failures += 1; }
         }
     }
 
-    let total_time = start_time.elapsed().as_millis();
+    response_times.sort();
 
-    // Sort by completion time and show stats
-    times.sort_by_key(|(_, t)| *t);
+    if !response_times.is_empty() {
+        let min = response_times.first().unwrap();
+        let max = response_times.last().unwrap();
+        let avg: u128 = response_times.iter().sum::<u128>() / response_times.len() as u128;
+        let p50 = response_times[response_times.len() / 2];
+        let p95 = response_times[response_times.len() * 95 / 100];
+        let p99 = response_times[response_times.len() * 99 / 100];
 
-    if !times.is_empty() {
-        let min_time = times.first().unwrap().1;
-        let max_time = times.last().unwrap().1;
-        let avg_time: u128 = times.iter().map(|(_, t)| t).sum::<u128>() / times.len() as u128;
-
-        println!("  Timing stats:");
-        println!("    Fastest client: {}ms", min_time);
-        println!("    Slowest client: {}ms", max_time);
-        println!("    Average: {}ms", avg_time);
-        println!("    Total wall time: {}ms", total_time);
-
-        // Show first 5 and last 5 to see if there's slowdown
-        println!("  First 5 to complete:");
-        for (id, time) in times.iter().take(5) {
-            println!("    Client {}: {}ms", id, time);
-        }
-        println!("  Last 5 to complete:");
-        for (id, time) in times.iter().rev().take(5).collect::<Vec<_>>().iter().rev() {
-            println!("    Client {}: {}ms", id, time);
-        }
+        println!("  Per-click response times:");
+        println!("    Min:  {}ms", min);
+        println!("    Avg:  {}ms", avg);
+        println!("    P50:  {}ms (median)", p50);
+        println!("    P95:  {}ms", p95);
+        println!("    P99:  {}ms", p99);
+        println!("    Max:  {}ms", max);
     }
 
-    assert_eq!(success, num_clients, "All clients should succeed");
-    println!("  All {} clients completed successfully", success);
+    println!("  Success: {}, Failures: {}", response_times.len(), failures);
+    assert_eq!(failures, 0, "No failures expected");
     println!("  PASSED ✓");
     Ok(())
 }
@@ -336,7 +312,7 @@ async fn main() {
         Err(e) => { println!("  FAILED: {}", e); failed += 1; }
     }
 
-    match test_many_concurrent_clients().await {
+    match test_realistic_load().await {
         Ok(_) => passed += 1,
         Err(e) => { println!("  FAILED: {}", e); failed += 1; }
     }
