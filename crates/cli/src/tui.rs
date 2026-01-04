@@ -527,6 +527,8 @@ struct TuiState {
     last_focused_window: Option<String>,
     /// Saved window widths before fullscreen (exact values from layout)
     saved_window_widths: std::collections::HashMap<String, usize>,
+    /// Original source file path (for single-file mode)
+    source_file_path: Option<std::path::PathBuf>,
 }
 
 pub fn run_tui(args: &[String]) -> ExitCode {
@@ -650,6 +652,7 @@ pub fn run_tui(args: &[String]) -> ExitCode {
 
     // Load files or directories, track single files to open in editor
     let mut single_file_to_open: Option<String> = None;
+    let mut source_file_path: Option<std::path::PathBuf> = None;
     for arg in args {
         if !arg.starts_with('-') {
             let path = std::path::Path::new(arg);
@@ -668,6 +671,8 @@ pub fn run_tui(args: &[String]) -> ExitCode {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                     single_file_to_open = Some(stem.to_string());
                 }
+                // Track original file path for background saving
+                source_file_path = Some(path.to_path_buf());
             }
         }
     }
@@ -695,6 +700,7 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         fullscreen_window: None,
         last_focused_window: Some("repl_log".to_string()),
         saved_window_widths: std::collections::HashMap::new(),
+        source_file_path,
     })));
 
     // Components
@@ -889,6 +895,15 @@ pub fn run_tui(args: &[String]) -> ExitCode {
 fn log_to_repl(s: &mut Cursive, text: &str) {
     s.call_on_name("repl_log", |view: &mut FocusableConsole| {
         view.append(&format!("{}\n", text));
+    });
+}
+
+/// Save content to file in background thread (fire-and-forget)
+fn save_file_background(path: std::path::PathBuf, content: String) {
+    std::thread::spawn(move || {
+        if let Err(e) = std::fs::write(&path, &content) {
+            eprintln!("Background save failed for {:?}: {}", path, e);
+        }
     });
 }
 
@@ -2880,6 +2895,13 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
             };
             debug_log(&format!("Content length: {} chars", content.len()));
 
+            // Background save to original file if in single-file mode
+            if let Some(path) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                state.borrow().source_file_path.clone()
+            }).flatten() {
+                save_file_background(path, content.clone());
+            }
+
             // Extract actual definition names from the content
             let actual_names = extract_definition_names(&content);
             debug_log(&format!("Actual definition names in content: {:?}", actual_names));
@@ -3139,6 +3161,13 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                     return;
                 }
             };
+
+            // Background save to original file if in single-file mode
+            if let Some(path) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                state.borrow().source_file_path.clone()
+            }).flatten() {
+                save_file_background(path, content.clone());
+            }
 
             // Extract actual definition names from the content
             let actual_names = extract_definition_names(&content);
