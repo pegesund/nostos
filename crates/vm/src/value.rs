@@ -744,6 +744,9 @@ pub enum Instruction {
     // === Constants and moves ===
     /// Load constant: dst = constants[idx]
     LoadConst(Reg, ConstIdx),
+    /// Load function by name at runtime: dst = lookup(constants[idx])
+    /// Used for forward references where the function isn't compiled yet
+    LoadFunctionByName(Reg, ConstIdx),
     /// Copy: dst = src
     Move(Reg, Reg),
     /// Load unit: dst = ()

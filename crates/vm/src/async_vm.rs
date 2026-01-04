@@ -1311,6 +1311,19 @@ impl AsyncProcess {
                 let gc_value = self.heap.value_to_gc(&value);
                 set_reg!(dst, gc_value);
             }
+            LoadFunctionByName(dst, name_idx) => {
+                // Look up function by name at runtime (for forward references)
+                let name_value = get_const!(name_idx);
+                if let Value::String(name) = name_value {
+                    if let Some(func) = self.shared.functions.read().unwrap().get(&*name).cloned() {
+                        set_reg!(dst, GcValue::Function(func));
+                    } else {
+                        return Err(RuntimeError::Panic(format!("Function not found: {}", name)));
+                    }
+                } else {
+                    return Err(RuntimeError::Panic("LoadFunctionByName: expected string constant".to_string()));
+                }
+            }
             LoadUnit(dst) => set_reg!(dst, GcValue::Unit),
             LoadTrue(dst) => set_reg!(dst, GcValue::Bool(true)),
             LoadFalse(dst) => set_reg!(dst, GcValue::Bool(false)),

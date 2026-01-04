@@ -4175,8 +4175,8 @@ impl Compiler {
                     Ok(dst)
                 } else if self.functions.contains_key(name) {
                     // It's a function reference (exact match)
-                    let dst = self.alloc_reg();
                     let func = self.functions.get(name).unwrap().clone();
+                    let dst = self.alloc_reg();
                     let idx = self.chunk.add_constant(Value::Function(func));
                     self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                     Ok(dst)
@@ -4189,8 +4189,17 @@ impl Compiler {
                         .find(|k| k.starts_with(&prefix))
                         .cloned();
                     if let Some(key) = func_key {
-                        let dst = self.alloc_reg();
                         let func = self.functions.get(&key).unwrap().clone();
+                        // Check if this is a placeholder (empty code) - can't use it directly
+                        if func.code.code.is_empty() {
+                            // This is a forward reference to a function not yet compiled
+                            // We need to load it by name at runtime instead
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(key)));
+                            self.chunk.emit(Instruction::LoadFunctionByName(dst, name_idx), line);
+                            return Ok(dst);
+                        }
+                        let dst = self.alloc_reg();
                         let idx = self.chunk.add_constant(Value::Function(func));
                         self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                         return Ok(dst);
