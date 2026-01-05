@@ -159,6 +159,10 @@ pub struct SourceManager {
 
     /// Definitions created in REPL (no module yet)
     repl_defs: HashMap<String, DefinitionGroup>,
+
+    /// Source files tracked by relative path (for file-by-file editing mode)
+    /// Key is relative path from project root (e.g., "main.nos", "utils/math.nos")
+    source_files: HashMap<String, String>,
 }
 
 impl SourceManager {
@@ -170,6 +174,7 @@ impl SourceManager {
             modules: HashMap::new(),
             def_index: HashMap::new(),
             repl_defs: HashMap::new(),
+            source_files: HashMap::new(),
         };
 
         manager.initialize()?;
@@ -1808,6 +1813,111 @@ impl SourceManager {
         }
 
         Ok(())
+    }
+
+    // ============================================================
+    // File-based editing methods (for file-by-file editing mode)
+    // ============================================================
+
+    /// Load all source files from the project directory into memory
+    pub fn load_source_files(&mut self) -> Result<(), String> {
+        let nostos_exclude = self.project_root.join(".nostos");
+
+        // Clear existing
+        self.source_files.clear();
+
+        // Find all .nos files
+        for entry in WalkDir::new(&self.project_root)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let path = e.path();
+                path.extension().map(|ext| ext == "nos").unwrap_or(false)
+                    && !path.starts_with(&nostos_exclude)
+            })
+        {
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(&self.project_root)
+                .map_err(|_| format!("Failed to get relative path for {}", path.display()))?
+                .to_string_lossy()
+                .to_string();
+
+            let content = fs::read_to_string(path)
+                .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+
+            self.source_files.insert(relative, content);
+        }
+
+        Ok(())
+    }
+
+    /// Get list of source files (relative paths)
+    pub fn get_source_files(&self) -> Vec<String> {
+        let mut files: Vec<String> = self.source_files.keys().cloned().collect();
+        files.sort();
+        files
+    }
+
+    /// Get content of a source file by relative path
+    pub fn get_file_content(&self, path: &str) -> Option<String> {
+        self.source_files.get(path).cloned()
+    }
+
+    /// Get content of a source file directly from disk (not cached)
+    pub fn read_file_from_disk(&self, relative_path: &str) -> Result<String, String> {
+        let full_path = self.project_root.join(relative_path);
+        fs::read_to_string(&full_path)
+            .map_err(|e| format!("Failed to read {}: {}", full_path.display(), e))
+    }
+
+    /// Save content to a source file directly
+    /// Updates both the cache and the disk file
+    pub fn save_file_content(&mut self, relative_path: &str, content: &str) -> Result<(), String> {
+        let full_path = self.project_root.join(relative_path);
+
+        // Create parent directories if needed
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create directory: {}", e))?;
+        }
+
+        // Write to disk
+        fs::write(&full_path, content)
+            .map_err(|e| format!("Failed to write {}: {}", full_path.display(), e))?;
+
+        // Update cache
+        self.source_files.insert(relative_path.to_string(), content.to_string());
+
+        Ok(())
+    }
+
+    /// Check if a file exists (by relative path)
+    pub fn file_exists(&self, relative_path: &str) -> bool {
+        self.project_root.join(relative_path).exists()
+    }
+
+    /// Scan the project directory for .nos files (without caching)
+    pub fn scan_source_files(&self) -> Vec<String> {
+        let nostos_exclude = self.project_root.join(".nostos");
+        let mut files = Vec::new();
+
+        for entry in WalkDir::new(&self.project_root)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let path = e.path();
+                path.extension().map(|ext| ext == "nos").unwrap_or(false)
+                    && !path.starts_with(&nostos_exclude)
+            })
+        {
+            if let Ok(relative) = entry.path().strip_prefix(&self.project_root) {
+                files.push(relative.to_string_lossy().to_string());
+            }
+        }
+
+        files.sort();
+        files
     }
 }
 

@@ -673,6 +673,8 @@ pub fn run_tui(args: &[String]) -> ExitCode {
                 }
                 // Track original file path for background saving
                 source_file_path = Some(path.to_path_buf());
+                // Enable file-by-file editing mode for this single file
+                engine.set_single_file_path(path.to_path_buf());
             }
         }
     }
@@ -2778,8 +2780,18 @@ fn create_fullscreen_console_view(content: &str) -> impl View {
 /// Create an editor view for a given name
 /// If read_only is true, the editor will be in view-only mode (for eval'd functions)
 fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: &str, read_only: bool) -> impl View {
-    let source = engine.borrow().get_source(name);
-    let is_new_definition = source.starts_with("Not found");
+    // Check if this is a file:path name (file-by-file editing mode)
+    let (source, is_file_mode) = if name.starts_with("file:") {
+        let file_path = &name[5..]; // Strip "file:" prefix
+        let content = engine.borrow().get_file_content(file_path)
+            .unwrap_or_else(|| format!("# New file: {}\n\n", file_path));
+        (content, true)
+    } else {
+        let source = engine.borrow().get_source(name);
+        (source, false)
+    };
+
+    let is_new_definition = !is_file_mode && source.starts_with("Not found");
     let source = if is_new_definition && !read_only {
         // Use simple name (without module prefix) for the placeholder
         let simple_name = name.rsplit('.').next().unwrap_or(name);
@@ -2906,6 +2918,33 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
             }
 
             let mut engine = engine_save.borrow_mut();
+
+            // Check if this is a file-mode editor (file:path)
+            if name_for_save.starts_with("file:") {
+                let file_path = &name_for_save[5..]; // Strip "file:" prefix
+                debug_log(&format!("Saving as FILE: {}", file_path));
+
+                // Save file content directly
+                match engine.save_file_content(file_path, &content) {
+                    Ok(()) => {
+                        debug_log(&format!("File saved OK: {}", file_path));
+                        drop(engine);
+                        log_to_repl(s, &format!("Saved {}", file_path));
+
+                        // Mark editor as not dirty
+                        let editor_id = format!("editor_{}", name_for_save);
+                        s.call_on_name(&editor_id, |v: &mut CodeEditor| {
+                            v.mark_saved();
+                        });
+                    }
+                    Err(e) => {
+                        debug_log(&format!("File save ERROR: {}", e));
+                        drop(engine);
+                        s.add_layer(Dialog::info(format!("Save error: {}", e)));
+                    }
+                }
+                return;
+            }
 
             // Check if this is a metadata file
             if engine.is_metadata(&name_for_save) {
@@ -3175,6 +3214,26 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
             debug_log(&format!("Ctrl+O: definition names: {:?}", actual_names));
 
             let mut engine = engine_compile.borrow_mut();
+
+            // Check if this is file-mode (file:path)
+            if name_for_compile.starts_with("file:") {
+                let file_path = &name_for_compile[5..];
+                debug_log(&format!("Ctrl+O: Saving file: {}", file_path));
+                match engine.save_file_content(file_path, &content) {
+                    Ok(()) => {
+                        drop(engine);
+                        log_to_repl(s, &format!("Saved {}", file_path));
+                        s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
+                            v.mark_saved();
+                        });
+                    }
+                    Err(e) => {
+                        drop(engine);
+                        log_to_repl(s, &format!("Save error: {}", e));
+                    }
+                }
+                return;
+            }
 
             // Check if this is a metadata file
             if engine.is_metadata(&name_for_compile) {
@@ -3490,6 +3549,10 @@ fn open_browser(s: &mut Cursive) {
 fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: Vec<String>) {
     // Get browser items with mutable borrow (syncs dynamic functions)
     let items = engine.borrow_mut().get_browser_items(&path);
+
+    // Check if we're showing files at root level (file mode)
+    let is_file_mode = path.is_empty() && items.iter().any(|item| matches!(item, BrowserItem::File { .. }));
+
     // Now borrow immutably for the rest
     let engine_ref = engine.borrow();
 
@@ -3624,9 +3687,43 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 styled
             }
             BrowserItem::Metadata { .. } => StyledString::plain("⚙  _meta (together directives)"),
+            BrowserItem::File { name, .. } => StyledString::plain(format!("📄 {}", name)),
         };
         select.add_item(label, item.clone());
     }
+
+    // Compute initial preview for the first item (if any)
+    let initial_preview: StyledString = if let Some(first_item) = items.first() {
+        match first_item {
+            BrowserItem::File { path: file_path, .. } => {
+                if let Some(content) = engine_ref.get_file_content(file_path) {
+                    syntax_highlight_code(&content)
+                } else {
+                    StyledString::plain(format!("File: {}", file_path))
+                }
+            }
+            BrowserItem::Function { .. } => {
+                let full_name = engine_ref.get_full_name(&path, first_item);
+                let source = engine_ref.get_source(&full_name);
+                syntax_highlight_code(&source)
+            }
+            BrowserItem::Type { .. } => {
+                let full_name = engine_ref.get_full_name(&path, first_item);
+                let source = engine_ref.get_source(&full_name);
+                syntax_highlight_code(&source)
+            }
+            BrowserItem::Module(name) if name == ".." => {
+                StyledString::plain("(parent directory)")
+            }
+            BrowserItem::Module(name) => {
+                StyledString::plain(format!("Module: {}", name))
+            }
+            _ => StyledString::plain("Select an item to preview")
+        }
+    } else {
+        StyledString::plain("No items")
+    };
+
     drop(engine_ref);
 
     // Handle selection change - update preview pane with syntax highlighting
@@ -3689,6 +3786,14 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 let full_name = format!("{}._meta", module);
                 let source = engine.borrow().get_source(&full_name);
                 syntax_highlight_code(&source)
+            }
+            BrowserItem::File { path, .. } => {
+                // Show file content preview
+                if let Some(content) = engine.borrow().get_file_content(path) {
+                    syntax_highlight_code(&content)
+                } else {
+                    StyledString::plain(format!("File: {}", path))
+                }
             }
         };
 
@@ -3776,6 +3881,13 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 s.pop_layer();
                 open_editor(s, &full_name);
             }
+            BrowserItem::File { path, .. } => {
+                // Open file editor
+                let full_name = format!("file:{}", path);
+                debug_log(&format!("Browser: selected File: {}", path));
+                s.pop_layer();
+                open_editor(s, &full_name);
+            }
         }
     });
 
@@ -3787,7 +3899,7 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
 
     // Create preview pane (read-only code view)
     // Text wraps automatically for readability
-    let preview = TextView::new("Select an item to preview")
+    let preview = TextView::new(initial_preview)
         .with_name("browser_preview");
     let preview_scroll = preview
         .scrollable()
@@ -3799,10 +3911,15 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
         .child(Panel::new(preview_scroll).title("Preview"));
 
     // Create dialog with navigation hints
+    let menu_text = if is_file_mode {
+        "Enter: Open | n: New File | Ctrl+F: Search | Esc: Close"
+    } else {
+        "Enter: Open | a: All | n: New | m: Module | r: Rename | d: Delete | e: Error | g: Graph | i: History | Ctrl+F: Search | Esc: Close"
+    };
     let dialog = Dialog::around(
         LinearLayout::vertical()
             .child(split_view)
-            .child(TextView::new("Enter: Open | a: All | n: New | m: Module | r: Rename | d: Delete | e: Error | g: Graph | i: History | Ctrl+F: Search | Esc: Close"))
+            .child(TextView::new(menu_text))
     )
     .title(&title);
 

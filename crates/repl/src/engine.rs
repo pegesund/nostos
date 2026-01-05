@@ -22,6 +22,8 @@ pub enum BrowserItem {
     Module(String),
     /// Special folder for imported/extension modules
     Imports,
+    /// A source file (for file-by-file editing mode)
+    File { name: String, path: String },
     Function { name: String, signature: String, doc: Option<String>, eval_created: bool, is_public: bool },
     Type { name: String, eval_created: bool },
     Trait { name: String, eval_created: bool },
@@ -171,6 +173,8 @@ pub struct ReplEngine {
     var_counter: u64,
     /// Source manager for directory-based projects
     source_manager: Option<SourceManager>,
+    /// Single source file path (for single-file TUI mode)
+    single_file_path: Option<PathBuf>,
     /// Compilation status per definition (qualified name -> status)
     compile_status: HashMap<String, CompileStatus>,
     /// Last known good signature for each function (for detecting signature changes after error fix)
@@ -712,6 +716,7 @@ impl ReplEngine {
             var_bindings: HashMap::new(),
             var_counter: 0,
             source_manager: None,
+            single_file_path: None,
             compile_status: HashMap::new(),
             last_known_signatures: HashMap::new(),
             inspect_receiver,
@@ -3995,6 +4000,11 @@ impl ReplEngine {
         // Store source manager before compilation so we can still read sources on error
         self.source_manager = Some(sm);
 
+        // Load source files into memory for file-based browsing
+        if let Some(ref mut sm) = self.source_manager {
+            let _ = sm.load_source_files();
+        }
+
         // Compile all bodies, collecting errors
         let errors = self.compiler.compile_all_collecting_errors();
 
@@ -4066,6 +4076,88 @@ impl ReplEngine {
         } else {
             Err("No project loaded (use directory mode)".to_string())
         }
+    }
+
+    // ============================================================
+    // File-based editing methods
+    // ============================================================
+
+    /// Get list of source files in the project (relative paths)
+    pub fn get_source_files(&self) -> Vec<String> {
+        if let Some(ref sm) = self.source_manager {
+            let files = sm.get_source_files();
+            if !files.is_empty() {
+                return files;
+            }
+            // If cache is empty, scan directory directly
+            sm.scan_source_files()
+        } else {
+            vec![]
+        }
+    }
+
+    /// Get content of a source file by path
+    pub fn get_file_content(&self, path: &str) -> Option<String> {
+        // Single-file mode: read directly from the file path
+        if let Some(ref single_path) = self.single_file_path {
+            if single_path.to_string_lossy() == path {
+                return std::fs::read_to_string(single_path).ok();
+            }
+        }
+
+        // Project mode: use source manager
+        if let Some(ref sm) = self.source_manager {
+            // Try cache first, fall back to reading from disk
+            sm.get_file_content(path)
+                .or_else(|| sm.read_file_from_disk(path).ok())
+        } else {
+            // Try reading absolute path directly
+            std::fs::read_to_string(path).ok()
+        }
+    }
+
+    /// Save content to a source file directly
+    pub fn save_file_content(&mut self, path: &str, content: &str) -> Result<(), String> {
+        // Single-file mode: write directly to the file path
+        if let Some(ref single_path) = self.single_file_path {
+            if single_path.to_string_lossy() == path {
+                return std::fs::write(single_path, content)
+                    .map_err(|e| format!("Failed to save file: {}", e));
+            }
+        }
+
+        // Project mode: use source manager
+        if let Some(ref mut sm) = self.source_manager {
+            sm.save_file_content(path, content)
+        } else {
+            // Try writing to absolute path directly
+            std::fs::write(path, content)
+                .map_err(|e| format!("Failed to save file: {}", e))
+        }
+    }
+
+    /// Load source files into memory (for file browser)
+    pub fn load_source_files(&mut self) -> Result<(), String> {
+        if let Some(ref mut sm) = self.source_manager {
+            sm.load_source_files()
+        } else {
+            Err("No project loaded".to_string())
+        }
+    }
+
+    /// Set the single file path (for single-file TUI mode)
+    pub fn set_single_file_path(&mut self, path: PathBuf) {
+        self.single_file_path = Some(path);
+    }
+
+    /// Get the single file path if set
+    pub fn get_single_file_path(&self) -> Option<&PathBuf> {
+        self.single_file_path.as_ref()
+    }
+
+    /// Check if we're in single-file mode
+    pub fn is_single_file_mode(&self) -> bool {
+        self.single_file_path.is_some() && self.source_manager.is_none()
     }
 
     /// Save source to disk and attempt compilation, updating compile status.
@@ -5675,6 +5767,7 @@ impl ReplEngine {
     /// Special paths:
     /// - ["imports"] -> list of imported/extension modules
     /// - ["imports", "modname", ...] -> items within that imported module
+    /// - ["files"] -> list of source files for file-by-file editing
     pub fn get_browser_items(&mut self, path: &[String]) -> Vec<BrowserItem> {
         // Sync any dynamic items from VM's eval() before building the list
         self.sync_dynamic_functions();
@@ -5695,6 +5788,47 @@ impl ReplEngine {
                 // e.g., ["imports", "nalgebra", "vec"] -> ["nalgebra", "vec"]
                 let actual_path: Vec<String> = path[1..].to_vec();
                 return self.get_browser_items_internal(&actual_path, false);
+            }
+        }
+
+        // At root level, show source files instead of individual definitions
+        if path.is_empty() {
+            // Single-file mode: show the single file
+            if let Some(file_path) = &self.single_file_path {
+                let name = file_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "file.nos".to_string());
+                let path_str = file_path.to_string_lossy().to_string();
+                let mut items = vec![BrowserItem::File { name, path: path_str }];
+
+                // Add imports folder if there are imported modules
+                if !self.imported_modules.is_empty() {
+                    items.push(BrowserItem::Imports);
+                }
+
+                return items;
+            }
+
+            // Project mode: show all source files
+            if self.source_manager.is_some() {
+                let files = self.get_source_files();
+                if !files.is_empty() {
+                    let mut items: Vec<BrowserItem> = files.iter().map(|p| {
+                        let name = std::path::Path::new(p)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| p.clone());
+                        BrowserItem::File { name, path: p.clone() }
+                    }).collect();
+
+                    // Add imports folder if there are imported modules
+                    if !self.imported_modules.is_empty() {
+                        items.push(BrowserItem::Imports);
+                    }
+
+                    return items;
+                }
             }
         }
 
@@ -5979,6 +6113,7 @@ impl ReplEngine {
         match item {
             BrowserItem::Module(name) => format!("{}{}", prefix, name),
             BrowserItem::Imports => "imports".to_string(),
+            BrowserItem::File { path, .. } => format!("file:{}", path),
             BrowserItem::Function { name, .. } => format!("{}{}", prefix, name),
             BrowserItem::Type { name, .. } => format!("{}{}", prefix, name),
             BrowserItem::Trait { name, .. } => format!("{}{}", prefix, name),
