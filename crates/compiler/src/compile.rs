@@ -503,10 +503,10 @@ pub fn extract_doc_comment(source: &str, span_start: usize) -> Option<String> {
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum CompileError {
     #[error("unknown variable `{name}`")]
-    UnknownVariable { name: String, span: Span },
+    UnknownVariable { name: String, suggestions: Vec<String>, span: Span },
 
     #[error("unknown function `{name}`")]
-    UnknownFunction { name: String, span: Span },
+    UnknownFunction { name: String, suggestions: Vec<String>, span: Span },
 
     #[error("unknown type `{name}`")]
     UnknownType { name: String, span: Span },
@@ -566,6 +566,54 @@ pub enum CompileError {
     AmbiguousName { name: String, modules: String, span: Span },
 }
 
+/// Compute Levenshtein edit distance between two strings.
+fn edit_distance(s1: &str, s2: &str) -> usize {
+    let len1 = s1.chars().count();
+    let len2 = s2.chars().count();
+
+    if len1 == 0 { return len2; }
+    if len2 == 0 { return len1; }
+
+    let s1_chars: Vec<char> = s1.chars().collect();
+    let s2_chars: Vec<char> = s2.chars().collect();
+
+    let mut prev_row: Vec<usize> = (0..=len2).collect();
+    let mut curr_row: Vec<usize> = vec![0; len2 + 1];
+
+    for i in 1..=len1 {
+        curr_row[0] = i;
+        for j in 1..=len2 {
+            let cost = if s1_chars[i-1] == s2_chars[j-1] { 0 } else { 1 };
+            curr_row[j] = (prev_row[j] + 1)
+                .min(curr_row[j-1] + 1)
+                .min(prev_row[j-1] + cost);
+        }
+        std::mem::swap(&mut prev_row, &mut curr_row);
+    }
+    prev_row[len2]
+}
+
+/// Find similar names from a list of candidates.
+/// Returns names with edit distance <= threshold, sorted by distance.
+fn find_similar_names(name: &str, candidates: &[&str], max_suggestions: usize) -> Vec<String> {
+    let name_len = name.chars().count();
+    // Threshold scales with name length: shorter names need exact/near matches
+    let threshold = if name_len <= 3 { 1 } else { 2 };
+
+    let mut suggestions: Vec<(usize, String)> = candidates
+        .iter()
+        .filter(|c| **c != name) // Don't suggest the same name
+        .map(|c| (edit_distance(name, c), c.to_string()))
+        .filter(|(d, _)| *d <= threshold)
+        .collect();
+
+    suggestions.sort_by_key(|(d, _)| *d);
+    suggestions.into_iter()
+        .take(max_suggestions)
+        .map(|(_, s)| s)
+        .collect()
+}
+
 impl CompileError {
     /// Get the span associated with this error.
     pub fn span(&self) -> Span {
@@ -594,17 +642,95 @@ impl CompileError {
         }
     }
 
+    /// Improve type error messages by parsing the generic message and creating
+    /// contextual, user-friendly errors.
+    fn improve_type_error(message: &str, span: Span) -> nostos_syntax::SourceError {
+        use nostos_syntax::SourceError;
+
+        // Parse "no method `X` found for type `Y`" pattern (from UFCS method calls)
+        if message.starts_with("no method `") {
+            // Already a good message format, just add context
+            return SourceError::compile(message.to_string(), span)
+                .with_hint("available methods depend on the type; check the type's documentation")
+                .with_note("method calls like `x.foo()` are transformed to `foo(x)` via UFCS");
+        }
+
+        // Parse "Cannot unify types: X and Y" pattern
+        if let Some(types_part) = message.strip_prefix("Cannot unify types: ") {
+            let parts: Vec<&str> = types_part.split(" and ").collect();
+            if parts.len() == 2 {
+                let type1 = parts[0].trim();
+                let type2 = parts[1].trim();
+
+                // Case 1: Missing else branch (returns unit)
+                if type1 == "()" || type2 == "()" {
+                    let non_unit = if type1 == "()" { type2 } else { type1 };
+                    return SourceError::missing_else_branch(non_unit, span);
+                }
+
+                // Case 2: If branch type mismatch (neither is unit)
+                if type1 != type2 {
+                    // Check for common patterns
+
+                    // Int vs String - common beginner mistake
+                    if (type1 == "Int" && type2 == "String") || (type1 == "String" && type2 == "Int") {
+                        return SourceError::compile(
+                            format!("type mismatch: expected `{}`, found `{}`", type1, type2),
+                            span,
+                        ).with_hint("cannot mix `Int` and `String` types")
+                         .with_note("use `show(value)` to convert a number to a string");
+                    }
+
+                    // Int vs Float - numeric type mismatch
+                    if (type1 == "Int" && type2 == "Float") || (type1 == "Float" && type2 == "Int") {
+                        return SourceError::compile(
+                            format!("type mismatch: expected `{}`, found `{}`", type1, type2),
+                            span,
+                        ).with_hint("cannot implicitly convert between `Int` and `Float`")
+                         .with_note("use `toFloat(x)` to convert Int to Float, or `round(x)` for Float to Int");
+                    }
+
+                    // Bool vs non-Bool in condition
+                    if type1 == "Bool" || type2 == "Bool" {
+                        let non_bool = if type1 == "Bool" { type2 } else { type1 };
+                        return SourceError::condition_not_bool(non_bool, span);
+                    }
+
+                    // List type mismatch
+                    if type1.starts_with("List[") || type2.starts_with("List[") {
+                        return SourceError::list_type_mismatch(type1, type2, span);
+                    }
+
+                    // Generic if branch mismatch
+                    return SourceError::if_branch_type_mismatch(type1, type2, span);
+                }
+            }
+        }
+
+        // Fallback: return the original message with improved formatting
+        SourceError::compile(message.to_string(), span)
+            .with_hint("ensure all expressions have compatible types")
+    }
+
     /// Convert to a SourceError for pretty printing.
     pub fn to_source_error(&self) -> nostos_syntax::SourceError {
         use nostos_syntax::SourceError;
 
         let span = self.span();
         match self {
-            CompileError::UnknownVariable { name, .. } => {
-                SourceError::unknown_variable(name, span)
+            CompileError::UnknownVariable { name, suggestions, .. } => {
+                if suggestions.is_empty() {
+                    SourceError::unknown_variable(name, span)
+                } else {
+                    SourceError::unknown_variable_with_suggestions(name, suggestions, span)
+                }
             }
-            CompileError::UnknownFunction { name, .. } => {
-                SourceError::unknown_function(name, span)
+            CompileError::UnknownFunction { name, suggestions, .. } => {
+                if suggestions.is_empty() {
+                    SourceError::unknown_function(name, span)
+                } else {
+                    SourceError::unknown_variable_with_suggestions(name, suggestions, span)
+                }
             }
             CompileError::UnknownType { name, .. } => {
                 SourceError::unknown_type(name, span)
@@ -655,7 +781,7 @@ impl CompileError {
                 )
             }
             CompileError::TypeError { message, .. } => {
-                SourceError::compile(message.clone(), span)
+                Self::improve_type_error(message, span)
             }
             CompileError::MvarSafetyViolation { message, .. } => {
                 SourceError::compile(format!("mvar safety violation: {}", message), span)
@@ -4246,8 +4372,19 @@ impl Compiler {
                         self.current_fn_mvar_reads.insert(mvar_name);
                         return Ok(dst);
                     }
+                    // Find similar names from locals, functions, and mvars
+                    let local_names: Vec<&str> = self.locals.keys().map(|s| s.as_str()).collect();
+                    let fn_names: Vec<&str> = self.functions.keys().map(|s| s.as_str()).collect();
+                    let mvar_names: Vec<&str> = self.mvars.keys().map(|s| s.as_str()).collect();
+                    let all_names: Vec<&str> = local_names.iter()
+                        .chain(fn_names.iter())
+                        .chain(mvar_names.iter())
+                        .copied()
+                        .collect();
+                    let suggestions = find_similar_names(name, &all_names, 3);
                     Err(CompileError::UnknownVariable {
                         name: name.clone(),
+                        suggestions,
                         span: ident.span,
                     })
                 }
@@ -6503,7 +6640,23 @@ impl Compiler {
                 all_args.extend(args.iter().cloned());
 
                 let func_expr = Expr::Var(method.clone());
-                self.compile_call(&func_expr, &[], &all_args, is_tail)
+                match self.compile_call(&func_expr, &[], &all_args, is_tail) {
+                    Ok(r) => Ok(r),
+                    Err(CompileError::UnknownVariable { name, span, .. }) |
+                    Err(CompileError::UnknownFunction { name, span, .. }) => {
+                        // Improve error message: this was a method call, not a plain variable
+                        let receiver_type = self.expr_type_name(obj)
+                            .unwrap_or_else(|| "unknown".to_string());
+                        Err(CompileError::TypeError {
+                            message: format!(
+                                "no method `{}` found for type `{}`",
+                                name, receiver_type
+                            ),
+                            span,
+                        })
+                    }
+                    Err(e) => Err(e),
+                }
             }
 
             // Index access
@@ -8398,8 +8551,11 @@ impl Compiler {
                     // Function exists in fn_asts but not yet compiled (forward reference or mutual recursion)
                     // For now, this is an error - mutual recursion requires forward declarations
                     // TODO: Support forward declarations for mutual recursion
+                    let fn_names: Vec<&str> = self.functions.keys().map(|s| s.as_str()).collect();
+                    let suggestions = find_similar_names(&final_call_name, &fn_names, 3);
                     return Err(CompileError::UnknownFunction {
                         name: final_call_name,
+                        suggestions,
                         span: func.span(),
                     });
                 }
@@ -9028,10 +9184,15 @@ impl Compiler {
         // Get the original function's AST
         let fn_def = match self.fn_asts.get(base_name) {
             Some(def) => def.clone(),
-            None => return Err(CompileError::UnknownFunction {
-                name: base_name.to_string(),
-                span: Span::default(),
-            }),
+            None => {
+                let fn_names: Vec<&str> = self.functions.keys().map(|s| s.as_str()).collect();
+                let suggestions = find_similar_names(base_name, &fn_names, 3);
+                return Err(CompileError::UnknownFunction {
+                    name: base_name.to_string(),
+                    suggestions,
+                    span: Span::default(),
+                });
+            }
         };
 
         // Extract the module path from the base_name (e.g., "json.jsonParse" -> ["json"])
@@ -10827,8 +10988,16 @@ impl Compiler {
                         // Track mvar write for deadlock detection
                         self.current_fn_mvar_writes.insert(mvar_name);
                     } else {
+                        let local_names: Vec<&str> = self.locals.keys().map(|s| s.as_str()).collect();
+                        let mvar_names: Vec<&str> = self.mvars.keys().map(|s| s.as_str()).collect();
+                        let all_names: Vec<&str> = local_names.iter()
+                            .chain(mvar_names.iter())
+                            .copied()
+                            .collect();
+                        let suggestions = find_similar_names(&ident.node, &all_names, 3);
                         return Err(CompileError::UnknownVariable {
                             name: ident.node.clone(),
+                            suggestions,
                             span: ident.span,
                         });
                     }
@@ -16826,7 +16995,7 @@ mod tests {
         let source = "main() = x + 1";
         let err = compile_should_fail(source);
         match err {
-            CompileError::UnknownVariable { name, span } => {
+            CompileError::UnknownVariable { name, span, .. } => {
                 assert_eq!(name, "x");
                 // 'x' starts at position 9 in the source
                 assert_eq!(span.start, 9);
@@ -16884,7 +17053,7 @@ mod tests {
         let source = "main() = {\n    a = 1\n    b = c + a\n}";
         let err = compile_should_fail(source);
         match err {
-            CompileError::UnknownVariable { name, span } => {
+            CompileError::UnknownVariable { name, span, .. } => {
                 assert_eq!(name, "c");
                 // Verify the span points to 'c' by extracting from source
                 let pointed_text = &source[span.start..span.end];

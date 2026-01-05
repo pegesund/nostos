@@ -292,6 +292,132 @@ impl SourceError {
         Self::compile(format!("{} is not yet implemented", feature), span)
             .with_note("this feature is planned for a future version")
     }
+
+    /// Method not found error (for UFCS method calls like `x.foo()`).
+    pub fn method_not_found(method: &str, receiver_type: &str, span: Span) -> Self {
+        Self::compile(
+            format!("no method `{}` found for type `{}`", method, receiver_type),
+            span,
+        )
+        .with_hint(format!(
+            "the type `{}` does not have a method named `{}`",
+            receiver_type, method
+        ))
+    }
+
+    /// Type mismatch in list literal.
+    pub fn list_type_mismatch(expected: &str, found: &str, span: Span) -> Self {
+        Self::compile(
+            format!(
+                "mismatched types in list: expected `{}`, found `{}`",
+                expected, found
+            ),
+            span,
+        )
+        .with_hint("all elements in a list must have the same type")
+    }
+
+    /// Missing else branch in if expression used as value.
+    pub fn missing_else_branch(then_type: &str, span: Span) -> Self {
+        Self::compile(
+            format!(
+                "`if` without `else` cannot return a value of type `{}`",
+                then_type
+            ),
+            span,
+        )
+        .with_hint("add an `else` branch, or change the `then` branch to return `()`")
+        .with_note("an `if` expression without `else` returns `()` (unit) when the condition is false")
+    }
+
+    /// If branch type mismatch.
+    pub fn if_branch_type_mismatch(then_type: &str, else_type: &str, span: Span) -> Self {
+        Self::compile(
+            format!(
+                "`if` and `else` branches have incompatible types: `{}` vs `{}`",
+                then_type, else_type
+            ),
+            span,
+        )
+        .with_hint("both branches must return the same type")
+    }
+
+    /// Unknown variable with similar name suggestions.
+    pub fn unknown_variable_with_suggestions(name: &str, suggestions: &[String], span: Span) -> Self {
+        let err = Self::compile(format!("cannot find value `{}` in this scope", name), span);
+        if suggestions.is_empty() {
+            err.with_hint(format!("did you mean to define `{}` first?", name))
+        } else if suggestions.len() == 1 {
+            err.with_hint(format!("did you mean `{}`?", suggestions[0]))
+        } else {
+            err.with_hint(format!("did you mean one of: {}?", suggestions.join(", ")))
+        }
+    }
+
+    /// Match pattern type mismatch.
+    pub fn match_pattern_type_mismatch(scrutinee_type: &str, pattern_type: &str, span: Span) -> Self {
+        Self::compile(
+            format!(
+                "pattern type `{}` does not match the matched value type `{}`",
+                pattern_type, scrutinee_type
+            ),
+            span,
+        )
+        .with_hint(format!(
+            "the value being matched has type `{}`, but the pattern expects `{}`",
+            scrutinee_type, pattern_type
+        ))
+    }
+
+    /// Condition type error (non-boolean condition).
+    pub fn condition_not_bool(found_type: &str, span: Span) -> Self {
+        Self::compile(
+            format!(
+                "expected `Bool` condition, found `{}`",
+                found_type
+            ),
+            span,
+        )
+        .with_hint("the condition in `if` must be a boolean expression")
+    }
+
+    /// Wrong argument type.
+    pub fn argument_type_mismatch(param_name: &str, expected: &str, found: &str, span: Span) -> Self {
+        Self::compile(
+            format!(
+                "mismatched types for argument `{}`: expected `{}`, found `{}`",
+                param_name, expected, found
+            ),
+            span,
+        )
+    }
+
+    /// Binary operator type mismatch.
+    pub fn binary_op_type_mismatch(op: &str, left_type: &str, right_type: &str, span: Span) -> Self {
+        Self::compile(
+            format!(
+                "cannot apply operator `{}` to types `{}` and `{}`",
+                op, left_type, right_type
+            ),
+            span,
+        )
+        .with_hint(format!(
+            "operator `{}` requires both operands to be the same numeric type",
+            op
+        ))
+    }
+
+    /// String concatenation type error.
+    pub fn concat_type_mismatch(found_type: &str, span: Span) -> Self {
+        Self::compile(
+            format!(
+                "cannot concatenate `String` with `{}`",
+                found_type
+            ),
+            span,
+        )
+        .with_hint("use `show()` to convert to string, e.g., `\"text\" ++ show(value)`")
+    }
 }
 
 // Runtime error constructors
