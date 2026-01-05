@@ -3687,7 +3687,14 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 styled
             }
             BrowserItem::Metadata { .. } => StyledString::plain("⚙  _meta (together directives)"),
-            BrowserItem::File { name, .. } => StyledString::plain(format!("📄 {}", name)),
+            BrowserItem::File { name, path } => {
+                let has_errors = engine_ref.file_has_errors(path);
+                if has_errors {
+                    StyledString::plain(format!("🔴 📄 {}", name))
+                } else {
+                    StyledString::plain(format!("📄 {}", name))
+                }
+            }
         };
         select.add_item(label, item.clone());
     }

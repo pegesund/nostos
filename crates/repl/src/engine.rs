@@ -4096,6 +4096,22 @@ impl ReplEngine {
         }
     }
 
+    /// Check if a source file has parse errors
+    pub fn file_has_errors(&self, path: &str) -> bool {
+        if let Some(ref sm) = self.source_manager {
+            sm.file_has_errors(path)
+        } else {
+            false
+        }
+    }
+
+    /// Revalidate a file for parse errors (call after content changes)
+    pub fn revalidate_file(&mut self, path: &str, content: &str) {
+        if let Some(ref mut sm) = self.source_manager {
+            sm.revalidate_file(path, content);
+        }
+    }
+
     /// Get content of a source file by path
     pub fn get_file_content(&self, path: &str) -> Option<String> {
         // Single-file mode: read directly from the file path
