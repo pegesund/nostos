@@ -166,6 +166,9 @@ pub struct SourceManager {
 
     /// Files that failed to parse (relative paths)
     files_with_errors: HashSet<String>,
+
+    /// Files that compiled successfully (relative paths)
+    files_compiled_ok: HashSet<String>,
 }
 
 impl SourceManager {
@@ -179,6 +182,7 @@ impl SourceManager {
             repl_defs: HashMap::new(),
             source_files: HashMap::new(),
             files_with_errors: HashSet::new(),
+            files_compiled_ok: HashSet::new(),
         };
 
         manager.initialize()?;
@@ -1849,6 +1853,7 @@ impl SourceManager {
 
         // Clear existing
         self.source_files.clear();
+        self.files_with_errors.clear();
 
         // Find all .nos files
         for entry in WalkDir::new(&self.project_root)
@@ -1870,6 +1875,9 @@ impl SourceManager {
             let content = fs::read_to_string(path)
                 .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
 
+            // Check for parse errors
+            self.revalidate_file(&relative, &content);
+
             self.source_files.insert(relative, content);
         }
 
@@ -1886,6 +1894,24 @@ impl SourceManager {
     /// Check if a file has parse errors
     pub fn file_has_errors(&self, path: &str) -> bool {
         self.files_with_errors.contains(path)
+    }
+
+    /// Check if a file compiled successfully
+    pub fn file_compiled_ok(&self, path: &str) -> bool {
+        self.files_compiled_ok.contains(path)
+    }
+
+    /// Mark a file as compiled successfully
+    pub fn mark_file_compiled_ok(&mut self, path: &str) {
+        self.files_compiled_ok.insert(path.to_string());
+        // Remove from errors if it was there
+        self.files_with_errors.remove(path);
+    }
+
+    /// Mark a file as having compile errors
+    pub fn mark_file_compile_error(&mut self, path: &str) {
+        self.files_with_errors.insert(path.to_string());
+        self.files_compiled_ok.remove(path);
     }
 
     /// Get content of a source file by relative path

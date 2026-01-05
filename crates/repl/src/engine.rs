@@ -4112,6 +4112,34 @@ impl ReplEngine {
         }
     }
 
+    /// Check if a file compiled successfully
+    pub fn file_compiled_ok(&self, path: &str) -> bool {
+        if let Some(ref sm) = self.source_manager {
+            sm.file_compiled_ok(path)
+        } else {
+            false
+        }
+    }
+
+    /// Mark a file as compiled successfully
+    pub fn mark_file_compiled_ok(&mut self, path: &str) {
+        if let Some(ref mut sm) = self.source_manager {
+            sm.mark_file_compiled_ok(path);
+        }
+    }
+
+    /// Mark a file as having compile errors
+    pub fn mark_file_compile_error(&mut self, path: &str) {
+        if let Some(ref mut sm) = self.source_manager {
+            sm.mark_file_compile_error(path);
+        }
+    }
+
+    /// Get the project root directory (if in project mode)
+    pub fn get_project_root(&self) -> Option<PathBuf> {
+        self.source_manager.as_ref().map(|sm| sm.project_root().to_path_buf())
+    }
+
     /// Get content of a source file by path
     pub fn get_file_content(&self, path: &str) -> Option<String> {
         // Single-file mode: read directly from the file path

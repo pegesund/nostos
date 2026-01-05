@@ -3199,11 +3199,9 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
         })
         .on_event(Event::CtrlChar('o'), move |s| {
             // Ctrl+O: Save and compile without closing the editor
-            debug_log(&format!("Ctrl+O pressed for: {}", name_for_compile));
             let content = match s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| v.get_content()) {
                 Some(c) => c,
                 None => {
-                    debug_log(&format!("ERROR: Could not find editor {}", editor_id_compile));
                     log_to_repl(s, &format!("Error: Could not find editor {}", editor_id_compile));
                     return;
                 }
@@ -3211,25 +3209,67 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
 
             // Extract actual definition names from the content
             let actual_names = extract_definition_names(&content);
-            debug_log(&format!("Ctrl+O: definition names: {:?}", actual_names));
 
             let mut engine = engine_compile.borrow_mut();
 
             // Check if this is file-mode (file:path)
             if name_for_compile.starts_with("file:") {
                 let file_path = &name_for_compile[5..];
-                debug_log(&format!("Ctrl+O: Saving file: {}", file_path));
-                match engine.save_file_content(file_path, &content) {
-                    Ok(()) => {
+
+                // First save the file to disk
+                if let Err(e) = engine.save_file_content(file_path, &content) {
+                    drop(engine);
+                    s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
+                        v.set_compile_error(Some(format!("Save error: {}", e)));
+                    });
+                    return;
+                }
+
+                // Mark editor as saved
+                s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
+                    v.mark_saved();
+                });
+
+                // Try to compile the file content
+                let compile_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    // Get module name from file path (without .nos extension)
+                    let module_name = std::path::Path::new(file_path)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("main");
+                    engine.eval_in_module(&content, Some(module_name))
+                }));
+
+                let file_path_owned = file_path.to_string();
+                match compile_result {
+                    Ok(Ok(_)) => {
+                        engine.mark_file_compiled_ok(&file_path_owned);
                         drop(engine);
-                        log_to_repl(s, &format!("Saved {}", file_path));
                         s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
                             v.mark_saved();
+                            v.set_compile_error(None); // Clear error, show OK status
                         });
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
+                        engine.mark_file_compile_error(&file_path_owned);
                         drop(engine);
-                        log_to_repl(s, &format!("Save error: {}", e));
+                        s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
+                            v.set_compile_error(Some(e));
+                        });
+                    }
+                    Err(panic_info) => {
+                        let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            "Unknown panic".to_string()
+                        };
+                        engine.mark_file_compile_error(&file_path_owned);
+                        drop(engine);
+                        s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
+                            v.set_compile_error(Some(format!("Internal error: {}", panic_msg)));
+                        });
                     }
                 }
                 return;
@@ -3689,8 +3729,11 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
             BrowserItem::Metadata { .. } => StyledString::plain("⚙  _meta (together directives)"),
             BrowserItem::File { name, path } => {
                 let has_errors = engine_ref.file_has_errors(path);
+                let compiled_ok = engine_ref.file_compiled_ok(path);
                 if has_errors {
                     StyledString::plain(format!("🔴 📄 {}", name))
+                } else if compiled_ok {
+                    StyledString::plain(format!("🟢 📄 {}", name))
                 } else {
                     StyledString::plain(format!("📄 {}", name))
                 }
