@@ -904,6 +904,7 @@ fn main() -> ExitCode {
     let mut profiling_enabled = false; // Enable function call profiling
     let mut extension_paths: Vec<String> = Vec::new(); // Extension library paths
     let mut use_extensions: Vec<String> = Vec::new(); // Extensions to load by name from ~/.nostos/extensions/
+    let mut bin_name: Option<String> = None; // Binary entry point name from [[bin]] in nostos.toml
 
     let mut i = 1;
     let mut file_idx: Option<usize> = None;
@@ -916,12 +917,14 @@ fn main() -> ExitCode {
                 println!("USAGE:");
                 println!("    nostos <file.nos>              Run a single file");
                 println!("    nostos <directory/>            Run a project (needs main.nos)");
+                println!("    nostos <dir/> --bin NAME       Run specific entry point from project");
                 println!("    nostos --use <ext> <file.nos>  Run with an extension");
                 println!("    nostos repl                    Start interactive TUI/REPL");
                 println!();
                 println!("EXAMPLES:");
                 println!("    nostos hello.nos                       # Run a program");
                 println!("    nostos myproject/                      # Run a project");
+                println!("    nostos myproject/ --bin server         # Run 'server' entry point");
                 println!("    nostos --use nalgebra script.nos       # Use nalgebra extension");
                 println!("    nostos --profile slow_program.nos      # Profile for performance");
                 println!();
@@ -933,6 +936,16 @@ fn main() -> ExitCode {
                 println!("    Projects can also declare extensions in nostos.toml:");
                 println!("        [extensions]");
                 println!("        nalgebra = {{ git = \"https://github.com/user/nostos-nalgebra\" }}");
+                println!();
+                println!("ENTRY POINTS:");
+                println!("    --bin NAME, -b    Run specific entry point from [[bin]] in nostos.toml");
+                println!("                      Example: --bin server, -b cli");
+                println!();
+                println!("    Define entry points in nostos.toml:");
+                println!("        [[bin]]");
+                println!("        name = \"server\"");
+                println!("        entry = \"server.main\"");
+                println!("        default = true");
                 println!();
                 println!("PERFORMANCE:");
                 println!("    --threads N       Use N worker threads (default: all CPUs)");
@@ -1017,6 +1030,17 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             }
+            if arg == "--bin" || arg == "-b" {
+                // Specify which binary entry point to run (from [[bin]] in nostos.toml)
+                if i + 1 < args.len() {
+                    bin_name = Some(args[i + 1].clone());
+                    i += 2;
+                    continue;
+                } else {
+                    eprintln!("Error: --bin requires a binary name");
+                    return ExitCode::FAILURE;
+                }
+            }
             i += 1;
         } else {
             // First non-flag argument is the file
@@ -1050,8 +1074,11 @@ fn main() -> ExitCode {
     // Store extension module directories for loading later
     let mut extension_module_dirs: Vec<(String, std::path::PathBuf)> = Vec::new();
 
-    if let Some(config_path) = packages::find_config(&search_dir) {
+    // Load project config for [[bin]] entries
+    let project_config: Option<nostos_source::ProjectConfig> = if let Some(config_path) = packages::find_config(&search_dir) {
         eprintln!("Found package config: {:?}", config_path);
+
+        // Load extensions from package config
         match packages::parse_config(&config_path) {
             Ok(config) => {
                 if !config.extensions.is_empty() {
@@ -1069,10 +1096,21 @@ fn main() -> ExitCode {
                 }
             }
             Err(e) => {
-                eprintln!("Warning: Failed to parse nostos.toml: {}", e);
+                eprintln!("Warning: Failed to parse nostos.toml extensions: {}", e);
             }
         }
-    }
+
+        // Load full project config for [[bin]] entries
+        match nostos_source::ProjectConfig::load(&config_path) {
+            Ok(cfg) => Some(cfg),
+            Err(e) => {
+                eprintln!("Warning: Failed to load project config: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // Resolve --use extensions from ~/.nostos/extensions/
     for ext_name in &use_extensions {
@@ -1135,11 +1173,13 @@ fn main() -> ExitCode {
     if input_path.is_dir() {
         project_root = input_path;
 
-        // Check for main.nos in the directory
+        // Check for main.nos in the directory (unless project has [[bin]] entries)
         let main_file = input_path.join("main.nos");
-        if !main_file.exists() {
+        let has_bin_entries = project_config.as_ref().map(|c| c.has_bins()).unwrap_or(false);
+        if !main_file.exists() && !has_bin_entries {
             eprintln!("Error: No 'main.nos' found in directory '{}'", file_path_arg);
-            eprintln!("Projects must have a main.nos file with a main() function.");
+            eprintln!("Projects must have a main.nos file with a main() function,");
+            eprintln!("or define entry points with [[bin]] in nostos.toml.");
             return ExitCode::FAILURE;
         }
 
@@ -1349,26 +1389,77 @@ fn main() -> ExitCode {
 
     // Resolve entry point (function names now include signature, main has no params so it's "main/")
     let entry_point_name = if input_path.is_dir() {
-        // Check for main.main/ or main/ (with signature suffix)
         let funcs = compiler.get_all_functions();
-        if funcs.contains_key("main.main/") {
-            "main.main/".to_string()
-        } else if funcs.contains_key("main/") {
-            "main/".to_string()
-        } else if funcs.keys().any(|k| k.starts_with("main.main/")) {
-            // Find the main.main function with any signature (should be 0-arity for entry point)
-            funcs.keys()
-                .find(|k| k.starts_with("main.main/"))
-                .cloned()
-                .unwrap_or_else(|| "main.main/".to_string())
-        } else if funcs.keys().any(|k| k.starts_with("main/")) {
-            funcs.keys()
-                .find(|k| k.starts_with("main/"))
-                .cloned()
-                .unwrap_or_else(|| "main/".to_string())
-        } else {
-             eprintln!("Error: No 'main.main' or 'main' function found in project.");
-             return ExitCode::FAILURE;
+
+        // Helper to find function with signature suffix
+        let find_func = |base: &str| -> Option<String> {
+            let with_slash = format!("{}/", base);
+            if funcs.contains_key(&with_slash) {
+                Some(with_slash)
+            } else {
+                funcs.keys()
+                    .find(|k| k.starts_with(&with_slash))
+                    .cloned()
+            }
+        };
+
+        // Check if --bin was specified
+        if let Some(ref name) = bin_name {
+            if let Some(ref cfg) = project_config {
+                if let Some(bin_entry) = cfg.get_bin(name) {
+                    // Convert "module.func" to "module.func/"
+                    match find_func(&bin_entry.entry) {
+                        Some(f) => f,
+                        None => {
+                            eprintln!("Error: Entry point '{}' for bin '{}' not found", bin_entry.entry, name);
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                } else {
+                    eprintln!("Error: No [[bin]] entry named '{}' in nostos.toml", name);
+                    if cfg.has_bins() {
+                        eprintln!("Available bins: {}", cfg.bin_names().join(", "));
+                    }
+                    return ExitCode::FAILURE;
+                }
+            } else {
+                eprintln!("Error: --bin requires a nostos.toml with [[bin]] entries");
+                return ExitCode::FAILURE;
+            }
+        }
+        // Check for default bin in project config
+        else if let Some(ref cfg) = project_config {
+            if let Some(default_bin) = cfg.get_default_bin() {
+                match find_func(&default_bin.entry) {
+                    Some(f) => f,
+                    None => {
+                        eprintln!("Error: Default entry point '{}' not found", default_bin.entry);
+                        return ExitCode::FAILURE;
+                    }
+                }
+            } else if cfg.has_bins() {
+                // Has bins but none is default - require --bin
+                eprintln!("Error: Project has [[bin]] entries but none is marked as default.");
+                eprintln!("Use --bin NAME to specify which to run. Available: {}", cfg.bin_names().join(", "));
+                return ExitCode::FAILURE;
+            } else {
+                // No bins defined, fall back to main.main or main
+                find_func("main.main")
+                    .or_else(|| find_func("main"))
+                    .unwrap_or_else(|| {
+                        eprintln!("Error: No 'main.main' or 'main' function found in project.");
+                        std::process::exit(1);
+                    })
+            }
+        }
+        // No project config, fall back to main.main or main
+        else {
+            find_func("main.main")
+                .or_else(|| find_func("main"))
+                .unwrap_or_else(|| {
+                    eprintln!("Error: No 'main.main' or 'main' function found in project.");
+                    std::process::exit(1);
+                })
         }
     } else {
         "main/".to_string()

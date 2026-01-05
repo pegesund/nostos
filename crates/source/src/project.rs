@@ -8,6 +8,9 @@ use std::fs;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub project: ProjectInfo,
+    /// Binary entry points (optional)
+    #[serde(default, rename = "bin")]
+    pub bins: Vec<BinEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,6 +18,18 @@ pub struct ProjectInfo {
     pub name: String,
     #[serde(default = "default_version")]
     pub version: String,
+}
+
+/// A binary entry point definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinEntry {
+    /// Name of the binary (used with --bin flag)
+    pub name: String,
+    /// Entry point: module.function (e.g., "server.main" or "main.main")
+    pub entry: String,
+    /// Whether this is the default entry point
+    #[serde(default)]
+    pub default: bool,
 }
 
 fn default_version() -> String {
@@ -29,6 +44,7 @@ impl ProjectConfig {
                 name: name.to_string(),
                 version: default_version(),
             },
+            bins: Vec::new(),
         }
     }
 
@@ -59,6 +75,26 @@ impl ProjectConfig {
         let config_path = project_root.join("nostos.toml");
         config.save(&config_path)?;
         Ok(config)
+    }
+
+    /// Get a binary entry by name
+    pub fn get_bin(&self, name: &str) -> Option<&BinEntry> {
+        self.bins.iter().find(|b| b.name == name)
+    }
+
+    /// Get the default binary entry (marked with default = true)
+    pub fn get_default_bin(&self) -> Option<&BinEntry> {
+        self.bins.iter().find(|b| b.default)
+    }
+
+    /// Check if project has any binary entries defined
+    pub fn has_bins(&self) -> bool {
+        !self.bins.is_empty()
+    }
+
+    /// Get list of available binary names
+    pub fn bin_names(&self) -> Vec<&str> {
+        self.bins.iter().map(|b| b.name.as_str()).collect()
     }
 }
 
