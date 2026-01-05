@@ -3976,6 +3976,8 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     // Wrap in OnEventView for keyboard navigation
     let path_for_back = path.clone();
     let path_for_new = path.clone();
+    let engine_for_new = engine.clone();
+    let is_file_mode_for_new = is_file_mode;
     let path_for_rename = path.clone();
     let path_for_delete = path.clone();
     let path_for_error = path.clone();
@@ -4061,42 +4063,92 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
             }
         })
         .on_event('n', move |s| {
-            // Show dialog to enter new function name
-            let path_for_create = path_for_new.clone();
-            debug_log(&format!("New function dialog opened, current path: {:?}", path_for_create));
+            if is_file_mode_for_new {
+                // File mode: create a new .nos file
+                let engine_for_create = engine_for_new.clone();
+                debug_log("New file dialog opened");
 
-            let edit_view = EditView::new()
-                .on_submit(move |s, name| {
-                    let name = name.trim();
-                    if name.is_empty() {
-                        return;
-                    }
-                    // Build full name with module path
-                    let full_name = if path_for_create.is_empty() {
-                        name.to_string()
-                    } else {
-                        format!("{}.{}", path_for_create.join("."), name)
-                    };
-                    debug_log(&format!("Creating new function: name='{}', full_name='{}'", name, full_name));
-                    s.pop_layer(); // Remove new function dialog
-                    s.pop_layer(); // Remove browser dialog
-                    open_editor(s, &full_name);
-                })
-                .with_name("new_func_name")
-                .fixed_width(30);
+                let edit_view = EditView::new()
+                    .on_submit(move |s, name| {
+                        let name = name.trim();
+                        if name.is_empty() {
+                            return;
+                        }
+                        // Ensure .nos extension
+                        let filename = if name.ends_with(".nos") {
+                            name.to_string()
+                        } else {
+                            format!("{}.nos", name)
+                        };
 
-            let dialog = Dialog::new()
-                .title("New Function (Enter to create, Esc to cancel)")
-                .content(
-                    LinearLayout::vertical()
-                        .child(TextView::new("Function name:"))
-                        .child(edit_view)
-                );
+                        // Get project root from engine
+                        let project_root = engine_for_create.borrow().get_project_root();
+                        let file_path = if let Some(root) = project_root {
+                            format!("{}/{}", root.display(), filename)
+                        } else {
+                            filename.clone()
+                        };
 
-            let dialog_with_esc = OnEventView::new(dialog)
-                .on_event(Key::Esc, |s| { s.pop_layer(); });
+                        debug_log(&format!("Creating new file: '{}'", file_path));
+                        s.pop_layer(); // Remove new file dialog
+                        s.pop_layer(); // Remove browser dialog
 
-            s.add_layer(dialog_with_esc);
+                        // Open editor with file: prefix - it will create the file on save
+                        open_editor(s, &format!("file:{}", file_path));
+                    })
+                    .with_name("new_file_name")
+                    .fixed_width(30);
+
+                let dialog = Dialog::new()
+                    .title("New File (Enter to create, Esc to cancel)")
+                    .content(
+                        LinearLayout::vertical()
+                            .child(TextView::new("File name (.nos will be added):"))
+                            .child(edit_view)
+                    );
+
+                let dialog_with_esc = OnEventView::new(dialog)
+                    .on_event(Key::Esc, |s| { s.pop_layer(); });
+
+                s.add_layer(dialog_with_esc);
+            } else {
+                // Function mode: create a new function
+                let path_for_create = path_for_new.clone();
+                debug_log(&format!("New function dialog opened, current path: {:?}", path_for_create));
+
+                let edit_view = EditView::new()
+                    .on_submit(move |s, name| {
+                        let name = name.trim();
+                        if name.is_empty() {
+                            return;
+                        }
+                        // Build full name with module path
+                        let full_name = if path_for_create.is_empty() {
+                            name.to_string()
+                        } else {
+                            format!("{}.{}", path_for_create.join("."), name)
+                        };
+                        debug_log(&format!("Creating new function: name='{}', full_name='{}'", name, full_name));
+                        s.pop_layer(); // Remove new function dialog
+                        s.pop_layer(); // Remove browser dialog
+                        open_editor(s, &full_name);
+                    })
+                    .with_name("new_func_name")
+                    .fixed_width(30);
+
+                let dialog = Dialog::new()
+                    .title("New Function (Enter to create, Esc to cancel)")
+                    .content(
+                        LinearLayout::vertical()
+                            .child(TextView::new("Function name:"))
+                            .child(edit_view)
+                    );
+
+                let dialog_with_esc = OnEventView::new(dialog)
+                    .on_event(Key::Esc, |s| { s.pop_layer(); });
+
+                s.add_layer(dialog_with_esc);
+            }
         })
         .on_event('m', {
             let engine = engine_for_module.clone();
