@@ -608,19 +608,11 @@ impl SourceManager {
             }
         })?;
 
-        // Extract imports (import statements) and use statements
-        let mut imports = Vec::new();
+        // Extract use statements (imports field is kept for backwards compatibility but will be empty)
+        let imports = Vec::new();
         let mut use_stmts = Vec::new();
         for item in &parsed.items {
             match item {
-                Item::Import(import_stmt) => {
-                    // Convert path of Idents to dotted string
-                    let path_str: String = import_stmt.path.iter()
-                        .map(|ident| ident.node.as_str())
-                        .collect::<Vec<_>>()
-                        .join(".");
-                    imports.push(format!("import {}", path_str));
-                }
                 Item::Use(use_stmt) => {
                     // Convert path of Idents to dotted string
                     let path_str: String = use_stmt.path.iter()

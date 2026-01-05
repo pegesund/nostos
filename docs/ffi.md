@@ -157,7 +157,7 @@ cargo build --release
 
 In Nostos:
 ```nostos
-import mylib  # Loads both .nos interface and .so library
+use mylib.*  # Loads both .nos interface and .so library
 ```
 
 ## REPL Usage
@@ -208,7 +208,7 @@ When the compiler sees `__native__("Name", args)`:
 
 ### 2. Extension Loading
 
-When `import module` is executed:
+When `use module.*` is executed:
 1. Finds the `.nos` interface file
 2. Finds the matching `.so`/`.dylib` library
 3. Calls `dlopen` to load the library

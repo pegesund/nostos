@@ -4,7 +4,7 @@
 # using the native glam extension.
 #
 # Usage:
-#   import glam
+#   use glam.*
 #
 #   v1 = glam.vec3(1.0, 2.0, 3.0)
 #   v2 = glam.vec3(4.0, 5.0, 6.0)
