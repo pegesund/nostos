@@ -1076,8 +1076,6 @@ fn main() -> ExitCode {
 
     // Load project config for [[bin]] entries
     let project_config: Option<nostos_source::ProjectConfig> = if let Some(config_path) = packages::find_config(&search_dir) {
-        eprintln!("Found package config: {:?}", config_path);
-
         // Load extensions from package config
         match packages::parse_config(&config_path) {
             Ok(config) => {
