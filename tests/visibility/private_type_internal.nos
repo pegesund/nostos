@@ -1,0 +1,27 @@
+# expect: 42
+# Test that private types work correctly within the same module
+
+module Counter
+    # Private type - only used internally
+    type State = { count: Int }
+
+    # Public API using private type internally
+    pub create() = State(0)
+    pub increment(s) = State(s.count + 1)
+    pub getValue(s) = s.count
+
+    # Recursively increment n times
+    pub incrementN(s, n) = {
+        if n <= 0 then s
+        else incrementN(increment(s), n - 1)
+    }
+end
+
+use Counter.*
+
+main() = {
+    # Use public functions - they can work with private types internally
+    s = create()
+    final = incrementN(s, 42)
+    getValue(final)
+}

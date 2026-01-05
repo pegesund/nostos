@@ -9,14 +9,14 @@
 
 # === AST Types ===
 
-type HtmlNode =
+pub type HtmlNode =
     | Text(String)
     | Element(String, List[(String, String)], List[HtmlNode])
     | Comment(String)
 
 # === Token Types ===
 
-type HtmlToken =
+pub type HtmlToken =
     | TokStartTag(String, List[(String, String)], Bool)  # name, attrs, self-closing?
     | TokEndTag(String)
     | TokText(String)

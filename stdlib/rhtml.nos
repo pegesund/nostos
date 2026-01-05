@@ -4,7 +4,7 @@
 # Use RHtml(...) syntax like Html(...) - tag names are auto-resolved.
 
 # The RNode type (HTML tree)
-type RNode =
+pub type RNode =
     | Element(String, List[(String, String)], List[RNode])
     | Text(String)
     | Raw(String)
@@ -12,7 +12,7 @@ type RNode =
     | Component(String)  # just the name, content comes from renderers
 
 # Component tree - reflects hierarchy of components with their IDs
-type ComponentTree =
+pub type ComponentTree =
     | CNode(String, List[ComponentTree])  # name, children
 
 # Result of an RHtml render
@@ -21,7 +21,7 @@ type ComponentTree =
 # components: component hierarchy
 # renderers: component name -> render function (returns RHtmlResult)
 # changedIds: reactive record IDs that were modified during this render
-type RHtmlResult = { tree: RNode, deps: Map[Int, List[String]], components: List[ComponentTree], renderers: Map[String, () -> RHtmlResult], changedIds: List[Int] }
+pub type RHtmlResult = { tree: RNode, deps: Map[Int, List[String]], components: List[ComponentTree], renderers: Map[String, () -> RHtmlResult], changedIds: List[Int] }
 
 # === wrapNode helper ===
 # Creates an RHtmlResult from an RNode (for internal use)

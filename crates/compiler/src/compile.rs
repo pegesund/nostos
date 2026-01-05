@@ -523,6 +523,9 @@ pub enum CompileError {
     #[error("cannot access private function `{function}` from outside module `{module}`")]
     PrivateAccess { function: String, module: String, span: Span },
 
+    #[error("type `{type_name}` is private in module `{module}`")]
+    PrivateTypeAccess { type_name: String, module: String, span: Span },
+
     #[error("unknown trait `{name}`")]
     UnknownTrait { name: String, span: Span },
 
@@ -574,6 +577,7 @@ impl CompileError {
             CompileError::InvalidPattern { span, .. } => *span,
             CompileError::NotImplemented { span, .. } => *span,
             CompileError::PrivateAccess { span, .. } => *span,
+            CompileError::PrivateTypeAccess { span, .. } => *span,
             CompileError::UnknownTrait { span, .. } => *span,
             CompileError::MissingTraitMethod { span, .. } => *span,
             CompileError::TraitNotImplemented { span, .. } => *span,
@@ -616,6 +620,12 @@ impl CompileError {
             }
             CompileError::PrivateAccess { function, module, .. } => {
                 SourceError::private_access(function, module, span)
+            }
+            CompileError::PrivateTypeAccess { type_name, module, .. } => {
+                SourceError::compile(
+                    format!("type `{}` is private in module `{}`", type_name, module),
+                    span,
+                ).with_hint(format!("Consider using `pub type {}` in module `{}` to make it public", type_name, module))
             }
             CompileError::UnknownTrait { name, .. } => {
                 SourceError::unknown_trait(name, span)
@@ -728,6 +738,8 @@ pub struct Compiler {
     imports: HashMap<String, String>,
     /// Function visibility: qualified name -> Visibility
     function_visibility: HashMap<String, Visibility>,
+    /// Type visibility: qualified name -> Visibility
+    type_visibility: HashMap<String, Visibility>,
     /// Trait definitions: trait name -> TraitInfo
     trait_defs: HashMap<String, TraitInfo>,
     /// Trait implementations: (type_name, trait_name) -> TraitImplInfo
@@ -877,6 +889,7 @@ struct LoopContext {
 pub struct TypeInfo {
     pub name: String,
     pub kind: TypeInfoKind,
+    pub visibility: Visibility,
 }
 
 #[derive(Clone)]
@@ -942,6 +955,7 @@ impl Compiler {
             module_path: Vec::new(),
             imports: HashMap::new(),
             function_visibility: HashMap::new(),
+            type_visibility: HashMap::new(),
             trait_defs: HashMap::new(),
             trait_impls: HashMap::new(),
             type_traits: HashMap::new(),
@@ -1002,6 +1016,7 @@ impl Compiler {
                     ],
                     mutable: false,
                 },
+                visibility: Visibility::Public,
             },
         );
 
@@ -1024,6 +1039,7 @@ impl Compiler {
                     ],
                     mutable: false,
                 },
+                visibility: Visibility::Public,
             },
         );
 
@@ -1040,6 +1056,7 @@ impl Compiler {
                     ],
                     mutable: false,
                 },
+                visibility: Visibility::Public,
             },
         );
 
@@ -1056,6 +1073,7 @@ impl Compiler {
                     ],
                     mutable: false,
                 },
+                visibility: Visibility::Public,
             },
         );
     }
@@ -1467,6 +1485,7 @@ impl Compiler {
             module_path: Vec::new(),
             imports: HashMap::new(),
             function_visibility: HashMap::new(),
+            type_visibility: HashMap::new(),
             trait_defs: HashMap::new(),
             trait_impls: HashMap::new(),
             type_traits: HashMap::new(),
@@ -2787,7 +2806,10 @@ impl Compiler {
             }
         };
 
-        self.types.insert(name.clone(), TypeInfo { name: name.clone(), kind });
+        self.types.insert(name.clone(), TypeInfo { name: name.clone(), kind, visibility: def.visibility });
+
+        // Store type visibility for access control
+        self.type_visibility.insert(name.clone(), def.visibility);
 
         // Store the TypeDef AST for REPL introspection
         self.type_defs.insert(name.clone(), def.clone());
@@ -9521,6 +9543,64 @@ impl Compiler {
         })
     }
 
+    /// Check if a type can be accessed from the current module.
+    /// Returns Ok(()) if access is allowed, Err with PrivateTypeAccess otherwise.
+    fn check_type_visibility(&self, qualified_name: &str, span: Span) -> Result<(), CompileError> {
+        // REPL mode bypasses all visibility checks for interactive exploration
+        if self.repl_mode {
+            return Ok(());
+        }
+
+        // Built-in types are always accessible
+        if self.builtin_types.contains_key(qualified_name) {
+            return Ok(());
+        }
+
+        // Get the visibility of the type
+        let visibility = match self.type_visibility.get(qualified_name) {
+            Some(v) => *v,
+            None => return Ok(()), // Unknown type - will be caught later as UnknownType
+        };
+
+        // Extract the module path from the qualified name (everything before the last dot)
+        let type_module: Vec<&str> = qualified_name.rsplitn(2, '.').collect();
+        let type_module = if type_module.len() > 1 {
+            type_module[1].split('.').collect::<Vec<_>>()
+        } else {
+            vec![] // Type is in root module
+        };
+
+        // Current module path
+        let current_module: Vec<&str> = self.module_path.iter().map(|s| s.as_str()).collect();
+
+        // Check if same module (allow access to both public and private types)
+        let is_same_module = current_module.len() >= type_module.len()
+            && (type_module.is_empty() || current_module[..type_module.len()] == type_module[..]);
+
+        if is_same_module {
+            return Ok(());
+        }
+
+        // Different module - check visibility
+        if visibility.is_public() {
+            return Ok(());
+        }
+
+        // Private type from different module - access denied
+        let type_name = qualified_name.rsplit('.').next().unwrap_or(qualified_name);
+        let module_name = if type_module.is_empty() {
+            "<root>".to_string()
+        } else {
+            type_module.join(".")
+        };
+
+        Err(CompileError::PrivateTypeAccess {
+            type_name: type_name.to_string(),
+            module: module_name,
+            span,
+        })
+    }
+
     /// Compile an if expression.
     fn compile_if(
         &mut self,
@@ -11029,6 +11109,9 @@ impl Compiler {
             });
         }
 
+        // Check type visibility (private types cannot be used from other modules)
+        self.check_type_visibility(type_name, Span::default())?;
+
         let mut field_regs = Vec::new();
         for field in fields {
             match field {
@@ -11068,6 +11151,10 @@ impl Compiler {
 
         if is_variant_ctor {
             let parent_type = parent_type_name.unwrap();
+
+            // Check type visibility for variant constructors
+            self.check_type_visibility(&parent_type, Span::default())?;
+
             let type_idx = self.chunk.add_constant(Value::String(Arc::new(parent_type)));
             // Use local constructor name (without module path) for better user experience
             let local_ctor = type_name.rsplit('.').next().unwrap_or(type_name);
@@ -11098,6 +11185,9 @@ impl Compiler {
                 span: Span::default(),
             });
         }
+
+        // Check type visibility (private types cannot be used from other modules)
+        self.check_type_visibility(type_name, Span::default())?;
 
         // Get field order from type definition
         let type_info = self.types.get(type_name);
@@ -11274,8 +11364,9 @@ impl Compiler {
             }
             TypeKind::Primitive | TypeKind::Alias { .. } => return,
         };
-        let type_info = TypeInfo { name: name.to_string(), kind };
+        let type_info = TypeInfo { name: name.to_string(), kind, visibility: Visibility::Public };
         self.types.insert(name.to_string(), type_info);
+        self.type_visibility.insert(name.to_string(), Visibility::Public);
         self.known_constructors.insert(name.to_string());
     }
 

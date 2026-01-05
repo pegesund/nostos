@@ -2,7 +2,7 @@
 # Functional HTML building for Nostos
 
 # The Html type - represents an HTML node tree
-type Html =
+pub type Html =
     | Element(String, List[(String, String)], List[Html])
     | Text(String)
     | Raw(String)

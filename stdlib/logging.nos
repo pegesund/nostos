@@ -28,7 +28,7 @@
 # Use function-based API for logger operations.
 
 # Log Levels - prefixed with L to avoid namespace conflicts
-type LogLevel = LDebug | LInfo | LWarn | LError | LFatal
+pub type LogLevel = LDebug | LInfo | LWarn | LError | LFatal
 
 # Convert log level to string
 levelToString(level) = match level {
@@ -49,7 +49,7 @@ levelPriority(level) = match level {
 }
 
 # Log Entry
-type LogEntry = { level: LogLevel, message: String, timestamp: Int, source: String }
+pub type LogEntry = { level: LogLevel, message: String, timestamp: Int, source: String }
 
 # Create entries
 makeEntry(level, message) = LogEntry(level, message, Time.now(), "")
@@ -103,7 +103,7 @@ trait Logger
 end
 
 # Console Logger
-type ConsoleLogger = { minLevel: LogLevel }
+pub type ConsoleLogger = { minLevel: LogLevel }
 
 newConsoleLogger() = ConsoleLogger(LDebug)
 newConsoleLoggerWithLevel(level) = ConsoleLogger(level)
@@ -116,7 +116,7 @@ consoleLog(logger, entry) = {
 consoleFlush(logger) = flushStdout()
 
 # Stderr Logger
-type StderrLogger = { minLevel: LogLevel }
+pub type StderrLogger = { minLevel: LogLevel }
 
 newStderrLogger() = StderrLogger(LDebug)
 newStderrLoggerWithLevel(level) = StderrLogger(level)
@@ -143,7 +143,7 @@ logErrorFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LError,
 logFatalFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LFatal, message, source))
 
 # File Logger (simple, no rotation)
-type FileLogger = { path: String, minLevel: LogLevel }
+pub type FileLogger = { path: String, minLevel: LogLevel }
 
 newFileLogger(path) = FileLogger(path, LDebug)
 newFileLoggerWithLevel(path, level) = FileLogger(path, level)
@@ -163,7 +163,7 @@ fileFlush(logger) = {
 }
 
 # Rotating File Logger
-type RotatingFileLogger = { path: String, minLevel: LogLevel, maxSize: Int, maxBackups: Int }
+pub type RotatingFileLogger = { path: String, minLevel: LogLevel, maxSize: Int, maxBackups: Int }
 
 newRotatingFileLogger(path, maxSize, maxBackups) = RotatingFileLogger(path, LDebug, maxSize, maxBackups)
 newRotatingFileLoggerWithLevel(path, level, maxSize, maxBackups) = RotatingFileLogger(path, level, maxSize, maxBackups)

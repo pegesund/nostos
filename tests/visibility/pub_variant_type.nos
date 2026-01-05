@@ -1,0 +1,18 @@
+# expect: 15
+# Test that public variant types are accessible from other modules
+
+module Result
+    pub type Status = Ok(Int) | Error(String)
+end
+
+use Result.*
+
+main() = {
+    ok = Ok(15)
+    err = Error("fail")
+
+    match ok {
+        Ok(n) -> n
+        Error(_) -> 0
+    }
+}

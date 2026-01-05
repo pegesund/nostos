@@ -3,7 +3,7 @@
 # Parses JSON strings into a Json variant type.
 # Usage: jsonParse("{\"key\": 123}")
 
-type Json =
+pub type Json =
     | Null
     | Bool(Bool)
     | Number(Float)
