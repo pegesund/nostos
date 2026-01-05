@@ -2924,23 +2924,62 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                 let file_path = &name_for_save[5..]; // Strip "file:" prefix
                 debug_log(&format!("Saving as FILE: {}", file_path));
 
-                // Save file content directly
-                match engine.save_file_content(file_path, &content) {
-                    Ok(()) => {
-                        debug_log(&format!("File saved OK: {}", file_path));
-                        drop(engine);
-                        log_to_repl(s, &format!("Saved {}", file_path));
+                // First save the file to disk
+                if let Err(e) = engine.save_file_content(file_path, &content) {
+                    debug_log(&format!("File save ERROR: {}", e));
+                    drop(engine);
+                    s.add_layer(Dialog::info(format!("Save error: {}", e)));
+                    return;
+                }
 
-                        // Mark editor as not dirty
-                        let editor_id = format!("editor_{}", name_for_save);
+                debug_log(&format!("File saved OK: {}", file_path));
+
+                // Mark editor as saved
+                let editor_id = format!("editor_{}", name_for_save);
+                s.call_on_name(&editor_id, |v: &mut CodeEditor| {
+                    v.mark_saved();
+                });
+
+                // Now compile the file
+                let compile_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let module_name = std::path::Path::new(file_path)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("main");
+                    engine.eval_in_module(&content, Some(module_name))
+                }));
+
+                let file_path_owned = file_path.to_string();
+                match compile_result {
+                    Ok(Ok(_)) => {
+                        engine.mark_file_compiled_ok(&file_path_owned);
+                        drop(engine);
+                        log_to_repl(s, &format!("Saved and compiled {}", file_path_owned));
                         s.call_on_name(&editor_id, |v: &mut CodeEditor| {
-                            v.mark_saved();
+                            v.set_compile_error(None);
                         });
                     }
-                    Err(e) => {
-                        debug_log(&format!("File save ERROR: {}", e));
+                    Ok(Err(e)) => {
+                        engine.mark_file_compile_error(&file_path_owned);
                         drop(engine);
-                        s.add_layer(Dialog::info(format!("Save error: {}", e)));
+                        log_to_repl(s, &format!("Saved {} (compile error)", file_path_owned));
+                        s.call_on_name(&editor_id, |v: &mut CodeEditor| {
+                            v.set_compile_error(Some(e));
+                        });
+                    }
+                    Err(panic_info) => {
+                        let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            "Unknown panic".to_string()
+                        };
+                        engine.mark_file_compile_error(&file_path_owned);
+                        drop(engine);
+                        s.call_on_name(&editor_id, |v: &mut CodeEditor| {
+                            v.set_compile_error(Some(format!("Internal error: {}", panic_msg)));
+                        });
                     }
                 }
                 return;
