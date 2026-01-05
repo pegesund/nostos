@@ -770,10 +770,11 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
             });
 
         // If expression - skip newlines after then/else keywords
+        // Note: "then" keyword is optional (both "if x then y else z" and "if x y else z" work)
         let if_expr = just(Token::If)
             .ignore_then(skip_newlines().ignore_then(expr.clone()))
             .then_ignore(skip_newlines())
-            .then_ignore(just(Token::Then))
+            .then_ignore(just(Token::Then).or_not())
             .then(skip_newlines().ignore_then(expr.clone()))
             .then(
                 skip_newlines()
