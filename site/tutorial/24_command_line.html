@@ -132,11 +132,11 @@ Hello, World!</code></pre>
                 <!-- Running Projects -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Running Projects</h2>
                 <p class="text-slate-400 mb-4">
-                    For larger programs, organize your code into a project directory. The directory must contain a <code>main.nos</code> file:
+                    For larger programs, organize your code into a project directory. By default, the directory must contain a <code>main.nos</code> file (or use <code>[[bin]]</code> entries to specify custom entry points):
                 </p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-bash">myproject/
-├── main.nos        # Entry point (required)
+├── main.nos        # Entry point (or use [[bin]] entries)
 ├── utils.nos       # Helper functions
 ├── config.nos      # Configuration
 └── nostos.toml     # Project config (optional)</code></pre>
@@ -147,6 +147,80 @@ Hello, World!</code></pre>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-bash"># Run the project
 nostos myproject/</code></pre>
+                </div>
+
+                <!-- Multiple Entry Points -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Multiple Entry Points</h2>
+                <p class="text-slate-400 mb-4">
+                    Projects can define multiple executables using <code>[[bin]]</code> sections in <code>nostos.toml</code>. Each entry specifies a name and an entry point in <code>module.function</code> format:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-toml"># nostos.toml
+[project]
+name = "my_app"
+version = "0.1.0"
+
+[[bin]]
+name = "server"
+entry = "server.main"
+
+[[bin]]
+name = "cli"
+entry = "cli.main"
+default = true</code></pre>
+                </div>
+                <p class="text-slate-400 mb-4">
+                    With this configuration, your project structure might look like:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-bash">myproject/
+├── nostos.toml     # Project config with [[bin]] entries
+├── server.nos      # Contains server.main()
+├── cli.nos         # Contains cli.main()
+└── shared.nos      # Shared code used by both</code></pre>
+                </div>
+                <p class="text-slate-400 mb-4">
+                    Run different entry points using the <code>--bin</code> flag:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-bash"># Run the default entry point (cli.main)
+nostos myproject/
+
+# Run a specific entry point
+nostos myproject/ --bin server
+
+# Short form
+nostos myproject/ -b cli</code></pre>
+                </div>
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <h3 class="text-lg font-semibold text-white mb-3">[[bin]] Entry Fields</h3>
+                    <table class="w-full text-left">
+                        <thead>
+                            <tr class="border-b border-slate-700">
+                                <th class="py-2 text-blue-400">Field</th>
+                                <th class="py-2 text-slate-300">Description</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-slate-400">
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">name</code></td>
+                                <td class="py-3">The name used with <code>--bin</code> flag</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">entry</code></td>
+                                <td class="py-3">Entry point as <code>module.function</code> (e.g., <code>server.main</code>)</td>
+                            </tr>
+                            <tr>
+                                <td class="py-3"><code class="text-emerald-400">default</code></td>
+                                <td class="py-3">Optional boolean - marks this as the default entry point when no <code>--bin</code> is specified</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-8">
+                    <p class="text-blue-300 text-sm">
+                        <strong>Note:</strong> When a project has <code>[[bin]]</code> entries, the <code>main.nos</code> file is not required. The runtime uses the specified entry points instead.
+                    </p>
                 </div>
 
                 <!-- Using Extensions -->
@@ -171,7 +245,6 @@ nostos --use nalgebra --use redis myscript.nos</code></pre>
                 </p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos"># vector_math.nos
-import nalgebra
 use nalgebra.*
 
 main() = {
@@ -234,6 +307,10 @@ Loaded extension nalgebra v0.1.0
                             <tr class="border-b border-slate-800">
                                 <td class="py-3"><code class="text-emerald-400">--version</code></td>
                                 <td class="py-3">Display the Nostos version number</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">--bin NAME</code>, <code class="text-emerald-400">-b NAME</code></td>
+                                <td class="py-3">Run a specific binary entry point defined in <code>nostos.toml</code></td>
                             </tr>
                             <tr class="border-b border-slate-800">
                                 <td class="py-3"><code class="text-emerald-400">--use NAME</code></td>

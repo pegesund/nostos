@@ -2112,10 +2112,45 @@ main() = {
 
 ### Running Programs
 ```bash
-nostos <file.nos>           # Run a program
+nostos <file.nos>           # Run a single file
+nostos <directory>/         # Run a project directory
 nostos --help               # Show help
 nostos --version            # Show version
 ```
+
+### Multiple Entry Points
+
+Projects can define multiple executables using `[[bin]]` sections in `nostos.toml`:
+
+```toml
+# nostos.toml
+[project]
+name = "my_app"
+version = "0.1.0"
+
+[[bin]]
+name = "server"
+entry = "server.main"
+
+[[bin]]
+name = "cli"
+entry = "cli.main"
+default = true
+```
+
+Run specific entry points with `--bin`:
+```bash
+nostos myproject/              # Runs default entry point (cli.main)
+nostos myproject/ --bin server # Runs server.main
+nostos myproject/ -b cli       # Short form
+```
+
+Fields:
+- `name` - Name used with `--bin` flag
+- `entry` - Entry point as `module.function` (e.g., `server.main`)
+- `default` - Optional, marks as default when no `--bin` specified
+
+When using `[[bin]]` entries, the `main.nos` file is not required.
 
 ### Options
 ```bash

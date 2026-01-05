@@ -119,6 +119,38 @@ version = "0.1.0"
 
 Files in the same directory can reference each other. The runtime automatically discovers and compiles all `.nos` files in the project.
 
+### Multiple Entry Points
+
+Projects can define multiple executables using `[[bin]]` sections. Each entry specifies a name and an entry point in `module.function` format:
+
+```toml
+# nostos.toml
+[project]
+name = "my_app"
+version = "0.1.0"
+
+[[bin]]
+name = "server"
+entry = "server.main"
+
+[[bin]]
+name = "cli"
+entry = "cli.main"
+default = true
+```
+
+With this configuration:
+- `nostos myproject/` runs the default entry point (`cli.main`)
+- `nostos myproject/ --bin server` runs `server.main`
+- `nostos myproject/ -b cli` runs `cli.main` (short form)
+
+Each `[[bin]]` entry has these fields:
+- `name` - The name used with `--bin` flag
+- `entry` - Entry point as `module.function` (e.g., `server.main`)
+- `default` - Optional, marks this as the default entry point
+
+When a project has `[[bin]]` entries, the `main.nos` file is not required - the runtime uses the specified entry points instead.
+
 ### Best Practices
 
 - Import only what you need with selective imports: `use module.{a, b}`
