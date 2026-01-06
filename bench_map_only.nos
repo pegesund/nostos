@@ -1,0 +1,11 @@
+# Map-only benchmark: just the map operation
+countWithMap(n, max, list) = if n >= max then n else {
+  # Map over pre-existing list
+  y = list.map(v => v * 2)
+  countWithMap(n + 1, max, list)
+}
+
+main() = {
+  list = [1, 2, 3, 4, 5]
+  countWithMap(0, 1000000, list)
+}

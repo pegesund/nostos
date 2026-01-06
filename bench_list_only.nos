@@ -1,0 +1,8 @@
+# List-only benchmark: creates lists but no map
+countWithList(n, max) = if n >= max then n else {
+  # Create list, immediately discard
+  x = [1, 2, 3, 4, 5]
+  countWithList(n + 1, max)
+}
+
+main() = countWithList(0, 1000000)
