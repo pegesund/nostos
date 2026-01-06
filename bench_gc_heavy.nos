@@ -1,0 +1,9 @@
+# GC-heavy benchmark: lots of allocations
+countWithAlloc(n, max) = if n >= max then n else {
+  # Create list, map it, immediately discard
+  x = [1, 2, 3, 4, 5]
+  y = x.map(v => v * 2)
+  countWithAlloc(n + 1, max)
+}
+
+main() = countWithAlloc(0, 1000000)

@@ -1,0 +1,4 @@
+# GC-light benchmark: pure arithmetic, no allocations
+countUp(n, max) = if n >= max then n else countUp(n + 1, max)
+
+main() = countUp(0, 1000000)
