@@ -2330,7 +2330,8 @@ impl ReplEngine {
         }
 
         // Evaluate the mvar name to get its current value
-        match self.eval(qualified_name) {
+        // We wrap it in parens to ensure it's parsed as an expression
+        match self.eval(&format!("({})", qualified_name)) {
             Ok(formatted) => Some(formatted),
             Err(_) => None,
         }
