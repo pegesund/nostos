@@ -885,8 +885,8 @@ impl Autocomplete {
             vec![
                 ("length", "() -> Int", "Get the length of the string"),
                 ("chars", "() -> List", "Get the characters as a list"),
-                ("toInt", "() -> Option Int", "Parse as an integer"),
-                ("toFloat", "() -> Option Float", "Parse as a float"),
+                ("toInt", "() -> Option Int", "Parse as an integer, None if invalid"),
+                ("toFloat", "() -> Option Float", "Parse as a float, None if invalid"),
                 ("trim", "() -> String", "Remove leading and trailing whitespace"),
                 ("trimStart", "() -> String", "Remove leading whitespace"),
                 ("trimEnd", "() -> String", "Remove trailing whitespace"),

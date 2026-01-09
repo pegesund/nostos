@@ -374,9 +374,53 @@ impl TypeEnv {
 
     /// Check if a type implements a trait.
     pub fn implements(&self, ty: &Type, trait_name: &str) -> bool {
-        self.impls.iter().any(|i| {
+        // First check exact matches from registered implementations
+        if self.impls.iter().any(|i| {
             i.trait_name == trait_name && self.types_match(&i.for_type, ty)
-        })
+        }) {
+            return true;
+        }
+
+        // Handle parameterized types (Option, Result, List, Map, Set, etc.)
+        // These implement Eq and Show if their element types do
+        match ty {
+            Type::Named { name, args } => {
+                // Common container types that implement Eq/Show/Ord derivatively
+                let container_types = ["Option", "Result", "Json"];
+                if container_types.contains(&name.as_str()) {
+                    match trait_name {
+                        "Eq" | "Show" => {
+                            // Check if all type arguments implement the trait
+                            args.iter().all(|arg| self.implements(arg, trait_name))
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                }
+            }
+            Type::List(elem) | Type::Array(elem) | Type::Set(elem) => {
+                match trait_name {
+                    "Eq" | "Show" => self.implements(elem, trait_name),
+                    _ => false,
+                }
+            }
+            Type::Map(key, val) => {
+                match trait_name {
+                    "Eq" | "Show" => {
+                        self.implements(key, trait_name) && self.implements(val, trait_name)
+                    }
+                    _ => false,
+                }
+            }
+            Type::Tuple(elems) => {
+                match trait_name {
+                    "Eq" | "Show" => elems.iter().all(|e| self.implements(e, trait_name)),
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
     }
 
     /// Check if two types match (simple equality for now).
