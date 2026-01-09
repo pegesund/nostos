@@ -226,6 +226,27 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Regex.replaceAll", signature: "String -> String -> String -> String", doc: "Replace all matches: replaceAll(s, pattern, replacement)" },
     BuiltinInfo { name: "Regex.split", signature: "String -> String -> [String]", doc: "Split string by regex pattern" },
     BuiltinInfo { name: "Regex.captures", signature: "String -> String -> Option [String]", doc: "Get capture groups from first match" },
+
+    // === Map Functions ===
+    BuiltinInfo { name: "Map.insert", signature: "Map k v -> k -> v -> Map k v", doc: "Insert key-value pair, returns new map" },
+    BuiltinInfo { name: "Map.remove", signature: "Map k v -> k -> Map k v", doc: "Remove key from map, returns new map" },
+    BuiltinInfo { name: "Map.get", signature: "Map k v -> k -> Option v", doc: "Get value for key, returns None if not found" },
+    BuiltinInfo { name: "Map.contains", signature: "Map k v -> k -> Bool", doc: "Check if map contains key" },
+    BuiltinInfo { name: "Map.keys", signature: "Map k v -> [k]", doc: "Get list of all keys" },
+    BuiltinInfo { name: "Map.values", signature: "Map k v -> [v]", doc: "Get list of all values" },
+    BuiltinInfo { name: "Map.size", signature: "Map k v -> Int", doc: "Get number of entries in map" },
+    BuiltinInfo { name: "Map.isEmpty", signature: "Map k v -> Bool", doc: "Check if map is empty" },
+
+    // === Set Functions ===
+    BuiltinInfo { name: "Set.insert", signature: "Set a -> a -> Set a", doc: "Insert element, returns new set" },
+    BuiltinInfo { name: "Set.remove", signature: "Set a -> a -> Set a", doc: "Remove element, returns new set" },
+    BuiltinInfo { name: "Set.contains", signature: "Set a -> a -> Bool", doc: "Check if set contains element" },
+    BuiltinInfo { name: "Set.size", signature: "Set a -> Int", doc: "Get number of elements in set" },
+    BuiltinInfo { name: "Set.isEmpty", signature: "Set a -> Bool", doc: "Check if set is empty" },
+    BuiltinInfo { name: "Set.toList", signature: "Set a -> [a]", doc: "Convert set to list" },
+    BuiltinInfo { name: "Set.union", signature: "Set a -> Set a -> Set a", doc: "Union of two sets" },
+    BuiltinInfo { name: "Set.intersection", signature: "Set a -> Set a -> Set a", doc: "Intersection of two sets" },
+    BuiltinInfo { name: "Set.difference", signature: "Set a -> Set a -> Set a", doc: "Elements in first set but not in second" },
 ];
 
 /// Extract doc comment immediately preceding a definition at the given span start.
@@ -340,6 +361,9 @@ pub enum CompileError {
 
     #[error("mvar safety violation: {message}")]
     MvarSafetyViolation { message: String, span: Span },
+
+    #[error("nested write to mvar `{mvar_name}` would cause deadlock")]
+    NestedMvarWrite { mvar_name: String, span: Span },
 }
 
 impl CompileError {
@@ -362,6 +386,7 @@ impl CompileError {
             CompileError::TraitBoundNotSatisfied { span, .. } => *span,
             CompileError::TypeError { span, .. } => *span,
             CompileError::MvarSafetyViolation { span, .. } => *span,
+            CompileError::NestedMvarWrite { span, .. } => *span,
         }
     }
 
@@ -430,6 +455,12 @@ impl CompileError {
             }
             CompileError::MvarSafetyViolation { message, .. } => {
                 SourceError::compile(format!("mvar safety violation: {}", message), span)
+            }
+            CompileError::NestedMvarWrite { mvar_name, .. } => {
+                SourceError::compile(
+                    format!("nested write to mvar `{}` would cause deadlock - cannot write to the same mvar being assigned", mvar_name),
+                    span
+                )
             }
         }
     }
@@ -543,6 +574,8 @@ pub struct Compiler {
     current_fn_mvar_writes: HashSet<String>,
     /// Current function's calls (during compilation)
     current_fn_calls: HashSet<String>,
+    /// Current function's mvar locks: (mvar_name, const_idx, is_write) - sorted for ordered locking
+    current_fn_mvar_locks: Vec<(String, u16, bool)>,
 }
 
 /// Information about a module-level mutable variable (mvar).
@@ -685,6 +718,7 @@ impl Compiler {
             current_fn_mvar_reads: HashSet::new(),
             current_fn_mvar_writes: HashSet::new(),
             current_fn_calls: HashSet::new(),
+            current_fn_mvar_locks: Vec::new(),
         }
     }
 
@@ -980,6 +1014,7 @@ impl Compiler {
             current_fn_mvar_reads: HashSet::new(),
             current_fn_mvar_writes: HashSet::new(),
             current_fn_calls: HashSet::new(),
+            current_fn_mvar_locks: Vec::new(),
         }
     }
 
@@ -1027,24 +1062,31 @@ impl Compiler {
     /// Resolve a name, checking imports and module path.
     /// Returns the fully qualified name if found, or the original name.
     fn resolve_name(&self, name: &str) -> String {
-        // First check imports
-        if let Some(qualified) = self.imports.get(name) {
-            return qualified.clone();
-        }
-
         // If the name already contains '.', it's already qualified
         if name.contains('.') {
             return name.to_string();
         }
-        // Otherwise, check if it's a known function, type, constructor, or mvar in the current module
+
+        // First check module-local declarations (these should NOT be shadowed by imports)
+        // This includes mvars, local functions, types, and constructors
         let qualified = self.qualify_name(name);
-        if self.has_function_with_base(&qualified) || self.types.contains_key(&qualified) || self.known_constructors.contains(&qualified) || self.mvars.contains_key(&qualified) {
+        if self.mvars.contains_key(&qualified) || self.mvars.contains_key(name) {
+            // Mvars take highest precedence in local scope
+            return if self.mvars.contains_key(&qualified) { qualified } else { name.to_string() };
+        }
+        if self.has_function_with_base(&qualified) || self.types.contains_key(&qualified) || self.known_constructors.contains(&qualified) {
             return qualified;
         }
-        // Check if it's in the global scope
-        if self.has_function_with_base(name) || self.types.contains_key(name) || self.known_constructors.contains(name) || self.mvars.contains_key(name) {
+        // Check if it's in the global scope (before imports for user-defined global functions)
+        if self.has_function_with_base(name) || self.types.contains_key(name) || self.known_constructors.contains(name) {
             return name.to_string();
         }
+
+        // Then check imports (prelude functions)
+        if let Some(qualified) = self.imports.get(name) {
+            return qualified.clone();
+        }
+
         // Return the original name (will error later if not found)
         name.to_string()
     }
@@ -1809,29 +1851,24 @@ impl Compiler {
     }
 
     /// Generate a derived trait implementation for a type.
-    /// Instead of generating bytecode directly, we synthesize AST and compile it.
+    /// NOTE: Hash, Show, Copy, and Eq are now built-in for all types, so deriving is a no-op.
+    /// We keep the syntax for backward compatibility but don't generate any code.
     fn derive_trait_for_type(
         &mut self,
-        type_name: &str,
+        _type_name: &str,
         trait_name: &str,
         def: &TypeDef,
     ) -> Result<(), CompileError> {
-        // Only support deriving Hash, Show, Copy, and Eq for now
-        let trait_impl = match trait_name {
-            "Hash" => self.synthesize_hash_impl(type_name, def)?,
-            "Show" => self.synthesize_show_impl(type_name, def)?,
-            "Copy" => self.synthesize_copy_impl(type_name, def)?,
-            "Eq" => self.synthesize_eq_impl(type_name, def)?,
-            _ => return Err(CompileError::CannotDerive {
+        // Hash, Show, Copy, and Eq are now built-in for all types - deriving is a no-op
+        match trait_name {
+            "Hash" | "Show" | "Copy" | "Eq" => Ok(()),
+            _ => Err(CompileError::CannotDerive {
                 trait_name: trait_name.to_string(),
-                ty: type_name.to_string(),
-                reason: "only Hash, Show, Copy, and Eq can be derived".to_string(),
+                ty: _type_name.to_string(),
+                reason: "only Hash, Show, Copy, and Eq can be derived (and they're automatic)".to_string(),
                 span: def.name.span,
             }),
-        };
-
-        // Compile the synthesized trait implementation
-        self.compile_trait_impl(&trait_impl)
+        }
     }
 
     /// Helper to create a Spanned node with a dummy span
@@ -2858,33 +2895,14 @@ impl Compiler {
     }
 
     /// Check if a type implements a specific trait.
-    fn type_implements_trait(&self, type_name: &str, trait_name: &str) -> bool {
-        // Check if this is a primitive type with built-in trait support
-        let is_primitive_hashable = matches!(
-            type_name,
-            "Int" | "Float" | "Bool" | "String" | "Char" | "Atom"
-        );
-
-        if is_primitive_hashable && trait_name == "Hash" {
-            return true;
-        }
-
-        // Check primitive Show support (all types have native show)
-        if trait_name == "Show" {
-            return true; // All types can be shown (fall back to native)
-        }
-
-        // Check primitive Eq support
-        let is_primitive_eq = matches!(
-            type_name,
-            "Int" | "Float" | "Bool" | "String" | "Char" | "Atom"
-        );
-        if is_primitive_eq && trait_name == "Eq" {
+    fn type_implements_trait(&self, _type_name: &str, trait_name: &str) -> bool {
+        // Hash, Show, Eq, and Copy are now built-in for ALL types
+        if matches!(trait_name, "Hash" | "Show" | "Eq" | "Copy") {
             return true;
         }
 
         // Check if the type has an explicit trait implementation
-        if let Some(traits) = self.type_traits.get(type_name) {
+        if let Some(traits) = self.type_traits.get(_type_name) {
             if traits.contains(&trait_name.to_string()) {
                 return true;
             }
@@ -2893,7 +2911,7 @@ impl Compiler {
         // Check if type_name is a type parameter in the current function with the required bound
         // This handles nested calls like: double_hash[T: Hash](x) calling hashable[T: Hash](x)
         for type_param in &self.current_fn_type_params {
-            if type_param.name.node == type_name {
+            if type_param.name.node == _type_name {
                 // Check if this type parameter has the required trait bound
                 for constraint in &type_param.constraints {
                     if constraint.node == trait_name {
@@ -3124,10 +3142,11 @@ impl Compiler {
         // Allocate registers for parameters (0..arity)
         self.next_reg = arity as Reg;
 
-        // === Mvar access analysis (for safety checks, no function-level locking needed) ===
-        // Fine-grained locking: each MvarRead/MvarWrite acquires and releases its own lock
-        // No function-level MvarLock/MvarUnlock needed - deadlock-free by design
-        let (_fn_mvar_reads, _fn_mvar_writes) = self.analyze_fn_def_mvar_access(def);
+        // Function-level locking is disabled because it causes deadlocks when functions
+        // block on receive while holding locks. Instead, we use per-access locking with
+        // special atomic handling for read-modify-write expressions like `counter = counter + 1`.
+        // The try_lock + mvar_waiting queue approach handles contention without deadlocks.
+        self.current_fn_mvar_locks.clear();
 
         if needs_dispatch {
             // Multi-clause dispatch: try each clause in order
@@ -3183,7 +3202,10 @@ impl Compiler {
                         return Err(e);
                     }
                 };
-                // No MvarUnlock needed - fine-grained locking releases per-operation
+                // Emit MvarUnlock for all held locks (reverse order for proper LIFO unlocking)
+                for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                    self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                }
                 self.chunk.emit(Instruction::Return(result_reg), 0);
 
                 // Record where we need to patch for "matched" jumps
@@ -3198,7 +3220,10 @@ impl Compiler {
                 }
             }
 
-            // If we get here, no clause matched - throw error
+            // If we get here, no clause matched - release locks and throw error
+            for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+            }
             let error_idx = self.chunk.add_constant(Value::String(Arc::new(
                 format!("No clause matched for function '{}'", name)
             )));
@@ -3245,7 +3270,10 @@ impl Compiler {
                 }
                 Err(e) => return Err(e),
             };
-            // No MvarUnlock needed - fine-grained locking releases per-operation
+            // Emit MvarUnlock for all held locks (reverse order for proper LIFO unlocking)
+            for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+            }
             self.chunk.emit(Instruction::Return(result_reg), 0);
         }
 
@@ -3921,6 +3949,51 @@ impl Compiler {
                             let dst = self.alloc_reg();
                             let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
                             self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg, arg2_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Map functions (1 arg)
+                        "Map.keys" | "Map.values" | "Map.size" | "Map.isEmpty" if args.len() == 1 => {
+                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Map functions (2 args)
+                        "Map.get" | "Map.contains" | "Map.remove" if args.len() == 2 => {
+                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Map.insert (3 args)
+                        "Map.insert" if args.len() == 3 => {
+                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let arg2_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg, arg2_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Set functions (1 arg)
+                        "Set.size" | "Set.isEmpty" | "Set.toList" if args.len() == 1 => {
+                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg_reg].into()), line);
+                            return Ok(dst);
+                        }
+                        // Set functions (2 args)
+                        "Set.insert" | "Set.remove" | "Set.contains" | "Set.union"
+                        | "Set.intersection" | "Set.difference" if args.len() == 2 => {
+                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![arg0_reg, arg1_reg].into()), line);
                             return Ok(dst);
                         }
                         // File handle operations
@@ -7075,6 +7148,39 @@ impl Compiler {
         let inferred_type = self.expr_type_name(&binding.value);
         let value_type = explicit_type.clone().or(inferred_type);
 
+        // For simple variable bindings, check if this is an mvar assignment that needs atomic locking
+        let atomic_lock_info = if let Pattern::Var(ident) = &binding.pattern {
+            if self.locals.get(&ident.node).is_none() {
+                let mvar_name = self.resolve_name(&ident.node);
+                if self.mvars.contains_key(&mvar_name) {
+                    // Check if RHS WRITES to the same mvar (would deadlock!)
+                    let mvar_writes = self.collect_mvar_writes(&binding.value);
+                    if mvar_writes.contains(&mvar_name) {
+                        return Err(CompileError::NestedMvarWrite {
+                            mvar_name: mvar_name.clone(),
+                            span: binding.span,
+                        });
+                    }
+                    // Check if RHS reads from the same mvar (needs atomic read-modify-write)
+                    let mvar_refs = self.collect_mvar_refs(&binding.value);
+                    if mvar_refs.contains(&mvar_name) {
+                        // Emit MvarLock before compiling the RHS
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new(mvar_name.clone())));
+                        self.chunk.emit(Instruction::MvarLock(name_idx, true), 0); // write lock
+                        Some((mvar_name, name_idx))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let value_reg = self.compile_expr_tail(&binding.value, false)?;
 
         // For simple variable binding
@@ -7107,6 +7213,10 @@ impl Compiler {
                     // This is an mvar assignment, not a new binding
                     let name_idx = self.chunk.add_constant(Value::String(Arc::new(mvar_name.clone())));
                     self.chunk.emit(Instruction::MvarWrite(name_idx, value_reg), 0);
+                    // Emit MvarUnlock if we acquired a lock for atomic update
+                    if let Some((_, lock_idx)) = &atomic_lock_info {
+                        self.chunk.emit(Instruction::MvarUnlock(*lock_idx, true), 0);
+                    }
                     // Track mvar write for deadlock detection
                     self.current_fn_mvar_writes.insert(mvar_name);
                 } else {
@@ -7140,8 +7250,216 @@ impl Compiler {
         }
     }
 
+    /// Collect all mvar names referenced in an expression (for atomic update detection).
+    fn collect_mvar_refs(&self, expr: &Expr) -> std::collections::HashSet<String> {
+        let mut refs = std::collections::HashSet::new();
+        self.collect_mvar_refs_inner(expr, &mut refs);
+        refs
+    }
+
+    /// Collect all mvar names WRITTEN in an expression (for nested write detection).
+    /// This detects patterns like `x = { x = 5; ... }` which would deadlock.
+    fn collect_mvar_writes(&self, expr: &Expr) -> std::collections::HashSet<String> {
+        let mut writes = std::collections::HashSet::new();
+        self.collect_mvar_writes_inner(expr, &mut writes);
+        writes
+    }
+
+    fn collect_mvar_writes_inner(&self, expr: &Expr, writes: &mut std::collections::HashSet<String>) {
+        match expr {
+            Expr::Block(stmts, _) => {
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Expr(e) => self.collect_mvar_writes_inner(e, writes),
+                        Stmt::Let(binding) => {
+                            // Check if this is an mvar assignment (not a new local binding)
+                            if let Pattern::Var(ident) = &binding.pattern {
+                                if self.locals.get(&ident.node).is_none() {
+                                    let mvar_name = self.resolve_name(&ident.node);
+                                    if self.mvars.contains_key(&mvar_name) {
+                                        writes.insert(mvar_name);
+                                    }
+                                }
+                            }
+                            // Also recurse into the value expression
+                            self.collect_mvar_writes_inner(&binding.value, writes);
+                        }
+                        Stmt::Assign(target, value, _) => {
+                            // Check if target is an mvar
+                            if let AssignTarget::Var(ident) = target {
+                                if self.locals.get(&ident.node).is_none() {
+                                    let mvar_name = self.resolve_name(&ident.node);
+                                    if self.mvars.contains_key(&mvar_name) {
+                                        writes.insert(mvar_name);
+                                    }
+                                }
+                            }
+                            self.collect_mvar_writes_inner(value, writes);
+                        }
+                    }
+                }
+            }
+            Expr::If(cond, then_branch, else_branch, _) => {
+                self.collect_mvar_writes_inner(cond, writes);
+                self.collect_mvar_writes_inner(then_branch, writes);
+                self.collect_mvar_writes_inner(else_branch, writes);
+            }
+            Expr::Match(scrutinee, arms, _) => {
+                self.collect_mvar_writes_inner(scrutinee, writes);
+                for arm in arms {
+                    self.collect_mvar_writes_inner(&arm.body, writes);
+                }
+            }
+            Expr::BinOp(left, _, right, _) => {
+                self.collect_mvar_writes_inner(left, writes);
+                self.collect_mvar_writes_inner(right, writes);
+            }
+            Expr::UnaryOp(_, operand, _) => {
+                self.collect_mvar_writes_inner(operand, writes);
+            }
+            Expr::Call(func, args, _) => {
+                self.collect_mvar_writes_inner(func, writes);
+                for arg in args {
+                    self.collect_mvar_writes_inner(arg, writes);
+                }
+            }
+            Expr::Tuple(elems, _) => {
+                for e in elems {
+                    self.collect_mvar_writes_inner(e, writes);
+                }
+            }
+            Expr::List(elems, tail, _) => {
+                for e in elems {
+                    self.collect_mvar_writes_inner(e, writes);
+                }
+                if let Some(t) = tail {
+                    self.collect_mvar_writes_inner(t, writes);
+                }
+            }
+            Expr::Lambda(_, body, _) => {
+                self.collect_mvar_writes_inner(body, writes);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_mvar_refs_inner(&self, expr: &Expr, refs: &mut std::collections::HashSet<String>) {
+        match expr {
+            Expr::Var(ident) => {
+                let name = &ident.node;
+                let resolved = self.resolve_name(name);
+                if self.mvars.contains_key(&resolved) && !self.locals.contains_key(name) {
+                    refs.insert(resolved);
+                }
+            }
+            Expr::BinOp(left, _, right, _) => {
+                self.collect_mvar_refs_inner(left, refs);
+                self.collect_mvar_refs_inner(right, refs);
+            }
+            Expr::UnaryOp(_, operand, _) => {
+                self.collect_mvar_refs_inner(operand, refs);
+            }
+            Expr::Call(func, args, _) => {
+                self.collect_mvar_refs_inner(func, refs);
+                for arg in args {
+                    self.collect_mvar_refs_inner(arg, refs);
+                }
+            }
+            Expr::If(cond, then_branch, else_branch, _) => {
+                self.collect_mvar_refs_inner(cond, refs);
+                self.collect_mvar_refs_inner(then_branch, refs);
+                self.collect_mvar_refs_inner(else_branch, refs);
+            }
+            Expr::Block(stmts, _) => {
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Expr(e) => self.collect_mvar_refs_inner(e, refs),
+                        Stmt::Let(binding) => self.collect_mvar_refs_inner(&binding.value, refs),
+                        Stmt::Assign(_, e, _) => self.collect_mvar_refs_inner(e, refs),
+                    }
+                }
+            }
+            Expr::Tuple(elems, _) => {
+                for e in elems {
+                    self.collect_mvar_refs_inner(e, refs);
+                }
+            }
+            Expr::List(elems, tail, _) => {
+                for e in elems {
+                    self.collect_mvar_refs_inner(e, refs);
+                }
+                if let Some(t) = tail {
+                    self.collect_mvar_refs_inner(t, refs);
+                }
+            }
+            Expr::Index(coll, idx, _) => {
+                self.collect_mvar_refs_inner(coll, refs);
+                self.collect_mvar_refs_inner(idx, refs);
+            }
+            Expr::FieldAccess(obj, _, _) => {
+                self.collect_mvar_refs_inner(obj, refs);
+            }
+            Expr::MethodCall(obj, _, args, _) => {
+                self.collect_mvar_refs_inner(obj, refs);
+                for arg in args {
+                    self.collect_mvar_refs_inner(arg, refs);
+                }
+            }
+            Expr::Lambda(_, body, _) => {
+                self.collect_mvar_refs_inner(body, refs);
+            }
+            Expr::Match(scrutinee, arms, _) => {
+                self.collect_mvar_refs_inner(scrutinee, refs);
+                for arm in arms {
+                    self.collect_mvar_refs_inner(&arm.body, refs);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Compile an assignment.
     fn compile_assign(&mut self, target: &AssignTarget, value: &Expr) -> Result<Reg, CompileError> {
+        // Check if this is an mvar assignment that needs atomic locking
+        let needs_atomic_lock = if let AssignTarget::Var(ident) = target {
+            if self.locals.get(&ident.node).is_none() {
+                let mvar_name = self.resolve_name(&ident.node);
+                if self.mvars.contains_key(&mvar_name) {
+                    // Check if RHS WRITES to the same mvar (would deadlock!)
+                    let mvar_writes = self.collect_mvar_writes(value);
+                    if mvar_writes.contains(&mvar_name) {
+                        return Err(CompileError::NestedMvarWrite {
+                            mvar_name: mvar_name.clone(),
+                            span: ident.span,
+                        });
+                    }
+                    // Check if the RHS reads from this same mvar
+                    let mvar_refs = self.collect_mvar_refs(value);
+                    mvar_refs.contains(&mvar_name)
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        // If atomic lock needed, emit MvarLock before compiling the value
+        let lock_name_idx = if needs_atomic_lock {
+            if let AssignTarget::Var(ident) = target {
+                let mvar_name = self.resolve_name(&ident.node);
+                let name_idx = self.chunk.add_constant(Value::String(Arc::new(mvar_name)));
+                self.chunk.emit(Instruction::MvarLock(name_idx, true), 0); // write lock
+                Some(name_idx)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let value_reg = self.compile_expr_tail(value, false)?;
 
         match target {
@@ -7176,6 +7494,12 @@ impl Compiler {
                 self.chunk.emit(Instruction::IndexSet(coll_reg, idx_reg, value_reg), 0);
             }
         }
+
+        // Emit MvarUnlock if we acquired a lock for atomic update
+        if let Some(name_idx) = lock_name_idx {
+            self.chunk.emit(Instruction::MvarUnlock(name_idx, true), 0);
+        }
+
         let dst = self.alloc_reg();
         self.chunk.emit(Instruction::LoadUnit(dst), 0);
         Ok(dst)
@@ -8295,11 +8619,13 @@ impl Compiler {
         // This is critical because pending_fn_signatures contains type variables from a different context
         let max_var_in_functions = env.functions.values()
             .filter_map(|ft| ft.max_var_id())
+            // Filter out u32::MAX which is used as a sentinel for unknown types
+            .filter(|&id| id != u32::MAX)
             .max();
         if let Some(max_id) = max_var_in_functions {
             // Set next_var to be at least max_id + 1 to avoid collisions
             if env.next_var <= max_id {
-                env.next_var = max_id + 1;
+                env.next_var = max_id.saturating_add(1);
             }
         }
 

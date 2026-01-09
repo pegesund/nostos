@@ -398,6 +398,10 @@ impl Worker {
                     // For now, just skip - IO polling happens elsewhere
                     false
                 }
+                ProcessState::WaitingForMvar(_, _) => {
+                    // Waiting for mvar lock - handled by check_mvar_waiters
+                    false
+                }
                 ProcessState::Running | ProcessState::Waiting
                 | ProcessState::WaitingTimeout | ProcessState::Sleeping
                 | ProcessState::Suspended => {
@@ -940,7 +944,7 @@ impl Worker {
                         }
                     }
                     
-                    let mut entries = std::collections::HashMap::new();
+                    let mut entries = imbl::HashMap::new();
                     for (k, v) in pairs_vec {
                         if let Some(key) = k.to_gc_map_key(&proc.heap) {
                             entries.insert(key, v);
@@ -961,7 +965,7 @@ impl Worker {
                         elements.iter().map(|&r| frame.registers[r as usize].clone()).collect()
                     };
                     
-                    let mut entries = std::collections::HashSet::new();
+                    let mut entries = imbl::HashSet::new();
                     for item in items {
                         if let Some(key) = item.to_gc_map_key(&proc.heap) {
                             entries.insert(key);
