@@ -204,6 +204,8 @@ pub struct ReplPanel {
     stash_current: Option<Vec<String>>,
     /// Persistent command history (separate from display history)
     command_history: Vec<Vec<String>>,
+    /// Whether an async evaluation is in progress
+    eval_in_progress: bool,
 }
 
 impl ReplPanel {
@@ -230,6 +232,7 @@ impl ReplPanel {
             history_index: None,
             stash_current: None,
             command_history: Self::load_history_from_disk(),
+            eval_in_progress: false,
         }
     }
 
@@ -281,9 +284,38 @@ impl ReplPanel {
             return EvalResult::Exit;
         }
 
-        // Evaluate using the engine
-        let result = self.engine.borrow_mut().eval(&input_text);
+        // For REPL commands (: prefix), use synchronous eval (they're quick)
+        if trimmed.starts_with(':') {
+            let result = self.engine.borrow_mut().eval(&input_text);
+            self.finish_eval_with_result(result);
+            return EvalResult::Continue;
+        }
 
+        // Try async evaluation for expressions
+        let async_result = self.engine.borrow_mut().start_eval_async(&input_text);
+        match async_result {
+            Ok(()) => {
+                // Async eval started - mark as in progress and show "Evaluating..."
+                self.eval_in_progress = true;
+                self.current.output = Some(ReplOutput::Definition("Evaluating...".to_string()));
+            }
+            Err(e) if e == "Use eval() for commands" => {
+                // This shouldn't happen since we handle : above, but fallback to sync
+                let result = self.engine.borrow_mut().eval(&input_text);
+                self.finish_eval_with_result(result);
+            }
+            Err(e) => {
+                // Compile-time error - show it immediately
+                self.current.output = Some(ReplOutput::Error(e));
+                self.finalize_entry();
+            }
+        }
+
+        EvalResult::Continue
+    }
+
+    /// Complete evaluation with a result (used for sync eval and polling)
+    fn finish_eval_with_result(&mut self, result: Result<String, String>) {
         // Drain any output from spawned processes
         let spawned_output = self.engine.borrow().drain_output();
 
@@ -305,6 +337,11 @@ impl ReplPanel {
             Err(e) => ReplOutput::Error(e),
         });
 
+        self.finalize_entry();
+    }
+
+    /// Finalize the current entry (move to history, reset state)
+    fn finalize_entry(&mut self) {
         // Move current to history and start fresh
         self.history.push(self.current.clone());
         self.command_history.push(self.current.input.clone());
@@ -313,6 +350,7 @@ impl ReplPanel {
 
         self.history_index = None;
         self.stash_current = None;
+        self.eval_in_progress = false;
 
         // Auto-save history to disk
         self.save_history_to_disk();
@@ -326,8 +364,35 @@ impl ReplPanel {
 
         // Scroll to bottom
         self.scroll_to_bottom();
+    }
 
-        EvalResult::Continue
+    /// Poll for async evaluation result. Returns true if result was received.
+    pub fn poll_eval_result(&mut self) -> bool {
+        if !self.eval_in_progress {
+            return false;
+        }
+
+        let poll_result = self.engine.borrow_mut().poll_eval();
+        match poll_result {
+            Some(result) => {
+                self.finish_eval_with_result(result);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Cancel the current async evaluation
+    pub fn cancel_eval(&mut self) {
+        if self.eval_in_progress {
+            self.engine.borrow_mut().cancel_eval();
+            // The poll will pick up the interrupted result
+        }
+    }
+
+    /// Check if an evaluation is in progress
+    pub fn is_eval_in_progress(&self) -> bool {
+        self.eval_in_progress
     }
 
     /// Calculate total content height
@@ -820,6 +885,16 @@ impl View for ReplPanel {
     }
 
     fn on_event(&mut self, event: Event) -> EventResult {
+        // During evaluation, only Escape can cancel - block all other input
+        if self.eval_in_progress {
+            if let Event::Key(Key::Esc) = event {
+                self.cancel_eval();
+                return EventResult::Consumed(None);
+            }
+            // Block all other input during evaluation
+            return EventResult::Consumed(None);
+        }
+
         match event {
             // Tab: accept completion or cycle through candidates
             Event::Key(Key::Tab) => {
