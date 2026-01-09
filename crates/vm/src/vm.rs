@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::gc::{GcNativeFn, GcValue, Heap};
 use crate::value::*;
 
 /// Maximum call stack depth (before TCO kicks in).
@@ -21,30 +22,32 @@ pub struct CallFrame {
     pub function: Rc<FunctionValue>,
     /// Instruction pointer
     pub ip: usize,
-    /// Register file for this frame
-    pub registers: Vec<Value>,
-    /// Captured variables (for closures)
-    pub captures: Vec<Value>,
+    /// Register file for this frame (GC-managed values)
+    pub registers: Vec<GcValue>,
+    /// Captured variables (for closures, GC-managed)
+    pub captures: Vec<GcValue>,
     /// Return register in caller's frame
     pub return_reg: Option<Reg>,
 }
 
 /// The virtual machine state.
 pub struct VM {
+    /// Garbage-collected heap for runtime values
+    pub heap: Heap,
     /// Call stack
     pub frames: Vec<CallFrame>,
-    /// Global variables
+    /// Global variables (kept as Value for now - mostly static)
     pub globals: HashMap<String, Value>,
     /// Global functions
     pub functions: HashMap<String, Rc<FunctionValue>>,
-    /// Native functions
-    pub natives: HashMap<String, Rc<NativeFn>>,
+    /// Native functions (GC-aware, work directly with GcValue)
+    pub natives: HashMap<String, Rc<GcNativeFn>>,
     /// Type definitions (for introspection)
     pub types: HashMap<String, Rc<TypeValue>>,
     /// Exception handlers stack
     pub handlers: Vec<ExceptionHandler>,
-    /// Current exception (if any)
-    pub current_exception: Option<Value>,
+    /// Current exception (if any, GC-managed)
+    pub current_exception: Option<GcValue>,
     /// Output buffer (for testing/REPL)
     pub output: Vec<String>,
 }
@@ -62,6 +65,7 @@ pub type VMResult = Result<Value, RuntimeError>;
 impl VM {
     pub fn new() -> Self {
         let mut vm = Self {
+            heap: Heap::new(),
             frames: Vec::new(),
             globals: HashMap::new(),
             functions: HashMap::new(),
@@ -77,219 +81,357 @@ impl VM {
 
     /// Register built-in functions.
     fn register_builtins(&mut self) {
-        self.register_native("print", 1, |args| {
-            Ok(Value::String(Rc::new(format!("{}", args[0]))))
+        self.register_native("print", 1, |args, heap| {
+            let s = heap.display_value(&args[0]);
+            Ok(GcValue::String(heap.alloc_string(s)))
         });
 
-        self.register_native("println", 1, |args| {
-            println!("{}", args[0]);
-            Ok(Value::Unit)
+        self.register_native("println", 1, |args, heap| {
+            let s = heap.display_value(&args[0]);
+            println!("{}", s);
+            Ok(GcValue::Unit)
         });
 
-        self.register_native("typeOf", 1, |args| {
-            Ok(Value::String(Rc::new(args[0].type_name().to_string())))
+        self.register_native("typeOf", 1, |args, heap| {
+            let type_name = args[0].type_name(heap).to_string();
+            Ok(GcValue::String(heap.alloc_string(type_name)))
         });
 
-        self.register_native("length", 1, |args| {
+        self.register_native("length", 1, |args, heap| {
             match &args[0] {
-                Value::List(items) => Ok(Value::Int(items.len() as i64)),
-                Value::String(s) => Ok(Value::Int(s.len() as i64)),
-                Value::Array(arr) => Ok(Value::Int(arr.borrow().len() as i64)),
+                GcValue::List(ptr) => {
+                    if let Some(list) = heap.get_list(*ptr) {
+                        Ok(GcValue::Int(list.items.len() as i64))
+                    } else {
+                        Err(RuntimeError::TypeError {
+                            expected: "List".to_string(),
+                            found: "invalid list pointer".to_string(),
+                        })
+                    }
+                }
+                GcValue::String(ptr) => {
+                    if let Some(s) = heap.get_string(*ptr) {
+                        Ok(GcValue::Int(s.data.len() as i64))
+                    } else {
+                        Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "invalid string pointer".to_string(),
+                        })
+                    }
+                }
+                GcValue::Array(ptr) => {
+                    if let Some(arr) = heap.get_array(*ptr) {
+                        Ok(GcValue::Int(arr.items.len() as i64))
+                    } else {
+                        Err(RuntimeError::TypeError {
+                            expected: "Array".to_string(),
+                            found: "invalid array pointer".to_string(),
+                        })
+                    }
+                }
                 other => Err(RuntimeError::TypeError {
                     expected: "List, String, or Array".to_string(),
-                    found: other.type_name().to_string(),
+                    found: other.type_name(heap).to_string(),
                 }),
             }
         });
 
-        self.register_native("head", 1, |args| {
+        self.register_native("head", 1, |args, heap| {
             match &args[0] {
-                Value::List(items) if !items.is_empty() => Ok(items[0].clone()),
-                Value::List(_) => Err(RuntimeError::MatchFailed),
-                other => Err(RuntimeError::TypeError {
-                    expected: "List".to_string(),
-                    found: other.type_name().to_string(),
-                }),
-            }
-        });
-
-        self.register_native("tail", 1, |args| {
-            match &args[0] {
-                Value::List(items) if !items.is_empty() => {
-                    Ok(Value::List(Rc::new(items[1..].to_vec())))
+                GcValue::List(ptr) => {
+                    if let Some(list) = heap.get_list(*ptr) {
+                        if !list.items.is_empty() {
+                            Ok(list.items[0].clone())
+                        } else {
+                            Err(RuntimeError::MatchFailed)
+                        }
+                    } else {
+                        Err(RuntimeError::TypeError {
+                            expected: "List".to_string(),
+                            found: "invalid list pointer".to_string(),
+                        })
+                    }
                 }
-                Value::List(_) => Err(RuntimeError::MatchFailed),
                 other => Err(RuntimeError::TypeError {
                     expected: "List".to_string(),
-                    found: other.type_name().to_string(),
+                    found: other.type_name(heap).to_string(),
                 }),
             }
         });
 
-        self.register_native("isEmpty", 1, |args| {
+        self.register_native("tail", 1, |args, heap| {
             match &args[0] {
-                Value::List(items) => Ok(Value::Bool(items.is_empty())),
-                Value::String(s) => Ok(Value::Bool(s.is_empty())),
+                GcValue::List(ptr) => {
+                    if let Some(list) = heap.get_list(*ptr) {
+                        if !list.items.is_empty() {
+                            let tail_items = list.items[1..].to_vec();
+                            Ok(GcValue::List(heap.alloc_list(tail_items)))
+                        } else {
+                            Err(RuntimeError::MatchFailed)
+                        }
+                    } else {
+                        Err(RuntimeError::TypeError {
+                            expected: "List".to_string(),
+                            found: "invalid list pointer".to_string(),
+                        })
+                    }
+                }
+                other => Err(RuntimeError::TypeError {
+                    expected: "List".to_string(),
+                    found: other.type_name(heap).to_string(),
+                }),
+            }
+        });
+
+        self.register_native("isEmpty", 1, |args, heap| {
+            match &args[0] {
+                GcValue::List(ptr) => {
+                    if let Some(list) = heap.get_list(*ptr) {
+                        Ok(GcValue::Bool(list.items.is_empty()))
+                    } else {
+                        Err(RuntimeError::TypeError {
+                            expected: "List".to_string(),
+                            found: "invalid list pointer".to_string(),
+                        })
+                    }
+                }
+                GcValue::String(ptr) => {
+                    if let Some(s) = heap.get_string(*ptr) {
+                        Ok(GcValue::Bool(s.data.is_empty()))
+                    } else {
+                        Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "invalid string pointer".to_string(),
+                        })
+                    }
+                }
                 other => Err(RuntimeError::TypeError {
                     expected: "List or String".to_string(),
-                    found: other.type_name().to_string(),
+                    found: other.type_name(heap).to_string(),
                 }),
             }
         });
 
-        self.register_native("show", 1, |args| {
-            Ok(Value::String(Rc::new(format!("{}", args[0]))))
+        self.register_native("show", 1, |args, heap| {
+            let s = heap.display_value(&args[0]);
+            Ok(GcValue::String(heap.alloc_string(s)))
         });
 
-        self.register_native("toInt", 1, |args| {
+        self.register_native("toInt", 1, |args, heap| {
             match &args[0] {
-                Value::Int(i) => Ok(Value::Int(*i)),
-                Value::Float(f) => Ok(Value::Int(*f as i64)),
-                Value::String(s) => s.parse::<i64>()
-                    .map(Value::Int)
-                    .map_err(|_| RuntimeError::TypeError {
-                        expected: "numeric string".to_string(),
-                        found: format!("\"{}\"", s),
-                    }),
+                GcValue::Int(i) => Ok(GcValue::Int(*i)),
+                GcValue::Float(f) => Ok(GcValue::Int(*f as i64)),
+                GcValue::String(ptr) => {
+                    if let Some(s) = heap.get_string(*ptr) {
+                        s.data.parse::<i64>()
+                            .map(GcValue::Int)
+                            .map_err(|_| RuntimeError::TypeError {
+                                expected: "numeric string".to_string(),
+                                found: format!("\"{}\"", s.data),
+                            })
+                    } else {
+                        Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "invalid string pointer".to_string(),
+                        })
+                    }
+                }
                 other => Err(RuntimeError::TypeError {
                     expected: "Int, Float, or String".to_string(),
-                    found: other.type_name().to_string(),
+                    found: other.type_name(heap).to_string(),
                 }),
             }
         });
 
-        self.register_native("toFloat", 1, |args| {
+        self.register_native("toFloat", 1, |args, heap| {
             match &args[0] {
-                Value::Int(i) => Ok(Value::Float(*i as f64)),
-                Value::Float(f) => Ok(Value::Float(*f)),
-                Value::String(s) => s.parse::<f64>()
-                    .map(Value::Float)
-                    .map_err(|_| RuntimeError::TypeError {
-                        expected: "numeric string".to_string(),
-                        found: format!("\"{}\"", s),
-                    }),
+                GcValue::Int(i) => Ok(GcValue::Float(*i as f64)),
+                GcValue::Float(f) => Ok(GcValue::Float(*f)),
+                GcValue::String(ptr) => {
+                    if let Some(s) = heap.get_string(*ptr) {
+                        s.data.parse::<f64>()
+                            .map(GcValue::Float)
+                            .map_err(|_| RuntimeError::TypeError {
+                                expected: "numeric string".to_string(),
+                                found: format!("\"{}\"", s.data),
+                            })
+                    } else {
+                        Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "invalid string pointer".to_string(),
+                        })
+                    }
+                }
                 other => Err(RuntimeError::TypeError {
                     expected: "Int, Float, or String".to_string(),
-                    found: other.type_name().to_string(),
+                    found: other.type_name(heap).to_string(),
                 }),
             }
         });
 
-        self.register_native("abs", 1, |args| {
+        self.register_native("abs", 1, |args, heap| {
             match &args[0] {
-                Value::Int(i) => Ok(Value::Int(i.abs())),
-                Value::Float(f) => Ok(Value::Float(f.abs())),
+                GcValue::Int(i) => Ok(GcValue::Int(i.abs())),
+                GcValue::Float(f) => Ok(GcValue::Float(f.abs())),
                 other => Err(RuntimeError::TypeError {
                     expected: "Int or Float".to_string(),
-                    found: other.type_name().to_string(),
+                    found: other.type_name(heap).to_string(),
                 }),
             }
         });
 
-        self.register_native("sqrt", 1, |args| {
+        self.register_native("sqrt", 1, |args, heap| {
             match &args[0] {
-                Value::Float(f) => Ok(Value::Float(f.sqrt())),
-                Value::Int(i) => Ok(Value::Float((*i as f64).sqrt())),
+                GcValue::Float(f) => Ok(GcValue::Float(f.sqrt())),
+                GcValue::Int(i) => Ok(GcValue::Float((*i as f64).sqrt())),
                 other => Err(RuntimeError::TypeError {
                     expected: "Float or Int".to_string(),
-                    found: other.type_name().to_string(),
+                    found: other.type_name(heap).to_string(),
                 }),
             }
         });
 
-        self.register_native("panic", 1, |args| {
+        self.register_native("panic", 1, |args, heap| {
             match &args[0] {
-                Value::String(s) => Err(RuntimeError::Panic(s.to_string())),
-                other => Err(RuntimeError::Panic(format!("{}", other))),
+                GcValue::String(ptr) => {
+                    if let Some(s) = heap.get_string(*ptr) {
+                        Err(RuntimeError::Panic(s.data.clone()))
+                    } else {
+                        Err(RuntimeError::Panic("panic".to_string()))
+                    }
+                }
+                other => Err(RuntimeError::Panic(heap.display_value(other))),
             }
         });
 
-        self.register_native("assert", 2, |args| {
+        self.register_native("assert", 2, |args, heap| {
             match &args[0] {
-                Value::Bool(true) => Ok(Value::Unit),
-                Value::Bool(false) => match &args[1] {
-                    Value::String(msg) => Err(RuntimeError::AssertionFailed(msg.to_string())),
+                GcValue::Bool(true) => Ok(GcValue::Unit),
+                GcValue::Bool(false) => match &args[1] {
+                    GcValue::String(ptr) => {
+                        if let Some(s) = heap.get_string(*ptr) {
+                            Err(RuntimeError::AssertionFailed(s.data.clone()))
+                        } else {
+                            Err(RuntimeError::AssertionFailed("assertion failed".to_string()))
+                        }
+                    }
                     _ => Err(RuntimeError::AssertionFailed("assertion failed".to_string())),
                 },
                 other => Err(RuntimeError::TypeError {
                     expected: "Bool".to_string(),
-                    found: other.type_name().to_string(),
+                    found: other.type_name(heap).to_string(),
                 }),
             }
         });
 
         // I/O functions
-        self.register_native("readFile", 1, |args| {
+        self.register_native("readFile", 1, |args, heap| {
             match &args[0] {
-                Value::String(path) => {
-                    match std::fs::read_to_string(path.as_ref()) {
-                        Ok(contents) => Ok(Value::String(Rc::new(contents))),
-                        Err(e) => Err(RuntimeError::IOError(e.to_string())),
+                GcValue::String(ptr) => {
+                    if let Some(s) = heap.get_string(*ptr) {
+                        match std::fs::read_to_string(&s.data) {
+                            Ok(contents) => Ok(GcValue::String(heap.alloc_string(contents))),
+                            Err(e) => Err(RuntimeError::IOError(e.to_string())),
+                        }
+                    } else {
+                        Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "invalid string pointer".to_string(),
+                        })
                     }
                 }
                 other => Err(RuntimeError::TypeError {
                     expected: "String".to_string(),
-                    found: other.type_name().to_string(),
+                    found: other.type_name(heap).to_string(),
                 }),
             }
         });
 
-        self.register_native("writeFile", 2, |args| {
+        self.register_native("writeFile", 2, |args, heap| {
             match (&args[0], &args[1]) {
-                (Value::String(path), Value::String(contents)) => {
-                    match std::fs::write(path.as_ref(), contents.as_ref()) {
-                        Ok(()) => Ok(Value::Unit),
-                        Err(e) => Err(RuntimeError::IOError(e.to_string())),
-                    }
-                }
-                (Value::String(_), other) => Err(RuntimeError::TypeError {
-                    expected: "String".to_string(),
-                    found: other.type_name().to_string(),
-                }),
-                (other, _) => Err(RuntimeError::TypeError {
-                    expected: "String".to_string(),
-                    found: other.type_name().to_string(),
-                }),
-            }
-        });
-
-        self.register_native("appendFile", 2, |args| {
-            use std::fs::OpenOptions;
-            use std::io::Write;
-            match (&args[0], &args[1]) {
-                (Value::String(path), Value::String(contents)) => {
-                    match OpenOptions::new().append(true).create(true).open(path.as_ref()) {
-                        Ok(mut file) => {
-                            match file.write_all(contents.as_bytes()) {
-                                Ok(()) => Ok(Value::Unit),
+                (GcValue::String(path_ptr), GcValue::String(contents_ptr)) => {
+                    let path = heap.get_string(*path_ptr).map(|s| s.data.clone());
+                    let contents = heap.get_string(*contents_ptr).map(|s| s.data.clone());
+                    match (path, contents) {
+                        (Some(path), Some(contents)) => {
+                            match std::fs::write(&path, &contents) {
+                                Ok(()) => Ok(GcValue::Unit),
                                 Err(e) => Err(RuntimeError::IOError(e.to_string())),
                             }
                         }
-                        Err(e) => Err(RuntimeError::IOError(e.to_string())),
+                        _ => Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "invalid string pointer".to_string(),
+                        }),
                     }
                 }
-                (Value::String(_), other) => Err(RuntimeError::TypeError {
+                (GcValue::String(_), other) => Err(RuntimeError::TypeError {
                     expected: "String".to_string(),
-                    found: other.type_name().to_string(),
+                    found: other.type_name(heap).to_string(),
                 }),
                 (other, _) => Err(RuntimeError::TypeError {
                     expected: "String".to_string(),
-                    found: other.type_name().to_string(),
+                    found: other.type_name(heap).to_string(),
                 }),
             }
         });
 
-        self.register_native("fileExists", 1, |args| {
+        self.register_native("appendFile", 2, |args, heap| {
+            use std::fs::OpenOptions;
+            use std::io::Write;
+            match (&args[0], &args[1]) {
+                (GcValue::String(path_ptr), GcValue::String(contents_ptr)) => {
+                    let path = heap.get_string(*path_ptr).map(|s| s.data.clone());
+                    let contents = heap.get_string(*contents_ptr).map(|s| s.data.clone());
+                    match (path, contents) {
+                        (Some(path), Some(contents)) => {
+                            match OpenOptions::new().append(true).create(true).open(&path) {
+                                Ok(mut file) => {
+                                    match file.write_all(contents.as_bytes()) {
+                                        Ok(()) => Ok(GcValue::Unit),
+                                        Err(e) => Err(RuntimeError::IOError(e.to_string())),
+                                    }
+                                }
+                                Err(e) => Err(RuntimeError::IOError(e.to_string())),
+                            }
+                        }
+                        _ => Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "invalid string pointer".to_string(),
+                        }),
+                    }
+                }
+                (GcValue::String(_), other) => Err(RuntimeError::TypeError {
+                    expected: "String".to_string(),
+                    found: other.type_name(heap).to_string(),
+                }),
+                (other, _) => Err(RuntimeError::TypeError {
+                    expected: "String".to_string(),
+                    found: other.type_name(heap).to_string(),
+                }),
+            }
+        });
+
+        self.register_native("fileExists", 1, |args, heap| {
             match &args[0] {
-                Value::String(path) => Ok(Value::Bool(std::path::Path::new(path.as_ref()).exists())),
+                GcValue::String(ptr) => {
+                    if let Some(s) = heap.get_string(*ptr) {
+                        Ok(GcValue::Bool(std::path::Path::new(&s.data).exists()))
+                    } else {
+                        Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "invalid string pointer".to_string(),
+                        })
+                    }
+                }
                 other => Err(RuntimeError::TypeError {
                     expected: "String".to_string(),
-                    found: other.type_name().to_string(),
+                    found: other.type_name(heap).to_string(),
                 }),
             }
         });
 
-        self.register_native("readLine", 0, |_args| {
+        self.register_native("readLine", 0, |_args, heap| {
             use std::io::BufRead;
             let stdin = std::io::stdin();
             let mut line = String::new();
@@ -302,31 +444,38 @@ impl VM {
                             line.pop();
                         }
                     }
-                    Ok(Value::String(Rc::new(line)))
+                    Ok(GcValue::String(heap.alloc_string(line)))
                 }
                 Err(e) => Err(RuntimeError::IOError(e.to_string())),
             }
         });
 
-        self.register_native("getArgs", 0, |_args| {
-            let args: Vec<Value> = std::env::args()
+        self.register_native("getArgs", 0, |_args, heap| {
+            let args: Vec<GcValue> = std::env::args()
                 .skip(1) // Skip the program name
-                .map(|s| Value::String(Rc::new(s)))
+                .map(|s| GcValue::String(heap.alloc_string(s)))
                 .collect();
-            Ok(Value::List(Rc::new(args)))
+            Ok(GcValue::List(heap.alloc_list(args)))
         });
 
-        self.register_native("getEnv", 1, |args| {
+        self.register_native("getEnv", 1, |args, heap| {
             match &args[0] {
-                Value::String(name) => {
-                    match std::env::var(name.as_ref()) {
-                        Ok(value) => Ok(Value::String(Rc::new(value))),
-                        Err(_) => Ok(Value::String(Rc::new(String::new()))),
+                GcValue::String(ptr) => {
+                    if let Some(s) = heap.get_string(*ptr) {
+                        match std::env::var(&s.data) {
+                            Ok(value) => Ok(GcValue::String(heap.alloc_string(value))),
+                            Err(_) => Ok(GcValue::String(heap.alloc_string(String::new()))),
+                        }
+                    } else {
+                        Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "invalid string pointer".to_string(),
+                        })
                     }
                 }
                 other => Err(RuntimeError::TypeError {
                     expected: "String".to_string(),
-                    found: other.type_name().to_string(),
+                    found: other.type_name(heap).to_string(),
                 }),
             }
         });
@@ -334,9 +483,9 @@ impl VM {
 
     pub fn register_native<F>(&mut self, name: &str, arity: usize, func: F)
     where
-        F: Fn(&[Value]) -> VMResult + Send + Sync + 'static,
+        F: Fn(&[GcValue], &mut Heap) -> Result<GcValue, RuntimeError> + Send + Sync + 'static,
     {
-        let native = Rc::new(NativeFn {
+        let native = Rc::new(GcNativeFn {
             name: name.to_string(),
             arity,
             func: Box::new(func),
@@ -365,7 +514,12 @@ impl VM {
                     found: args.len(),
                 });
             }
-            return (native.func)(&args);
+            // Convert Value args to GcValue for native call
+            let gc_args: Vec<GcValue> = args.iter()
+                .map(|a| self.heap.value_to_gc(a))
+                .collect();
+            let result = (native.func)(&gc_args, &mut self.heap)?;
+            return Ok(self.heap.gc_to_value(&result));
         }
 
         let func = self.functions.get(name).cloned()
@@ -387,16 +541,23 @@ impl VM {
         args: Vec<Value>,
         captures: Vec<Value>,
     ) -> VMResult {
-        let mut registers = vec![Value::Unit; func.code.register_count];
+        // Convert args to GcValue
+        let mut registers = vec![GcValue::Unit; func.code.register_count];
         for (i, arg) in args.into_iter().enumerate() {
-            registers[i] = arg;
+            registers[i] = self.heap.value_to_gc(&arg);
         }
+
+        // Convert captures to GcValue
+        let gc_captures: Vec<GcValue> = captures
+            .into_iter()
+            .map(|c| self.heap.value_to_gc(&c))
+            .collect();
 
         let frame = CallFrame {
             function: func,
             ip: 0,
             registers,
-            captures,
+            captures: gc_captures,
             return_reg: None,
         };
 
@@ -411,21 +572,58 @@ impl VM {
             }
 
             if self.frames.len() > MAX_STACK_DEPTH {
+                // Stack overflow - check if there's a handler
+                if let Some(handler) = self.handlers.pop() {
+                    let exc = RuntimeError::StackOverflow.to_exception_value();
+                    self.current_exception = Some(self.heap.value_to_gc(&exc));
+                    while self.frames.len() > handler.frame_index + 1 {
+                        self.frames.pop();
+                    }
+                    if let Some(frame) = self.frames.last_mut() {
+                        frame.ip = handler.catch_ip;
+                    }
+                    continue;
+                }
                 return Err(RuntimeError::StackOverflow);
             }
 
-            let result = self.execute_step()?;
+            let result = match self.execute_step() {
+                Ok(r) => r,
+                Err(e) => {
+                    // Runtime error occurred - check if there's an exception handler
+                    if let Some(handler) = self.handlers.pop() {
+                        // Convert the error to an exception value
+                        let exc = e.to_exception_value();
+                        self.current_exception = Some(self.heap.value_to_gc(&exc));
+
+                        // Unwind stack to the handler's frame
+                        while self.frames.len() > handler.frame_index + 1 {
+                            self.frames.pop();
+                        }
+
+                        // Jump to the catch block
+                        if let Some(frame) = self.frames.last_mut() {
+                            frame.ip = handler.catch_ip;
+                        }
+                        continue;
+                    } else {
+                        // No handler - propagate the error
+                        return Err(e);
+                    }
+                }
+            };
 
             match result {
                 StepResult::Continue => {}
-                StepResult::Return(value) => {
+                StepResult::Return(gc_value) => {
                     self.frames.pop();
                     if self.frames.is_empty() {
-                        return Ok(value);
+                        // Convert GcValue back to Value for the final return
+                        return Ok(self.heap.gc_to_value(&gc_value));
                     }
                     if let Some(frame) = self.frames.last_mut() {
                         if let Some(ret_reg) = frame.return_reg {
-                            frame.registers[ret_reg as usize] = value;
+                            frame.registers[ret_reg as usize] = gc_value;
                         }
                         frame.return_reg = None;
                     }
@@ -436,7 +634,7 @@ impl VM {
                     frame.ip = 0;
                     frame.captures = captures;
                     frame.registers.clear();
-                    frame.registers.resize(func.code.register_count, Value::Unit);
+                    frame.registers.resize(func.code.register_count, GcValue::Unit);
                     for (i, arg) in args.into_iter().enumerate() {
                         frame.registers[i] = arg;
                     }
@@ -444,7 +642,7 @@ impl VM {
                 StepResult::Call { func, args, captures, return_reg } => {
                     self.frames.last_mut().unwrap().return_reg = Some(return_reg);
 
-                    let mut registers = vec![Value::Unit; func.code.register_count];
+                    let mut registers = vec![GcValue::Unit; func.code.register_count];
                     for (i, arg) in args.into_iter().enumerate() {
                         registers[i] = arg;
                     }
@@ -488,13 +686,41 @@ impl VM {
             ($r:expr, $v:expr) => { frame!().registers[$r as usize] = $v };
         }
 
+        // Helper to get type name for error messages
+        macro_rules! gc_type_name {
+            ($v:expr) => {
+                match $v {
+                    GcValue::Unit => "()",
+                    GcValue::Bool(_) => "Bool",
+                    GcValue::Int(_) => "Int",
+                    GcValue::Float(_) => "Float",
+                    GcValue::Char(_) => "Char",
+                    GcValue::String(_) => "String",
+                    GcValue::List(_) => "List",
+                    GcValue::Array(_) => "Array",
+                    GcValue::Tuple(_) => "Tuple",
+                    GcValue::Map(_) => "Map",
+                    GcValue::Set(_) => "Set",
+                    GcValue::Record(_) => "Record",
+                    GcValue::Variant(_) => "Variant",
+                    GcValue::Closure(_) => "Closure",
+                    GcValue::Function(_) => "Function",
+                    GcValue::NativeFunction(_) => "NativeFunction",
+                    GcValue::Pid(_) => "Pid",
+                    GcValue::Ref(_) => "Ref",
+                    GcValue::Type(_) => "Type",
+                    GcValue::Pointer(_) => "Pointer",
+                }
+            };
+        }
+
         macro_rules! get_int {
             ($r:expr) => {
                 match reg!($r) {
-                    Value::Int(i) => *i,
+                    GcValue::Int(i) => *i,
                     other => return Err(RuntimeError::TypeError {
                         expected: "Int".to_string(),
-                        found: other.type_name().to_string(),
+                        found: gc_type_name!(other).to_string(),
                     }),
                 }
             };
@@ -503,10 +729,10 @@ impl VM {
         macro_rules! get_float {
             ($r:expr) => {
                 match reg!($r) {
-                    Value::Float(f) => *f,
+                    GcValue::Float(f) => *f,
                     other => return Err(RuntimeError::TypeError {
                         expected: "Float".to_string(),
-                        found: other.type_name().to_string(),
+                        found: gc_type_name!(other).to_string(),
                     }),
                 }
             };
@@ -515,22 +741,22 @@ impl VM {
         macro_rules! get_bool {
             ($r:expr) => {
                 match reg!($r) {
-                    Value::Bool(b) => *b,
+                    GcValue::Bool(b) => *b,
                     other => return Err(RuntimeError::TypeError {
                         expected: "Bool".to_string(),
-                        found: other.type_name().to_string(),
+                        found: gc_type_name!(other).to_string(),
                     }),
                 }
             };
         }
 
-        macro_rules! get_string {
+        macro_rules! get_string_ptr {
             ($r:expr) => {
                 match reg!($r) {
-                    Value::String(s) => s.clone(),
+                    GcValue::String(ptr) => *ptr,
                     other => return Err(RuntimeError::TypeError {
                         expected: "String".to_string(),
-                        found: other.type_name().to_string(),
+                        found: gc_type_name!(other).to_string(),
                     }),
                 }
             };
@@ -538,282 +764,338 @@ impl VM {
 
         match instr {
             Instruction::LoadConst(dst, idx) => {
-                let value = constants[idx as usize].clone();
-                set_reg!(dst, value);
+                // Convert Value constant to GcValue
+                let value = &constants[idx as usize];
+                let gc_value = self.heap.value_to_gc(value);
+                set_reg!(dst, gc_value);
             }
             Instruction::Move(dst, src) => {
                 let value = reg!(src).clone();
                 set_reg!(dst, value);
             }
-            Instruction::LoadUnit(dst) => set_reg!(dst, Value::Unit),
-            Instruction::LoadTrue(dst) => set_reg!(dst, Value::Bool(true)),
-            Instruction::LoadFalse(dst) => set_reg!(dst, Value::Bool(false)),
+            Instruction::LoadUnit(dst) => set_reg!(dst, GcValue::Unit),
+            Instruction::LoadTrue(dst) => set_reg!(dst, GcValue::Bool(true)),
+            Instruction::LoadFalse(dst) => set_reg!(dst, GcValue::Bool(false)),
 
             // Integer arithmetic
             Instruction::AddInt(dst, a, b) => {
                 let a = get_int!(a);
                 let b = get_int!(b);
-                set_reg!(dst, Value::Int(a + b));
+                set_reg!(dst, GcValue::Int(a + b));
             }
             Instruction::SubInt(dst, a, b) => {
                 let a = get_int!(a);
                 let b = get_int!(b);
-                set_reg!(dst, Value::Int(a - b));
+                set_reg!(dst, GcValue::Int(a - b));
             }
             Instruction::MulInt(dst, a, b) => {
                 let a = get_int!(a);
                 let b = get_int!(b);
-                set_reg!(dst, Value::Int(a * b));
+                set_reg!(dst, GcValue::Int(a * b));
             }
             Instruction::DivInt(dst, a, b) => {
                 let a = get_int!(a);
                 let b = get_int!(b);
                 if b == 0 { return Err(RuntimeError::DivisionByZero); }
-                set_reg!(dst, Value::Int(a / b));
+                set_reg!(dst, GcValue::Int(a / b));
             }
             Instruction::ModInt(dst, a, b) => {
                 let a = get_int!(a);
                 let b = get_int!(b);
                 if b == 0 { return Err(RuntimeError::DivisionByZero); }
-                set_reg!(dst, Value::Int(a % b));
+                set_reg!(dst, GcValue::Int(a % b));
             }
             Instruction::NegInt(dst, src) => {
                 let v = get_int!(src);
-                set_reg!(dst, Value::Int(-v));
+                set_reg!(dst, GcValue::Int(-v));
             }
 
             // Float arithmetic
             Instruction::AddFloat(dst, a, b) => {
                 let a = get_float!(a);
                 let b = get_float!(b);
-                set_reg!(dst, Value::Float(a + b));
+                set_reg!(dst, GcValue::Float(a + b));
             }
             Instruction::SubFloat(dst, a, b) => {
                 let a = get_float!(a);
                 let b = get_float!(b);
-                set_reg!(dst, Value::Float(a - b));
+                set_reg!(dst, GcValue::Float(a - b));
             }
             Instruction::MulFloat(dst, a, b) => {
                 let a = get_float!(a);
                 let b = get_float!(b);
-                set_reg!(dst, Value::Float(a * b));
+                set_reg!(dst, GcValue::Float(a * b));
             }
             Instruction::DivFloat(dst, a, b) => {
                 let a = get_float!(a);
                 let b = get_float!(b);
-                set_reg!(dst, Value::Float(a / b));
+                set_reg!(dst, GcValue::Float(a / b));
             }
             Instruction::NegFloat(dst, src) => {
                 let v = get_float!(src);
-                set_reg!(dst, Value::Float(-v));
+                set_reg!(dst, GcValue::Float(-v));
             }
             Instruction::PowFloat(dst, a, b) => {
                 let a = get_float!(a);
                 let b = get_float!(b);
-                set_reg!(dst, Value::Float(a.powf(b)));
+                set_reg!(dst, GcValue::Float(a.powf(b)));
             }
 
             // Comparisons
             Instruction::EqInt(dst, a, b) => {
                 let a = get_int!(a);
                 let b = get_int!(b);
-                set_reg!(dst, Value::Bool(a == b));
+                set_reg!(dst, GcValue::Bool(a == b));
             }
             Instruction::NeInt(dst, a, b) => {
                 let a = get_int!(a);
                 let b = get_int!(b);
-                set_reg!(dst, Value::Bool(a != b));
+                set_reg!(dst, GcValue::Bool(a != b));
             }
             Instruction::LtInt(dst, a, b) => {
                 let a = get_int!(a);
                 let b = get_int!(b);
-                set_reg!(dst, Value::Bool(a < b));
+                set_reg!(dst, GcValue::Bool(a < b));
             }
             Instruction::LeInt(dst, a, b) => {
                 let a = get_int!(a);
                 let b = get_int!(b);
-                set_reg!(dst, Value::Bool(a <= b));
+                set_reg!(dst, GcValue::Bool(a <= b));
             }
             Instruction::GtInt(dst, a, b) => {
                 let a = get_int!(a);
                 let b = get_int!(b);
-                set_reg!(dst, Value::Bool(a > b));
+                set_reg!(dst, GcValue::Bool(a > b));
             }
             Instruction::GeInt(dst, a, b) => {
                 let a = get_int!(a);
                 let b = get_int!(b);
-                set_reg!(dst, Value::Bool(a >= b));
+                set_reg!(dst, GcValue::Bool(a >= b));
             }
             Instruction::EqFloat(dst, a, b) => {
                 let a = get_float!(a);
                 let b = get_float!(b);
-                set_reg!(dst, Value::Bool(a == b));
+                set_reg!(dst, GcValue::Bool(a == b));
             }
             Instruction::LtFloat(dst, a, b) => {
                 let a = get_float!(a);
                 let b = get_float!(b);
-                set_reg!(dst, Value::Bool(a < b));
+                set_reg!(dst, GcValue::Bool(a < b));
             }
             Instruction::LeFloat(dst, a, b) => {
                 let a = get_float!(a);
                 let b = get_float!(b);
-                set_reg!(dst, Value::Bool(a <= b));
+                set_reg!(dst, GcValue::Bool(a <= b));
             }
             Instruction::EqBool(dst, a, b) => {
                 let a = get_bool!(a);
                 let b = get_bool!(b);
-                set_reg!(dst, Value::Bool(a == b));
+                set_reg!(dst, GcValue::Bool(a == b));
             }
             Instruction::EqStr(dst, a, b) => {
-                let a = get_string!(a);
-                let b = get_string!(b);
-                set_reg!(dst, Value::Bool(a == b));
+                let a_ptr = get_string_ptr!(a);
+                let b_ptr = get_string_ptr!(b);
+                let a_str = self.heap.get_string(a_ptr).map(|s| &s.data);
+                let b_str = self.heap.get_string(b_ptr).map(|s| &s.data);
+                set_reg!(dst, GcValue::Bool(a_str == b_str));
             }
             Instruction::Eq(dst, a, b) => {
-                let a = reg!(a).clone();
-                let b = reg!(b).clone();
-                set_reg!(dst, Value::Bool(a == b));
+                // Use gc_values_equal for content-based comparison (not pointer comparison)
+                let result = self.heap.gc_values_equal(reg!(a), reg!(b));
+                set_reg!(dst, GcValue::Bool(result));
             }
 
             // Logical
             Instruction::Not(dst, src) => {
                 let v = get_bool!(src);
-                set_reg!(dst, Value::Bool(!v));
+                set_reg!(dst, GcValue::Bool(!v));
             }
             Instruction::And(dst, a, b) => {
                 let a = get_bool!(a);
                 let b = get_bool!(b);
-                set_reg!(dst, Value::Bool(a && b));
+                set_reg!(dst, GcValue::Bool(a && b));
             }
             Instruction::Or(dst, a, b) => {
                 let a = get_bool!(a);
                 let b = get_bool!(b);
-                set_reg!(dst, Value::Bool(a || b));
+                set_reg!(dst, GcValue::Bool(a || b));
             }
 
             // String
             Instruction::Concat(dst, a, b) => {
-                let a = get_string!(a);
-                let b = get_string!(b);
-                set_reg!(dst, Value::String(Rc::new(format!("{}{}", a, b))));
+                let a_ptr = get_string_ptr!(a);
+                let b_ptr = get_string_ptr!(b);
+                let a_str = self.heap.get_string(a_ptr).map(|s| s.data.as_str()).unwrap_or("");
+                let b_str = self.heap.get_string(b_ptr).map(|s| s.data.as_str()).unwrap_or("");
+                let result = format!("{}{}", a_str, b_str);
+                let result_ptr = self.heap.alloc_string(result);
+                set_reg!(dst, GcValue::String(result_ptr));
             }
 
             // Collections
             Instruction::MakeList(dst, regs) => {
-                let items: Vec<Value> = regs.iter()
+                let items: Vec<GcValue> = regs.iter()
                     .map(|r| reg!(*r).clone())
                     .collect();
-                set_reg!(dst, Value::List(Rc::new(items)));
+                let list_ptr = self.heap.alloc_list(items);
+                set_reg!(dst, GcValue::List(list_ptr));
             }
             Instruction::MakeTuple(dst, regs) => {
-                let items: Vec<Value> = regs.iter()
+                let items: Vec<GcValue> = regs.iter()
                     .map(|r| reg!(*r).clone())
                     .collect();
-                set_reg!(dst, Value::Tuple(Rc::new(items)));
+                let tuple_ptr = self.heap.alloc_tuple(items);
+                set_reg!(dst, GcValue::Tuple(tuple_ptr));
             }
             Instruction::Cons(dst, head, tail) => {
                 let head = reg!(head).clone();
-                let tail = match reg!(tail) {
-                    Value::List(items) => items.clone(),
+                let tail_ptr = match reg!(tail) {
+                    GcValue::List(ptr) => *ptr,
                     other => return Err(RuntimeError::TypeError {
                         expected: "List".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 };
-                let mut new_list = vec![head];
-                new_list.extend(tail.iter().cloned());
-                set_reg!(dst, Value::List(Rc::new(new_list)));
+                let tail_items = self.heap.get_list(tail_ptr)
+                    .map(|l| l.items.clone())
+                    .unwrap_or_default();
+                let mut new_items = vec![head];
+                new_items.extend(tail_items);
+                let list_ptr = self.heap.alloc_list(new_items);
+                set_reg!(dst, GcValue::List(list_ptr));
             }
             Instruction::ListConcat(dst, a, b) => {
-                let a = match reg!(a) {
-                    Value::List(items) => items.clone(),
+                let a_ptr = match reg!(a) {
+                    GcValue::List(ptr) => *ptr,
                     other => return Err(RuntimeError::TypeError {
                         expected: "List".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 };
-                let b = match reg!(b) {
-                    Value::List(items) => items.clone(),
+                let b_ptr = match reg!(b) {
+                    GcValue::List(ptr) => *ptr,
                     other => return Err(RuntimeError::TypeError {
                         expected: "List".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 };
-                let mut new_list = a.to_vec();
-                new_list.extend(b.iter().cloned());
-                set_reg!(dst, Value::List(Rc::new(new_list)));
+                let a_items = self.heap.get_list(a_ptr)
+                    .map(|l| l.items.clone())
+                    .unwrap_or_default();
+                let b_items = self.heap.get_list(b_ptr)
+                    .map(|l| l.items.clone())
+                    .unwrap_or_default();
+                let mut new_items = a_items;
+                new_items.extend(b_items);
+                let list_ptr = self.heap.alloc_list(new_items);
+                set_reg!(dst, GcValue::List(list_ptr));
             }
             Instruction::Index(dst, coll, idx) => {
                 let idx = get_int!(idx) as usize;
                 let value = match reg!(coll) {
-                    Value::List(items) => items.get(idx).cloned()
-                        .ok_or(RuntimeError::IndexOutOfBounds { index: idx as i64, length: items.len() })?,
-                    Value::Tuple(items) => items.get(idx).cloned()
-                        .ok_or(RuntimeError::IndexOutOfBounds { index: idx as i64, length: items.len() })?,
-                    Value::Array(items) => items.borrow().get(idx).cloned()
-                        .ok_or(RuntimeError::IndexOutOfBounds { index: idx as i64, length: items.borrow().len() })?,
+                    GcValue::List(ptr) => {
+                        let list = self.heap.get_list(*ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "List".to_string(),
+                                found: "invalid heap reference".to_string(),
+                            })?;
+                        list.items.get(idx).cloned()
+                            .ok_or(RuntimeError::IndexOutOfBounds { index: idx as i64, length: list.items.len() })?
+                    }
+                    GcValue::Tuple(ptr) => {
+                        let tuple = self.heap.get_tuple(*ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "Tuple".to_string(),
+                                found: "invalid heap reference".to_string(),
+                            })?;
+                        tuple.items.get(idx).cloned()
+                            .ok_or(RuntimeError::IndexOutOfBounds { index: idx as i64, length: tuple.items.len() })?
+                    }
+                    GcValue::Array(ptr) => {
+                        let array = self.heap.get_array(*ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "Array".to_string(),
+                                found: "invalid heap reference".to_string(),
+                            })?;
+                        array.items.get(idx).cloned()
+                            .ok_or(RuntimeError::IndexOutOfBounds { index: idx as i64, length: array.items.len() })?
+                    }
                     other => return Err(RuntimeError::TypeError {
                         expected: "List, Tuple, or Array".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 };
                 set_reg!(dst, value);
             }
             Instruction::Length(dst, src) => {
                 let len = match reg!(src) {
-                    Value::List(items) => items.len(),
-                    Value::Tuple(items) => items.len(),
-                    Value::Array(items) => items.borrow().len(),
-                    Value::String(s) => s.len(),
+                    GcValue::List(ptr) => {
+                        self.heap.get_list(*ptr).map(|l| l.items.len()).unwrap_or(0)
+                    }
+                    GcValue::Tuple(ptr) => {
+                        self.heap.get_tuple(*ptr).map(|t| t.items.len()).unwrap_or(0)
+                    }
+                    GcValue::Array(ptr) => {
+                        self.heap.get_array(*ptr).map(|a| a.items.len()).unwrap_or(0)
+                    }
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(*ptr).map(|s| s.data.len()).unwrap_or(0)
+                    }
                     other => return Err(RuntimeError::TypeError {
                         expected: "List, Tuple, Array, or String".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 };
-                set_reg!(dst, Value::Int(len as i64));
+                set_reg!(dst, GcValue::Int(len as i64));
             }
             Instruction::MakeMap(dst, pairs) => {
                 let mut map = HashMap::new();
                 for (k, v) in pairs {
-                    let key = reg!(k).to_map_key()
+                    let key = reg!(k).to_gc_map_key()
                         .ok_or_else(|| RuntimeError::TypeError {
                             expected: "hashable type".to_string(),
-                            found: reg!(k).type_name().to_string(),
+                            found: reg!(k).type_name(&self.heap).to_string(),
                         })?;
                     let value = reg!(v).clone();
                     map.insert(key, value);
                 }
-                set_reg!(dst, Value::Map(Rc::new(map)));
+                let map_ptr = self.heap.alloc_map(map);
+                set_reg!(dst, GcValue::Map(map_ptr));
             }
             Instruction::MakeSet(dst, regs) => {
                 let mut set = std::collections::HashSet::new();
                 for r in regs {
-                    let key = reg!(r).to_map_key()
+                    let key = reg!(r).to_gc_map_key()
                         .ok_or_else(|| RuntimeError::TypeError {
                             expected: "hashable type".to_string(),
-                            found: reg!(r).type_name().to_string(),
+                            found: reg!(r).type_name(&self.heap).to_string(),
                         })?;
                     set.insert(key);
                 }
-                set_reg!(dst, Value::Set(Rc::new(set)));
+                let set_ptr = self.heap.alloc_set(set);
+                set_reg!(dst, GcValue::Set(set_ptr));
             }
             Instruction::IndexSet(coll, idx, val) => {
                 let idx = get_int!(idx) as usize;
                 let value = reg!(val).clone();
                 match reg!(coll) {
-                    Value::Array(items) => {
-                        let mut items = items.borrow_mut();
-                        if idx >= items.len() {
+                    GcValue::Array(ptr) => {
+                        let array = self.heap.get_array_mut(*ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "Array".to_string(),
+                                found: "invalid heap reference".to_string(),
+                            })?;
+                        if idx >= array.items.len() {
                             return Err(RuntimeError::IndexOutOfBounds {
                                 index: idx as i64,
-                                length: items.len(),
+                                length: array.items.len(),
                             });
                         }
-                        items[idx] = value;
+                        array.items[idx] = value;
                     }
                     other => return Err(RuntimeError::TypeError {
                         expected: "Array".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 }
             }
@@ -834,15 +1116,11 @@ impl VM {
                 let mutable_fields: Vec<bool> = type_info
                     .map(|t| t.fields.iter().map(|f| f.mutable).collect())
                     .unwrap_or_else(|| vec![false; field_regs.len()]);
-                let fields: Vec<Value> = field_regs.iter()
+                let fields: Vec<GcValue> = field_regs.iter()
                     .map(|r| reg!(*r).clone())
                     .collect();
-                set_reg!(dst, Value::Record(Rc::new(RecordValue {
-                    type_name,
-                    field_names,
-                    fields,
-                    mutable_fields,
-                })));
+                let record_ptr = self.heap.alloc_record(type_name, field_names, fields, mutable_fields);
+                set_reg!(dst, GcValue::Record(record_ptr));
             }
             Instruction::GetField(dst, record, field_idx) => {
                 let field_name = match &constants[field_idx as usize] {
@@ -853,7 +1131,12 @@ impl VM {
                     }),
                 };
                 match reg!(record) {
-                    Value::Record(rec) => {
+                    GcValue::Record(ptr) => {
+                        let rec = self.heap.get_record(*ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "Record".to_string(),
+                                found: "invalid heap reference".to_string(),
+                            })?;
                         let idx = rec.field_names.iter().position(|n| n == &field_name)
                             .ok_or_else(|| RuntimeError::UnknownField {
                                 type_name: rec.type_name.clone(),
@@ -862,21 +1145,26 @@ impl VM {
                         let value = rec.fields[idx].clone();
                         set_reg!(dst, value);
                     }
-                    Value::Tuple(items) => {
+                    GcValue::Tuple(ptr) => {
                         // Support tuple field access with numeric indices (t.0, t.1, etc.)
+                        let tuple = self.heap.get_tuple(*ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "Tuple".to_string(),
+                                found: "invalid heap reference".to_string(),
+                            })?;
                         let idx: usize = field_name.parse().map_err(|_| RuntimeError::UnknownField {
                             type_name: "Tuple".to_string(),
                             field: field_name.clone(),
                         })?;
-                        let value = items.get(idx).cloned().ok_or_else(|| RuntimeError::IndexOutOfBounds {
+                        let value = tuple.items.get(idx).cloned().ok_or_else(|| RuntimeError::IndexOutOfBounds {
                             index: idx as i64,
-                            length: items.len(),
+                            length: tuple.items.len(),
                         })?;
                         set_reg!(dst, value);
                     }
                     other => return Err(RuntimeError::TypeError {
                         expected: "Record or Tuple".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 }
             }
@@ -890,7 +1178,12 @@ impl VM {
                 };
                 let new_value = reg!(value).clone();
                 match reg!(record).clone() {
-                    Value::Record(rec) => {
+                    GcValue::Record(ptr) => {
+                        let rec = self.heap.get_record(ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "Record".to_string(),
+                                found: "invalid heap reference".to_string(),
+                            })?;
                         let idx = rec.field_names.iter().position(|n| n == &field_name)
                             .ok_or_else(|| RuntimeError::UnknownField {
                                 type_name: rec.type_name.clone(),
@@ -899,13 +1192,20 @@ impl VM {
                         if !rec.mutable_fields[idx] {
                             return Err(RuntimeError::ImmutableField { field: field_name });
                         }
-                        let mut new_rec = (*rec).clone();
-                        new_rec.fields[idx] = new_value;
-                        set_reg!(record, Value::Record(Rc::new(new_rec)));
+                        // Create a new record with the updated field
+                        let mut new_fields = rec.fields.clone();
+                        new_fields[idx] = new_value;
+                        let new_record_ptr = self.heap.alloc_record(
+                            rec.type_name.clone(),
+                            rec.field_names.clone(),
+                            new_fields,
+                            rec.mutable_fields.clone(),
+                        );
+                        set_reg!(record, GcValue::Record(new_record_ptr));
                     }
                     other => return Err(RuntimeError::TypeError {
                         expected: "Record".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 }
             }
@@ -918,7 +1218,12 @@ impl VM {
                     }),
                 };
                 match reg!(base).clone() {
-                    Value::Record(rec) => {
+                    GcValue::Record(ptr) => {
+                        let rec = self.heap.get_record(ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "Record".to_string(),
+                                found: "invalid heap reference".to_string(),
+                            })?;
                         let mut new_fields = rec.fields.clone();
                         // Update the specified fields (for now, assumes positional)
                         for (i, &r) in field_regs.iter().enumerate() {
@@ -926,16 +1231,17 @@ impl VM {
                                 new_fields[i] = reg!(r).clone();
                             }
                         }
-                        set_reg!(dst, Value::Record(Rc::new(RecordValue {
+                        let new_record_ptr = self.heap.alloc_record(
                             type_name,
-                            field_names: rec.field_names.clone(),
-                            fields: new_fields,
-                            mutable_fields: rec.mutable_fields.clone(),
-                        })));
+                            rec.field_names.clone(),
+                            new_fields,
+                            rec.mutable_fields.clone(),
+                        );
+                        set_reg!(dst, GcValue::Record(new_record_ptr));
                     }
                     other => return Err(RuntimeError::TypeError {
                         expected: "Record".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 }
             }
@@ -943,19 +1249,24 @@ impl VM {
             // Tuples
             Instruction::GetTupleField(dst, tuple, idx) => {
                 match reg!(tuple) {
-                    Value::Tuple(items) => {
-                        if (idx as usize) < items.len() {
-                            set_reg!(dst, items[idx as usize].clone());
+                    GcValue::Tuple(ptr) => {
+                        let t = self.heap.get_tuple(*ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "Tuple".to_string(),
+                                found: "invalid heap reference".to_string(),
+                            })?;
+                        if (idx as usize) < t.items.len() {
+                            set_reg!(dst, t.items[idx as usize].clone());
                         } else {
                             return Err(RuntimeError::IndexOutOfBounds {
                                 index: idx as i64,
-                                length: items.len(),
+                                length: t.items.len(),
                             });
                         }
                     }
                     other => return Err(RuntimeError::TypeError {
                         expected: "Tuple".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 }
             }
@@ -976,30 +1287,37 @@ impl VM {
                         found: "non-string".to_string(),
                     }),
                 };
-                let fields: Vec<Value> = field_regs.iter()
+                let fields: Vec<GcValue> = field_regs.iter()
                     .map(|r| reg!(*r).clone())
                     .collect();
-                set_reg!(dst, Value::Variant(Rc::new(VariantValue {
-                    type_name,
-                    constructor,
-                    fields,
-                    named_fields: None,
-                })));
+                let variant_ptr = self.heap.alloc_variant(type_name, constructor, fields);
+                set_reg!(dst, GcValue::Variant(variant_ptr));
             }
             Instruction::GetTag(dst, variant) => {
                 match reg!(variant) {
-                    Value::Variant(v) => {
-                        set_reg!(dst, Value::String(Rc::new(v.constructor.clone())));
+                    GcValue::Variant(ptr) => {
+                        let v = self.heap.get_variant(*ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "Variant".to_string(),
+                                found: "invalid heap reference".to_string(),
+                            })?;
+                        let str_ptr = self.heap.alloc_string(v.constructor.clone());
+                        set_reg!(dst, GcValue::String(str_ptr));
                     }
                     other => return Err(RuntimeError::TypeError {
                         expected: "Variant".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 }
             }
             Instruction::GetVariantField(dst, variant, field_idx) => {
                 match reg!(variant) {
-                    Value::Variant(v) => {
+                    GcValue::Variant(ptr) => {
+                        let v = self.heap.get_variant(*ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "Variant".to_string(),
+                                found: "invalid heap reference".to_string(),
+                            })?;
                         let value = v.fields.get(field_idx as usize).cloned()
                             .ok_or(RuntimeError::IndexOutOfBounds {
                                 index: field_idx as i64,
@@ -1008,7 +1326,12 @@ impl VM {
                         set_reg!(dst, value);
                     }
                     // Also support Record types for unified handling
-                    Value::Record(r) => {
+                    GcValue::Record(ptr) => {
+                        let r = self.heap.get_record(*ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "Record".to_string(),
+                                found: "invalid heap reference".to_string(),
+                            })?;
                         let value = r.fields.get(field_idx as usize).cloned()
                             .ok_or(RuntimeError::IndexOutOfBounds {
                                 index: field_idx as i64,
@@ -1018,11 +1341,11 @@ impl VM {
                     }
                     other => return Err(RuntimeError::TypeError {
                         expected: "Variant".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 }
             }
-            Instruction::GetVariantFieldByName(dst, variant, name_idx) => {
+            Instruction::GetVariantFieldByName(_dst, variant, name_idx) => {
                 let field_name = match &constants[name_idx as usize] {
                     Value::String(s) => s.to_string(),
                     _ => return Err(RuntimeError::TypeError {
@@ -1031,18 +1354,22 @@ impl VM {
                     }),
                 };
                 match reg!(variant) {
-                    Value::Variant(v) => {
-                        let value = v.named_fields.as_ref()
-                            .and_then(|fields| fields.get(&field_name).cloned())
-                            .ok_or_else(|| RuntimeError::UnknownField {
-                                type_name: v.constructor.clone(),
-                                field: field_name.clone(),
+                    GcValue::Variant(ptr) => {
+                        // Note: GcVariant doesn't have named_fields - this is a simplification
+                        // For now, return an error as named_fields are not supported in GC variants
+                        let v = self.heap.get_variant(*ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "Variant".to_string(),
+                                found: "invalid heap reference".to_string(),
                             })?;
-                        set_reg!(dst, value);
+                        return Err(RuntimeError::UnknownField {
+                            type_name: v.constructor.clone(),
+                            field: field_name.clone(),
+                        });
                     }
                     other => return Err(RuntimeError::TypeError {
                         expected: "Variant".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 }
             }
@@ -1075,51 +1402,76 @@ impl VM {
                     }),
                 };
                 let result = match reg!(variant) {
-                    Value::Variant(v) => v.constructor == ctor_name,
+                    GcValue::Variant(ptr) => {
+                        self.heap.get_variant(*ptr)
+                            .map(|v| v.constructor == ctor_name)
+                            .unwrap_or(false)
+                    }
                     // Also support Record types for unified handling
-                    Value::Record(r) => r.type_name == ctor_name,
+                    GcValue::Record(ptr) => {
+                        self.heap.get_record(*ptr)
+                            .map(|r| r.type_name == ctor_name)
+                            .unwrap_or(false)
+                    }
                     _ => false,
                 };
-                set_reg!(dst, Value::Bool(result));
+                set_reg!(dst, GcValue::Bool(result));
             }
             Instruction::TestUnit(dst, value) => {
-                let result = matches!(reg!(value), Value::Unit);
-                set_reg!(dst, Value::Bool(result));
+                let result = matches!(reg!(value), GcValue::Unit);
+                set_reg!(dst, GcValue::Bool(result));
             }
             Instruction::TestConst(dst, value, const_idx) => {
                 let constant = &constants[const_idx as usize];
-                let result = reg!(value) == constant;
-                set_reg!(dst, Value::Bool(result));
+                // Convert constant to GcValue for comparison
+                let gc_const = self.heap.value_to_gc(constant);
+                // Use gc_values_equal for content-based comparison (not pointer comparison)
+                let result = self.heap.gc_values_equal(reg!(value), &gc_const);
+                set_reg!(dst, GcValue::Bool(result));
             }
             Instruction::TestNil(dst, list) => {
                 let result = match reg!(list) {
-                    Value::List(items) => items.is_empty(),
+                    GcValue::List(ptr) => {
+                        self.heap.get_list(*ptr)
+                            .map(|l| l.items.is_empty())
+                            .unwrap_or(false)
+                    }
                     _ => false,
                 };
-                set_reg!(dst, Value::Bool(result));
+                set_reg!(dst, GcValue::Bool(result));
             }
             Instruction::Decons(head, tail, list) => {
-                match reg!(list).clone() {
-                    Value::List(items) if !items.is_empty() => {
-                        set_reg!(head, items[0].clone());
-                        set_reg!(tail, Value::List(Rc::new(items[1..].to_vec())));
+                match reg!(list) {
+                    GcValue::List(ptr) => {
+                        let list_data = self.heap.get_list(*ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "List".to_string(),
+                                found: "invalid heap reference".to_string(),
+                            })?;
+                        if list_data.items.is_empty() {
+                            return Err(RuntimeError::MatchFailed);
+                        }
+                        let head_val = list_data.items[0].clone();
+                        let tail_items: Vec<GcValue> = list_data.items[1..].to_vec();
+                        let tail_ptr = self.heap.alloc_list(tail_items);
+                        set_reg!(head, head_val);
+                        set_reg!(tail, GcValue::List(tail_ptr));
                     }
-                    Value::List(_) => return Err(RuntimeError::MatchFailed),
                     other => return Err(RuntimeError::TypeError {
                         expected: "List".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 }
             }
 
             // Function calls
             Instruction::Call(dst, func_reg, arg_regs) => {
-                let args: Vec<Value> = arg_regs.iter()
+                let args: Vec<GcValue> = arg_regs.iter()
                     .map(|r| reg!(*r).clone())
                     .collect();
 
                 match reg!(func_reg).clone() {
-                    Value::Function(func) => {
+                    GcValue::Function(func) => {
                         if args.len() != func.arity {
                             return Err(RuntimeError::ArityMismatch {
                                 expected: func.arity,
@@ -1133,43 +1485,51 @@ impl VM {
                             return_reg: dst,
                         });
                     }
-                    Value::Closure(closure) => {
+                    GcValue::Closure(closure_ptr) => {
+                        let closure = self.heap.get_closure(closure_ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "Closure".to_string(),
+                                found: "invalid heap reference".to_string(),
+                            })?;
                         if args.len() != closure.function.arity {
                             return Err(RuntimeError::ArityMismatch {
                                 expected: closure.function.arity,
                                 found: args.len(),
                             });
                         }
+                        let func = closure.function.clone();
+                        let gc_captures = closure.captures.clone();
                         return Ok(StepResult::Call {
-                            func: closure.function.clone(),
+                            func,
                             args,
-                            captures: closure.captures.clone(),
+                            captures: gc_captures,
                             return_reg: dst,
                         });
                     }
-                    Value::NativeFunction(native) => {
+                    GcValue::NativeFunction(native) => {
                         if args.len() != native.arity {
                             return Err(RuntimeError::ArityMismatch {
                                 expected: native.arity,
                                 found: args.len(),
                             });
                         }
-                        let result = (native.func)(&args)?;
+                        // Call native function directly with GcValue
+                        let result = (native.func)(&args, &mut self.heap)?;
                         set_reg!(dst, result);
                     }
                     other => return Err(RuntimeError::TypeError {
                         expected: "Function".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 }
             }
             Instruction::TailCall(func_reg, arg_regs) => {
-                let args: Vec<Value> = arg_regs.iter()
+                let args: Vec<GcValue> = arg_regs.iter()
                     .map(|r| reg!(*r).clone())
                     .collect();
 
                 match reg!(func_reg).clone() {
-                    Value::Function(func) => {
+                    GcValue::Function(func) => {
                         if args.len() != func.arity {
                             return Err(RuntimeError::ArityMismatch {
                                 expected: func.arity,
@@ -1182,32 +1542,40 @@ impl VM {
                             captures: vec![],
                         });
                     }
-                    Value::Closure(closure) => {
+                    GcValue::Closure(closure_ptr) => {
+                        let closure = self.heap.get_closure(closure_ptr)
+                            .ok_or(RuntimeError::TypeError {
+                                expected: "Closure".to_string(),
+                                found: "invalid heap reference".to_string(),
+                            })?;
                         if args.len() != closure.function.arity {
                             return Err(RuntimeError::ArityMismatch {
                                 expected: closure.function.arity,
                                 found: args.len(),
                             });
                         }
+                        let func = closure.function.clone();
+                        let gc_captures = closure.captures.clone();
                         return Ok(StepResult::TailCall {
-                            func: closure.function.clone(),
+                            func,
                             args,
-                            captures: closure.captures.clone(),
+                            captures: gc_captures,
                         });
                     }
-                    Value::NativeFunction(native) => {
+                    GcValue::NativeFunction(native) => {
                         if args.len() != native.arity {
                             return Err(RuntimeError::ArityMismatch {
                                 expected: native.arity,
                                 found: args.len(),
                             });
                         }
-                        let result = (native.func)(&args)?;
+                        // Call native function directly with GcValue
+                        let result = (native.func)(&args, &mut self.heap)?;
                         return Ok(StepResult::Return(result));
                     }
                     other => return Err(RuntimeError::TypeError {
                         expected: "Function".to_string(),
-                        found: other.type_name().to_string(),
+                        found: other.type_name(&self.heap).to_string(),
                     }),
                 }
             }
@@ -1219,7 +1587,7 @@ impl VM {
                         found: "non-string".to_string(),
                     }),
                 };
-                let args: Vec<Value> = arg_regs.iter()
+                let args: Vec<GcValue> = arg_regs.iter()
                     .map(|r| reg!(*r).clone())
                     .collect();
 
@@ -1247,7 +1615,7 @@ impl VM {
                         found: "non-string".to_string(),
                     }),
                 };
-                let args: Vec<Value> = arg_regs.iter()
+                let args: Vec<GcValue> = arg_regs.iter()
                     .map(|r| reg!(*r).clone())
                     .collect();
 
@@ -1274,20 +1642,22 @@ impl VM {
                         found: "non-string".to_string(),
                     }),
                 };
-                let args: Vec<Value> = arg_regs.iter()
+                // Collect args as GcValue - no conversion needed!
+                let gc_args: Vec<GcValue> = arg_regs.iter()
                     .map(|r| reg!(*r).clone())
                     .collect();
 
                 let native = self.natives.get(&name).cloned()
                     .ok_or_else(|| RuntimeError::UnknownFunction(name))?;
 
-                if args.len() != native.arity {
+                if gc_args.len() != native.arity {
                     return Err(RuntimeError::ArityMismatch {
                         expected: native.arity,
-                        found: args.len(),
+                        found: gc_args.len(),
                     });
                 }
-                let result = (native.func)(&args)?;
+                // Call native function directly with GcValue and heap
+                let result = (native.func)(&gc_args, &mut self.heap)?;
                 set_reg!(dst, result);
             }
             Instruction::Return(src) => {
@@ -1304,18 +1674,16 @@ impl VM {
                         found: "non-function".to_string(),
                     }),
                 };
-                let captures: Vec<Value> = capture_regs.iter()
+                // Collect captures as GcValue for the GC-managed closure
+                let gc_captures: Vec<GcValue> = capture_regs.iter()
                     .map(|r| reg!(*r).clone())
                     .collect();
-                let capture_names: Vec<String> = (0..captures.len())
+                let capture_names: Vec<String> = (0..gc_captures.len())
                     .map(|i| format!("capture_{}", i))
                     .collect();
 
-                set_reg!(dst, Value::Closure(Rc::new(ClosureValue {
-                    function: func,
-                    captures,
-                    capture_names,
-                })));
+                let closure_ptr = self.heap.alloc_closure(func, gc_captures, capture_names);
+                set_reg!(dst, GcValue::Closure(closure_ptr));
             }
             Instruction::GetCapture(dst, idx) => {
                 let frame = self.frames.last().unwrap();
@@ -1355,19 +1723,20 @@ impl VM {
                 }
             }
             Instruction::GetException(dst) => {
-                let exc = self.current_exception.take().unwrap_or(Value::Unit);
+                let exc = self.current_exception.take().unwrap_or(GcValue::Unit);
                 set_reg!(dst, exc);
             }
 
             // Introspection
             Instruction::TypeOf(dst, src) => {
-                let type_name = reg!(src).type_name().to_string();
-                set_reg!(dst, Value::String(Rc::new(type_name)));
+                let type_name = reg!(src).type_name(&self.heap).to_string();
+                let str_ptr = self.heap.alloc_string(type_name);
+                set_reg!(dst, GcValue::String(str_ptr));
             }
 
             // Concurrency (stubs)
             Instruction::SelfPid(dst) => {
-                set_reg!(dst, Value::Pid(Pid(0)));
+                set_reg!(dst, GcValue::Pid(0));
             }
             Instruction::Spawn(_, _, _) |
             Instruction::SpawnLink(_, _, _) |
@@ -1392,16 +1761,16 @@ impl VM {
 
 enum StepResult {
     Continue,
-    Return(Value),
+    Return(GcValue),
     TailCall {
         func: Rc<FunctionValue>,
-        args: Vec<Value>,
-        captures: Vec<Value>,
+        args: Vec<GcValue>,
+        captures: Vec<GcValue>,
     },
     Call {
         func: Rc<FunctionValue>,
-        args: Vec<Value>,
-        captures: Vec<Value>,
+        args: Vec<GcValue>,
+        captures: Vec<GcValue>,
         return_reg: Reg,
     },
 }
@@ -1987,5 +2356,90 @@ mod tests {
 
         let result = vm.call("triple", vec![Value::Int(1), Value::Int(2), Value::Int(3)]).unwrap();
         assert_eq!(result, Value::List(Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])));
+    }
+
+    #[test]
+    fn test_eq_instruction_string_comparison() {
+        // Tests that the generic Eq instruction compares strings by content, not pointer
+        let mut vm = VM::new();
+
+        let mut chunk = Chunk::new();
+        chunk.register_count = 5;
+
+        // Load two strings (different heap allocations, same content)
+        let str1_idx = chunk.add_constant(Value::String(Rc::new("hello".to_string())));
+        let str2_idx = chunk.add_constant(Value::String(Rc::new("hello".to_string())));
+        let str3_idx = chunk.add_constant(Value::String(Rc::new("world".to_string())));
+
+        // r0 = "hello"
+        chunk.emit(Instruction::LoadConst(0, str1_idx as u16), 1);
+        // r1 = "hello" (different allocation)
+        chunk.emit(Instruction::LoadConst(1, str2_idx as u16), 2);
+        // r2 = "world"
+        chunk.emit(Instruction::LoadConst(2, str3_idx as u16), 3);
+        // r3 = r0 == r1 (should be true - same content)
+        chunk.emit(Instruction::Eq(3, 0, 1), 4);
+        // r4 = r0 == r2 (should be false - different content)
+        chunk.emit(Instruction::Eq(4, 0, 2), 5);
+        // Build tuple (r3, r4) for result
+        chunk.emit(Instruction::MakeTuple(3, vec![3, 4]), 6);
+        chunk.emit(Instruction::Return(3), 7);
+
+        let func = FunctionValue {
+            name: "test_eq".to_string(),
+            arity: 0,
+            param_names: vec![],
+            code: Rc::new(chunk),
+            module: None,
+            source_span: None,
+            jit_code: None,
+        };
+
+        vm.register_function(func);
+
+        let result = vm.call("test_eq", vec![]).unwrap();
+        // Should be (true, false)
+        assert_eq!(result, Value::Tuple(Rc::new(vec![Value::Bool(true), Value::Bool(false)])));
+    }
+
+    #[test]
+    fn test_eq_instruction_list_comparison() {
+        // Tests that the generic Eq instruction compares lists by content, not pointer
+        let mut vm = VM::new();
+
+        let mut chunk = Chunk::new();
+        chunk.register_count = 5;
+
+        // Load two ints
+        let int1_idx = chunk.add_constant(Value::Int(1));
+        let int2_idx = chunk.add_constant(Value::Int(2));
+
+        // r0 = 1
+        chunk.emit(Instruction::LoadConst(0, int1_idx as u16), 1);
+        // r1 = 2
+        chunk.emit(Instruction::LoadConst(1, int2_idx as u16), 2);
+        // r2 = [1, 2]
+        chunk.emit(Instruction::MakeList(2, vec![0, 1]), 3);
+        // r3 = [1, 2] (different allocation)
+        chunk.emit(Instruction::MakeList(3, vec![0, 1]), 4);
+        // r4 = r2 == r3 (should be true - same content)
+        chunk.emit(Instruction::Eq(4, 2, 3), 5);
+        chunk.emit(Instruction::Return(4), 6);
+
+        let func = FunctionValue {
+            name: "test_list_eq".to_string(),
+            arity: 0,
+            param_names: vec![],
+            code: Rc::new(chunk),
+            module: None,
+            source_span: None,
+            jit_code: None,
+        };
+
+        vm.register_function(func);
+
+        let result = vm.call("test_list_eq", vec![]).unwrap();
+        // Should be true - lists with same content are equal
+        assert_eq!(result, Value::Bool(true));
     }
 }

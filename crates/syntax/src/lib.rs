@@ -3,10 +3,12 @@
 //! This crate provides the lexer and parser for the Nostos programming language.
 
 pub mod ast;
+pub mod errors;
 pub mod lexer;
 pub mod parser;
 
 pub use ast::*;
+pub use errors::{ErrorKind, SourceError, format_errors, eprint_errors, offset_to_line_col, parse_error_to_source_error, parse_errors_to_source_errors};
 pub use lexer::{lex, Token};
 pub use parser::{parse, parse_expr};
 

@@ -12,38 +12,105 @@ use std::rc::Rc;
 use nostos_syntax::ast::*;
 use nostos_vm::*;
 
-/// Compilation errors.
+/// Compilation errors with source location information.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum CompileError {
-    #[error("Unknown variable: {0}")]
-    UnknownVariable(String),
+    #[error("unknown variable `{name}`")]
+    UnknownVariable { name: String, span: Span },
 
-    #[error("Unknown function: {0}")]
-    UnknownFunction(String),
+    #[error("unknown function `{name}`")]
+    UnknownFunction { name: String, span: Span },
 
-    #[error("Unknown type: {0}")]
-    UnknownType(String),
+    #[error("unknown type `{name}`")]
+    UnknownType { name: String, span: Span },
 
-    #[error("Duplicate definition: {0}")]
-    DuplicateDefinition(String),
+    #[error("`{name}` is defined multiple times")]
+    DuplicateDefinition { name: String, span: Span },
 
-    #[error("Invalid pattern")]
-    InvalidPattern,
+    #[error("invalid pattern")]
+    InvalidPattern { span: Span, context: String },
 
-    #[error("Not implemented: {0}")]
-    NotImplemented(String),
+    #[error("{feature} is not yet implemented")]
+    NotImplemented { feature: String, span: Span },
 
-    #[error("Cannot access private function '{function}' from outside module '{module}'")]
-    PrivateAccess { function: String, module: String },
+    #[error("cannot access private function `{function}` from outside module `{module}`")]
+    PrivateAccess { function: String, module: String, span: Span },
 
-    #[error("Unknown trait: {0}")]
-    UnknownTrait(String),
+    #[error("unknown trait `{name}`")]
+    UnknownTrait { name: String, span: Span },
 
-    #[error("Method '{method}' not implemented for type '{ty}' as required by trait '{trait_name}'")]
-    MissingTraitMethod { method: String, ty: String, trait_name: String },
+    #[error("type `{ty}` does not implement method `{method}` required by trait `{trait_name}`")]
+    MissingTraitMethod { method: String, ty: String, trait_name: String, span: Span },
 
-    #[error("Type '{ty}' does not implement trait '{trait_name}'")]
-    TraitNotImplemented { ty: String, trait_name: String },
+    #[error("type `{ty}` does not implement trait `{trait_name}`")]
+    TraitNotImplemented { ty: String, trait_name: String, span: Span },
+
+    #[error("function `{name}` expects {expected} argument(s), but {found} were provided")]
+    ArityMismatch { name: String, expected: usize, found: usize, span: Span },
+}
+
+impl CompileError {
+    /// Get the span associated with this error.
+    pub fn span(&self) -> Span {
+        match self {
+            CompileError::UnknownVariable { span, .. } => *span,
+            CompileError::UnknownFunction { span, .. } => *span,
+            CompileError::UnknownType { span, .. } => *span,
+            CompileError::DuplicateDefinition { span, .. } => *span,
+            CompileError::InvalidPattern { span, .. } => *span,
+            CompileError::NotImplemented { span, .. } => *span,
+            CompileError::PrivateAccess { span, .. } => *span,
+            CompileError::UnknownTrait { span, .. } => *span,
+            CompileError::MissingTraitMethod { span, .. } => *span,
+            CompileError::TraitNotImplemented { span, .. } => *span,
+            CompileError::ArityMismatch { span, .. } => *span,
+        }
+    }
+
+    /// Convert to a SourceError for pretty printing.
+    pub fn to_source_error(&self) -> nostos_syntax::SourceError {
+        use nostos_syntax::SourceError;
+
+        let span = self.span();
+        match self {
+            CompileError::UnknownVariable { name, .. } => {
+                SourceError::unknown_variable(name, span)
+            }
+            CompileError::UnknownFunction { name, .. } => {
+                SourceError::unknown_function(name, span)
+            }
+            CompileError::UnknownType { name, .. } => {
+                SourceError::unknown_type(name, span)
+            }
+            CompileError::DuplicateDefinition { name, .. } => {
+                SourceError::duplicate_definition(name, span, None)
+            }
+            CompileError::InvalidPattern { context, .. } => {
+                SourceError::invalid_pattern(span, context)
+            }
+            CompileError::NotImplemented { feature, .. } => {
+                SourceError::not_implemented(feature, span)
+            }
+            CompileError::PrivateAccess { function, module, .. } => {
+                SourceError::private_access(function, module, span)
+            }
+            CompileError::UnknownTrait { name, .. } => {
+                SourceError::unknown_trait(name, span)
+            }
+            CompileError::MissingTraitMethod { method, ty, trait_name, .. } => {
+                SourceError::missing_trait_method(method, ty, trait_name, span)
+            }
+            CompileError::TraitNotImplemented { ty, trait_name, .. } => {
+                SourceError::compile(
+                    format!("type `{}` does not implement trait `{}`", ty, trait_name),
+                    span,
+                )
+            }
+            CompileError::ArityMismatch { name, expected, found, .. } => {
+                SourceError::arity_mismatch(name, *expected, *found, span)
+            }
+        }
+    }
 }
 
 /// Compilation context.
@@ -216,7 +283,10 @@ impl Compiler {
                 self.compile_trait_impl(trait_impl)?;
             }
             _ => {
-                return Err(CompileError::NotImplemented(format!("item: {:?}", item)));
+                return Err(CompileError::NotImplemented {
+                    feature: format!("item: {:?}", item),
+                    span: item.span(),
+                });
             }
         }
         Ok(())
@@ -296,7 +366,10 @@ impl Compiler {
 
         // Check that the trait exists
         if !self.trait_defs.contains_key(&trait_name) {
-            return Err(CompileError::UnknownTrait(trait_name));
+            return Err(CompileError::UnknownTrait {
+                name: trait_name,
+                span: impl_def.trait_name.span,
+            });
         }
 
         // Compile each method as a function with a special qualified name: Type.Trait.method
@@ -597,7 +670,10 @@ impl Compiler {
                     self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
                     Ok(dst)
                 } else {
-                    Err(CompileError::UnknownVariable(name.clone()))
+                    Err(CompileError::UnknownVariable {
+                        name: name.clone(),
+                        span: ident.span,
+                    })
                 }
             }
 
@@ -717,7 +793,7 @@ impl Compiler {
 
                     if self.functions.contains_key(&resolved_name) {
                         // Check visibility before allowing the call
-                        self.check_visibility(&resolved_name)?;
+                        self.check_visibility(&resolved_name, method.span)?;
 
                         // Compile arguments
                         let mut arg_regs = Vec::new();
@@ -806,7 +882,20 @@ impl Compiler {
                 Ok(dst)
             }
 
-            _ => Err(CompileError::NotImplemented(format!("expr: {:?}", expr))),
+            // Try/catch/finally expression
+            Expr::Try(try_expr, catch_arms, finally_expr, _) => {
+                self.compile_try(try_expr, catch_arms, finally_expr.as_deref(), is_tail)
+            }
+
+            // Error propagation: expr?
+            Expr::Try_(inner_expr, _) => {
+                self.compile_try_propagate(inner_expr)
+            }
+
+            _ => Err(CompileError::NotImplemented {
+                feature: format!("expr: {:?}", expr),
+                span: expr.span(),
+            }),
         }
     }
 
@@ -972,15 +1061,28 @@ impl Compiler {
 
     /// Compile a function call, with tail call optimization.
     fn compile_call(&mut self, func: &Expr, args: &[Expr], is_tail: bool) -> Result<Reg, CompileError> {
+        // Try to extract a qualified function name from the expression
+        let maybe_qualified_name = self.extract_qualified_name(func);
+
+        // Handle special built-in `throw` that compiles to the Throw instruction
+        if let Some(ref name) = maybe_qualified_name {
+            if name == "throw" && args.len() == 1 {
+                let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                self.chunk.emit(Instruction::Throw(arg_reg), 0);
+                // Throw doesn't return, but we need to return a register
+                // Return a unit register since execution won't continue
+                let dst = self.alloc_reg();
+                self.chunk.emit(Instruction::LoadUnit(dst), 0);
+                return Ok(dst);
+            }
+        }
+
         // Compile arguments first
         let mut arg_regs = Vec::new();
         for arg in args {
             let reg = self.compile_expr_tail(arg, false)?;
             arg_regs.push(reg);
         }
-
-        // Try to extract a qualified function name from the expression
-        let maybe_qualified_name = self.extract_qualified_name(func);
 
         if let Some(qualified_name) = maybe_qualified_name {
             // Check for native functions (only simple names)
@@ -1144,7 +1246,7 @@ impl Compiler {
 
     /// Check if a function can be accessed from the current module.
     /// Returns Ok(()) if access is allowed, Err with PrivateAccess otherwise.
-    fn check_visibility(&self, qualified_name: &str) -> Result<(), CompileError> {
+    fn check_visibility(&self, qualified_name: &str, span: Span) -> Result<(), CompileError> {
         // Get the visibility of the function
         let visibility = self.function_visibility.get(qualified_name);
 
@@ -1190,6 +1292,7 @@ impl Compiler {
         Err(CompileError::PrivateAccess {
             function: function_name.to_string(),
             module: module_name,
+            span,
         })
     }
 
@@ -1280,6 +1383,136 @@ impl Compiler {
         for jump in end_jumps {
             self.chunk.patch_jump(jump, end_target);
         }
+
+        Ok(dst)
+    }
+
+    /// Compile a try/catch/finally expression.
+    fn compile_try(
+        &mut self,
+        try_expr: &Expr,
+        catch_arms: &[MatchArm],
+        finally_expr: Option<&Expr>,
+        is_tail: bool,
+    ) -> Result<Reg, CompileError> {
+        let dst = self.alloc_reg();
+
+        // 1. Push exception handler - offset will be patched later
+        let handler_idx = self.chunk.emit(Instruction::PushHandler(0), 0);
+
+        // 2. Compile the try body
+        let try_result = self.compile_expr_tail(try_expr, false)?;
+        self.chunk.emit(Instruction::Move(dst, try_result), 0);
+
+        // 3. Pop the handler (success path)
+        self.chunk.emit(Instruction::PopHandler, 0);
+
+        // 4. Jump past the catch block (success path)
+        let skip_catch_jump = self.chunk.emit(Instruction::Jump(0), 0);
+
+        // 5. CATCH BLOCK START - patch the handler to jump here
+        let catch_start = self.chunk.code.len();
+        self.chunk.patch_jump(handler_idx, catch_start);
+
+        // 6. Get the exception value
+        let exc_reg = self.alloc_reg();
+        self.chunk.emit(Instruction::GetException(exc_reg), 0);
+
+        // 7. Pattern match on the exception (similar to compile_match)
+        let mut end_jumps = Vec::new();
+        for (i, arm) in catch_arms.iter().enumerate() {
+            let is_last = i == catch_arms.len() - 1;
+
+            // Try to match the pattern
+            let (match_success, bindings) = self.compile_pattern_test(&arm.pattern, exc_reg)?;
+
+            let next_arm_jump = if !is_last {
+                Some(self.chunk.emit(Instruction::JumpIfFalse(match_success, 0), 0))
+            } else {
+                None
+            };
+
+            // Bind pattern variables
+            for (name, reg) in bindings {
+                self.locals.insert(name, reg);
+            }
+
+            // Compile guard if present
+            if let Some(guard) = &arm.guard {
+                let guard_reg = self.compile_expr_tail(guard, false)?;
+                if let Some(jump) = next_arm_jump {
+                    self.chunk.patch_jump(jump, self.chunk.code.len());
+                }
+                let guard_jump = self.chunk.emit(Instruction::JumpIfFalse(guard_reg, 0), 0);
+                end_jumps.push(guard_jump);
+            }
+
+            // Compile catch arm body
+            let body_reg = self.compile_expr_tail(&arm.body, is_tail && finally_expr.is_none())?;
+            self.chunk.emit(Instruction::Move(dst, body_reg), 0);
+
+            if !is_last {
+                end_jumps.push(self.chunk.emit(Instruction::Jump(0), 0));
+            }
+
+            // Patch jump to next arm
+            if let Some(jump) = next_arm_jump {
+                if arm.guard.is_none() {
+                    let next_target = self.chunk.code.len();
+                    self.chunk.patch_jump(jump, next_target);
+                }
+            }
+        }
+
+        // 8. Patch all end jumps from catch arms
+        let after_catch = self.chunk.code.len();
+        for jump in end_jumps {
+            self.chunk.patch_jump(jump, after_catch);
+        }
+
+        // 9. Patch the skip_catch_jump to land here
+        self.chunk.patch_jump(skip_catch_jump, after_catch);
+
+        // 10. Compile finally block if present
+        if let Some(finally) = finally_expr {
+            // Finally is executed for both success and exception paths
+            // Its result is discarded; the try/catch result is preserved in dst
+            self.compile_expr_tail(finally, false)?;
+        }
+
+        Ok(dst)
+    }
+
+    /// Compile error propagation: expr?
+    /// If expr throws, re-throw the exception. Otherwise return its value.
+    fn compile_try_propagate(&mut self, inner_expr: &Expr) -> Result<Reg, CompileError> {
+        let dst = self.alloc_reg();
+
+        // 1. Push exception handler
+        let handler_idx = self.chunk.emit(Instruction::PushHandler(0), 0);
+
+        // 2. Compile the inner expression
+        let result = self.compile_expr_tail(inner_expr, false)?;
+        self.chunk.emit(Instruction::Move(dst, result), 0);
+
+        // 3. Pop handler on success
+        self.chunk.emit(Instruction::PopHandler, 0);
+
+        // 4. Jump past the re-throw
+        let skip_rethrow_jump = self.chunk.emit(Instruction::Jump(0), 0);
+
+        // 5. RE-THROW BLOCK - patch handler to jump here
+        let rethrow_start = self.chunk.code.len();
+        self.chunk.patch_jump(handler_idx, rethrow_start);
+
+        // 6. Get exception and re-throw it
+        let exc_reg = self.alloc_reg();
+        self.chunk.emit(Instruction::GetException(exc_reg), 0);
+        self.chunk.emit(Instruction::Throw(exc_reg), 0);
+
+        // 7. Patch skip_rethrow_jump to land here
+        let after_rethrow = self.chunk.code.len();
+        self.chunk.patch_jump(skip_rethrow_jump, after_rethrow);
 
         Ok(dst)
     }
@@ -1429,7 +1662,10 @@ impl Compiler {
                 }
             }
             _ => {
-                return Err(CompileError::NotImplemented(format!("pattern: {:?}", pattern)));
+                return Err(CompileError::NotImplemented {
+                    feature: format!("pattern: {:?}", pattern),
+                    span: pattern.span(),
+                });
             }
         }
 
@@ -1499,7 +1735,10 @@ impl Compiler {
                     self.chunk.emit(Instruction::Move(var_reg, value_reg), 0);
                     Ok(var_reg)
                 } else {
-                    Err(CompileError::UnknownVariable(ident.node.clone()))
+                    Err(CompileError::UnknownVariable {
+                        name: ident.node.clone(),
+                        span: ident.span,
+                    })
                 }
             }
             AssignTarget::Field(obj, field) => {
@@ -3859,5 +4098,238 @@ mod tests {
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int(60)));
+    }
+
+    // =========================================================================
+    // Error handling tests - verify correct error types and span locations
+    // =========================================================================
+
+    fn compile_should_fail(source: &str) -> CompileError {
+        let (module_opt, errors) = parse(source);
+        if !errors.is_empty() {
+            panic!("Unexpected parse error: {:?}", errors);
+        }
+        let module = module_opt.expect("Parse returned no module");
+        match compile_module(&module) {
+            Err(e) => e,
+            Ok(_) => panic!("Expected compile error, but compilation succeeded"),
+        }
+    }
+
+    #[test]
+    fn test_error_unknown_variable() {
+        let source = "main() = x + 1";
+        let err = compile_should_fail(source);
+        match err {
+            CompileError::UnknownVariable { name, span } => {
+                assert_eq!(name, "x");
+                // 'x' starts at position 9 in the source
+                assert_eq!(span.start, 9);
+                assert_eq!(span.end, 10);
+            }
+            _ => panic!("Expected UnknownVariable error, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_error_unknown_variable_in_block() {
+        let source = "main() = { y = undefined_var }";
+        let err = compile_should_fail(source);
+        match err {
+            CompileError::UnknownVariable { name, .. } => {
+                assert_eq!(name, "undefined_var");
+            }
+            _ => panic!("Expected UnknownVariable error, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_error_unknown_trait() {
+        let source = "type Foo = { x: Int }\nFoo: NonExistentTrait end";
+        let err = compile_should_fail(source);
+        match err {
+            CompileError::UnknownTrait { name, .. } => {
+                assert_eq!(name, "NonExistentTrait");
+            }
+            _ => panic!("Expected UnknownTrait error, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_error_private_access() {
+        let source = "
+            module Secret
+                private_fn() = 42
+            end
+            main() = Secret.private_fn()
+        ";
+        let err = compile_should_fail(source);
+        match err {
+            CompileError::PrivateAccess { function, module, .. } => {
+                assert_eq!(function, "private_fn");
+                assert_eq!(module, "Secret");
+            }
+            _ => panic!("Expected PrivateAccess error, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_error_span_points_to_correct_variable() {
+        // Test that the span correctly points to the undefined variable
+        let source = "main() = {\n    a = 1\n    b = c + a\n}";
+        let err = compile_should_fail(source);
+        match err {
+            CompileError::UnknownVariable { name, span } => {
+                assert_eq!(name, "c");
+                // Verify the span points to 'c' by extracting from source
+                let pointed_text = &source[span.start..span.end];
+                assert_eq!(pointed_text, "c");
+            }
+            _ => panic!("Expected UnknownVariable error, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_error_to_source_error_conversion() {
+        let source = "main() = unknown";
+        let err = compile_should_fail(source);
+
+        // Test that to_source_error creates a proper SourceError
+        let source_err = err.to_source_error();
+        assert!(source_err.message.contains("unknown"));
+        assert_eq!(source_err.span.start, 9);
+        assert_eq!(source_err.span.end, 16);
+    }
+
+    #[test]
+    fn test_error_format_output() {
+        let source = "main() = undefined_var";
+        let err = compile_should_fail(source);
+        let source_err = err.to_source_error();
+
+        // Test that format() produces valid output
+        let formatted = source_err.format("test.nos", source);
+        assert!(formatted.contains("unknown variable"));
+        assert!(formatted.contains("undefined_var"));
+        // Should contain line/column reference
+        assert!(formatted.contains("test.nos"));
+    }
+
+    #[test]
+    fn test_error_nested_undefined() {
+        // Test nested expression with undefined variable
+        let source = "main() = if true then undefined_fn() else 0";
+        let err = compile_should_fail(source);
+        match err {
+            CompileError::UnknownVariable { name, .. } => {
+                assert_eq!(name, "undefined_fn");
+            }
+            _ => panic!("Expected UnknownVariable error, got {:?}", err),
+        }
+    }
+
+    // ============= Try/Catch Tests =============
+
+    #[test]
+    fn test_try_catch_basic() {
+        // throw and catch should work
+        let source = r#"
+            main() = try throw("error") catch e -> e end
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "error"),
+            other => panic!("Expected string 'error', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_try_catch_no_exception() {
+        // When no exception, return the try body value
+        let source = r#"
+            main() = try 42 catch _ -> 0 end
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_try_catch_pattern_matching() {
+        // Pattern matching in catch
+        let source = r#"
+            main() = try throw("special") catch
+                "special" -> 1
+                other -> 2
+            end
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(1)));
+    }
+
+    #[test]
+    fn test_try_catch_pattern_fallthrough() {
+        // Non-matching pattern falls to next
+        let source = r#"
+            main() = try throw("other") catch
+                "special" -> 1
+                _ -> 2
+            end
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(2)));
+    }
+
+    #[test]
+    fn test_error_propagation_success() {
+        // ? operator returns value on success
+        let source = r#"
+            might_fail(fail) = if fail then throw("error") else 42
+            main() = try might_fail(false)? + 1 catch _ -> 0 end
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(43)));
+    }
+
+    #[test]
+    fn test_error_propagation_rethrow() {
+        // ? operator propagates exception
+        let source = r#"
+            might_fail(fail) = if fail then throw("error") else 42
+            propagate() = might_fail(true)? + 1
+            main() = try propagate() catch e -> e end
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "error"),
+            other => panic!("Expected string 'error', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_nested_try_catch() {
+        // Nested try/catch
+        let source = r#"
+            main() = try {
+                inner = try throw("inner") catch _ -> throw("outer") end
+                inner
+            } catch
+                e -> e
+            end
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "outer"),
+            other => panic!("Expected string 'outer', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_throw_integer() {
+        // Can throw any value, not just strings
+        let source = r#"
+            main() = try throw(42) catch e -> e end
+        "#;
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(42)));
     }
 }
