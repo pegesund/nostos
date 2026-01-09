@@ -422,9 +422,11 @@ impl SourceManager {
             return Ok(());
         }
 
-        // Import each new file
-        for (_path, module_path, content) in new_files {
-            self.parse_and_add_definitions(&module_path, &content)?;
+        // Import each new file - continue on errors
+        for (path, module_path, content) in new_files {
+            if let Err(e) = self.parse_and_add_definitions(&module_path, &content) {
+                eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
+            }
         }
 
         // Write new definitions to .nostos/defs/
@@ -509,8 +511,8 @@ impl SourceManager {
             return Ok(());
         }
 
-        // Re-import each updated file
-        for (_path, module_path, content) in &updated_files {
+        // Re-import each updated file - continue on errors
+        for (path, module_path, content) in &updated_files {
             let module_key = module_path_to_string(module_path);
 
             // Clear existing definitions for this module
@@ -523,7 +525,9 @@ impl SourceManager {
             }
 
             // Re-parse and add definitions
-            self.parse_and_add_definitions(module_path, content)?;
+            if let Err(e) = self.parse_and_add_definitions(module_path, content) {
+                eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
+            }
         }
 
         // Write updated definitions to .nostos/defs/
@@ -582,9 +586,12 @@ impl SourceManager {
             })
             .collect();
 
-        // Now process each file
-        for (_path, module_path, content) in files_to_process {
-            self.parse_and_add_definitions(&module_path, &content)?;
+        // Now process each file - continue on errors
+        for (path, module_path, content) in files_to_process {
+            if let Err(e) = self.parse_and_add_definitions(&module_path, &content) {
+                eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
+                // Continue processing other files
+            }
         }
 
         // Write all definitions to .nostos/defs/
