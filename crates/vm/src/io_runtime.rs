@@ -13,13 +13,15 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use chrono::Timelike;
 use tokio::runtime::Runtime;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
 use tokio_postgres::{Client as PgClient, NoTls, Statement};
 use postgres_native_tls::MakeTlsConnector;
 use native_tls::TlsConnector;
+use deadpool_postgres::{Config as PgPoolConfig, Runtime as DeadpoolRuntime, ManagerConfig, RecyclingMethod};
 
 use crate::process::{IoResponseValue, PgValue};
 
@@ -55,10 +57,72 @@ impl<'a> tokio_postgres::types::FromSql<'a> for PgVector {
     }
 }
 
-/// PostgreSQL connection with prepared statements
-struct PgConnection {
-    client: PgClient,
-    prepared: HashMap<String, Statement>,
+/// Pooled connection wrapper that holds the connection object
+/// When dropped, the connection returns to the pool automatically
+struct PgPooledConnection(deadpool_postgres::Object);
+
+impl PgPooledConnection {
+    /// Get a reference to the underlying client
+    fn client(&self) -> &PgClient {
+        self.0.as_ref()
+    }
+}
+
+/// PostgreSQL connection with prepared statements (pooled or direct)
+enum PgConnection {
+    /// Direct connection (legacy, non-pooled)
+    Direct {
+        client: PgClient,
+        prepared: HashMap<String, Statement>,
+    },
+    /// Pooled connection
+    Pooled {
+        conn: PgPooledConnection,
+        prepared: HashMap<String, Statement>,
+    },
+}
+
+impl PgConnection {
+    fn client(&self) -> &PgClient {
+        match self {
+            PgConnection::Direct { client, .. } => client,
+            PgConnection::Pooled { conn, .. } => conn.client(),
+        }
+    }
+
+    fn prepared(&self) -> &HashMap<String, Statement> {
+        match self {
+            PgConnection::Direct { prepared, .. } => prepared,
+            PgConnection::Pooled { prepared, .. } => prepared,
+        }
+    }
+
+    fn prepared_mut(&mut self) -> &mut HashMap<String, Statement> {
+        match self {
+            PgConnection::Direct { prepared, .. } => prepared,
+            PgConnection::Pooled { prepared, .. } => prepared,
+        }
+    }
+}
+
+/// Connection pools keyed by connection string
+type PgPools = Arc<TokioMutex<HashMap<String, deadpool_postgres::Pool>>>;
+
+/// Create a TLS connector for PostgreSQL
+fn create_tls_connector() -> Result<MakeTlsConnector, native_tls::Error> {
+    let tls_connector = TlsConnector::builder()
+        .danger_accept_invalid_certs(true) // For self-signed certs
+        .min_protocol_version(Some(native_tls::Protocol::Tlsv10)) // Allow older TLS
+        .build()?;
+    Ok(MakeTlsConnector::new(tls_connector))
+}
+
+/// Check if a connection string requires TLS
+fn requires_tls(connection_string: &str) -> bool {
+    connection_string.contains("sslmode=require") ||
+    connection_string.contains("sslmode=prefer") ||
+    connection_string.contains("sslmode=verify-ca") ||
+    connection_string.contains("sslmode=verify-full")
 }
 
 /// Unique handle for an open file
@@ -531,6 +595,9 @@ impl IoRuntime {
         // PostgreSQL connection state (with prepared statements)
         let pg_connections: Arc<Mutex<HashMap<u64, PgConnection>>> = Arc::new(Mutex::new(HashMap::new()));
         let mut next_pg_handle: u64 = 1;
+
+        // PostgreSQL connection pools (keyed by connection string)
+        let pg_pools: PgPools = Arc::new(TokioMutex::new(HashMap::new()));
 
         while let Some(request) = request_rx.recv().await {
             match request {
@@ -1163,72 +1230,75 @@ impl IoRuntime {
                     }
                 }
 
-                // PostgreSQL operations
+                // PostgreSQL operations (with connection pooling)
                 IoRequest::PgConnect { connection_string, response } => {
                     let pg_conns = pg_connections.clone();
+                    let pools = pg_pools.clone();
                     let handle = next_pg_handle;
                     next_pg_handle += 1;
 
                     tokio::spawn(async move {
-                        // Check if TLS is required
-                        let use_tls = connection_string.contains("sslmode=require") ||
-                                      connection_string.contains("sslmode=prefer") ||
-                                      connection_string.contains("sslmode=verify-ca") ||
-                                      connection_string.contains("sslmode=verify-full");
+                        let use_tls = requires_tls(&connection_string);
 
-                        let connect_result: Result<(PgClient, _), tokio_postgres::Error> = if use_tls {
-                            // Create TLS connector with permissive settings for self-signed certs
-                            // Note: We keep SNI enabled (default) for cloud providers like Neon that use it for routing
-                            let tls_connector = match TlsConnector::builder()
-                                .danger_accept_invalid_certs(true) // For self-signed certs
-                                .min_protocol_version(Some(native_tls::Protocol::Tlsv10)) // Allow older TLS
-                                .build() {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    let _ = response.send(Err(IoError::PgError(format!("TLS error: {}", e))));
-                                    return;
-                                }
-                            };
-                            let connector = MakeTlsConnector::new(tls_connector);
+                        // Get or create pool for this connection string
+                        let pool_result = {
+                            let mut pools_guard = pools.lock().await;
+                            if !pools_guard.contains_key(&connection_string) {
+                                // Create new pool
+                                let mut cfg = PgPoolConfig::new();
+                                cfg.url = Some(connection_string.clone());
+                                cfg.manager = Some(ManagerConfig {
+                                    recycling_method: RecyclingMethod::Fast,
+                                });
 
-                            // Connect with TLS
-                            match tokio_postgres::connect(&connection_string, connector).await {
-                                Ok((client, connection)) => {
-                                    tokio::spawn(async move {
-                                        if let Err(e) = connection.await {
-                                            eprintln!("PostgreSQL TLS connection error: {}", e);
-                                        }
-                                    });
-                                    Ok((client, ()))
+                                let pool_create_result: Result<deadpool_postgres::Pool, IoError> = if use_tls {
+                                    match create_tls_connector() {
+                                        Ok(tls) => cfg.create_pool(Some(DeadpoolRuntime::Tokio1), tls)
+                                            .map_err(|e| IoError::PgError(format!("Pool creation error: {}", e))),
+                                        Err(e) => Err(IoError::PgError(format!("TLS error: {}", e))),
+                                    }
+                                } else {
+                                    cfg.create_pool(Some(DeadpoolRuntime::Tokio1), NoTls)
+                                        .map_err(|e| IoError::PgError(format!("Pool creation error: {}", e)))
+                                };
+
+                                match pool_create_result {
+                                    Ok(pool) => {
+                                        pools_guard.insert(connection_string.clone(), pool);
+                                        Ok(())
+                                    }
+                                    Err(e) => Err(e),
                                 }
-                                Err(e) => Err(e),
-                            }
-                        } else {
-                            // Connect without TLS
-                            match tokio_postgres::connect(&connection_string, NoTls).await {
-                                Ok((client, connection)) => {
-                                    tokio::spawn(async move {
-                                        if let Err(e) = connection.await {
-                                            eprintln!("PostgreSQL connection error: {}", e);
-                                        }
-                                    });
-                                    Ok((client, ()))
-                                }
-                                Err(e) => Err(e),
+                            } else {
+                                Ok(())
                             }
                         };
 
-                        match connect_result {
-                            Ok((client, _)) => {
-                                let pg_conn = PgConnection {
-                                    client,
+                        if let Err(e) = pool_result {
+                            let _ = response.send(Err(e));
+                            return;
+                        }
+
+                        // Get connection from pool
+                        let conn_result = {
+                            let pools_guard = pools.lock().await;
+                            let pool = pools_guard.get(&connection_string).unwrap();
+                            pool.get().await
+                                .map(PgPooledConnection)
+                                .map_err(|e| IoError::PgError(format!("Pool get error: {}", e)))
+                        };
+
+                        match conn_result {
+                            Ok(pooled_conn) => {
+                                let pg_conn = PgConnection::Pooled {
+                                    conn: pooled_conn,
                                     prepared: HashMap::new(),
                                 };
                                 pg_conns.lock().await.insert(handle, pg_conn);
                                 let _ = response.send(Ok(IoResponseValue::PgHandle(handle)));
                             }
                             Err(e) => {
-                                let _ = response.send(Err(IoError::PgError(e.to_string())));
+                                let _ = response.send(Err(e));
                             }
                         }
                     });
@@ -1242,7 +1312,7 @@ impl IoRuntime {
                         match conns.get(&handle) {
                             Some(conn) => {
                                 // Build params - we need to keep ownership of the boxed values
-                                let result = Self::execute_pg_query(&conn.client, &query, &params).await;
+                                let result = Self::execute_pg_query(conn.client(), &query, &params).await;
                                 match result {
                                     Ok(rows) => {
                                         let _ = response.send(Ok(IoResponseValue::PgRows(rows)));
@@ -1266,7 +1336,7 @@ impl IoRuntime {
                         let conns = pg_conns.lock().await;
                         match conns.get(&handle) {
                             Some(conn) => {
-                                let result = Self::execute_pg_execute(&conn.client, &query, &params).await;
+                                let result = Self::execute_pg_execute(conn.client(), &query, &params).await;
                                 match result {
                                     Ok(count) => {
                                         let _ = response.send(Ok(IoResponseValue::PgAffected(count)));
@@ -1298,7 +1368,7 @@ impl IoRuntime {
                     tokio::spawn(async move {
                         let conns = pg_conns.lock().await;
                         if let Some(conn) = conns.get(&handle) {
-                            match conn.client.batch_execute("BEGIN").await {
+                            match conn.client().batch_execute("BEGIN").await {
                                 Ok(_) => {
                                     let _ = response.send(Ok(IoResponseValue::Unit));
                                 }
@@ -1318,7 +1388,7 @@ impl IoRuntime {
                     tokio::spawn(async move {
                         let conns = pg_conns.lock().await;
                         if let Some(conn) = conns.get(&handle) {
-                            match conn.client.batch_execute("COMMIT").await {
+                            match conn.client().batch_execute("COMMIT").await {
                                 Ok(_) => {
                                     let _ = response.send(Ok(IoResponseValue::Unit));
                                 }
@@ -1338,7 +1408,7 @@ impl IoRuntime {
                     tokio::spawn(async move {
                         let conns = pg_conns.lock().await;
                         if let Some(conn) = conns.get(&handle) {
-                            match conn.client.batch_execute("ROLLBACK").await {
+                            match conn.client().batch_execute("ROLLBACK").await {
                                 Ok(_) => {
                                     let _ = response.send(Ok(IoResponseValue::Unit));
                                 }
@@ -1358,9 +1428,9 @@ impl IoRuntime {
                     tokio::spawn(async move {
                         let mut conns = pg_conns.lock().await;
                         if let Some(conn) = conns.get_mut(&handle) {
-                            match conn.client.prepare(&query).await {
+                            match conn.client().prepare(&query).await {
                                 Ok(stmt) => {
-                                    conn.prepared.insert(name, stmt);
+                                    conn.prepared_mut().insert(name, stmt);
                                     let _ = response.send(Ok(IoResponseValue::Unit));
                                 }
                                 Err(e) => {
@@ -1379,8 +1449,8 @@ impl IoRuntime {
                     tokio::spawn(async move {
                         let conns = pg_conns.lock().await;
                         if let Some(conn) = conns.get(&handle) {
-                            if let Some(stmt) = conn.prepared.get(&name) {
-                                let result = Self::execute_pg_query_prepared(&conn.client, stmt, &params).await;
+                            if let Some(stmt) = conn.prepared().get(&name) {
+                                let result = Self::execute_pg_query_prepared(conn.client(), stmt, &params).await;
                                 match result {
                                     Ok(rows) => {
                                         let _ = response.send(Ok(IoResponseValue::PgRows(rows)));
@@ -1404,8 +1474,8 @@ impl IoRuntime {
                     tokio::spawn(async move {
                         let conns = pg_conns.lock().await;
                         if let Some(conn) = conns.get(&handle) {
-                            if let Some(stmt) = conn.prepared.get(&name) {
-                                let result = Self::execute_pg_execute_prepared(&conn.client, stmt, &params).await;
+                            if let Some(stmt) = conn.prepared().get(&name) {
+                                let result = Self::execute_pg_execute_prepared(conn.client(), stmt, &params).await;
                                 match result {
                                     Ok(count) => {
                                         let _ = response.send(Ok(IoResponseValue::PgAffected(count)));
@@ -1429,7 +1499,7 @@ impl IoRuntime {
                     tokio::spawn(async move {
                         let mut conns = pg_conns.lock().await;
                         if let Some(conn) = conns.get_mut(&handle) {
-                            if conn.prepared.remove(&name).is_some() {
+                            if conn.prepared_mut().remove(&name).is_some() {
                                 let _ = response.send(Ok(IoResponseValue::Unit));
                             } else {
                                 let _ = response.send(Err(IoError::PgError(format!("Prepared statement '{}' not found", name))));
