@@ -204,43 +204,6 @@ impl<'a> InferCtx<'a> {
         }
     }
 
-    /// Substitute type parameters in a type using the given mapping
-    fn substitute_type_param(&self, ty: &Type, subst: &HashMap<String, Type>) -> Type {
-        match ty {
-            Type::TypeParam(name) => {
-                subst.get(name).cloned().unwrap_or_else(|| ty.clone())
-            }
-            Type::List(elem) => Type::List(Box::new(self.substitute_type_param(elem, subst))),
-            Type::Array(elem) => Type::Array(Box::new(self.substitute_type_param(elem, subst))),
-            Type::Set(elem) => Type::Set(Box::new(self.substitute_type_param(elem, subst))),
-            Type::Map(k, v) => Type::Map(
-                Box::new(self.substitute_type_param(k, subst)),
-                Box::new(self.substitute_type_param(v, subst)),
-            ),
-            Type::Tuple(elems) => Type::Tuple(
-                elems.iter().map(|e| self.substitute_type_param(e, subst)).collect()
-            ),
-            Type::Function(f) => Type::Function(FunctionType {
-                type_params: f.type_params.clone(),
-                params: f.params.iter().map(|p| self.substitute_type_param(p, subst)).collect(),
-                ret: Box::new(self.substitute_type_param(&f.ret, subst)),
-            }),
-            Type::IO(inner) => Type::IO(Box::new(self.substitute_type_param(inner, subst))),
-            Type::Record(rec) => Type::Record(RecordType {
-                name: rec.name.clone(),
-                fields: rec.fields.iter().map(|(n, t, m)| {
-                    (n.clone(), self.substitute_type_param(t, subst), *m)
-                }).collect(),
-            }),
-            Type::Named { name, args } => Type::Named {
-                name: name.clone(),
-                args: args.iter().map(|a| self.substitute_type_param(a, subst)).collect(),
-            },
-            // Primitive types, Var, etc. - no substitution needed
-            _ => ty.clone(),
-        }
-    }
-
     /// Solve all constraints through unification.
     /// Uses a fixed-point iteration with a maximum iteration limit to avoid infinite loops
     /// when constraints reference unresolved type variables.
