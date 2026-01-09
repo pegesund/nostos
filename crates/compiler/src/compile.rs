@@ -785,6 +785,9 @@ pub struct Compiler {
     /// Native function indices: name -> index for CallNativeIdx optimization.
     /// When set, CallNative instructions are replaced with faster CallNativeIdx.
     native_indices: HashMap<String, u16>,
+    /// Extension function indices: name -> index for CallExtensionIdx optimization.
+    /// When set, CallExtension instructions are replaced with faster CallExtensionIdx.
+    extension_indices: HashMap<String, u16>,
 }
 
 /// Information about a module-level mutable variable (mvar).
@@ -944,6 +947,7 @@ impl Compiler {
             current_fn_has_blocking: false,
             current_fn_debug_symbols: Vec::new(),
             native_indices: HashMap::new(),
+            extension_indices: HashMap::new(),
         };
 
         // Register builtin types for autocomplete
@@ -1411,6 +1415,7 @@ impl Compiler {
             current_fn_has_blocking: false,
             current_fn_debug_symbols: Vec::new(),
             native_indices: HashMap::new(),
+            extension_indices: HashMap::new(),
         }
     }
 
@@ -6527,10 +6532,9 @@ impl Compiler {
                     arg_regs.push(reg);
                 }
 
-                // Emit CallExtension instruction
+                // Emit CallExtension instruction (uses CallExtensionIdx if index is known)
                 let dst = self.alloc_reg();
-                let name_idx = self.chunk.add_constant(Value::String(Arc::new(ext_func_name)));
-                self.chunk.emit(Instruction::CallExtension(dst, name_idx, arg_regs.into()), line);
+                self.emit_call_extension(dst, &ext_func_name, arg_regs.into(), line);
                 return Ok(dst);
             }
             // Handle self() - get current process ID
@@ -10307,6 +10311,11 @@ impl Compiler {
         self.native_indices = indices;
     }
 
+    /// Set the extension function indices for CallExtensionIdx optimization.
+    pub fn set_extension_indices(&mut self, indices: HashMap<String, u16>) {
+        self.extension_indices = indices;
+    }
+
     /// Emit a native function call, using CallNativeIdx if the index is known,
     /// otherwise falling back to CallNative.
     fn emit_call_native(&mut self, dst: Reg, name: &str, args: RegList, line: usize) {
@@ -10317,6 +10326,19 @@ impl Compiler {
             // Slow path: use string-based lookup
             let name_idx = self.chunk.add_constant(Value::String(Arc::new(name.to_string())));
             self.chunk.emit(Instruction::CallNative(dst, name_idx, args), line);
+        }
+    }
+
+    /// Emit an extension function call, using CallExtensionIdx if the index is known,
+    /// otherwise falling back to CallExtension.
+    fn emit_call_extension(&mut self, dst: Reg, name: &str, args: RegList, line: usize) {
+        if let Some(&idx) = self.extension_indices.get(name) {
+            // Fast path: use indexed call
+            self.chunk.emit(Instruction::CallExtensionIdx(dst, idx, args), line);
+        } else {
+            // Slow path: use string-based lookup
+            let name_idx = self.chunk.add_constant(Value::String(Arc::new(name.to_string())));
+            self.chunk.emit(Instruction::CallExtension(dst, name_idx, args), line);
         }
     }
 

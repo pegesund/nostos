@@ -725,6 +725,8 @@ pub enum Instruction {
     CallNativeIdx(Reg, u16, RegList),
     /// Call extension function (dynamic library): dst = ext_func(args...)
     CallExtension(Reg, ConstIdx, RegList),
+    /// Call extension function by index (fast path - no string lookup)
+    CallExtensionIdx(Reg, u16, RegList),
     /// Return value from function
     Return(Reg),
 

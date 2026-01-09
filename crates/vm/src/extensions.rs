@@ -21,8 +21,12 @@ pub use nostos_extension::{
 pub struct ExtensionManager {
     /// Loaded libraries (kept to prevent unloading)
     libraries: RwLock<Vec<Library>>,
-    /// Registered functions
+    /// Registered functions (string-based lookup for compatibility)
     functions: RwLock<HashMap<String, ExtFn>>,
+    /// Extension functions indexed by u16 - for fast CallExtensionIdx lookup
+    functions_vec: RwLock<Vec<ExtFn>>,
+    /// Maps extension function names to their index in functions_vec
+    function_name_to_idx: RwLock<HashMap<String, u16>>,
     /// Channel sender for messages back to scheduler
     message_tx: mpsc::UnboundedSender<ExtMessage>,
     /// Channel receiver (handed off to scheduler)
@@ -39,6 +43,8 @@ impl ExtensionManager {
         ExtensionManager {
             libraries: RwLock::new(Vec::new()),
             functions: RwLock::new(HashMap::new()),
+            functions_vec: RwLock::new(Vec::new()),
+            function_name_to_idx: RwLock::new(HashMap::new()),
             message_tx: tx,
             message_rx: RwLock::new(Some(rx)),
             tokio_handle,
@@ -82,8 +88,14 @@ impl ExtensionManager {
             (decl.register)(&mut registry);
 
             let mut funcs = self.functions.write();
+            let mut funcs_vec = self.functions_vec.write();
+            let mut name_to_idx = self.function_name_to_idx.write();
             for (func_name, func) in registry.functions() {
                 funcs.insert(func_name.clone(), *func);
+                // Also add to indexed storage
+                let idx = funcs_vec.len() as u16;
+                funcs_vec.push(*func);
+                name_to_idx.insert(func_name.clone(), idx);
             }
 
             // Keep library loaded
@@ -96,12 +108,18 @@ impl ExtensionManager {
     /// Register functions directly (for testing without dynamic loading).
     pub fn register(&self, registry: &ExtRegistry) {
         let mut funcs = self.functions.write();
+        let mut funcs_vec = self.functions_vec.write();
+        let mut name_to_idx = self.function_name_to_idx.write();
         for (name, func) in registry.functions() {
             funcs.insert(name.clone(), *func);
+            // Also add to indexed storage
+            let idx = funcs_vec.len() as u16;
+            funcs_vec.push(*func);
+            name_to_idx.insert(name.clone(), idx);
         }
     }
 
-    /// Call an extension function.
+    /// Call an extension function by name (string-based lookup).
     pub fn call(
         &self,
         name: &str,
@@ -120,6 +138,38 @@ impl ExtensionManager {
         );
 
         func(args, &ctx)
+    }
+
+    /// Call an extension function by index (fast path - no string lookup).
+    #[inline]
+    pub fn call_by_index(
+        &self,
+        idx: u16,
+        args: &[Value],
+        caller_pid: Pid,
+    ) -> Result<Value, String> {
+        let funcs_vec = self.functions_vec.read();
+        let func = funcs_vec
+            .get(idx as usize)
+            .ok_or_else(|| format!("Invalid extension function index: {}", idx))?;
+
+        let ctx = ExtContext::new(
+            self.tokio_handle.clone(),
+            self.message_tx.clone(),
+            caller_pid,
+        );
+
+        func(args, &ctx)
+    }
+
+    /// Get index for a function name.
+    pub fn get_function_index(&self, name: &str) -> Option<u16> {
+        self.function_name_to_idx.read().get(name).copied()
+    }
+
+    /// Get all function name to index mappings.
+    pub fn get_all_function_indices(&self) -> HashMap<String, u16> {
+        self.function_name_to_idx.read().clone()
     }
 
     /// Check if a function exists.
