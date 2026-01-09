@@ -788,6 +788,55 @@ impl Runtime {
                 proc.consume_reductions(1);
             }
 
+            Instruction::CallSelf(dst, ref arg_regs) => {
+                // Self-recursion: reuse current frame's function (no HashMap lookup!)
+                let dst = *dst;
+                let arg_values: Vec<GcValue> = arg_regs.iter().map(|&r| reg_clone!(r)).collect();
+
+                // Get current function directly from frame
+                let func = proc.frames[frame_idx].function.clone();
+
+                let reg_count = func.code.register_count;
+                let mut registers = vec![GcValue::Unit; reg_count];
+                for (i, arg) in arg_values.into_iter().enumerate() {
+                    if i < reg_count {
+                        registers[i] = arg;
+                    }
+                }
+
+                let frame = CallFrame {
+                    function: func,
+                    ip: 0,
+                    registers,
+                    captures: Vec::new(),
+                    return_reg: Some(dst),
+                };
+                proc.frames.push(frame);
+                proc.consume_reductions(1);
+            }
+
+            Instruction::TailCallSelf(ref arg_regs) => {
+                // Self tail-recursion: reuse current frame's function (no HashMap lookup!)
+                let arg_values: Vec<GcValue> = arg_regs.iter().map(|&r| reg_clone!(r)).collect();
+
+                // Get current function and reuse frame
+                let func = proc.frames[frame_idx].function.clone();
+                let reg_count = func.code.register_count;
+
+                if let Some(frame) = proc.frames.last_mut() {
+                    frame.ip = 0;
+                    frame.registers.clear();
+                    frame.registers.resize(reg_count, GcValue::Unit);
+                    for (i, arg) in arg_values.into_iter().enumerate() {
+                        if i < reg_count {
+                            frame.registers[i] = arg;
+                        }
+                    }
+                    frame.captures.clear();
+                }
+                proc.consume_reductions(1);
+            }
+
             // === Collections (direct access) ===
             Instruction::MakeList(dst, ref elements) => {
                 let items: Vec<GcValue> = elements.iter().map(|&r| reg_clone!(r)).collect();

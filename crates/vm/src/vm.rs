@@ -1727,6 +1727,33 @@ impl VM {
                     captures: vec![],
                 });
             }
+            Instruction::CallSelf(dst, arg_regs) => {
+                // Self-recursion: reuse current frame's function (no lookup!)
+                let func = frame!().function.clone();
+                let args: Vec<GcValue> = arg_regs.iter()
+                    .map(|r| reg!(*r).clone())
+                    .collect();
+
+                return Ok(StepResult::Call {
+                    func,
+                    args,
+                    captures: vec![],
+                    return_reg: dst,
+                });
+            }
+            Instruction::TailCallSelf(arg_regs) => {
+                // Self tail-recursion: reuse current frame's function (no lookup!)
+                let func = frame!().function.clone();
+                let args: Vec<GcValue> = arg_regs.iter()
+                    .map(|r| reg!(*r).clone())
+                    .collect();
+
+                return Ok(StepResult::TailCall {
+                    func,
+                    args,
+                    captures: vec![],
+                });
+            }
             Instruction::CallNative(dst, name_idx, arg_regs) => {
                 let name = match &constants[name_idx as usize] {
                     Value::String(s) => s.to_string(),
