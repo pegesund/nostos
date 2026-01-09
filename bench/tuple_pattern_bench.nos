@@ -1,0 +1,69 @@
+# Tuple pattern matching benchmark
+
+# Pattern match on pairs - common case
+sumPair((a, b)) = a + b
+
+# Pattern match on triples
+sumTriple((a, b, c)) = a + b + c
+
+# Nested tuple pattern
+sumNested(((a, b), (c, d))) = a + b + c + d
+
+# Create tuples in a list to prevent constant folding
+makePairs(0, acc) = acc
+makePairs(n, acc) = makePairs(n - 1, [(n, n * 2) | acc])
+
+makeTriples(0, acc) = acc
+makeTriples(n, acc) = makeTriples(n - 1, [(n, n * 2, n * 3) | acc])
+
+makeNested(0, acc) = acc
+makeNested(n, acc) = makeNested(n - 1, [((n, n + 1), (n + 2, n + 3)) | acc])
+
+# Benchmark pair patterns (most common)
+benchPairs([]) = 0
+benchPairs([h | t]) = sumPair(h) + benchPairs(t)
+
+# Benchmark triple patterns
+benchTriples([]) = 0
+benchTriples([h | t]) = sumTriple(h) + benchTriples(t)
+
+# Benchmark nested tuple patterns
+benchNested([]) = 0
+benchNested([h | t]) = sumNested(h) + benchNested(t)
+
+main() = {
+    iterations = 100000
+
+    # Build lists of tuples
+    pairs = makePairs(iterations, [])
+    triples = makeTriples(iterations, [])
+    nested = makeNested(iterations, [])
+
+    # Warmup
+    _ = benchPairs(makePairs(100, []))
+    _ = benchTriples(makeTriples(100, []))
+    _ = benchNested(makeNested(100, []))
+
+    print("=== Tuple Pattern Benchmark ===")
+
+    # Benchmark pairs (Time.now() returns milliseconds)
+    start1 = Time.now()
+    result1 = benchPairs(pairs)
+    elapsed1 = Time.now() - start1
+    print("Pair patterns (" ++ show(iterations) ++ " iterations): " ++ show(elapsed1) ++ " ms")
+
+    # Benchmark triples
+    start2 = Time.now()
+    result2 = benchTriples(triples)
+    elapsed2 = Time.now() - start2
+    print("Triple patterns (" ++ show(iterations) ++ " iterations): " ++ show(elapsed2) ++ " ms")
+
+    # Benchmark nested
+    start3 = Time.now()
+    result3 = benchNested(nested)
+    elapsed3 = Time.now() - start3
+    print("Nested tuple patterns (" ++ show(iterations) ++ " iterations): " ++ show(elapsed3) ++ " ms")
+
+    # Return something to verify correctness
+    42
+}

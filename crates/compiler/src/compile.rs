@@ -12252,10 +12252,26 @@ impl Compiler {
             }
             Pattern::Tuple(patterns, _) => {
                 self.chunk.emit(Instruction::LoadTrue(success_reg), 0);
+
+                // Use batch destructure for common cases (pairs and triples)
+                let elem_regs: Vec<Reg> = (0..patterns.len()).map(|_| self.alloc_reg()).collect();
+
+                if patterns.len() == 2 {
+                    // Optimized pair destructure - single heap lookup
+                    self.chunk.emit(Instruction::DestructurePair(elem_regs[0], elem_regs[1], scrut_reg), 0);
+                } else if patterns.len() == 3 {
+                    // Optimized triple destructure - single heap lookup
+                    self.chunk.emit(Instruction::DestructureTriple(elem_regs[0], elem_regs[1], elem_regs[2], scrut_reg), 0);
+                } else {
+                    // Fallback for other sizes
+                    for (i, &elem_reg) in elem_regs.iter().enumerate() {
+                        self.chunk.emit(Instruction::GetTupleField(elem_reg, scrut_reg, i as u8), 0);
+                    }
+                }
+
+                // Now compile sub-patterns
                 for (i, pat) in patterns.iter().enumerate() {
-                    let elem_reg = self.alloc_reg();
-                    self.chunk.emit(Instruction::GetTupleField(elem_reg, scrut_reg, i as u8), 0);
-                    let (sub_success, mut sub_bindings) = self.compile_pattern_test(pat, elem_reg)?;
+                    let (sub_success, mut sub_bindings) = self.compile_pattern_test(pat, elem_regs[i])?;
                     // AND the sub-pattern's success with our overall success
                     self.chunk.emit(Instruction::And(success_reg, success_reg, sub_success), 0);
                     bindings.append(&mut sub_bindings);

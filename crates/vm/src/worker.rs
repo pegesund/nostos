@@ -2993,6 +2993,47 @@ impl Worker {
                 set_reg!(dst, result);
             }
 
+            Instruction::DestructurePair(dst0, dst1, tuple) => {
+                let t = get_reg!(tuple);
+                let (v0, v1) = self.scheduler.with_process(pid, |proc| {
+                    match &t {
+                        GcValue::Tuple(ptr) => {
+                            proc.heap.get_tuple(*ptr).and_then(|tup| {
+                                if tup.items.len() >= 2 {
+                                    Some((tup.items[0].clone(), tup.items[1].clone()))
+                                } else {
+                                    None
+                                }
+                            })
+                        }
+                        _ => None,
+                    }
+                }).flatten().ok_or_else(|| RuntimeError::Panic("Invalid pair destructure".to_string()))?;
+                set_reg!(dst0, v0);
+                set_reg!(dst1, v1);
+            }
+
+            Instruction::DestructureTriple(dst0, dst1, dst2, tuple) => {
+                let t = get_reg!(tuple);
+                let (v0, v1, v2) = self.scheduler.with_process(pid, |proc| {
+                    match &t {
+                        GcValue::Tuple(ptr) => {
+                            proc.heap.get_tuple(*ptr).and_then(|tup| {
+                                if tup.items.len() >= 3 {
+                                    Some((tup.items[0].clone(), tup.items[1].clone(), tup.items[2].clone()))
+                                } else {
+                                    None
+                                }
+                            })
+                        }
+                        _ => None,
+                    }
+                }).flatten().ok_or_else(|| RuntimeError::Panic("Invalid triple destructure".to_string()))?;
+                set_reg!(dst0, v0);
+                set_reg!(dst1, v1);
+                set_reg!(dst2, v2);
+            }
+
             Instruction::MakeRecord(dst, type_idx, ref field_regs) => {
                 let type_name = match constants.get(type_idx as usize) {
                     Some(Value::String(s)) => (**s).clone(),

@@ -838,6 +838,10 @@ pub enum Instruction {
     // === Tuples ===
     /// Get tuple element: dst = tuple[idx]
     GetTupleField(Reg, Reg, u8),
+    /// Batch destructure pair: (dst0, dst1) = tuple - single heap lookup
+    DestructurePair(Reg, Reg, Reg),
+    /// Batch destructure triple: (dst0, dst1, dst2) = tuple - single heap lookup
+    DestructureTriple(Reg, Reg, Reg, Reg),
 
     // === Records ===
     /// Create record: dst = TypeName{fields...}

@@ -3277,6 +3277,43 @@ impl AsyncProcess {
                 }
             }
 
+            DestructurePair(dst0, dst1, tuple_reg) => {
+                let tuple = reg!(tuple_reg);
+                if let GcValue::Tuple(ptr) = tuple {
+                    if let Some(t) = self.heap.get_tuple(ptr) {
+                        if t.items.len() >= 2 {
+                            set_reg!(dst0, t.items[0].clone());
+                            set_reg!(dst1, t.items[1].clone());
+                        } else {
+                            return Err(RuntimeError::Panic("Pair destructure: tuple too small".into()));
+                        }
+                    } else {
+                        return Err(RuntimeError::Panic("Invalid tuple pointer".into()));
+                    }
+                } else {
+                    return Err(RuntimeError::Panic("Expected tuple for pair destructure".into()));
+                }
+            }
+
+            DestructureTriple(dst0, dst1, dst2, tuple_reg) => {
+                let tuple = reg!(tuple_reg);
+                if let GcValue::Tuple(ptr) = tuple {
+                    if let Some(t) = self.heap.get_tuple(ptr) {
+                        if t.items.len() >= 3 {
+                            set_reg!(dst0, t.items[0].clone());
+                            set_reg!(dst1, t.items[1].clone());
+                            set_reg!(dst2, t.items[2].clone());
+                        } else {
+                            return Err(RuntimeError::Panic("Triple destructure: tuple too small".into()));
+                        }
+                    } else {
+                        return Err(RuntimeError::Panic("Invalid tuple pointer".into()));
+                    }
+                } else {
+                    return Err(RuntimeError::Panic("Expected tuple for triple destructure".into()));
+                }
+            }
+
             GetField(dst, record, field_idx) => {
                 let field_name = match get_const!(field_idx) {
                     Value::String(s) => (*s).clone(),
