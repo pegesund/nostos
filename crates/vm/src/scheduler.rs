@@ -235,7 +235,7 @@ impl JitTracker {
     /// Process the JIT queue with a backend.
     /// Compiles queued functions and registers them.
     /// Returns number of functions successfully compiled.
-    pub fn process_queue<B: JitBackend>(&self, backend: &B, functions: &HashMap<String, Rc<FunctionValue>>) -> usize {
+    pub fn process_queue<B: JitBackend>(&self, backend: &B, functions: &HashMap<String, Arc<FunctionValue>>) -> usize {
         let mut compiled = 0;
 
         while let Some(func_name) = self.pop_jit_queue() {
@@ -290,13 +290,13 @@ pub struct Scheduler {
 
     /// Global functions (shared across processes).
     /// RwLock since these are typically only written at startup.
-    pub functions: RwLock<HashMap<String, Rc<FunctionValue>>>,
+    pub functions: RwLock<HashMap<String, Arc<FunctionValue>>>,
 
     /// Native functions (shared across processes).
-    pub natives: RwLock<HashMap<String, Rc<GcNativeFn>>>,
+    pub natives: RwLock<HashMap<String, Arc<GcNativeFn>>>,
 
     /// Type definitions (shared).
-    pub types: RwLock<HashMap<String, Rc<TypeValue>>>,
+    pub types: RwLock<HashMap<String, Arc<TypeValue>>>,
 
     /// Global variables (shared, read-only after init).
     pub globals: RwLock<HashMap<String, Value>>,
@@ -346,6 +346,12 @@ impl Scheduler {
         self.spawn_with_config(GcConfig::default())
     }
 
+    /// Spawn a child process with lightweight heap (for mass spawning).
+    /// Returns the new process's Pid.
+    pub fn spawn_child(&self) -> Pid {
+        self.spawn_with_config(GcConfig::lightweight())
+    }
+
     /// Spawn a new process with custom GC config.
     /// Note: Adds process to internal run queue. For WorkerPool use, consider spawn_unqueued().
     pub fn spawn_with_config(&self, gc_config: GcConfig) -> Pid {
@@ -365,6 +371,12 @@ impl Scheduler {
     /// Used by WorkerPool which manages its own work queues.
     pub fn spawn_unqueued(&self) -> Pid {
         self.spawn_unqueued_with_config(GcConfig::default())
+    }
+
+    /// Spawn a lightweight process without adding to the run queue.
+    /// Uses minimal heap pre-allocation for memory-efficient mass spawning.
+    pub fn spawn_lightweight(&self) -> Pid {
+        self.spawn_unqueued_with_config(GcConfig::lightweight())
     }
 
     /// Spawn with config without adding to run queue.
@@ -1083,16 +1095,16 @@ mod tests {
         });
 
         // Create function definitions
-        let mut functions: HashMap<String, Rc<FunctionValue>> = HashMap::new();
-        functions.insert("hot_func".to_string(), Rc::new(FunctionValue {
+        let mut functions: HashMap<String, Arc<FunctionValue>> = HashMap::new();
+        functions.insert("hot_func".to_string(), Arc::new(FunctionValue {
             name: "hot_func".to_string(),
             arity: 0,
             param_names: vec![],
-            code: Rc::new(Chunk::new()),
+            code: Arc::new(Chunk::new()),
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: std::cell::Cell::new(0),
+            call_count: std::sync::atomic::AtomicU32::new(0),
             debug_symbols: vec![],
         }));
 
@@ -1121,11 +1133,11 @@ mod tests {
             name: "test".to_string(),
             arity: 0,
             param_names: vec![],
-            code: Rc::new(Chunk::new()),
+            code: Arc::new(Chunk::new()),
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: std::cell::Cell::new(0),
+            call_count: std::sync::atomic::AtomicU32::new(0),
             debug_symbols: vec![],
         };
 

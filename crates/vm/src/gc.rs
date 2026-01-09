@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use num_bigint::BigInt;
 use rust_decimal::Decimal;
@@ -196,7 +197,7 @@ pub struct GcBigInt {
 /// A GC-managed closure.
 #[derive(Clone, Debug)]
 pub struct GcClosure {
-    pub function: Rc<FunctionValue>, // The function being closed over
+    pub function: Arc<FunctionValue>, // The function being closed over
     pub captures: Vec<GcValue>,
     pub capture_names: Vec<String>,
 }
@@ -274,14 +275,14 @@ pub enum GcValue {
     BigInt(GcPtr<GcBigInt>),
     Closure(GcPtr<GcClosure>),
 
-    // Callable values (Rc-managed, not GC'd - code doesn't need collection)
-    Function(Rc<FunctionValue>),
+    // Callable values (Arc-managed, not GC'd - code doesn't need collection)
+    Function(Arc<FunctionValue>),
     NativeFunction(Rc<GcNativeFn>),
 
     // Special values
     Pid(u64),
     Ref(u64),
-    Type(Rc<TypeValue>),
+    Type(Arc<TypeValue>),
     Pointer(usize),
 }
 
@@ -323,11 +324,11 @@ impl PartialEq for GcValue {
             (GcValue::Variant(a), GcValue::Variant(b)) => a == b,
             (GcValue::BigInt(a), GcValue::BigInt(b)) => a == b,
             (GcValue::Closure(a), GcValue::Closure(b)) => a == b,
-            (GcValue::Function(a), GcValue::Function(b)) => Rc::ptr_eq(a, b),
+            (GcValue::Function(a), GcValue::Function(b)) => Arc::ptr_eq(a, b),
             (GcValue::NativeFunction(a), GcValue::NativeFunction(b)) => Rc::ptr_eq(a, b),
             (GcValue::Pid(a), GcValue::Pid(b)) => a == b,
             (GcValue::Ref(a), GcValue::Ref(b)) => a == b,
-            (GcValue::Type(a), GcValue::Type(b)) => Rc::ptr_eq(a, b),
+            (GcValue::Type(a), GcValue::Type(b)) => Arc::ptr_eq(a, b),
             (GcValue::Pointer(a), GcValue::Pointer(b)) => a == b,
             _ => false,
         }
@@ -526,7 +527,7 @@ impl GcValue {
             GcValue::Char(c) => Some(MapKey::Char(*c)),
             GcValue::String(ptr) => {
                 heap.get_string(*ptr)
-                    .map(|s| MapKey::String(Rc::new(s.data.clone())))
+                    .map(|s| MapKey::String(Arc::new(s.data.clone())))
             }
             _ => None,
         }
@@ -772,6 +773,19 @@ impl Default for GcConfig {
     }
 }
 
+impl GcConfig {
+    /// Configuration for lightweight spawned processes.
+    /// Uses minimal pre-allocation since most workers need very few heap objects.
+    pub fn lightweight() -> Self {
+        Self {
+            initial_capacity: 8, // Minimal pre-allocation
+            gc_threshold: 64 * 1024, // 64KB - trigger GC earlier for small heaps
+            growth_factor: 2.0,
+            debug: false,
+        }
+    }
+}
+
 /// A garbage-collected heap.
 ///
 /// This is the main GC structure. Each process should have its own Heap.
@@ -945,7 +959,7 @@ impl Heap {
     /// Allocate a closure.
     pub fn alloc_closure(
         &mut self,
-        function: Rc<FunctionValue>,
+        function: Arc<FunctionValue>,
         captures: Vec<GcValue>,
         capture_names: Vec<String>,
     ) -> GcPtr<GcClosure> {
@@ -1283,7 +1297,7 @@ impl Heap {
             }
 
             // Functions and closures - compare by identity (pointer)
-            (GcValue::Function(a), GcValue::Function(b)) => Rc::ptr_eq(a, b),
+            (GcValue::Function(a), GcValue::Function(b)) => Arc::ptr_eq(a, b),
             (GcValue::Closure(a), GcValue::Closure(b)) => a == b,
             (GcValue::NativeFunction(a), GcValue::NativeFunction(b)) => Rc::ptr_eq(a, b),
 
@@ -2012,18 +2026,18 @@ impl Heap {
             // Array - recursively convert elements
             Value::Array(arr) => {
                 let gc_items: Vec<GcValue> =
-                    arr.borrow().iter().map(|v| self.value_to_gc(v)).collect();
+                    arr.read().unwrap().iter().map(|v| self.value_to_gc(v)).collect();
                 let ptr = self.alloc_array(gc_items);
                 GcValue::Array(ptr)
             }
 
             // Typed arrays - copy the raw values
             Value::Int64Array(arr) => {
-                let items = arr.borrow().clone();
+                let items = arr.read().unwrap().clone();
                 GcValue::Int64Array(self.alloc_int64_array(items))
             }
             Value::Float64Array(arr) => {
-                let items = arr.borrow().clone();
+                let items = arr.read().unwrap().clone();
                 GcValue::Float64Array(self.alloc_float64_array(items))
             }
 
@@ -2127,7 +2141,7 @@ impl Heap {
     pub fn gc_to_value(&self, gc_value: &GcValue) -> Value {
         use crate::value::Pid as ValuePid;
         use crate::value::RefId as ValueRefId;
-        use std::cell::RefCell;
+        use std::sync::RwLock;
 
         match gc_value {
             // Immediate values - direct conversion
@@ -2152,44 +2166,44 @@ impl Heap {
             // BigInt
             GcValue::BigInt(ptr) => {
                 let b = self.get_bigint(*ptr).expect("invalid bigint pointer");
-                Value::BigInt(Rc::new(b.value.clone()))
+                Value::BigInt(Arc::new(b.value.clone()))
             }
 
             // String
             GcValue::String(ptr) => {
                 let s = self.get_string(*ptr).expect("invalid string pointer");
-                Value::String(Rc::new(s.data.clone()))
+                Value::String(Arc::new(s.data.clone()))
             }
 
             // List
             GcValue::List(ptr) => {
                 let list = self.get_list(*ptr).expect("invalid list pointer");
                 let items: Vec<Value> = list.items.iter().map(|v| self.gc_to_value(v)).collect();
-                Value::List(Rc::new(items))
+                Value::List(Arc::new(items))
             }
 
             // Array
             GcValue::Array(ptr) => {
                 let arr = self.get_array(*ptr).expect("invalid array pointer");
                 let items: Vec<Value> = arr.items.iter().map(|v| self.gc_to_value(v)).collect();
-                Value::Array(Rc::new(RefCell::new(items)))
+                Value::Array(Arc::new(RwLock::new(items)))
             }
 
             // Typed arrays
             GcValue::Int64Array(ptr) => {
                 let arr = self.get_int64_array(*ptr).expect("invalid int64 array pointer");
-                Value::Int64Array(Rc::new(RefCell::new(arr.items.clone())))
+                Value::Int64Array(Arc::new(RwLock::new(arr.items.clone())))
             }
             GcValue::Float64Array(ptr) => {
                 let arr = self.get_float64_array(*ptr).expect("invalid float64 array pointer");
-                Value::Float64Array(Rc::new(RefCell::new(arr.items.clone())))
+                Value::Float64Array(Arc::new(RwLock::new(arr.items.clone())))
             }
 
             // Tuple
             GcValue::Tuple(ptr) => {
                 let tuple = self.get_tuple(*ptr).expect("invalid tuple pointer");
                 let items: Vec<Value> = tuple.items.iter().map(|v| self.gc_to_value(v)).collect();
-                Value::Tuple(Rc::new(items))
+                Value::Tuple(Arc::new(items))
             }
 
             // Map
@@ -2200,7 +2214,7 @@ impl Heap {
                     .iter()
                     .map(|(k, v)| (self.gc_map_key_to_value(k), self.gc_to_value(v)))
                     .collect();
-                Value::Map(Rc::new(entries))
+                Value::Map(Arc::new(entries))
             }
 
             // Set
@@ -2208,7 +2222,7 @@ impl Heap {
                 let set = self.get_set(*ptr).expect("invalid set pointer");
                 let items: std::collections::HashSet<MapKey> =
                     set.items.iter().map(|k| self.gc_map_key_to_value(k)).collect();
-                Value::Set(Rc::new(items))
+                Value::Set(Arc::new(items))
             }
 
             // Record
@@ -2216,7 +2230,7 @@ impl Heap {
                 let record = self.get_record(*ptr).expect("invalid record pointer");
                 let fields: Vec<Value> =
                     record.fields.iter().map(|v| self.gc_to_value(v)).collect();
-                Value::Record(Rc::new(RecordValue {
+                Value::Record(Arc::new(RecordValue {
                     type_name: record.type_name.clone(),
                     field_names: record.field_names.clone(),
                     fields,
@@ -2229,7 +2243,7 @@ impl Heap {
                 let variant = self.get_variant(*ptr).expect("invalid variant pointer");
                 let fields: Vec<Value> =
                     variant.fields.iter().map(|v| self.gc_to_value(v)).collect();
-                Value::Variant(Rc::new(VariantValue {
+                Value::Variant(Arc::new(VariantValue {
                     type_name: variant.type_name.clone(),
                     constructor: variant.constructor.clone(),
                     fields,
@@ -2242,7 +2256,7 @@ impl Heap {
                 let closure = self.get_closure(*ptr).expect("invalid closure pointer");
                 let captures: Vec<Value> =
                     closure.captures.iter().map(|v| self.gc_to_value(v)).collect();
-                Value::Closure(Rc::new(ClosureValue {
+                Value::Closure(Arc::new(ClosureValue {
                     function: closure.function.clone(),
                     captures,
                     capture_names: closure.capture_names.clone(),
@@ -2284,7 +2298,7 @@ impl Heap {
             // String
             GcMapKey::String(ptr) => {
                 let s = self.get_string(*ptr).expect("invalid string pointer in map key");
-                MapKey::String(Rc::new(s.data.clone()))
+                MapKey::String(Arc::new(s.data.clone()))
             }
         }
     }
@@ -2450,15 +2464,15 @@ mod tests {
         let mut heap = Heap::new();
 
         // Create a test function
-        let func = Rc::new(FunctionValue {
+        let func = Arc::new(FunctionValue {
             name: "test_closure".to_string(),
             arity: 2,
             param_names: vec!["x".to_string(), "y".to_string()],
-            code: Rc::new(Chunk::new()),
+            code: Arc::new(Chunk::new()),
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: std::cell::Cell::new(0),
+            call_count: std::sync::atomic::AtomicU32::new(0),
             debug_symbols: vec![],
         });
 
@@ -2763,15 +2777,15 @@ mod tests {
         let mut heap = Heap::new();
 
         // Create a test function
-        let func = Rc::new(FunctionValue {
+        let func = Arc::new(FunctionValue {
             name: "test_closure".to_string(),
             arity: 2,
             param_names: vec!["x".to_string(), "y".to_string()],
-            code: Rc::new(Chunk::new()),
+            code: Arc::new(Chunk::new()),
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: std::cell::Cell::new(0),
+            call_count: std::sync::atomic::AtomicU32::new(0),
             debug_symbols: vec![],
         });
 
@@ -3016,15 +3030,15 @@ mod tests {
         let mut heap2 = Heap::new();
 
         // Create a test function for the closure
-        let func = Rc::new(FunctionValue {
+        let func = Arc::new(FunctionValue {
             name: "test_func".to_string(),
             arity: 2,
             param_names: vec!["x".to_string(), "y".to_string()],
-            code: Rc::new(Chunk::new()),
+            code: Arc::new(Chunk::new()),
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: std::cell::Cell::new(0),
+            call_count: std::sync::atomic::AtomicU32::new(0),
             debug_symbols: vec![],
         });
 

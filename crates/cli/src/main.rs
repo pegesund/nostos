@@ -5,6 +5,9 @@ use nostos_jit::{JitCompiler, JitConfig};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::gc::GcValue;
 use nostos_vm::runtime::Runtime;
+use nostos_vm::scheduler::Scheduler;
+use nostos_vm::worker::{WorkerPool, WorkerPoolConfig};
+use nostos_vm::parallel::{ParallelVM, ParallelConfig};
 use nostos_vm::value::RuntimeError;
 use std::env;
 use std::fs;
@@ -177,8 +180,12 @@ fn main() -> ExitCode {
     let mut enable_jit = true;
     let mut json_errors = false;
     let mut debug_mode = false;
+    let mut parallel_workers: Option<usize> = None;
+    let mut parallel_affinity: Option<usize> = None;
 
-    for (i, arg) in args.iter().enumerate().skip(1) {
+    let mut i = 1;
+    while i < args.len() {
+        let arg = &args[i];
         if arg.starts_with("--") || arg.starts_with("-") {
             if arg == "--help" || arg == "-h" {
                 println!("Usage: nostos [options] <file.nos> [args...]");
@@ -186,11 +193,13 @@ fn main() -> ExitCode {
                 println!("Run a Nostos program file.");
                 println!();
                 println!("Options:");
-                println!("  --help         Show this help message");
-                println!("  --version      Show version information");
-                println!("  --no-jit       Disable JIT compilation (for debugging)");
-                println!("  --debug        Show local variable values in stack traces");
-                println!("  --json-errors  Output errors as JSON (for debugger integration)");
+                println!("  --help           Show this help message");
+                println!("  --version        Show version information");
+                println!("  --no-jit         Disable JIT compilation (for debugging)");
+                println!("  --debug          Show local variable values in stack traces");
+                println!("  --json-errors    Output errors as JSON (for debugger integration)");
+                println!("  --parallel [N]   Enable parallel execution with N workers (default: all CPUs)");
+                println!("  --parallel-affinity [N]  Parallel with CPU affinity (processes stay on spawning thread)");
                 return ExitCode::SUCCESS;
             }
             if arg == "--version" || arg == "-v" {
@@ -199,16 +208,48 @@ fn main() -> ExitCode {
             }
             if arg == "--no-jit" {
                 enable_jit = false;
+                i += 1;
                 continue;
             }
             if arg == "--debug" {
                 debug_mode = true;
+                i += 1;
                 continue;
             }
             if arg == "--json-errors" {
                 json_errors = true;
+                i += 1;
                 continue;
             }
+            if arg == "--parallel" {
+                // Check if next arg is a number
+                if i + 1 < args.len() {
+                    if let Ok(n) = args[i + 1].parse::<usize>() {
+                        parallel_workers = Some(n);
+                        i += 2;
+                        continue;
+                    }
+                }
+                // No number specified, use 0 (auto-detect)
+                parallel_workers = Some(0);
+                i += 1;
+                continue;
+            }
+            if arg == "--parallel-affinity" {
+                // Check if next arg is a number
+                if i + 1 < args.len() {
+                    if let Ok(n) = args[i + 1].parse::<usize>() {
+                        parallel_affinity = Some(n);
+                        i += 2;
+                        continue;
+                    }
+                }
+                // No number specified, use 0 (auto-detect)
+                parallel_affinity = Some(0);
+                i += 1;
+                continue;
+            }
+            i += 1;
         } else {
             file_idx = i;
             break;
@@ -305,13 +346,105 @@ fn main() -> ExitCode {
         }
     };
 
-    runtime.spawn_initial(main_func);
+    // Run with either parallel WorkerPool, ParallelVM (affinity), or single-threaded Runtime
+    if let Some(num_threads) = parallel_affinity {
+        // Parallel execution with CPU affinity (new ParallelVM)
+        let config = ParallelConfig {
+            num_threads,
+            ..Default::default()
+        };
 
-    match runtime.run() {
+        let mut vm = ParallelVM::new(config);
+
+        // Register default native functions
+        vm.register_default_natives();
+
+        // Register functions
+        for (name, func) in compiler.get_all_functions() {
+            vm.register_function(&name, func.clone());
+        }
+
+        // Set function list for CallDirect
+        vm.set_function_list(compiler.get_function_list());
+
+        // Register types
+        for (name, type_val) in compiler.get_vm_types() {
+            vm.register_type(&name, type_val);
+        }
+
+        // JIT compile suitable functions (unless --no-jit was specified)
+        if enable_jit {
+            if let Ok(mut jit) = JitCompiler::new(JitConfig::default()) {
+                for idx in 0..function_list.len() {
+                    jit.queue_compilation(idx as u16);
+                }
+                if let Ok(compiled) = jit.process_queue(&function_list) {
+                    if compiled > 0 {
+                        for (idx, _func) in function_list.iter().enumerate() {
+                            if let Some(jit_fn) = jit.get_int_function(idx as u16) {
+                                vm.register_jit_int_function(idx as u16, jit_fn);
+                            }
+                            if let Some(jit_fn) = jit.get_loop_int64_array_function(idx as u16) {
+                                vm.register_jit_loop_array_function(idx as u16, jit_fn);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        match vm.run(main_func) {
+            Ok(Some(val)) => {
+                if !val.is_unit() {
+                    println!("{}", val.display());
+                }
+                return ExitCode::SUCCESS;
+            }
+            Ok(None) => return ExitCode::SUCCESS,
+            Err(e) => {
+                if json_errors {
+                    println!("{}", format_error_json(&e, file_path));
+                } else {
+                    eprintln!("Runtime error in {}:", file_path);
+                    eprintln!("{}", e);
+                }
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    let result = if let Some(num_workers) = parallel_workers {
+        // Parallel execution with work-stealing WorkerPool
+        let scheduler = Scheduler::new();
+
+        // Register functions on scheduler
+        for (name, func) in compiler.get_all_functions() {
+            scheduler.functions.write().insert(name.clone(), func.clone());
+        }
+
+        let config = WorkerPoolConfig {
+            num_workers,
+            enable_jit,
+            ..Default::default()
+        };
+
+        let pool = WorkerPool::new(scheduler, config);
+        pool.spawn_initial(main_func);
+        let result = pool.run();
+        pool.shutdown();
+        result
+    } else {
+        // Single-threaded execution
+        runtime.spawn_initial(main_func);
+        runtime.run()
+    };
+
+    match result {
         Ok(result) => {
             if let Some(val) = result {
                 if !matches!(val, GcValue::Unit) {
-                    println!("{:?}", val);
+                    // Use display_result to get human-readable output (matches ParallelVM)
+                    println!("{}", runtime.display_result(&val));
                 }
             }
             ExitCode::SUCCESS

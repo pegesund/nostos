@@ -11,15 +11,16 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::rc::Rc;
-use std::cell::{Cell, RefCell};
+use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 
 use num_bigint::BigInt;
 use rust_decimal::Decimal;
 
 /// Shared register list - makes instruction cloning O(1) instead of O(n).
 /// Used for function arguments, list/tuple construction, etc.
-pub type RegList = Rc<[Reg]>;
+/// Uses Arc for thread-safety with ParallelVM.
+pub type RegList = Arc<[Reg]>;
 
 /// A runtime value in Nostos.
 #[derive(Clone)]
@@ -46,30 +47,30 @@ pub enum Value {
     Float64(f64),
 
     // === Arbitrary precision ===
-    BigInt(Rc<BigInt>),
+    BigInt(Arc<BigInt>),
 
     // === Decimal (fixed-point) ===
     Decimal(Decimal),
 
     // === Heap-allocated values ===
-    String(Rc<String>),
-    List(Rc<Vec<Value>>),
-    Array(Rc<RefCell<Vec<Value>>>), // mutable, general
+    String(Arc<String>),
+    List(Arc<Vec<Value>>),
+    Array(Arc<std::sync::RwLock<Vec<Value>>>), // mutable, general
     // Typed arrays for JIT optimization (contiguous memory, no tag checking)
-    Int64Array(Rc<RefCell<Vec<i64>>>),
-    Float64Array(Rc<RefCell<Vec<f64>>>),
-    Tuple(Rc<Vec<Value>>),
-    Map(Rc<HashMap<MapKey, Value>>),
-    Set(Rc<std::collections::HashSet<MapKey>>),
+    Int64Array(Arc<std::sync::RwLock<Vec<i64>>>),
+    Float64Array(Arc<std::sync::RwLock<Vec<f64>>>),
+    Tuple(Arc<Vec<Value>>),
+    Map(Arc<HashMap<MapKey, Value>>),
+    Set(Arc<std::collections::HashSet<MapKey>>),
 
     // === Structured values ===
-    Record(Rc<RecordValue>),
-    Variant(Rc<VariantValue>),
+    Record(Arc<RecordValue>),
+    Variant(Arc<VariantValue>),
 
     // === Callable values ===
-    Function(Rc<FunctionValue>),
-    Closure(Rc<ClosureValue>),
-    NativeFunction(Rc<NativeFn>),
+    Function(Arc<FunctionValue>),
+    Closure(Arc<ClosureValue>),
+    NativeFunction(Arc<NativeFn>),
 
     // === Concurrency values ===
     Pid(Pid),
@@ -77,7 +78,7 @@ pub enum Value {
 
     // === Special ===
     /// Type value for introspection
-    Type(Rc<TypeValue>),
+    Type(Arc<TypeValue>),
     /// Opaque pointer for FFI
     Pointer(usize),
 }
@@ -99,7 +100,7 @@ pub enum MapKey {
     UInt32(u32),
     UInt64(u64),
     // String
-    String(Rc<String>),
+    String(Arc<String>),
 }
 
 /// A record value with named fields.
@@ -138,7 +139,7 @@ pub struct LocalVarSymbol {
 }
 
 /// A compiled function.
-#[derive(Clone)]
+/// Uses Arc for thread-safe sharing across worker threads.
 pub struct FunctionValue {
     /// Function name
     pub name: String,
@@ -147,17 +148,33 @@ pub struct FunctionValue {
     /// Parameter names (for introspection)
     pub param_names: Vec<String>,
     /// Bytecode instructions
-    pub code: Rc<Chunk>,
+    pub code: Arc<Chunk>,
     /// Module this function belongs to
     pub module: Option<String>,
     /// Source location for debugging
     pub source_span: Option<(usize, usize)>,
     /// JIT-compiled version (if available)
     pub jit_code: Option<JitFunction>,
-    /// Call counter for JIT hot detection (interior mutability for Rc<FunctionValue>)
-    pub call_count: Cell<u32>,
+    /// Call counter for JIT hot detection (thread-safe for multi-CPU execution)
+    pub call_count: AtomicU32,
     /// Debug symbols: local variable names and their registers
     pub debug_symbols: Vec<LocalVarSymbol>,
+}
+
+impl Clone for FunctionValue {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            arity: self.arity,
+            param_names: self.param_names.clone(),
+            code: self.code.clone(),
+            module: self.module.clone(),
+            source_span: self.source_span,
+            jit_code: self.jit_code.clone(),
+            call_count: AtomicU32::new(self.call_count.load(std::sync::atomic::Ordering::Relaxed)),
+            debug_symbols: self.debug_symbols.clone(),
+        }
+    }
 }
 
 impl std::fmt::Debug for FunctionValue {
@@ -177,7 +194,7 @@ impl std::fmt::Debug for FunctionValue {
 #[derive(Clone)]
 pub struct ClosureValue {
     /// The underlying function
-    pub function: Rc<FunctionValue>,
+    pub function: Arc<FunctionValue>,
     /// Captured variables from enclosing scope
     pub captures: Vec<Value>,
     /// Captured variable names (for introspection)
@@ -312,8 +329,6 @@ impl RuntimeError {
     /// Convert this runtime error to an exception Value that can be caught by try/catch.
     /// Returns a record with `type` and `message` fields.
     pub fn to_exception_value(&self) -> Value {
-        use std::rc::Rc;
-
         let (error_type, message) = match self {
             RuntimeError::TypeError { expected, found } => {
                 ("TypeError", format!("expected {}, got {}", expected, found))
@@ -377,13 +392,13 @@ impl RuntimeError {
             type_name: "Error".to_string(),
             field_names: vec!["type".to_string(), "message".to_string()],
             fields: vec![
-                Value::String(Rc::new(error_type.to_string())),
-                Value::String(Rc::new(message)),
+                Value::String(Arc::new(error_type.to_string())),
+                Value::String(Arc::new(message)),
             ],
             mutable_fields: vec![false, false],
         };
 
-        Value::Record(Rc::new(record))
+        Value::Record(Arc::new(record))
     }
 }
 
@@ -476,7 +491,7 @@ pub enum Instruction {
     /// Create tuple: dst = (regs...)
     MakeTuple(Reg, RegList),
     /// Create map: dst = %{keys: values}
-    MakeMap(Reg, Rc<[(Reg, Reg)]>),
+    MakeMap(Reg, Arc<[(Reg, Reg)]>),
     /// Create set: dst = #{regs...}
     MakeSet(Reg, RegList),
     /// List cons: dst = [head | tail]
@@ -838,9 +853,9 @@ impl fmt::Debug for Value {
             Value::Ref(r) => write!(f, "<ref {}>", r.0),
             Value::Map(m) => write!(f, "%{{...{} entries}}", m.len()),
             Value::Set(s) => write!(f, "#{{...{} items}}", s.len()),
-            Value::Array(a) => write!(f, "Array[{}]", a.borrow().len()),
-            Value::Int64Array(a) => write!(f, "Int64Array[{}]", a.borrow().len()),
-            Value::Float64Array(a) => write!(f, "Float64Array[{}]", a.borrow().len()),
+            Value::Array(a) => write!(f, "Array[{}]", a.read().unwrap().len()),
+            Value::Int64Array(a) => write!(f, "Int64Array[{}]", a.read().unwrap().len()),
+            Value::Float64Array(a) => write!(f, "Float64Array[{}]", a.read().unwrap().len()),
             Value::Type(t) => write!(f, "<type {}>", t.name),
             Value::Pointer(p) => write!(f, "<ptr 0x{:x}>", p),
         }
@@ -958,7 +973,7 @@ mod tests {
     fn test_value_display() {
         assert_eq!(format!("{}", Value::Int64(42)), "42");
         assert_eq!(format!("{}", Value::Bool(true)), "true");
-        assert_eq!(format!("{}", Value::String(Rc::new("hello".to_string()))), "hello");
+        assert_eq!(format!("{}", Value::String(Arc::new("hello".to_string()))), "hello");
     }
 
     #[test]

@@ -16,7 +16,6 @@
 //! - `Temporary`: Never restart (for one-off tasks)
 
 use std::collections::VecDeque;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -67,7 +66,7 @@ pub struct ChildSpec {
     /// Unique identifier for this child
     pub id: String,
     /// Function to start the child
-    pub start_func: Rc<FunctionValue>,
+    pub start_func: Arc<FunctionValue>,
     /// Arguments to pass to start function
     pub start_args: Vec<GcValue>,
     /// When to restart
@@ -78,7 +77,7 @@ pub struct ChildSpec {
 
 impl ChildSpec {
     /// Create a new child specification.
-    pub fn new(id: impl Into<String>, start_func: Rc<FunctionValue>) -> Self {
+    pub fn new(id: impl Into<String>, start_func: Arc<FunctionValue>) -> Self {
         Self {
             id: id.into(),
             start_func,
@@ -475,13 +474,14 @@ impl Clone for SupervisorHandle {
 mod tests {
     use super::*;
     use crate::value::{Chunk, Instruction, Value};
+    use std::sync::atomic::AtomicU32;
 
-    fn make_test_function(name: &str) -> Rc<FunctionValue> {
-        Rc::new(FunctionValue {
+    fn make_test_function(name: &str) -> Arc<FunctionValue> {
+        Arc::new(FunctionValue {
             name: name.to_string(),
             arity: 0,
             param_names: Vec::new(),
-            code: Rc::new(Chunk {
+            code: Arc::new(Chunk {
                 code: vec![
                     Instruction::LoadConst(0, 0),
                     Instruction::Return(0),
@@ -494,7 +494,7 @@ mod tests {
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: std::cell::Cell::new(0),
+            call_count: AtomicU32::new(0),
             debug_symbols: vec![],
         })
     }

@@ -10,7 +10,7 @@
 //! the same Process struct, accessing heap/registers directly.
 
 use std::collections::{HashMap, VecDeque};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::gc::{GcConfig, GcValue, Heap};
 use crate::value::{FunctionValue, Pid, RefId, Reg};
@@ -19,7 +19,7 @@ use crate::value::{FunctionValue, Pid, RefId, Reg};
 #[derive(Clone)]
 pub struct CallFrame {
     /// Function being executed
-    pub function: Rc<FunctionValue>,
+    pub function: Arc<FunctionValue>,
     /// Instruction pointer
     pub ip: usize,
     /// Register file for this frame (GC-managed values)

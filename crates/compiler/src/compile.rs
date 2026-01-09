@@ -6,9 +6,10 @@
 //! - Pattern match compilation
 //! - Type-directed code generation
 
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 
 use nostos_syntax::ast::*;
 use nostos_vm::*;
@@ -122,18 +123,25 @@ enum InferredType {
     Float,
 }
 
+/// Information about a local variable.
+#[derive(Clone, Copy)]
+struct LocalInfo {
+    reg: Reg,
+    is_float: bool,
+}
+
 /// Compilation context.
 pub struct Compiler {
     /// Current function being compiled
     chunk: Chunk,
-    /// Local variable -> register mapping
-    locals: HashMap<String, Reg>,
+    /// Local variable -> register and type info
+    locals: HashMap<String, LocalInfo>,
     /// Next available register
     next_reg: Reg,
     /// Captured variables for the current closure: name -> capture index
     capture_indices: HashMap<String, u8>,
     /// Compiled functions
-    functions: HashMap<String, Rc<FunctionValue>>,
+    functions: HashMap<String, Arc<FunctionValue>>,
     /// Function name -> index mapping for direct calls (no HashMap lookup at runtime!)
     function_indices: HashMap<String, u16>,
     /// Ordered list of function names (index -> name)
@@ -187,7 +195,9 @@ pub struct TypeInfo {
 #[derive(Clone)]
 pub enum TypeInfoKind {
     Record { fields: Vec<String>, mutable: bool },
-    Variant { constructors: Vec<(String, usize)> }, // (name, field_count)
+    /// Variant type: constructors with (name, field_types)
+    /// Field types are stored as simple strings: "Float", "Int", etc.
+    Variant { constructors: Vec<(String, Vec<String>)> },
 }
 
 /// Trait definition information.
@@ -301,6 +311,10 @@ impl Compiler {
         match expr {
             Expr::Float(_, _) | Expr::Float32(_, _) => true,
             Expr::Int(_, _) => false,
+            // Check if variable is known to be float
+            Expr::Var(ident) => {
+                self.locals.get(&ident.node).map(|info| info.is_float).unwrap_or(false)
+            }
             Expr::BinOp(left, op, right, _) => {
                 // Arithmetic operators preserve float type
                 match op {
@@ -356,6 +370,32 @@ impl Compiler {
         Ok(())
     }
 
+    /// Look up field types for a variant constructor.
+    fn get_constructor_field_types(&self, ctor_name: &str) -> Vec<String> {
+        for info in self.types.values() {
+            if let TypeInfoKind::Variant { constructors } = &info.kind {
+                for (name, field_types) in constructors {
+                    if name == ctor_name {
+                        return field_types.clone();
+                    }
+                }
+            }
+        }
+        vec![]
+    }
+
+    /// Get the simple name of a type expression (for type tracking).
+    fn type_expr_name(&self, ty: &nostos_syntax::TypeExpr) -> String {
+        match ty {
+            nostos_syntax::TypeExpr::Name(ident) => ident.node.clone(),
+            nostos_syntax::TypeExpr::Generic(ident, _) => ident.node.clone(),
+            nostos_syntax::TypeExpr::Function(_, _) => "Function".to_string(),
+            nostos_syntax::TypeExpr::Record(_) => "Record".to_string(),
+            nostos_syntax::TypeExpr::Tuple(_) => "Tuple".to_string(),
+            nostos_syntax::TypeExpr::Unit => "Unit".to_string(),
+        }
+    }
+
     /// Compile a type definition.
     fn compile_type_def(&mut self, def: &TypeDef) -> Result<(), CompileError> {
         // Use qualified name (with module path prefix)
@@ -369,14 +409,18 @@ impl Compiler {
                 TypeInfoKind::Record { fields: field_names, mutable: def.mutable }
             }
             TypeBody::Variant(variants) => {
-                let constructors: Vec<(String, usize)> = variants.iter()
+                let constructors: Vec<(String, Vec<String>)> = variants.iter()
                     .map(|v| {
-                        let field_count = match &v.fields {
-                            VariantFields::Unit => 0,
-                            VariantFields::Positional(fields) => fields.len(),
-                            VariantFields::Named(fields) => fields.len(),
+                        let field_types = match &v.fields {
+                            VariantFields::Unit => vec![],
+                            VariantFields::Positional(fields) => {
+                                fields.iter().map(|ty| self.type_expr_name(ty)).collect()
+                            }
+                            VariantFields::Named(fields) => {
+                                fields.iter().map(|f| self.type_expr_name(&f.ty)).collect()
+                            }
                         };
-                        (v.name.node.clone(), field_count)
+                        (v.name.node.clone(), field_types)
                     })
                     .collect();
                 TypeInfoKind::Variant { constructors }
@@ -581,9 +625,9 @@ impl Compiler {
                         self.chunk.emit(Instruction::JumpIfFalse(success_reg, 0), 0)
                     );
 
-                    // Add bindings to locals
-                    for (name, reg) in bindings {
-                        self.locals.insert(name, reg);
+                    // Add bindings to locals with type info from pattern
+                    for (name, reg, is_float) in bindings {
+                        self.locals.insert(name, LocalInfo { reg, is_float });
                     }
                 }
 
@@ -612,7 +656,7 @@ impl Compiler {
             }
 
             // If we get here, no clause matched - throw error
-            let error_idx = self.chunk.add_constant(Value::String(Rc::new(
+            let error_idx = self.chunk.add_constant(Value::String(Arc::new(
                 format!("No clause matched for function '{}'", name)
             )));
             let error_reg = self.alloc_reg();
@@ -625,7 +669,16 @@ impl Compiler {
             // Map parameter patterns to registers
             for (i, param) in clause.params.iter().enumerate() {
                 if let Some(n) = self.pattern_binding_name(&param.pattern) {
-                    self.locals.insert(n, i as Reg);
+                    // Check if parameter has Float type annotation
+                    let is_float = param.ty.as_ref().map(|t| {
+                        match t {
+                            nostos_syntax::TypeExpr::Name(ident) => {
+                                matches!(ident.node.as_str(), "Float" | "Float32" | "Float64")
+                            }
+                            _ => false,
+                        }
+                    }).unwrap_or(false);
+                    self.locals.insert(n, LocalInfo { reg: i as Reg, is_float });
                 }
             }
 
@@ -640,9 +693,9 @@ impl Compiler {
         let debug_symbols: Vec<LocalVarSymbol> = self
             .locals
             .iter()
-            .map(|(name, &reg)| LocalVarSymbol {
+            .map(|(name, info)| LocalVarSymbol {
                 name: name.clone(),
-                register: reg,
+                register: info.reg,
             })
             .collect();
 
@@ -650,11 +703,11 @@ impl Compiler {
             name: name.clone(),
             arity,
             param_names,
-            code: Rc::new(std::mem::take(&mut self.chunk)),
+            code: Arc::new(std::mem::take(&mut self.chunk)),
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: Cell::new(0),
+            call_count: AtomicU32::new(0),
             debug_symbols,
         };
 
@@ -665,7 +718,7 @@ impl Compiler {
             self.function_list.push(name.clone());
         }
 
-        self.functions.insert(name, Rc::new(func));
+        self.functions.insert(name, Arc::new(func));
 
         // Restore compiler state
         self.chunk = saved_chunk;
@@ -763,7 +816,7 @@ impl Compiler {
                 let dst = self.alloc_reg();
                 use num_bigint::BigInt;
                 let big = s.parse::<BigInt>().unwrap_or_default();
-                let idx = self.chunk.add_constant(Value::BigInt(Rc::new(big)));
+                let idx = self.chunk.add_constant(Value::BigInt(Arc::new(big)));
                 self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                 Ok(dst)
             }
@@ -789,7 +842,7 @@ impl Compiler {
                 match string_lit {
                     StringLit::Plain(s) => {
                         let dst = self.alloc_reg();
-                        let idx = self.chunk.add_constant(Value::String(Rc::new(s.clone())));
+                        let idx = self.chunk.add_constant(Value::String(Arc::new(s.clone())));
                         self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                         Ok(dst)
                     }
@@ -813,8 +866,8 @@ impl Compiler {
             // Variables
             Expr::Var(ident) => {
                 let name = &ident.node;
-                if let Some(&reg) = self.locals.get(name) {
-                    Ok(reg)
+                if let Some(info) = self.locals.get(name) {
+                    Ok(info.reg)
                 } else if let Some(&capture_idx) = self.capture_indices.get(name) {
                     // It's a captured variable - load from closure environment
                     let dst = self.alloc_reg();
@@ -921,7 +974,7 @@ impl Compiler {
             Expr::FieldAccess(obj, field, _) => {
                 let obj_reg = self.compile_expr_tail(obj, false)?;
                 let dst = self.alloc_reg();
-                let field_idx = self.chunk.add_constant(Value::String(Rc::new(field.node.clone())));
+                let field_idx = self.chunk.add_constant(Value::String(Arc::new(field.node.clone())));
                 self.chunk.emit(Instruction::GetField(dst, obj_reg, field_idx), line);
                 Ok(dst)
             }
@@ -1118,9 +1171,9 @@ impl Compiler {
                         None
                     };
 
-                    // Bind pattern variables
-                    for (name, reg) in bindings {
-                        self.locals.insert(name, reg);
+                    // Bind pattern variables with type info from pattern
+                    for (name, reg, is_float) in bindings {
+                        self.locals.insert(name, LocalInfo { reg, is_float });
                     }
 
                     // Compile guard if present
@@ -1253,9 +1306,9 @@ impl Compiler {
         let counter_reg = self.compile_expr_tail(start, false)?;
         let end_reg = self.compile_expr_tail(end, false)?;
 
-        // Bind loop variable to counter register
-        let saved_var = self.locals.get(&var.node).copied();
-        self.locals.insert(var.node.clone(), counter_reg);
+        // Bind loop variable to counter register (for loop counter is always int)
+        let saved_var = self.locals.get(&var.node).cloned();
+        self.locals.insert(var.node.clone(), LocalInfo { reg: counter_reg, is_float: false });
 
         // Record loop start
         let loop_start = self.chunk.code.len();
@@ -1307,8 +1360,8 @@ impl Compiler {
         }
 
         // Restore previous variable binding if any
-        if let Some(prev_reg) = saved_var {
-            self.locals.insert(var.node.clone(), prev_reg);
+        if let Some(prev_info) = saved_var {
+            self.locals.insert(var.node.clone(), prev_info);
         } else {
             self.locals.remove(&var.node);
         }
@@ -1717,7 +1770,7 @@ impl Compiler {
                     // === Dynamic builtins (trait-based, keep CallNative for now) ===
                     "show" | "copy" => {
                         let dst = self.alloc_reg();
-                        let name_idx = self.chunk.add_constant(Value::String(Rc::new(qualified_name)));
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
                         self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
                         return Ok(dst);
                     }
@@ -1989,9 +2042,9 @@ impl Compiler {
                 None
             };
 
-            // Bind pattern variables
-            for (name, reg) in bindings {
-                self.locals.insert(name, reg);
+            // Bind pattern variables with type info from pattern
+            for (name, reg, is_float) in bindings {
+                self.locals.insert(name, LocalInfo { reg, is_float });
             }
 
             // Compile guard if present
@@ -2075,9 +2128,9 @@ impl Compiler {
                 None
             };
 
-            // Bind pattern variables
-            for (name, reg) in bindings {
-                self.locals.insert(name, reg);
+            // Bind pattern variables with type info from pattern
+            for (name, reg, is_float) in bindings {
+                self.locals.insert(name, LocalInfo { reg, is_float });
             }
 
             // Compile guard if present
@@ -2161,9 +2214,10 @@ impl Compiler {
     }
 
     /// Compile a pattern test and return (success_reg, bindings).
-    fn compile_pattern_test(&mut self, pattern: &Pattern, scrut_reg: Reg) -> Result<(Reg, Vec<(String, Reg)>), CompileError> {
+    /// Bindings are (name, reg, is_float) tuples.
+    fn compile_pattern_test(&mut self, pattern: &Pattern, scrut_reg: Reg) -> Result<(Reg, Vec<(String, Reg, bool)>), CompileError> {
         let success_reg = self.alloc_reg();
-        let mut bindings = Vec::new();
+        let mut bindings: Vec<(String, Reg, bool)> = Vec::new();
 
         match pattern {
             Pattern::Wildcard(_) => {
@@ -2173,7 +2227,8 @@ impl Compiler {
                 self.chunk.emit(Instruction::LoadTrue(success_reg), 0);
                 let var_reg = self.alloc_reg();
                 self.chunk.emit(Instruction::Move(var_reg, scrut_reg), 0);
-                bindings.push((ident.node.clone(), var_reg));
+                // Type unknown for plain var pattern, will be updated by variant context
+                bindings.push((ident.node.clone(), var_reg, false));
             }
             Pattern::Unit(_) => {
                 self.chunk.emit(Instruction::TestUnit(success_reg, scrut_reg), 0);
@@ -2221,7 +2276,7 @@ impl Compiler {
             Pattern::BigInt(s, _) => {
                 use num_bigint::BigInt;
                 let big = s.parse::<BigInt>().unwrap_or_default();
-                let const_idx = self.chunk.add_constant(Value::BigInt(Rc::new(big)));
+                let const_idx = self.chunk.add_constant(Value::BigInt(Arc::new(big)));
                 self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
             }
             Pattern::Decimal(s, _) => {
@@ -2239,12 +2294,15 @@ impl Compiler {
                 self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
             }
             Pattern::String(s, _) => {
-                let const_idx = self.chunk.add_constant(Value::String(Rc::new(s.clone())));
+                let const_idx = self.chunk.add_constant(Value::String(Arc::new(s.clone())));
                 self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
             }
             Pattern::Variant(ctor, fields, _) => {
-                let ctor_idx = self.chunk.add_constant(Value::String(Rc::new(ctor.node.clone())));
+                let ctor_idx = self.chunk.add_constant(Value::String(Arc::new(ctor.node.clone())));
                 self.chunk.emit(Instruction::TestTag(success_reg, scrut_reg, ctor_idx), 0);
+
+                // Look up field types for this constructor
+                let field_types = self.get_constructor_field_types(&ctor.node);
 
                 // Extract and bind fields - only if tag matches (guard with conditional jump)
                 match fields {
@@ -2257,6 +2315,14 @@ impl Compiler {
                             let field_reg = self.alloc_reg();
                             self.chunk.emit(Instruction::GetVariantField(field_reg, scrut_reg, i as u8), 0);
                             let (_, mut sub_bindings) = self.compile_pattern_test(pat, field_reg)?;
+
+                            // Update type info based on constructor's field type
+                            let is_float = field_types.get(i)
+                                .map(|t| matches!(t.as_str(), "Float" | "Float32" | "Float64"))
+                                .unwrap_or(false);
+                            for binding in &mut sub_bindings {
+                                binding.2 = is_float;
+                            }
                             bindings.append(&mut sub_bindings);
                         }
 
@@ -2264,23 +2330,24 @@ impl Compiler {
                         let after_extract = self.chunk.code.len();
                         self.chunk.patch_jump(skip_jump, after_extract);
                     }
-                    VariantPatternFields::Named(fields) => {
+                    VariantPatternFields::Named(nfields) => {
                         // Jump past field extraction if tag doesn't match
                         let skip_jump = self.chunk.emit(Instruction::JumpIfFalse(success_reg, 0), 0);
 
-                        for field in fields {
+                        for field in nfields {
                             match field {
                                 RecordPatternField::Punned(ident) => {
                                     // {x} means bind field "x" to variable "x"
                                     let field_reg = self.alloc_reg();
-                                    let name_idx = self.chunk.add_constant(Value::String(Rc::new(ident.node.clone())));
+                                    let name_idx = self.chunk.add_constant(Value::String(Arc::new(ident.node.clone())));
                                     self.chunk.emit(Instruction::GetVariantFieldByName(field_reg, scrut_reg, name_idx), 0);
-                                    bindings.push((ident.node.clone(), field_reg));
+                                    // Type unknown for named fields (would need named field type lookup)
+                                    bindings.push((ident.node.clone(), field_reg, false));
                                 }
                                 RecordPatternField::Named(ident, pat) => {
                                     // {name: n} means bind field "name" to the result of matching pattern
                                     let field_reg = self.alloc_reg();
-                                    let name_idx = self.chunk.add_constant(Value::String(Rc::new(ident.node.clone())));
+                                    let name_idx = self.chunk.add_constant(Value::String(Arc::new(ident.node.clone())));
                                     self.chunk.emit(Instruction::GetVariantFieldByName(field_reg, scrut_reg, name_idx), 0);
                                     let (_, mut sub_bindings) = self.compile_pattern_test(pat, field_reg)?;
                                     bindings.append(&mut sub_bindings);
@@ -2403,14 +2470,16 @@ impl Compiler {
         if let Pattern::Var(ident) = &binding.pattern {
             // If the variable already exists, this is a reassignment, not a new binding.
             // Move the value to the existing register to preserve mutation semantics.
-            if let Some(&existing_reg) = self.locals.get(&ident.node) {
+            if let Some(existing_info) = self.locals.get(&ident.node) {
+                let existing_reg = existing_info.reg;
                 if existing_reg != value_reg {
                     self.chunk.emit(Instruction::Move(existing_reg, value_reg), 0);
                 }
                 return Ok(existing_reg);
             }
-            // New binding
-            self.locals.insert(ident.node.clone(), value_reg);
+            // New binding - track if value is float
+            let is_float = self.is_float_expr(&binding.value);
+            self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float });
             // Record the type if we know it
             if let Some(ty) = value_type {
                 self.local_types.insert(ident.node.clone(), ty);
@@ -2420,8 +2489,8 @@ impl Compiler {
 
         // For complex patterns, we need to deconstruct
         let (_, bindings) = self.compile_pattern_test(&binding.pattern, value_reg)?;
-        for (name, reg) in bindings {
-            self.locals.insert(name, reg);
+        for (name, reg, is_float) in bindings {
+            self.locals.insert(name, LocalInfo { reg, is_float });
         }
 
         let dst = self.alloc_reg();
@@ -2435,7 +2504,8 @@ impl Compiler {
 
         match target {
             AssignTarget::Var(ident) => {
-                if let Some(&var_reg) = self.locals.get(&ident.node) {
+                if let Some(info) = self.locals.get(&ident.node) {
+                    let var_reg = info.reg;
                     self.chunk.emit(Instruction::Move(var_reg, value_reg), 0);
                     Ok(var_reg)
                 } else {
@@ -2447,7 +2517,7 @@ impl Compiler {
             }
             AssignTarget::Field(obj, field) => {
                 let obj_reg = self.compile_expr_tail(obj, false)?;
-                let field_idx = self.chunk.add_constant(Value::String(Rc::new(field.node.clone())));
+                let field_idx = self.chunk.add_constant(Value::String(Arc::new(field.node.clone())));
                 self.chunk.emit(Instruction::SetField(obj_reg, field_idx, value_reg), 0);
                 Ok(value_reg)
             }
@@ -2470,7 +2540,7 @@ impl Compiler {
         if parts.is_empty() {
             // Empty string
             let dst = self.alloc_reg();
-            let idx = self.chunk.add_constant(Value::String(Rc::new(String::new())));
+            let idx = self.chunk.add_constant(Value::String(Arc::new(String::new())));
             self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
             return Ok(dst);
         }
@@ -2481,7 +2551,7 @@ impl Compiler {
             let reg = match part {
                 StringPart::Lit(s) => {
                     let dst = self.alloc_reg();
-                    let idx = self.chunk.add_constant(Value::String(Rc::new(s.clone())));
+                    let idx = self.chunk.add_constant(Value::String(Arc::new(s.clone())));
                     self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
                     dst
                 }
@@ -2490,7 +2560,7 @@ impl Compiler {
                     let expr_reg = self.compile_expr_tail(e, false)?;
                     // Call `show` to convert to string
                     let dst = self.alloc_reg();
-                    let name_idx = self.chunk.add_constant(Value::String(Rc::new("show".to_string())));
+                    let name_idx = self.chunk.add_constant(Value::String(Arc::new("show".to_string())));
                     self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![expr_reg].into()), 0);
                     dst
                 }
@@ -2530,8 +2600,8 @@ impl Compiler {
         // Step 2: Filter to variables that exist in outer scope (locals)
         let mut captures: Vec<(String, Reg)> = Vec::new();
         for var_name in &body_free_vars {
-            if let Some(&reg) = self.locals.get(var_name) {
-                captures.push((var_name.clone(), reg));
+            if let Some(info) = self.locals.get(var_name) {
+                captures.push((var_name.clone(), info.reg));
             }
             // Also check if it's in our own captures (nested closures)
             else if self.capture_indices.contains_key(var_name) {
@@ -2560,10 +2630,10 @@ impl Compiler {
         let arity = params.len();
         let mut param_names = Vec::new();
 
-        // Allocate registers for parameters
+        // Allocate registers for parameters (type unknown for lambda params)
         for (i, param) in params.iter().enumerate() {
             if let Some(name) = self.pattern_binding_name(param) {
-                self.locals.insert(name.clone(), i as Reg);
+                self.locals.insert(name.clone(), LocalInfo { reg: i as Reg, is_float: false });
                 param_names.push(name);
             } else {
                 param_names.push(format!("_arg{}", i));
@@ -2588,9 +2658,9 @@ impl Compiler {
         let debug_symbols: Vec<LocalVarSymbol> = self
             .locals
             .iter()
-            .map(|(name, &reg)| LocalVarSymbol {
+            .map(|(name, info)| LocalVarSymbol {
                 name: name.clone(),
-                register: reg,
+                register: info.reg,
             })
             .collect();
 
@@ -2606,11 +2676,11 @@ impl Compiler {
             name: "<lambda>".to_string(),
             arity,
             param_names,
-            code: Rc::new(lambda_chunk),
+            code: Arc::new(lambda_chunk),
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: Cell::new(0),
+            call_count: AtomicU32::new(0),
             debug_symbols,
         };
 
@@ -2618,11 +2688,11 @@ impl Compiler {
 
         if captures.is_empty() {
             // No captures - just load the function
-            let func_idx = self.chunk.add_constant(Value::Function(Rc::new(func)));
+            let func_idx = self.chunk.add_constant(Value::Function(Arc::new(func)));
             self.chunk.emit(Instruction::LoadConst(dst, func_idx), 0);
         } else {
             // Has captures - create a closure
-            let func_idx = self.chunk.add_constant(Value::Function(Rc::new(func)));
+            let func_idx = self.chunk.add_constant(Value::Function(Arc::new(func)));
             let capture_regs: Vec<Reg> = captures.iter().map(|(_, reg)| *reg).collect();
             self.chunk.emit(Instruction::MakeClosure(dst, func_idx, capture_regs.into()), 0);
         }
@@ -2647,7 +2717,7 @@ impl Compiler {
         }
 
         let dst = self.alloc_reg();
-        let type_idx = self.chunk.add_constant(Value::String(Rc::new(type_name.to_string())));
+        let type_idx = self.chunk.add_constant(Value::String(Arc::new(type_name.to_string())));
         self.chunk.emit(Instruction::MakeRecord(dst, type_idx, field_regs.into()), 0);
         Ok(dst)
     }
@@ -2671,7 +2741,7 @@ impl Compiler {
         }
 
         let dst = self.alloc_reg();
-        let type_idx = self.chunk.add_constant(Value::String(Rc::new(type_name.to_string())));
+        let type_idx = self.chunk.add_constant(Value::String(Arc::new(type_name.to_string())));
         self.chunk.emit(Instruction::UpdateRecord(dst, base_reg, type_idx, field_regs.into()), 0);
         Ok(dst)
     }
@@ -2730,25 +2800,25 @@ impl Compiler {
     }
 
     /// Get a compiled function.
-    pub fn get_function(&self, name: &str) -> Option<Rc<FunctionValue>> {
+    pub fn get_function(&self, name: &str) -> Option<Arc<FunctionValue>> {
         self.functions.get(name).cloned()
     }
 
     /// Get all compiled functions.
-    pub fn get_all_functions(&self) -> &HashMap<String, Rc<FunctionValue>> {
+    pub fn get_all_functions(&self) -> &HashMap<String, Arc<FunctionValue>> {
         &self.functions
     }
 
     /// Get the ordered function list for direct indexed calls.
     /// Returns functions in the same order as their indices (for CallDirect).
-    pub fn get_function_list(&self) -> Vec<Rc<FunctionValue>> {
+    pub fn get_function_list(&self) -> Vec<Arc<FunctionValue>> {
         self.function_list.iter()
             .map(|name| self.functions.get(name).cloned().expect("Function should exist"))
             .collect()
     }
 
     /// Get all types for the VM.
-    pub fn get_vm_types(&self) -> HashMap<String, Rc<TypeValue>> {
+    pub fn get_vm_types(&self) -> HashMap<String, Arc<TypeValue>> {
         use nostos_vm::value::{TypeValue, TypeKind, FieldInfo, ConstructorInfo};
 
         let mut vm_types = HashMap::new();
@@ -2777,11 +2847,11 @@ impl Compiler {
                         kind: TypeKind::Variant,
                         fields: vec![],
                         constructors: constructors.iter()
-                            .map(|(n, field_count)| ConstructorInfo {
+                            .map(|(n, field_types)| ConstructorInfo {
                                 name: n.clone(),
-                                fields: (0..*field_count).map(|i| FieldInfo {
+                                fields: field_types.iter().enumerate().map(|(i, ty)| FieldInfo {
                                     name: format!("_{}", i),
-                                    type_name: "any".to_string(),
+                                    type_name: ty.clone(),
                                     mutable: false,
                                     private: false,
                                 }).collect(),
@@ -2791,7 +2861,7 @@ impl Compiler {
                     }
                 }
             };
-            vm_types.insert(name.clone(), Rc::new(type_value));
+            vm_types.insert(name.clone(), Arc::new(type_value));
         }
         vm_types
     }
@@ -3095,14 +3165,14 @@ impl Compiler {
                 name: name.clone(),
                 arity,
                 param_names: vec![],
-                code: Rc::new(Chunk::new()),
+                code: Arc::new(Chunk::new()),
                 module: if self.module_path.is_empty() { None } else { Some(self.module_path.join(".")) },
                 source_span: None,
                 jit_code: None,
-                call_count: Cell::new(0),
+                call_count: AtomicU32::new(0),
                 debug_symbols: vec![],
             };
-            self.functions.insert(name.clone(), Rc::new(placeholder));
+            self.functions.insert(name.clone(), Arc::new(placeholder));
 
             // Assign function index for direct calls (no HashMap lookup at runtime!)
             if !self.function_indices.contains_key(name) {
@@ -4796,7 +4866,7 @@ mod tests {
             main() = \"World\".greet()
         ";
         let result = compile_and_run(source);
-        assert_eq!(result, Ok(Value::String(std::rc::Rc::new("Hello, World".to_string()))));
+        assert_eq!(result, Ok(Value::String(std::sync::Arc::new("Hello, World".to_string()))));
     }
 
     #[test]

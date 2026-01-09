@@ -11,7 +11,7 @@
 //! Supported types: Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64
 
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use cranelift_codegen::ir::{AbiParam, Block, InstBuilder, UserFuncName, Value as CraneliftValue};
 use cranelift_codegen::ir::condcodes::{IntCC, FloatCC};
@@ -336,7 +336,7 @@ impl JitCompiler {
     }
 
     /// Process the compilation queue
-    pub fn process_queue(&mut self, functions: &[Rc<FunctionValue>]) -> Result<usize, JitError> {
+    pub fn process_queue(&mut self, functions: &[Arc<FunctionValue>]) -> Result<usize, JitError> {
         let mut compiled = 0;
 
         while let Some(func_index) = self.compile_queue.pop() {
@@ -1880,7 +1880,7 @@ pub struct JitStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
+    use std::sync::atomic::AtomicU32;
     use nostos_vm::value::Chunk;
 
     #[test]
@@ -1901,11 +1901,11 @@ mod tests {
             name: "identity".to_string(),
             arity: 1,
             param_names: vec!["n".to_string()],
-            code: Rc::new(chunk),
+            code: Arc::new(chunk),
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: Cell::new(0),
+            call_count: AtomicU32::new(0),
             debug_symbols: vec![],
         }
     }
@@ -1926,11 +1926,11 @@ mod tests {
             name: "add1".to_string(),
             arity: 1,
             param_names: vec!["n".to_string()],
-            code: Rc::new(chunk),
+            code: Arc::new(chunk),
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: Cell::new(0),
+            call_count: AtomicU32::new(0),
             debug_symbols: vec![],
         }
     }
@@ -1993,13 +1993,13 @@ mod tests {
         // SubInt r3, r0, r1  ; r3 = n - 1 (else branch starts here, IP=4)
         chunk.code.push(Instruction::SubInt(3, 0, 1));
         // CallSelf r4, [r3]  ; r4 = fib(n-1)
-        chunk.code.push(Instruction::CallSelf(4, Rc::new([3])));
+        chunk.code.push(Instruction::CallSelf(4, Arc::new([3])));
         // LoadConst r5, 1    ; r5 = 2
         chunk.code.push(Instruction::LoadConst(5, 1));
         // SubInt r6, r0, r5  ; r6 = n - 2
         chunk.code.push(Instruction::SubInt(6, 0, 5));
         // CallSelf r7, [r6]  ; r7 = fib(n-2)
-        chunk.code.push(Instruction::CallSelf(7, Rc::new([6])));
+        chunk.code.push(Instruction::CallSelf(7, Arc::new([6])));
         // AddInt r8, r4, r7  ; r8 = fib(n-1) + fib(n-2)
         chunk.code.push(Instruction::AddInt(8, 4, 7));
         // Return r8
@@ -2011,11 +2011,11 @@ mod tests {
             name: "fib".to_string(),
             arity: 1,
             param_names: vec!["n".to_string()],
-            code: Rc::new(chunk),
+            code: Arc::new(chunk),
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: Cell::new(0),
+            call_count: AtomicU32::new(0),
             debug_symbols: vec![],
         }
     }
@@ -2096,7 +2096,7 @@ mod tests {
         // IP=6: r7 = i + 1
         chunk.code.push(Instruction::AddInt(7, 1, 8));
         // IP=7: tail call: sumArray(arr, i+1, acc+arr[i])
-        chunk.code.push(Instruction::TailCallSelf(Rc::new([0, 7, 6])));
+        chunk.code.push(Instruction::TailCallSelf(Arc::new([0, 7, 6])));
         // IP=8: return acc (base case)
         chunk.code.push(Instruction::Return(2));
 
@@ -2106,11 +2106,11 @@ mod tests {
             name: "sumArray".to_string(),
             arity: 3,
             param_names: vec!["arr".to_string(), "i".to_string(), "acc".to_string()],
-            code: Rc::new(chunk),
+            code: Arc::new(chunk),
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: Cell::new(0),
+            call_count: AtomicU32::new(0),
             debug_symbols: vec![],
         }
     }
@@ -2213,11 +2213,11 @@ mod tests {
             name: "countdown".to_string(),
             arity: 1,
             param_names: vec!["n".to_string()],
-            code: Rc::new(chunk),
+            code: Arc::new(chunk),
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: Cell::new(0),
+            call_count: AtomicU32::new(0),
             debug_symbols: vec![],
         }
     }
@@ -2292,11 +2292,11 @@ mod tests {
             name: "sumTo".to_string(),
             arity: 1,
             param_names: vec!["n".to_string()],
-            code: Rc::new(chunk),
+            code: Arc::new(chunk),
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: Cell::new(0),
+            call_count: AtomicU32::new(0),
             debug_symbols: vec![],
         }
     }
@@ -2397,11 +2397,11 @@ mod tests {
             name: "sumArray".to_string(),
             arity: 1,
             param_names: vec!["arr".to_string()],
-            code: Rc::new(chunk),
+            code: Arc::new(chunk),
             module: None,
             source_span: None,
             jit_code: None,
-            call_count: Cell::new(0),
+            call_count: AtomicU32::new(0),
             debug_symbols: vec![],
         }
     }
