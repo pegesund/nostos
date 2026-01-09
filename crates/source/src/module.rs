@@ -29,6 +29,9 @@ pub struct Module {
     /// Import statements for this module
     pub imports: Vec<String>,
 
+    /// Use statements for this module (e.g., "use nalgebra.*")
+    pub use_stmts: Vec<String>,
+
     /// All definitions in this module, keyed by base name
     definitions: HashMap<String, DefinitionGroup>,
 
@@ -46,6 +49,7 @@ impl Module {
         Self {
             path,
             imports: Vec::new(),
+            use_stmts: Vec::new(),
             definitions: HashMap::new(),
             groups: Vec::new(),
             dirty: false,
@@ -123,6 +127,12 @@ impl Module {
     /// Set imports
     pub fn set_imports(&mut self, imports: Vec<String>) {
         self.imports = imports;
+        self.dirty = true;
+    }
+
+    /// Set use statements
+    pub fn set_use_stmts(&mut self, use_stmts: Vec<String>) {
+        self.use_stmts = use_stmts;
         self.dirty = true;
     }
 

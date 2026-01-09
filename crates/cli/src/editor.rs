@@ -434,6 +434,8 @@ pub struct CodeEditor {
     ac_state: AutocompleteState,
     /// Module name being edited (e.g., "Math" when editing "Math.add")
     module_name: Option<String>,
+    /// Function name being edited (the simple name, e.g., "main" or "add")
+    function_name: Option<String>,
     /// Whether editor is in read-only mode (for eval'd functions)
     read_only: bool,
     /// Current compile status
@@ -463,6 +465,7 @@ impl CodeEditor {
             autocomplete: Autocomplete::new(),
             ac_state: AutocompleteState::new(),
             module_name: None,
+            function_name: None,
             read_only: false,
             compile_status: CompileStatus::Unknown,
             last_check_line: 0,
@@ -516,13 +519,30 @@ impl CodeEditor {
             None => return,
         };
 
-        // Use empty string for unnamed modules
-        let module_name = self.module_name.clone().unwrap_or_default();
-
         let content = self.content.join("\n");
 
         // Try to compile via the engine
         let eng = engine.borrow();
+
+        // Determine the module name for compile context
+        // If module_name is not set but we have a function_name, try to look up the module
+        let module_name = match &self.module_name {
+            Some(m) => m.clone(),
+            None => {
+                // Try to find the module for this function
+                if let Some(ref fn_name) = self.function_name {
+                    eng.get_function_module(fn_name).unwrap_or_default()
+                } else {
+                    String::new()
+                }
+            }
+        };
+
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+            use std::io::Write;
+            let _ = writeln!(f, "[Editor.check_compile] module_name={:?}, function_name={:?}, resolved_module={:?}",
+                self.module_name, self.function_name, module_name);
+        }
 
         match eng.check_module_compiles(&module_name, &content) {
             Ok(()) => {
@@ -563,7 +583,13 @@ impl CodeEditor {
     /// This extracts the module context for autocomplete
     pub fn with_function_name(mut self, name: &str) -> Self {
         self.module_name = extract_module_from_editor_name(name);
-        eprintln!("[Editor] with_function_name({:?}) -> module_name={:?}", name, self.module_name);
+        // Store the simple function name (part after last dot, or full name)
+        self.function_name = Some(name.rsplit('.').next().unwrap_or(name).to_string());
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+            use std::io::Write;
+            let _ = writeln!(f, "[Editor] with_function_name({:?}) -> module_name={:?}, function_name={:?}",
+                name, self.module_name, self.function_name);
+        }
         self
     }
 

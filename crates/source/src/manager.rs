@@ -277,7 +277,7 @@ impl SourceManager {
             module.add_definition(group);
         }
 
-        // Load imports for each module
+        // Load imports and use statements for each module
         for entry in WalkDir::new(defs_dir)
             .into_iter()
             .filter_map(|e| e.ok())
@@ -297,15 +297,24 @@ impl SourceManager {
             let content = fs::read_to_string(path)
                 .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
 
-            let imports: Vec<String> = content
-                .lines()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
+            let mut imports: Vec<String> = Vec::new();
+            let mut use_stmts: Vec<String> = Vec::new();
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if trimmed.starts_with("import ") {
+                    imports.push(trimmed.to_string());
+                } else if trimmed.starts_with("use ") {
+                    use_stmts.push(trimmed.to_string());
+                }
+            }
 
             let module_key = module_path_to_string(&module_path);
             if let Some(module) = self.modules.get_mut(&module_key) {
                 module.set_imports(imports);
+                module.set_use_stmts(use_stmts);
             }
         }
 
@@ -599,16 +608,40 @@ impl SourceManager {
             }
         })?;
 
-        // Extract imports
+        // Extract imports (import statements) and use statements
         let mut imports = Vec::new();
+        let mut use_stmts = Vec::new();
         for item in &parsed.items {
-            if let Item::Use(use_item) = item {
-                // Convert path of Idents to dotted string
-                let path_str: String = use_item.path.iter()
-                    .map(|ident| ident.node.as_str())
-                    .collect::<Vec<_>>()
-                    .join(".");
-                imports.push(format!("use {}", path_str));
+            match item {
+                Item::Import(import_stmt) => {
+                    // Convert path of Idents to dotted string
+                    let path_str: String = import_stmt.path.iter()
+                        .map(|ident| ident.node.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    imports.push(format!("import {}", path_str));
+                }
+                Item::Use(use_stmt) => {
+                    // Convert path of Idents to dotted string
+                    let path_str: String = use_stmt.path.iter()
+                        .map(|ident| ident.node.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    // Format based on import type
+                    let use_str = match &use_stmt.imports {
+                        nostos_syntax::ast::UseImports::All => {
+                            format!("use {}.*", path_str)
+                        }
+                        nostos_syntax::ast::UseImports::Named(items) => {
+                            let names: Vec<_> = items.iter()
+                                .map(|item| item.name.node.as_str())
+                                .collect();
+                            format!("use {}.{{{}}}", path_str, names.join(", "))
+                        }
+                    };
+                    use_stmts.push(use_str);
+                }
+                _ => {}
             }
         }
 
@@ -618,6 +651,7 @@ impl SourceManager {
             .or_insert_with(|| Module::new(module_path.clone()));
 
         module.set_imports(imports);
+        module.set_use_stmts(use_stmts);
 
         // Extract definitions
         for item in &parsed.items {
@@ -702,11 +736,18 @@ impl SourceManager {
             fs::create_dir_all(&module_dir)
                 .map_err(|e| format!("Failed to create directory: {}", e))?;
 
-            // Write imports
-            if !module.imports.is_empty() {
+            // Write imports and use statements
+            if !module.imports.is_empty() || !module.use_stmts.is_empty() {
                 let imports_path = module_dir.join("_imports.nos");
-                let imports_content = module.imports.join("\n") + "\n";
-                fs::write(&imports_path, imports_content)
+                let mut content = module.imports.join("\n");
+                if !module.imports.is_empty() && !module.use_stmts.is_empty() {
+                    content.push('\n');
+                }
+                content.push_str(&module.use_stmts.join("\n"));
+                if !content.is_empty() {
+                    content.push('\n');
+                }
+                fs::write(&imports_path, content)
                     .map_err(|e| format!("Failed to write imports: {}", e))?;
             }
 
