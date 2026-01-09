@@ -160,6 +160,8 @@ pub struct Compiler {
     current_function_name: Option<String>,
     /// Loop context stack for break/continue
     loop_stack: Vec<LoopContext>,
+    /// Line starts: byte offsets where each line begins (line 1 is at index 0)
+    line_starts: Vec<usize>,
 }
 
 /// Context for a loop being compiled (for break/continue).
@@ -213,7 +215,15 @@ pub struct TraitImplInfo {
 }
 
 impl Compiler {
-    pub fn new() -> Self {
+    pub fn new(source: &str) -> Self {
+        // Compute line start offsets for source mapping
+        let mut line_starts = vec![0]; // Line 1 starts at offset 0
+        for (i, c) in source.char_indices() {
+            if c == '\n' {
+                line_starts.push(i + 1); // Next line starts after the newline
+            }
+        }
+
         Self {
             chunk: Chunk::new(),
             locals: HashMap::new(),
@@ -233,7 +243,22 @@ impl Compiler {
             local_types: HashMap::new(),
             current_function_name: None,
             loop_stack: Vec::new(),
+            line_starts,
         }
+    }
+
+    /// Convert a byte offset to a line number (1-indexed).
+    fn offset_to_line(&self, offset: usize) -> usize {
+        // Binary search for the line containing this offset
+        match self.line_starts.binary_search(&offset) {
+            Ok(idx) => idx + 1, // Exact match: offset is at start of line
+            Err(idx) => idx,    // offset is within line idx (1-indexed)
+        }
+    }
+
+    /// Get the line number for a span.
+    fn span_line(&self, span: Span) -> usize {
+        self.offset_to_line(span.start)
     }
 
     /// Get the fully qualified name with the current module path prefix.
@@ -656,69 +681,70 @@ impl Compiler {
 
     /// Compile an expression, potentially in tail position.
     fn compile_expr_tail(&mut self, expr: &Expr, is_tail: bool) -> Result<Reg, CompileError> {
+        let line = self.span_line(expr.span());
         match expr {
             // Literals
             Expr::Int(n, _) => {
                 let dst = self.alloc_reg();
                 let idx = self.chunk.add_constant(Value::Int64(*n));
-                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                 Ok(dst)
             }
             Expr::Float(f, _) => {
                 let dst = self.alloc_reg();
                 let idx = self.chunk.add_constant(Value::Float64(*f));
-                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                 Ok(dst)
             }
             // Typed integer literals
             Expr::Int8(n, _) => {
                 let dst = self.alloc_reg();
                 let idx = self.chunk.add_constant(Value::Int8(*n));
-                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                 Ok(dst)
             }
             Expr::Int16(n, _) => {
                 let dst = self.alloc_reg();
                 let idx = self.chunk.add_constant(Value::Int16(*n));
-                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                 Ok(dst)
             }
             Expr::Int32(n, _) => {
                 let dst = self.alloc_reg();
                 let idx = self.chunk.add_constant(Value::Int32(*n));
-                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                 Ok(dst)
             }
             // Unsigned integer literals
             Expr::UInt8(n, _) => {
                 let dst = self.alloc_reg();
                 let idx = self.chunk.add_constant(Value::UInt8(*n));
-                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                 Ok(dst)
             }
             Expr::UInt16(n, _) => {
                 let dst = self.alloc_reg();
                 let idx = self.chunk.add_constant(Value::UInt16(*n));
-                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                 Ok(dst)
             }
             Expr::UInt32(n, _) => {
                 let dst = self.alloc_reg();
                 let idx = self.chunk.add_constant(Value::UInt32(*n));
-                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                 Ok(dst)
             }
             Expr::UInt64(n, _) => {
                 let dst = self.alloc_reg();
                 let idx = self.chunk.add_constant(Value::UInt64(*n));
-                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                 Ok(dst)
             }
             // Float32 literal
             Expr::Float32(f, _) => {
                 let dst = self.alloc_reg();
                 let idx = self.chunk.add_constant(Value::Float32(*f));
-                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                 Ok(dst)
             }
             // BigInt literal
@@ -727,7 +753,7 @@ impl Compiler {
                 use num_bigint::BigInt;
                 let big = s.parse::<BigInt>().unwrap_or_default();
                 let idx = self.chunk.add_constant(Value::BigInt(Rc::new(big)));
-                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                 Ok(dst)
             }
             // Decimal literal
@@ -736,15 +762,15 @@ impl Compiler {
                 use rust_decimal::Decimal;
                 let dec = s.parse::<Decimal>().unwrap_or_default();
                 let idx = self.chunk.add_constant(Value::Decimal(dec));
-                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                 Ok(dst)
             }
             Expr::Bool(b, _) => {
                 let dst = self.alloc_reg();
                 if *b {
-                    self.chunk.emit(Instruction::LoadTrue(dst), 0);
+                    self.chunk.emit(Instruction::LoadTrue(dst), line);
                 } else {
-                    self.chunk.emit(Instruction::LoadFalse(dst), 0);
+                    self.chunk.emit(Instruction::LoadFalse(dst), line);
                 }
                 Ok(dst)
             }
@@ -753,7 +779,7 @@ impl Compiler {
                     StringLit::Plain(s) => {
                         let dst = self.alloc_reg();
                         let idx = self.chunk.add_constant(Value::String(Rc::new(s.clone())));
-                        self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                        self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                         Ok(dst)
                     }
                     StringLit::Interpolated(parts) => {
@@ -764,12 +790,12 @@ impl Compiler {
             Expr::Char(c, _) => {
                 let dst = self.alloc_reg();
                 let idx = self.chunk.add_constant(Value::Char(*c));
-                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                 Ok(dst)
             }
             Expr::Unit(_) => {
                 let dst = self.alloc_reg();
-                self.chunk.emit(Instruction::LoadUnit(dst), 0);
+                self.chunk.emit(Instruction::LoadUnit(dst), line);
                 Ok(dst)
             }
 
@@ -781,14 +807,14 @@ impl Compiler {
                 } else if let Some(&capture_idx) = self.capture_indices.get(name) {
                     // It's a captured variable - load from closure environment
                     let dst = self.alloc_reg();
-                    self.chunk.emit(Instruction::GetCapture(dst, capture_idx), 0);
+                    self.chunk.emit(Instruction::GetCapture(dst, capture_idx), line);
                     Ok(dst)
                 } else if self.functions.contains_key(name) {
                     // It's a function reference
                     let dst = self.alloc_reg();
                     let func = self.functions.get(name).unwrap().clone();
                     let idx = self.chunk.add_constant(Value::Function(func));
-                    self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                    self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                     Ok(dst)
                 } else {
                     Err(CompileError::UnknownVariable {
@@ -844,7 +870,7 @@ impl Compiler {
                         // Cons each item onto the tail in reverse order
                         for item_reg in item_regs.into_iter().rev() {
                             let new_reg = self.alloc_reg();
-                            self.chunk.emit(Instruction::Cons(new_reg, item_reg, result_reg), 0);
+                            self.chunk.emit(Instruction::Cons(new_reg, item_reg, result_reg), line);
                             result_reg = new_reg;
                         }
                         Ok(result_reg)
@@ -857,7 +883,7 @@ impl Compiler {
                             regs.push(reg);
                         }
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::MakeList(dst, regs.into()), 0);
+                        self.chunk.emit(Instruction::MakeList(dst, regs.into()), line);
                         Ok(dst)
                     }
                 }
@@ -871,7 +897,7 @@ impl Compiler {
                     regs.push(reg);
                 }
                 let dst = self.alloc_reg();
-                self.chunk.emit(Instruction::MakeTuple(dst, regs.into()), 0);
+                self.chunk.emit(Instruction::MakeTuple(dst, regs.into()), line);
                 Ok(dst)
             }
 
@@ -885,7 +911,7 @@ impl Compiler {
                 let obj_reg = self.compile_expr_tail(obj, false)?;
                 let dst = self.alloc_reg();
                 let field_idx = self.chunk.add_constant(Value::String(Rc::new(field.node.clone())));
-                self.chunk.emit(Instruction::GetField(dst, obj_reg, field_idx), 0);
+                self.chunk.emit(Instruction::GetField(dst, obj_reg, field_idx), line);
                 Ok(dst)
             }
 
@@ -928,10 +954,10 @@ impl Compiler {
                         let func_idx = *self.function_indices.get(&resolved_name)
                             .expect("Function should have been assigned an index");
                         if is_tail {
-                            self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), 0);
+                            self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
                             return Ok(0);
                         } else {
-                            self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), 0);
+                            self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
                             return Ok(dst);
                         }
                     }
@@ -956,10 +982,10 @@ impl Compiler {
                         let func_idx = *self.function_indices.get(&qualified_method)
                             .expect("Trait method should have been assigned an index");
                         if is_tail {
-                            self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), 0);
+                            self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
                             return Ok(0);
                         } else {
-                            self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), 0);
+                            self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
                             return Ok(dst);
                         }
                     }
@@ -978,7 +1004,7 @@ impl Compiler {
                 let coll_reg = self.compile_expr_tail(coll, false)?;
                 let idx_reg = self.compile_expr_tail(index, false)?;
                 let dst = self.alloc_reg();
-                self.chunk.emit(Instruction::Index(dst, coll_reg, idx_reg), 0);
+                self.chunk.emit(Instruction::Index(dst, coll_reg, idx_reg), line);
                 Ok(dst)
             }
 
@@ -991,7 +1017,7 @@ impl Compiler {
                     pair_regs.push((key_reg, val_reg));
                 }
                 let dst = self.alloc_reg();
-                self.chunk.emit(Instruction::MakeMap(dst, pair_regs.into()), 0);
+                self.chunk.emit(Instruction::MakeMap(dst, pair_regs.into()), line);
                 Ok(dst)
             }
 
@@ -1003,7 +1029,7 @@ impl Compiler {
                     regs.push(reg);
                 }
                 let dst = self.alloc_reg();
-                self.chunk.emit(Instruction::MakeSet(dst, regs.into()), 0);
+                self.chunk.emit(Instruction::MakeSet(dst, regs.into()), line);
                 Ok(dst)
             }
 
@@ -1023,10 +1049,10 @@ impl Compiler {
             Expr::Send(pid_expr, msg_expr, _) => {
                 let pid_reg = self.compile_expr_tail(pid_expr, false)?;
                 let msg_reg = self.compile_expr_tail(msg_expr, false)?;
-                self.chunk.emit(Instruction::Send(pid_reg, msg_reg), 0);
+                self.chunk.emit(Instruction::Send(pid_reg, msg_reg), line);
                 // Send returns unit
                 let dst = self.alloc_reg();
-                self.chunk.emit(Instruction::LoadUnit(dst), 0);
+                self.chunk.emit(Instruction::LoadUnit(dst), line);
                 Ok(dst)
             }
 
@@ -1041,15 +1067,15 @@ impl Compiler {
                 let dst = self.alloc_reg();
                 match kind {
                     SpawnKind::Normal => {
-                        self.chunk.emit(Instruction::Spawn(dst, func_reg, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::Spawn(dst, func_reg, arg_regs.into()), line);
                     }
                     SpawnKind::Linked => {
-                        self.chunk.emit(Instruction::SpawnLink(dst, func_reg, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::SpawnLink(dst, func_reg, arg_regs.into()), line);
                     }
                     SpawnKind::Monitored => {
                         // SpawnMonitor returns (pid, ref)
                         let ref_dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::SpawnMonitor(dst, ref_dst, func_reg, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::SpawnMonitor(dst, ref_dst, func_reg, arg_regs.into()), line);
                     }
                 }
                 Ok(dst)
@@ -1059,7 +1085,7 @@ impl Compiler {
             Expr::Receive(arms, _after, _) => {
                 // Emit receive instruction - this blocks until a message arrives
                 // and places it in register 0
-                self.chunk.emit(Instruction::Receive, 0);
+                self.chunk.emit(Instruction::Receive, line);
 
                 // The message is in register 0 after Receive completes
                 // We need to match it against the arms
@@ -1076,7 +1102,7 @@ impl Compiler {
                     let (match_success, bindings) = self.compile_pattern_test(&arm.pattern, msg_reg)?;
 
                     let next_arm_jump = if !is_last {
-                        Some(self.chunk.emit(Instruction::JumpIfFalse(match_success, 0), 0))
+                        Some(self.chunk.emit(Instruction::JumpIfFalse(match_success, 0), line))
                     } else {
                         None
                     };
@@ -1090,11 +1116,11 @@ impl Compiler {
                     if let Some(ref guard) = arm.guard {
                         let guard_reg = self.compile_expr_tail(guard, false)?;
                         if !is_last {
-                            let guard_fail = self.chunk.emit(Instruction::JumpIfFalse(guard_reg, 0), 0);
+                            let guard_fail = self.chunk.emit(Instruction::JumpIfFalse(guard_reg, 0), line);
                             // Compile body
                             let body_reg = self.compile_expr_tail(&arm.body, is_tail)?;
-                            self.chunk.emit(Instruction::Move(dst, body_reg), 0);
-                            end_jumps.push(self.chunk.emit(Instruction::Jump(0), 0));
+                            self.chunk.emit(Instruction::Move(dst, body_reg), line);
+                            end_jumps.push(self.chunk.emit(Instruction::Jump(0), line));
                             // Patch guard fail jump
                             let here = self.chunk.code.len() as i16;
                             if let Instruction::JumpIfFalse(_, ref mut offset) = self.chunk.code[guard_fail] {
@@ -1103,14 +1129,14 @@ impl Compiler {
                         } else {
                             // Last arm - no jump needed for guard failure
                             let body_reg = self.compile_expr_tail(&arm.body, is_tail)?;
-                            self.chunk.emit(Instruction::Move(dst, body_reg), 0);
+                            self.chunk.emit(Instruction::Move(dst, body_reg), line);
                         }
                     } else {
                         // No guard - compile body directly
                         let body_reg = self.compile_expr_tail(&arm.body, is_tail)?;
-                        self.chunk.emit(Instruction::Move(dst, body_reg), 0);
+                        self.chunk.emit(Instruction::Move(dst, body_reg), line);
                         if !is_last {
-                            end_jumps.push(self.chunk.emit(Instruction::Jump(0), 0));
+                            end_jumps.push(self.chunk.emit(Instruction::Jump(0), line));
                         }
                     }
 
@@ -1332,6 +1358,9 @@ impl Compiler {
 
     /// Compile a binary operation.
     fn compile_binop(&mut self, op: &BinOp, left: &Expr, right: &Expr) -> Result<Reg, CompileError> {
+        // Compute line number from the left operand's span
+        let line = self.span_line(left.span());
+
         // Handle short-circuit operators first
         match op {
             BinOp::And => return self.compile_and(left, right),
@@ -1390,11 +1419,11 @@ impl Compiler {
             }
             BinOp::NotEq => {
                 if is_float {
-                    self.chunk.emit(Instruction::EqFloat(dst, left_reg, right_reg), 0);
+                    self.chunk.emit(Instruction::EqFloat(dst, left_reg, right_reg), line);
                 } else {
-                    self.chunk.emit(Instruction::Eq(dst, left_reg, right_reg), 0);
+                    self.chunk.emit(Instruction::Eq(dst, left_reg, right_reg), line);
                 }
-                self.chunk.emit(Instruction::Not(dst, dst), 0);
+                self.chunk.emit(Instruction::Not(dst, dst), line);
                 return Ok(dst);
             }
             BinOp::Lt => {
@@ -1431,7 +1460,7 @@ impl Compiler {
             BinOp::And | BinOp::Or | BinOp::Pipe => unreachable!(),
         };
 
-        self.chunk.emit(instr, 0);
+        self.chunk.emit(instr, line);
         Ok(dst)
     }
 
@@ -1492,6 +1521,9 @@ impl Compiler {
 
     /// Compile a function call, with tail call optimization.
     fn compile_call(&mut self, func: &Expr, args: &[Expr], is_tail: bool) -> Result<Reg, CompileError> {
+        // Get line number for this call expression
+        let line = self.span_line(func.span());
+
         // Try to extract a qualified function name from the expression
         let maybe_qualified_name = self.extract_qualified_name(func);
 
@@ -1499,17 +1531,17 @@ impl Compiler {
         if let Some(ref name) = maybe_qualified_name {
             if name == "throw" && args.len() == 1 {
                 let arg_reg = self.compile_expr_tail(&args[0], false)?;
-                self.chunk.emit(Instruction::Throw(arg_reg), 0);
+                self.chunk.emit(Instruction::Throw(arg_reg), line);
                 // Throw doesn't return, but we need to return a register
                 // Return a unit register since execution won't continue
                 let dst = self.alloc_reg();
-                self.chunk.emit(Instruction::LoadUnit(dst), 0);
+                self.chunk.emit(Instruction::LoadUnit(dst), line);
                 return Ok(dst);
             }
             // Handle self() - get current process ID
             if name == "self" && args.is_empty() {
                 let dst = self.alloc_reg();
-                self.chunk.emit(Instruction::SelfPid(dst), 0);
+                self.chunk.emit(Instruction::SelfPid(dst), line);
                 return Ok(dst);
             }
         }
@@ -1694,10 +1726,10 @@ impl Compiler {
                 if is_self_call {
                     // Direct self-call - no lookup needed!
                     if is_tail {
-                        self.chunk.emit(Instruction::TailCallSelf(arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::TailCallSelf(arg_regs.into()), line);
                         return Ok(0);
                     } else {
-                        self.chunk.emit(Instruction::CallSelf(dst, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::CallSelf(dst, arg_regs.into()), line);
                         return Ok(dst);
                     }
                 } else {
@@ -1705,10 +1737,10 @@ impl Compiler {
                     let func_idx = *self.function_indices.get(&resolved_name)
                         .expect("Function should have been assigned an index");
                     if is_tail {
-                        self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
                         return Ok(0);
                     } else {
-                        self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), 0);
+                        self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
                         return Ok(dst);
                     }
                 }
@@ -1720,10 +1752,10 @@ impl Compiler {
         let dst = self.alloc_reg();
 
         if is_tail {
-            self.chunk.emit(Instruction::TailCall(func_reg, arg_regs.into()), 0);
+            self.chunk.emit(Instruction::TailCall(func_reg, arg_regs.into()), line);
             Ok(0)
         } else {
-            self.chunk.emit(Instruction::Call(dst, func_reg, arg_regs.into()), 0);
+            self.chunk.emit(Instruction::Call(dst, func_reg, arg_regs.into()), line);
             Ok(dst)
         }
     }
@@ -2968,15 +3000,9 @@ fn collect_pattern_vars(pat: &Pattern, vars: &mut std::collections::HashSet<Stri
     }
 }
 
-impl Default for Compiler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Compile a complete module.
-pub fn compile_module(module: &Module) -> Result<Compiler, CompileError> {
-    let mut compiler = Compiler::new();
+pub fn compile_module(module: &Module, source: &str) -> Result<Compiler, CompileError> {
+    let mut compiler = Compiler::new(source);
     compiler.compile_items(&module.items)?;
     Ok(compiler)
 }
@@ -3140,7 +3166,7 @@ mod tests {
             return Err(format!("Parse error: {:?}", errors));
         }
         let module = module_opt.ok_or_else(|| "Parse returned no module".to_string())?;
-        let compiler = compile_module(&module).map_err(|e| format!("Compile error: {:?}", e))?;
+        let compiler = compile_module(&module, source).map_err(|e| format!("Compile error: {:?}", e))?;
 
         let mut runtime = Runtime::new();
         for (name, func) in compiler.get_all_functions() {
@@ -4840,7 +4866,7 @@ mod tests {
             panic!("Unexpected parse error: {:?}", errors);
         }
         let module = module_opt.expect("Parse returned no module");
-        match compile_module(&module) {
+        match compile_module(&module, source) {
             Err(e) => e,
             Ok(_) => panic!("Expected compile error, but compilation succeeded"),
         }

@@ -24,7 +24,7 @@ fn bench_vm() -> (i64, std::time::Duration) {
     assert!(errors.is_empty(), "Parse errors: {:?}", errors);
     let module = module.unwrap();
 
-    let compiler = compile_module(&module).expect("Compile failed");
+    let compiler = compile_module(&module, FIB_SOURCE).expect("Compile failed");
 
     let mut vm = VM::new();
     for (name, func) in compiler.get_all_functions() {
@@ -48,7 +48,7 @@ fn bench_runtime() -> (i64, std::time::Duration) {
     assert!(errors.is_empty(), "Parse errors: {:?}", errors);
     let module = module.unwrap();
 
-    let compiler = compile_module(&module).expect("Compile failed");
+    let compiler = compile_module(&module, FIB_SOURCE).expect("Compile failed");
 
     let mut runtime = Runtime::new();
     for (name, func) in compiler.get_all_functions() {

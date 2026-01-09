@@ -30,6 +30,46 @@ pub struct CallFrame {
     pub return_reg: Option<Reg>,
 }
 
+impl CallFrame {
+    /// Get the current source line number (1-indexed), or 0 if unavailable.
+    /// Note: IP is incremented before instruction execution, so we look at ip-1
+    /// to find the line number of the instruction that was actually executing.
+    pub fn current_line(&self) -> usize {
+        // Use ip-1 because IP is incremented before execution
+        let actual_ip = if self.ip > 0 { self.ip - 1 } else { 0 };
+        if actual_ip < self.function.code.lines.len() {
+            self.function.code.lines[actual_ip]
+        } else if !self.function.code.lines.is_empty() {
+            // If IP is past the end (e.g., after last instruction), use last line
+            *self.function.code.lines.last().unwrap()
+        } else {
+            0
+        }
+    }
+}
+
+/// Format a stack trace from call frames.
+/// Returns a human-readable string showing the call stack.
+pub fn format_stack_trace(frames: &[CallFrame]) -> String {
+    if frames.is_empty() {
+        return String::from("  <no stack frames>");
+    }
+
+    let mut result = String::new();
+    // Print frames from innermost (most recent) to outermost
+    for (i, frame) in frames.iter().rev().enumerate() {
+        let line = frame.current_line();
+        let func_name = &frame.function.name;
+
+        if line > 0 {
+            result.push_str(&format!("  {}. {} (line {})\n", i + 1, func_name, line));
+        } else {
+            result.push_str(&format!("  {}. {}\n", i + 1, func_name));
+        }
+    }
+    result
+}
+
 /// Exception handler info.
 #[derive(Clone)]
 pub struct ExceptionHandler {

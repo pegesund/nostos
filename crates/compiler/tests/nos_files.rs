@@ -114,7 +114,7 @@ fn run_nos_source(source: &str) -> Result<Value, String> {
     let module = module_opt.ok_or_else(|| "Parse returned no module".to_string())?;
 
     // Compile
-    let compiler = compile_module(&module).map_err(|e| format!("Compile error: {:?}", e))?;
+    let compiler = compile_module(&module, source).map_err(|e| format!("Compile error: {:?}", e))?;
 
     // Create Runtime and load functions/types
     let mut runtime = Runtime::new();
@@ -147,7 +147,7 @@ fn run_nos_source_gc(source: &str) -> Result<String, String> {
     let module = module_opt.ok_or_else(|| "Parse returned no module".to_string())?;
 
     // Compile
-    let compiler = compile_module(&module).map_err(|e| format!("Compile error: {:?}", e))?;
+    let compiler = compile_module(&module, source).map_err(|e| format!("Compile error: {:?}", e))?;
 
     // Create Runtime and load functions/types
     let mut runtime = Runtime::new();

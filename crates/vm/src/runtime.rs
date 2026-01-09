@@ -24,7 +24,7 @@ use crate::process::ExitReason;
 use crate::scheduler::Scheduler;
 use crate::value::TypeValue;
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, Value};
-use crate::process::CallFrame;
+use crate::process::{CallFrame, format_stack_trace};
 
 /// Result of running a single process step.
 pub enum ProcessStepResult {
@@ -408,14 +408,16 @@ impl Runtime {
                 let constants_values: Vec<Value> = constants.iter().cloned().collect();
                 proc.frames[frame_idx].ip += 1;
 
+                // Capture stack trace before dropping the lock (in case of error)
+                let stack_trace = format_stack_trace(&proc.frames);
                 drop(proc);
-                let result = self.execute_ipc_instruction(pid, instr_clone, &constants_values)?;
-                match result {
-                    ProcessStepResult::Continue => {
+                match self.execute_ipc_instruction(pid, instr_clone, &constants_values) {
+                    Ok(ProcessStepResult::Continue) => {
                         proc = process_handle.lock();
                         continue;
                     }
-                    other => return Ok(other),
+                    Ok(other) => return Ok(other),
+                    Err(err) => return Err(err.with_stack_trace(stack_trace)),
                 }
             }
 
@@ -425,9 +427,14 @@ impl Runtime {
             // SAFETY: ip < code_len was checked above, constants are immutable
             let constants = unsafe { std::slice::from_raw_parts(constants_ptr, constants_len) };
 
-            match self.execute_local_instruction_inline(&mut proc, frame_idx, instr, constants, &functions, &function_list, &natives, &types, &jit_int_functions, &jit_loop_array_functions)? {
-                ProcessStepResult::Continue => continue,
-                other => return Ok(other),
+            match self.execute_local_instruction_inline(&mut proc, frame_idx, instr, constants, &functions, &function_list, &natives, &types, &jit_int_functions, &jit_loop_array_functions) {
+                Ok(ProcessStepResult::Continue) => continue,
+                Ok(other) => return Ok(other),
+                Err(err) => {
+                    // Capture stack trace before returning error
+                    let stack_trace = format_stack_trace(&proc.frames);
+                    return Err(err.with_stack_trace(stack_trace));
+                }
             }
         }
     }

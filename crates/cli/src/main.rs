@@ -5,9 +5,158 @@ use nostos_jit::{JitCompiler, JitConfig};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::gc::GcValue;
 use nostos_vm::runtime::Runtime;
+use nostos_vm::value::RuntimeError;
 use std::env;
 use std::fs;
 use std::process::ExitCode;
+
+/// Format a runtime error as JSON for debugger integration.
+fn format_error_json(error: &RuntimeError, file_path: &str) -> String {
+    // Extract the error type, message, and stack trace
+    let (error_type, message, stack_trace) = extract_error_info(error);
+
+    // Build JSON manually (avoid adding serde dependency just for this)
+    let mut json = String::from("{\n");
+    json.push_str(&format!("  \"file\": {},\n", json_string(file_path)));
+    json.push_str(&format!("  \"error_type\": {},\n", json_string(&error_type)));
+    json.push_str(&format!("  \"message\": {},\n", json_string(&message)));
+    json.push_str("  \"stack_trace\": [\n");
+
+    for (i, frame) in stack_trace.iter().enumerate() {
+        json.push_str("    {\n");
+        json.push_str(&format!("      \"function\": {},\n", json_string(&frame.0)));
+        json.push_str(&format!("      \"line\": {}\n", frame.1));
+        json.push_str("    }");
+        if i < stack_trace.len() - 1 {
+            json.push(',');
+        }
+        json.push('\n');
+    }
+
+    json.push_str("  ]\n");
+    json.push_str("}");
+    json
+}
+
+/// Extract error type, message, and stack frames from a RuntimeError.
+fn extract_error_info(error: &RuntimeError) -> (String, String, Vec<(String, usize)>) {
+    match error {
+        RuntimeError::WithStackTrace { error: inner, stack_trace } => {
+            let (error_type, message) = get_error_type_and_message(inner);
+            let frames = parse_stack_trace(stack_trace);
+            (error_type, message, frames)
+        }
+        _ => {
+            let (error_type, message) = get_error_type_and_message(error);
+            (error_type, message, vec![])
+        }
+    }
+}
+
+/// Get the error type name and message from a RuntimeError.
+fn get_error_type_and_message(error: &RuntimeError) -> (String, String) {
+    match error {
+        RuntimeError::TypeError { expected, found } => {
+            ("TypeError".to_string(), format!("expected {}, got {}", expected, found))
+        }
+        RuntimeError::DivisionByZero => {
+            ("DivisionByZero".to_string(), "Division by zero".to_string())
+        }
+        RuntimeError::IndexOutOfBounds { index, length } => {
+            ("IndexOutOfBounds".to_string(), format!("Index {} out of bounds (length {})", index, length))
+        }
+        RuntimeError::UnknownField { type_name, field } => {
+            ("UnknownField".to_string(), format!("Unknown field '{}' on type '{}'", field, type_name))
+        }
+        RuntimeError::ImmutableField { field } => {
+            ("ImmutableField".to_string(), format!("Cannot mutate immutable field '{}'", field))
+        }
+        RuntimeError::ImmutableBinding { name } => {
+            ("ImmutableBinding".to_string(), format!("Cannot mutate immutable binding '{}'", name))
+        }
+        RuntimeError::UnknownVariable(name) => {
+            ("UnknownVariable".to_string(), format!("Unknown variable '{}'", name))
+        }
+        RuntimeError::UnknownFunction(name) => {
+            ("UnknownFunction".to_string(), format!("Unknown function '{}'", name))
+        }
+        RuntimeError::ArityMismatch { expected, found } => {
+            ("ArityMismatch".to_string(), format!("Expected {} arguments, got {}", expected, found))
+        }
+        RuntimeError::MatchFailed => {
+            ("MatchFailed".to_string(), "Pattern match failed".to_string())
+        }
+        RuntimeError::AssertionFailed(msg) => {
+            ("AssertionFailed".to_string(), msg.clone())
+        }
+        RuntimeError::Panic(msg) => {
+            ("Panic".to_string(), msg.clone())
+        }
+        RuntimeError::StackOverflow => {
+            ("StackOverflow".to_string(), "Stack overflow".to_string())
+        }
+        RuntimeError::ProcessNotFound(pid) => {
+            ("ProcessNotFound".to_string(), format!("Process not found: {:?}", pid))
+        }
+        RuntimeError::Timeout => {
+            ("Timeout".to_string(), "Timeout".to_string())
+        }
+        RuntimeError::IOError(msg) => {
+            ("IOError".to_string(), msg.clone())
+        }
+        RuntimeError::WithStackTrace { error, .. } => {
+            get_error_type_and_message(error)
+        }
+    }
+}
+
+/// Parse a formatted stack trace string into (function_name, line_number) pairs.
+fn parse_stack_trace(trace: &str) -> Vec<(String, usize)> {
+    let mut frames = Vec::new();
+    for line in trace.lines() {
+        let line = line.trim();
+        // Format: "1. function_name (line N)" or "1. function_name"
+        if let Some(rest) = line.strip_prefix(|c: char| c.is_ascii_digit()) {
+            let rest = rest.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.');
+            let rest = rest.trim();
+
+            if let Some(paren_pos) = rest.find(" (line ") {
+                let func_name = rest[..paren_pos].to_string();
+                let line_part = &rest[paren_pos + 7..];
+                if let Some(end_paren) = line_part.find(')') {
+                    if let Ok(line_num) = line_part[..end_paren].parse::<usize>() {
+                        frames.push((func_name, line_num));
+                        continue;
+                    }
+                }
+            }
+            // No line number
+            frames.push((rest.to_string(), 0));
+        }
+    }
+    frames
+}
+
+/// Escape a string for JSON output.
+fn json_string(s: &str) -> String {
+    let mut result = String::with_capacity(s.len() + 2);
+    result.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => result.push_str("\\\""),
+            '\\' => result.push_str("\\\\"),
+            '\n' => result.push_str("\\n"),
+            '\r' => result.push_str("\\r"),
+            '\t' => result.push_str("\\t"),
+            c if c.is_control() => {
+                result.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => result.push(c),
+        }
+    }
+    result.push('"');
+    result
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -25,6 +174,8 @@ fn main() -> ExitCode {
 
     // Parse options
     let mut file_idx = 1;
+    let mut enable_jit = true;
+    let mut json_errors = false;
 
     for (i, arg) in args.iter().enumerate().skip(1) {
         if arg.starts_with("--") || arg.starts_with("-") {
@@ -34,13 +185,23 @@ fn main() -> ExitCode {
                 println!("Run a Nostos program file.");
                 println!();
                 println!("Options:");
-                println!("  --help     Show this help message");
-                println!("  --version  Show version information");
+                println!("  --help         Show this help message");
+                println!("  --version      Show version information");
+                println!("  --no-jit       Disable JIT compilation (for debugging)");
+                println!("  --json-errors  Output errors as JSON (for debugger integration)");
                 return ExitCode::SUCCESS;
             }
             if arg == "--version" || arg == "-v" {
                 println!("nostos {}", env!("CARGO_PKG_VERSION"));
                 return ExitCode::SUCCESS;
+            }
+            if arg == "--no-jit" {
+                enable_jit = false;
+                continue;
+            }
+            if arg == "--json-errors" {
+                json_errors = true;
+                continue;
             }
         } else {
             file_idx = i;
@@ -81,7 +242,7 @@ fn main() -> ExitCode {
     };
 
     // Compile
-    let compiler = match compile_module(&module) {
+    let compiler = match compile_module(&module, &source) {
         Ok(c) => c,
         Err(e) => {
             let source_error = e.to_source_error();
@@ -102,24 +263,26 @@ fn main() -> ExitCode {
         runtime.register_type(&name, type_val);
     }
 
-    // JIT compile suitable functions
-    if let Ok(mut jit) = JitCompiler::new(JitConfig::default()) {
-        for idx in 0..function_list.len() {
-            // Queue all functions for JIT compilation
-            jit.queue_compilation(idx as u16);
-        }
-        // Process the queue
-        if let Ok(compiled) = jit.process_queue(&function_list) {
-            if compiled > 0 {
-                // Register JIT functions with the runtime
-                for (idx, _func) in function_list.iter().enumerate() {
-                    // Register pure numeric JIT functions
-                    if let Some(jit_fn) = jit.get_int_function(idx as u16) {
-                        runtime.register_jit_int_function(idx as u16, jit_fn);
-                    }
-                    // Register loop-based array JIT functions
-                    if let Some(jit_fn) = jit.get_loop_int64_array_function(idx as u16) {
-                        runtime.register_jit_loop_array_function(idx as u16, jit_fn);
+    // JIT compile suitable functions (unless --no-jit was specified)
+    if enable_jit {
+        if let Ok(mut jit) = JitCompiler::new(JitConfig::default()) {
+            for idx in 0..function_list.len() {
+                // Queue all functions for JIT compilation
+                jit.queue_compilation(idx as u16);
+            }
+            // Process the queue
+            if let Ok(compiled) = jit.process_queue(&function_list) {
+                if compiled > 0 {
+                    // Register JIT functions with the runtime
+                    for (idx, _func) in function_list.iter().enumerate() {
+                        // Register pure numeric JIT functions
+                        if let Some(jit_fn) = jit.get_int_function(idx as u16) {
+                            runtime.register_jit_int_function(idx as u16, jit_fn);
+                        }
+                        // Register loop-based array JIT functions
+                        if let Some(jit_fn) = jit.get_loop_int64_array_function(idx as u16) {
+                            runtime.register_jit_loop_array_function(idx as u16, jit_fn);
+                        }
                     }
                 }
             }
@@ -147,7 +310,12 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("Runtime error: {}", e);
+            if json_errors {
+                println!("{}", format_error_json(&e, file_path));
+            } else {
+                eprintln!("Runtime error in {}:", file_path);
+                eprintln!("{}", e);
+            }
             ExitCode::FAILURE
         }
     }
