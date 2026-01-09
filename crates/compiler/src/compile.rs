@@ -3155,6 +3155,19 @@ impl Compiler {
         }
     }
 
+    /// Maps binary operators to scalar method names for mixed-type operations (e.g., Vec * Float)
+    /// Returns the capitalized method suffix (e.g., "AddScalar" for +)
+    /// Convention: function name is {typeLower}{Suffix}, e.g., vecAddScalar for Vec + Float
+    fn operator_to_scalar_method(op: &BinOp) -> Option<&'static str> {
+        match op {
+            BinOp::Add => Some("AddScalar"),
+            BinOp::Sub => Some("SubScalar"),
+            BinOp::Mul => Some("MulScalar"),
+            BinOp::Div => Some("DivScalar"),
+            _ => None,
+        }
+    }
+
     /// Check if a type is a primitive type (not a custom user-defined type).
     fn is_primitive_type(type_name: &str) -> bool {
         matches!(type_name,
@@ -6253,6 +6266,65 @@ impl Compiler {
                                 // Track function call for deadlock detection
                                 self.current_fn_calls.insert(resolved_method.clone());
 
+                                self.chunk.emit(Instruction::CallDirect(dst, func_idx, vec![left_reg, right_reg].into()), line);
+                                return Ok(dst);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Scalar method fallback: if left is a custom type and right is a numeric type,
+        // try to dispatch to a scalar function (e.g., vecMulScalar for Vec * Float)
+        if let Some(scalar_method) = Self::operator_to_scalar_method(op) {
+            if let Some(left_type) = self.expr_type_name(left) {
+                if !Self::is_primitive_type(&left_type) && self.types.contains_key(&left_type) {
+                    // Check if right operand is a numeric type
+                    let right_type = self.expr_type_name(right);
+                    let right_is_numeric = right_type.as_ref().map_or(false, |t| {
+                        t == "Float" || t == "Int" || t == "Float64" || t == "Int64"
+                    }) || self.is_float_expr(right) || self.is_int_expr(right);
+
+                    if right_is_numeric {
+                        // Build the scalar function name: {module}.{typeNameLower}{ScalarMethod}
+                        // e.g., for nalgebra.Vec with mulScalar -> nalgebra.vecMulScalar
+                        let func_name = if let Some(dot_pos) = left_type.rfind('.') {
+                            let module = &left_type[..dot_pos];
+                            let type_name = &left_type[dot_pos + 1..];
+                            let type_lower = type_name.chars().next()
+                                .map(|c| c.to_lowercase().collect::<String>() + &type_name[c.len_utf8()..])
+                                .unwrap_or_else(|| type_name.to_lowercase());
+                            format!("{}.{}{}", module, type_lower, scalar_method)
+                        } else {
+                            // No module prefix
+                            let type_lower = left_type.chars().next()
+                                .map(|c| c.to_lowercase().collect::<String>() + &left_type[c.len_utf8()..])
+                                .unwrap_or_else(|| left_type.to_lowercase());
+                            format!("{}{}", type_lower, scalar_method)
+                        };
+
+                        // For scalar functions, args are (TypeValue, Float)
+                        let func_arg_types = vec![Some(left_type.clone()), Some("Float".to_string())];
+                        if let Some(resolved_func) = self.resolve_function_call(&func_name, &func_arg_types) {
+                            if self.functions.contains_key(&resolved_func) {
+                                // Compile as a function call to the scalar function
+                                let left_reg = self.compile_expr_tail(left, false)?;
+                                // Coerce right to float if it's an int
+                                let right_reg = self.compile_expr_tail(right, false)?;
+                                let right_reg = if self.is_int_expr(right) && !self.is_float_expr(right) {
+                                    let coerced = self.alloc_reg();
+                                    self.chunk.emit(Instruction::IntToFloat(coerced, right_reg), self.span_line(right.span()));
+                                    coerced
+                                } else {
+                                    right_reg
+                                };
+                                let dst = self.alloc_reg();
+
+                                let func_idx = *self.function_indices.get(&resolved_func)
+                                    .expect("Function should have been assigned an index");
+
+                                self.current_fn_calls.insert(resolved_func.clone());
                                 self.chunk.emit(Instruction::CallDirect(dst, func_idx, vec![left_reg, right_reg].into()), line);
                                 return Ok(dst);
                             }
