@@ -1300,6 +1300,12 @@ impl IoRuntime {
                         if let Some((sender, _)) = conns.get_mut(&request_id) {
                             match sender.send(WsMessage::Text(message.into())).await {
                                 Ok(()) => {
+                                    // Flush to ensure message is sent immediately
+                                    use futures::SinkExt;
+                                    if let Err(e) = sender.flush().await {
+                                        let _ = response.send(Err(IoError::IoError(format!("WebSocket flush failed: {}", e))));
+                                        return;
+                                    }
                                     let _ = response.send(Ok(IoResponseValue::Unit));
                                 }
                                 Err(e) => {
@@ -1315,8 +1321,13 @@ impl IoRuntime {
                 IoRequest::WebSocketReceive { request_id, response } => {
                     let ws_conns = ws_connections.clone();
                     tokio::spawn(async move {
-                        let mut conns = ws_conns.lock().await;
-                        if let Some((_, receiver)) = conns.get_mut(&request_id) {
+                        // Take the connection out of the map to avoid holding the lock during recv
+                        let conn = {
+                            let mut conns = ws_conns.lock().await;
+                            conns.remove(&request_id)
+                        };
+                        // Lock is now released - safe to await on receiver
+                        if let Some((sender, mut receiver)) = conn {
                             match receiver.next().await {
                                 Some(Ok(msg)) => {
                                     let text: String = match msg {
@@ -1328,6 +1339,8 @@ impl IoRuntime {
                                         }
                                         _ => String::new(),
                                     };
+                                    // Put the connection back for future operations
+                                    ws_conns.lock().await.insert(request_id, (sender, receiver));
                                     let _ = response.send(Ok(IoResponseValue::String(text)));
                                 }
                                 Some(Err(e)) => {

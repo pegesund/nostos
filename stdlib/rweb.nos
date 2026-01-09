@@ -34,7 +34,7 @@
 #
 #   main() = startRWeb(8080, "My App", initState, myPage, handleAction)
 
-use stdlib.server
+use stdlib.server.{serve, respondHtml, respond404}
 use stdlib.rhtml
 
 # --- Client JavaScript ---
@@ -190,8 +190,16 @@ sessionLoop(ws, appState, renderResult: RHtmlResult, pageRenderer, actionHandler
 
         (true, newRenderResult)
     } catch { (kind, msg) -> {
-        # Log error but keep connection alive unless it's a connection error
-        if kind == "websocket" then (false, renderResult)
+        # WebSocket connection errors include:
+        # - kind == "websocket" or "websocket_error" for connection-related errors
+        # - kind == "io_error" with "closed" or "not found" messages
+        containsClosed = String.contains(msg, "closed")
+        containsNotFound = String.contains(msg, "not found")
+        isWsError = kind == "websocket" || kind == "websocket_error"
+        isIoConnectionError = kind == "io_error" && (containsClosed || containsNotFound)
+        isConnectionError = isWsError || isIoConnectionError
+
+        if isConnectionError then (false, renderResult)
         else {
             println("RWeb action error: " ++ msg)
             (true, renderResult)
@@ -260,7 +268,10 @@ sendComponentUpdates(ws, componentNames, renderers) = match componentNames {
         if Map.contains(renderers, name) then {
             renderFn = Map.get(renderers, name)
             result = renderFn()
-            html = renderRHtml(result)
+            innerHtml = renderRHtml(result)
+            # Wrap with component div to preserve the id for future updates
+            # This matches the structure created by renderComponent in rhtml.nos
+            html = "<div id=\"" ++ name ++ "\" data-component=\"true\">" ++ innerHtml ++ "</div>"
             msg = "{\"type\":\"update\",\"component\":\"" ++ escapeJsonString(name) ++ "\",\"html\":\"" ++ escapeJsonString(html) ++ "\"}"
             WebSocket.send(ws, msg)
         } else ()
@@ -288,7 +299,9 @@ escapeJsonChar(c) = match c {
 # --- Request Handler ---
 
 # Handle HTTP requests
-handleRequest(req, title, initState, pageRenderer, actionHandler) = {
+rwebHandleRequest(req, title, initState, pageRenderer, actionHandler) = {
+    # NOTE: For WebSocket, we MUST call WebSocket.accept BEFORE any println!
+    # Otherwise the spawned process blocks stdout before handshake completes
     if req.path == "/" then {
         # Serve initial HTML page
         state = initState()
@@ -297,14 +310,17 @@ handleRequest(req, title, initState, pageRenderer, actionHandler) = {
         respondHtml(req, pageTemplate(title, html))
     }
     else if req.path == "/ws" && req.isWebSocket then {
-        # WebSocket upgrade - spawn session process
+        # WebSocket upgrade - accept FIRST before any IO
         ws = WebSocket.accept(req.id)
+
+        # Initialize state and render for this session
         appState = initState()
         renderResult = pageRenderer(appState)
 
-        # Send initial full page
+        # Send initial full page HTML
         html = renderRHtml(renderResult)
-        WebSocket.send(ws, "{\"type\":\"full\",\"html\":\"" ++ escapeJsonString(html) ++ "\"}")
+        msg = "{\"type\":\"full\",\"html\":\"" ++ escapeJsonString(html) ++ "\"}"
+        WebSocket.send(ws, msg)
 
         # Enter session loop (this process becomes the session)
         sessionLoop(ws, appState, renderResult, pageRenderer, actionHandler)
@@ -320,17 +336,7 @@ handleRequest(req, title, initState, pageRenderer, actionHandler) = {
 # actionHandler: (action, params, state) -> () - handles actions by mutating reactive records
 #   No return value needed - VM tracks changes via Reactive.getChangedRecordIds()
 startRWeb(port, title, initState, pageRenderer, actionHandler) = {
-    server = Server.bind(port)
     println("RWeb server started on http://localhost:" ++ show(port))
     println("WebSocket endpoint: ws://localhost:" ++ show(port) ++ "/ws")
-    acceptLoop(server, title, initState, pageRenderer, actionHandler)
-}
-
-acceptLoop(server, title, initState, pageRenderer, actionHandler) = {
-    ok = try {
-        req = Server.accept(server)
-        spawn { handleRequest(req, title, initState, pageRenderer, actionHandler) }
-        true
-    } catch { _ -> false }
-    if ok then acceptLoop(server, title, initState, pageRenderer, actionHandler) else ()
+    serve(port, req => rwebHandleRequest(req, title, initState, pageRenderer, actionHandler))
 }
