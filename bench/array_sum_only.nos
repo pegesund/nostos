@@ -1,0 +1,28 @@
+# Array sum benchmark - JIT-able
+fillArray(arr, i) = if i >= length(arr) then arr else {
+    arr[i] = i + 1
+    fillArray(arr, i + 1)
+}
+
+sumArray(arr, i, acc) = if i >= length(arr) then acc else sumArray(arr, i + 1, acc + arr[i])
+
+main() = {
+    n = 100000
+    arr = newInt64Array(n)
+    filled = fillArray(arr, 0)
+
+    # Sum 10 times
+    s1 = sumArray(filled, 0, 0)
+    s2 = sumArray(filled, 0, 0)
+    s3 = sumArray(filled, 0, 0)
+    s4 = sumArray(filled, 0, 0)
+    s5 = sumArray(filled, 0, 0)
+    s6 = sumArray(filled, 0, 0)
+    s7 = sumArray(filled, 0, 0)
+    s8 = sumArray(filled, 0, 0)
+    s9 = sumArray(filled, 0, 0)
+    s10 = sumArray(filled, 0, 0)
+
+    println(s1)
+    s1
+}

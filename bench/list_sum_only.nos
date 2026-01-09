@@ -1,0 +1,26 @@
+# List sum benchmark - minimal allocation
+buildList(0) = []
+buildList(n) = [n | buildList(n - 1)]
+
+sumList([], acc) = acc
+sumList([x | xs], acc) = sumList(xs, acc + x)
+
+main() = {
+    n = 100000
+    list = buildList(n)
+
+    # Sum 10 times
+    s1 = sumList(list, 0)
+    s2 = sumList(list, 0)
+    s3 = sumList(list, 0)
+    s4 = sumList(list, 0)
+    s5 = sumList(list, 0)
+    s6 = sumList(list, 0)
+    s7 = sumList(list, 0)
+    s8 = sumList(list, 0)
+    s9 = sumList(list, 0)
+    s10 = sumList(list, 0)
+
+    println(s1)
+    s1
+}
