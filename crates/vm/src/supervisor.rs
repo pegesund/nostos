@@ -232,7 +232,7 @@ impl Supervisor {
                 }
             }
 
-            let frame = crate::vm::CallFrame {
+            let frame = crate::process::CallFrame {
                 function: spec.start_func.clone(),
                 ip: 0,
                 registers,

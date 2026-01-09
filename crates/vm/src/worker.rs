@@ -18,7 +18,7 @@ use crate::gc::GcValue;
 use crate::process::{ExitReason, ProcessState};
 use crate::scheduler::Scheduler;
 use crate::value::{FunctionValue, Pid, RuntimeError};
-use crate::vm::CallFrame;
+use crate::process::CallFrame;
 
 /// Thread-safe result from main process.
 /// Since GcValue contains Rc (not Send), we transfer simple values only.

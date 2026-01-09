@@ -15,7 +15,7 @@ use crate::process::ExitReason;
 use crate::scheduler::Scheduler;
 use crate::value::TypeValue;
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, Value};
-use crate::vm::CallFrame;
+use crate::process::CallFrame;
 
 /// Result of running a single process step.
 pub enum ProcessStepResult {
@@ -1791,7 +1791,7 @@ impl Runtime {
 
             // === Exception handling ===
             Instruction::PushHandler(catch_offset) => {
-                use crate::vm::ExceptionHandler;
+                use crate::process::ExceptionHandler;
                 let frame_idx = proc.frames.len() - 1;
                 let catch_ip = (proc.frames[frame_idx].ip as isize + *catch_offset as isize) as usize;
                 let handler = ExceptionHandler {
@@ -1838,14 +1838,6 @@ impl Runtime {
                 println!("DEBUG: {:?}", value);
                 proc.output.push(format!("{:?}", value));
             }
-
-            // Unhandled instructions - note: we match on reference so can't move
-            _ => {
-                return Err(RuntimeError::Panic(format!(
-                    "Instruction {:?} not yet implemented in Runtime",
-                    instr
-                )));
-            }
         }
 
         Ok(ProcessStepResult::Continue)
@@ -1857,7 +1849,7 @@ impl Runtime {
         &mut self,
         pid: Pid,
         instr: Instruction,
-        constants: &[Value],
+        _constants: &[Value],
     ) -> Result<ProcessStepResult, RuntimeError> {
         // Helper to read registers via scheduler (we don't hold the lock)
         macro_rules! get_reg {

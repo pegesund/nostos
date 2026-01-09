@@ -10,10 +10,32 @@
 //! the same Process struct, accessing heap/registers directly.
 
 use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 
 use crate::gc::{GcConfig, GcValue, Heap};
-use crate::value::{Pid, RefId};
-use crate::vm::{CallFrame, ExceptionHandler};
+use crate::value::{FunctionValue, Pid, RefId, Reg};
+
+/// A call frame on the stack.
+#[derive(Clone)]
+pub struct CallFrame {
+    /// Function being executed
+    pub function: Rc<FunctionValue>,
+    /// Instruction pointer
+    pub ip: usize,
+    /// Register file for this frame (GC-managed values)
+    pub registers: Vec<GcValue>,
+    /// Captured variables (for closures, GC-managed)
+    pub captures: Vec<GcValue>,
+    /// Return register in caller's frame
+    pub return_reg: Option<Reg>,
+}
+
+/// Exception handler info.
+#[derive(Clone)]
+pub struct ExceptionHandler {
+    pub frame_index: usize,
+    pub catch_ip: usize,
+}
 
 /// Default reductions per time slice.
 pub const REDUCTIONS_PER_SLICE: usize = 2000;
