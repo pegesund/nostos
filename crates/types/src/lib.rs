@@ -675,6 +675,61 @@ pub fn standard_env() -> TypeEnv {
         });
     }
 
+    // Num trait for arithmetic operations
+    env.traits.insert(
+        "Num".to_string(),
+        TraitDef {
+            name: "Num".to_string(),
+            supertraits: vec![],
+            required: vec![
+                TraitMethod {
+                    name: "+".to_string(),
+                    params: vec![
+                        ("self".to_string(), Type::TypeParam("Self".to_string())),
+                        ("other".to_string(), Type::TypeParam("Self".to_string())),
+                    ],
+                    ret: Type::TypeParam("Self".to_string()),
+                },
+                TraitMethod {
+                    name: "-".to_string(),
+                    params: vec![
+                        ("self".to_string(), Type::TypeParam("Self".to_string())),
+                        ("other".to_string(), Type::TypeParam("Self".to_string())),
+                    ],
+                    ret: Type::TypeParam("Self".to_string()),
+                },
+                TraitMethod {
+                    name: "*".to_string(),
+                    params: vec![
+                        ("self".to_string(), Type::TypeParam("Self".to_string())),
+                        ("other".to_string(), Type::TypeParam("Self".to_string())),
+                    ],
+                    ret: Type::TypeParam("Self".to_string()),
+                },
+                TraitMethod {
+                    name: "/".to_string(),
+                    params: vec![
+                        ("self".to_string(), Type::TypeParam("Self".to_string())),
+                        ("other".to_string(), Type::TypeParam("Self".to_string())),
+                    ],
+                    ret: Type::TypeParam("Self".to_string()),
+                },
+            ],
+            defaults: vec![],
+        },
+    );
+
+    // Num implementations for numeric types
+    for ty in [Type::Int, Type::Float, Type::Int8, Type::Int16, Type::Int32,
+               Type::UInt8, Type::UInt16, Type::UInt32, Type::UInt64,
+               Type::Float32, Type::BigInt, Type::Decimal] {
+        env.impls.push(TraitImpl {
+            trait_name: "Num".to_string(),
+            for_type: ty,
+            constraints: vec![],
+        });
+    }
+
     env
 }
 

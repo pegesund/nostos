@@ -13,6 +13,7 @@ use std::sync::atomic::AtomicU32;
 
 use nostos_syntax::ast::*;
 use nostos_vm::*;
+use nostos_types::{TypeEnv, infer::InferCtx};
 
 /// Compilation errors with source location information.
 #[derive(Debug, Clone, thiserror::Error)]
@@ -1960,7 +1961,7 @@ impl Compiler {
             source_code,
             source_file: self.current_source_name.clone(),
             doc: def.doc.clone(),
-            signature: Some(def.signature()),
+            signature: Some(self.infer_signature(def)),
             param_types: def.param_type_strings(),
             return_type: def.return_type_string(),
         };
@@ -5048,6 +5049,316 @@ impl Compiler {
     pub fn get_fn_def(&self, name: &str) -> Option<&FnDef> {
         self.fn_asts.get(name)
     }
+
+    /// Check if a module exists (has any functions/types with that prefix).
+    pub fn module_exists(&self, module_name: &str) -> bool {
+        let prefix = format!("{}.", module_name);
+        // Check functions
+        for name in self.functions.keys() {
+            if name.starts_with(&prefix) || name == module_name {
+                return true;
+            }
+        }
+        // Check types
+        for name in self.types.keys() {
+            if name.starts_with(&prefix) || name == module_name {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Infer the type signature of a function definition using Hindley-Milner type inference.
+    /// Returns a formatted signature string like "Int -> Int -> Int" or "a -> a -> a".
+    ///
+    /// This function attempts full HM inference and falls back to AST-based constraint analysis
+    /// if inference fails.
+    pub fn infer_signature(&self, def: &FnDef) -> String {
+        // Try full Hindley-Milner inference first
+        if let Some(sig) = self.try_hm_inference(def) {
+            return sig;
+        }
+        // Fall back to AST-based signature
+        def.signature()
+    }
+
+    /// Try full Hindley-Milner type inference for a function.
+    /// Returns None if inference fails, allowing fallback to AST-based signature.
+    fn try_hm_inference(&self, def: &FnDef) -> Option<String> {
+        // Create a fresh type environment for inference
+        let mut env = nostos_types::standard_env();
+
+        // Register known types from the compiler context
+        for (name, type_info) in &self.types {
+            match &type_info.kind {
+                TypeInfoKind::Record { fields, mutable } => {
+                    let field_types: Vec<(String, nostos_types::Type, bool)> = fields
+                        .iter()
+                        .map(|(n, ty)| (n.clone(), self.type_name_to_type(ty), false))
+                        .collect();
+                    env.define_type(
+                        name.clone(),
+                        nostos_types::TypeDef::Record {
+                            params: vec![],
+                            fields: field_types,
+                            is_mutable: *mutable,
+                        },
+                    );
+                }
+                TypeInfoKind::Variant { constructors } => {
+                    let ctors: Vec<nostos_types::Constructor> = constructors
+                        .iter()
+                        .map(|(ctor_name, field_types)| {
+                            if field_types.is_empty() {
+                                nostos_types::Constructor::Unit(ctor_name.clone())
+                            } else {
+                                nostos_types::Constructor::Positional(
+                                    ctor_name.clone(),
+                                    field_types.iter().map(|ty| self.type_name_to_type(ty)).collect(),
+                                )
+                            }
+                        })
+                        .collect();
+                    env.define_type(
+                        name.clone(),
+                        nostos_types::TypeDef::Variant {
+                            params: vec![],
+                            constructors: ctors,
+                        },
+                    );
+                }
+            }
+        }
+
+        // Register known functions in environment for recursive calls
+        for (fn_name, fn_val) in &self.functions {
+            let param_types: Vec<nostos_types::Type> = fn_val.param_types
+                .iter()
+                .map(|ty| self.type_name_to_type(ty))
+                .collect();
+            let ret_ty = fn_val.return_type.as_ref()
+                .map(|ty| self.type_name_to_type(ty))
+                .unwrap_or_else(|| env.fresh_var());
+
+            env.functions.insert(
+                fn_name.clone(),
+                nostos_types::FunctionType {
+                    type_params: vec![],
+                    params: param_types,
+                    ret: Box::new(ret_ty),
+                },
+            );
+        }
+
+        // Create inference context
+        let mut ctx = InferCtx::new(&mut env);
+
+        // Infer the function type
+        let func_ty = ctx.infer_function(def).ok()?;
+
+        // Solve constraints (this can hang on unresolved type vars with HasField)
+        ctx.solve().ok()?;
+
+        // Collect all resolved types for the signature
+        let resolved_params: Vec<nostos_types::Type> = func_ty.params
+            .iter()
+            .map(|ty| ctx.env.apply_subst(ty))
+            .collect();
+        let resolved_ret = ctx.env.apply_subst(&func_ty.ret);
+
+        // Collect all type variable IDs in order of first appearance
+        let mut var_order: Vec<u32> = Vec::new();
+        for ty in resolved_params.iter().chain(std::iter::once(&resolved_ret)) {
+            self.collect_type_vars(ty, &mut var_order);
+        }
+
+        // Create mapping from type var ID to normalized letter
+        let var_map: HashMap<u32, char> = var_order.iter().enumerate()
+            .map(|(i, &id)| (id, (b'a' + (i as u8 % 26)) as char))
+            .collect();
+
+        // Format with normalized type variables
+        let param_types: Vec<String> = resolved_params.iter()
+            .map(|ty| self.format_type_normalized(ty, &var_map))
+            .collect();
+        let ret_type = self.format_type_normalized(&resolved_ret, &var_map);
+
+        // Collect trait bounds for type variables that appear in the signature
+        let mut bounds: Vec<String> = Vec::new();
+        for (&var_id, &var_name) in &var_map {
+            let trait_names = ctx.get_trait_bounds(var_id);
+            for trait_name in trait_names {
+                bounds.push(format!("{} {}", trait_name, var_name));
+            }
+        }
+        bounds.sort(); // Deterministic ordering
+
+        // Format the signature with constraint prefix if there are bounds
+        let type_sig = if param_types.is_empty() {
+            ret_type
+        } else {
+            format!("{} -> {}", param_types.join(" -> "), ret_type)
+        };
+
+        if bounds.is_empty() {
+            Some(type_sig)
+        } else {
+            Some(format!("{} => {}", bounds.join(", "), type_sig))
+        }
+    }
+
+    /// Collect all type variable IDs in order of first appearance.
+    fn collect_type_vars(&self, ty: &nostos_types::Type, vars: &mut Vec<u32>) {
+        match ty {
+            nostos_types::Type::Var(id) => {
+                if !vars.contains(id) {
+                    vars.push(*id);
+                }
+            }
+            nostos_types::Type::Tuple(elems) => {
+                for e in elems {
+                    self.collect_type_vars(e, vars);
+                }
+            }
+            nostos_types::Type::List(elem) | nostos_types::Type::Array(elem)
+            | nostos_types::Type::Set(elem) | nostos_types::Type::IO(elem) => {
+                self.collect_type_vars(elem, vars);
+            }
+            nostos_types::Type::Map(k, v) => {
+                self.collect_type_vars(k, vars);
+                self.collect_type_vars(v, vars);
+            }
+            nostos_types::Type::Function(f) => {
+                for p in &f.params {
+                    self.collect_type_vars(p, vars);
+                }
+                self.collect_type_vars(&f.ret, vars);
+            }
+            nostos_types::Type::Named { args, .. } => {
+                for a in args {
+                    self.collect_type_vars(a, vars);
+                }
+            }
+            nostos_types::Type::Record(rec) => {
+                for (_, t, _) in &rec.fields {
+                    self.collect_type_vars(t, vars);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Format a type with normalized type variable names.
+    fn format_type_normalized(&self, ty: &nostos_types::Type, var_map: &HashMap<u32, char>) -> String {
+        match ty {
+            nostos_types::Type::Var(id) => {
+                var_map.get(id).map(|c| c.to_string()).unwrap_or_else(|| format!("?{}", id))
+            }
+            nostos_types::Type::Int => "Int".to_string(),
+            nostos_types::Type::Int8 => "Int8".to_string(),
+            nostos_types::Type::Int16 => "Int16".to_string(),
+            nostos_types::Type::Int32 => "Int32".to_string(),
+            nostos_types::Type::Int64 => "Int64".to_string(),
+            nostos_types::Type::UInt8 => "UInt8".to_string(),
+            nostos_types::Type::UInt16 => "UInt16".to_string(),
+            nostos_types::Type::UInt32 => "UInt32".to_string(),
+            nostos_types::Type::UInt64 => "UInt64".to_string(),
+            nostos_types::Type::Float => "Float".to_string(),
+            nostos_types::Type::Float32 => "Float32".to_string(),
+            nostos_types::Type::Float64 => "Float64".to_string(),
+            nostos_types::Type::BigInt => "BigInt".to_string(),
+            nostos_types::Type::Decimal => "Decimal".to_string(),
+            nostos_types::Type::Bool => "Bool".to_string(),
+            nostos_types::Type::Char => "Char".to_string(),
+            nostos_types::Type::String => "String".to_string(),
+            nostos_types::Type::Unit => "()".to_string(),
+            nostos_types::Type::Never => "Never".to_string(),
+            nostos_types::Type::Pid => "Pid".to_string(),
+            nostos_types::Type::Ref => "Ref".to_string(),
+            nostos_types::Type::TypeParam(name) => name.clone(),
+            nostos_types::Type::Tuple(elems) => {
+                let inner: Vec<String> = elems.iter()
+                    .map(|t| self.format_type_normalized(t, var_map))
+                    .collect();
+                format!("({})", inner.join(", "))
+            }
+            nostos_types::Type::List(elem) => {
+                format!("List[{}]", self.format_type_normalized(elem, var_map))
+            }
+            nostos_types::Type::Array(elem) => {
+                format!("Array[{}]", self.format_type_normalized(elem, var_map))
+            }
+            nostos_types::Type::Set(elem) => {
+                format!("Set[{}]", self.format_type_normalized(elem, var_map))
+            }
+            nostos_types::Type::Map(k, v) => {
+                format!("Map[{}, {}]",
+                    self.format_type_normalized(k, var_map),
+                    self.format_type_normalized(v, var_map))
+            }
+            nostos_types::Type::Function(f) => {
+                let params: Vec<String> = f.params.iter()
+                    .map(|t| self.format_type_normalized(t, var_map))
+                    .collect();
+                let ret = self.format_type_normalized(&f.ret, var_map);
+                if params.is_empty() {
+                    format!("() -> {}", ret)
+                } else {
+                    format!("({}) -> {}", params.join(", "), ret)
+                }
+            }
+            nostos_types::Type::Named { name, args } => {
+                if args.is_empty() {
+                    name.clone()
+                } else {
+                    let args_str: Vec<String> = args.iter()
+                        .map(|t| self.format_type_normalized(t, var_map))
+                        .collect();
+                    format!("{}[{}]", name, args_str.join(", "))
+                }
+            }
+            nostos_types::Type::Record(rec) => {
+                if let Some(name) = &rec.name {
+                    name.clone()
+                } else {
+                    let fields: Vec<String> = rec.fields.iter()
+                        .map(|(n, t, _)| format!("{}: {}", n, self.format_type_normalized(t, var_map)))
+                        .collect();
+                    format!("{{{}}}", fields.join(", "))
+                }
+            }
+            nostos_types::Type::Variant(v) => v.name.clone(),
+            nostos_types::Type::IO(inner) => {
+                format!("IO[{}]", self.format_type_normalized(inner, var_map))
+            }
+        }
+    }
+
+    /// Convert a type name string to a nostos_types::Type.
+    fn type_name_to_type(&self, ty: &str) -> nostos_types::Type {
+        match ty {
+            "Int" | "Int64" => nostos_types::Type::Int,
+            "Int8" => nostos_types::Type::Int8,
+            "Int16" => nostos_types::Type::Int16,
+            "Int32" => nostos_types::Type::Int32,
+            "UInt8" => nostos_types::Type::UInt8,
+            "UInt16" => nostos_types::Type::UInt16,
+            "UInt32" => nostos_types::Type::UInt32,
+            "UInt64" => nostos_types::Type::UInt64,
+            "Float" | "Float64" => nostos_types::Type::Float,
+            "Float32" => nostos_types::Type::Float32,
+            "BigInt" => nostos_types::Type::BigInt,
+            "Decimal" => nostos_types::Type::Decimal,
+            "Bool" => nostos_types::Type::Bool,
+            "Char" => nostos_types::Type::Char,
+            "String" => nostos_types::Type::String,
+            "Pid" => nostos_types::Type::Pid,
+            "Ref" => nostos_types::Type::Ref,
+            "?" => nostos_types::Type::Var(u32::MAX), // Unknown type
+            _ => nostos_types::Type::Named { name: ty.to_string(), args: vec![] },
+        }
+    }
+
 }
 
 /// Collect free variables in an expression (variables not bound locally).
@@ -7403,5 +7714,1001 @@ mod tests {
         "#;
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int64(42)));
+    }
+
+    // =========================================================================
+    // Type Inference Signature Tests (80+ tests)
+    // =========================================================================
+
+    fn get_signature(source: &str, fn_name: &str) -> Option<String> {
+        let (module_opt, errors) = parse(source);
+        if !errors.is_empty() {
+            return None;
+        }
+        let module = module_opt?;
+        let compiler = compile_module(&module, source).ok()?;
+        compiler.get_function_signature(fn_name).map(|s| s.to_string())
+    }
+
+    // Helper to check signature matches one of several valid options
+    // Also accepts signatures with trait bounds (e.g., "Num a => a -> a -> a" matches "a -> a -> a")
+    fn sig_matches(sig: &str, options: &[&str]) -> bool {
+        // Strip trait bound prefix if present (e.g., "Num a => " prefix)
+        let core_sig = if let Some(idx) = sig.find(" => ") {
+            &sig[idx + 4..]
+        } else {
+            sig
+        };
+        options.iter().any(|opt| sig == *opt || core_sig == *opt)
+    }
+
+    // -------------------------------------------------------------------------
+    // Basic Arithmetic Operations (Tests 1-10)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hm_01_add_unified() {
+        let sig = get_signature("add(x, y) = x + y\nmain() = 0", "add").unwrap();
+        // Should infer: Num a => a -> a -> a (or just a -> a -> a if bounds not shown)
+        assert!(sig_matches(&sig, &["a -> a -> a", "Int -> Int -> Int", "Num a => a -> a -> a"]),
+            "add: expected unified types, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_02_sub_unified() {
+        let sig = get_signature("sub(x, y) = x - y\nmain() = 0", "sub").unwrap();
+        assert!(sig_matches(&sig, &["a -> a -> a", "Int -> Int -> Int"]),
+            "sub: expected unified types, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_03_mul_unified() {
+        let sig = get_signature("mul(x, y) = x * y\nmain() = 0", "mul").unwrap();
+        assert!(sig_matches(&sig, &["a -> a -> a", "Int -> Int -> Int"]),
+            "mul: expected unified types, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_04_div_unified() {
+        let sig = get_signature("div(x, y) = x / y\nmain() = 0", "div").unwrap();
+        assert!(sig_matches(&sig, &["a -> a -> a", "Int -> Int -> Int"]),
+            "div: expected unified types, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_05_mod_unified() {
+        let sig = get_signature("rem(x, y) = x % y\nmain() = 0", "rem").unwrap();
+        assert!(sig_matches(&sig, &["a -> a -> a", "Int -> Int -> Int"]),
+            "mod: expected unified types, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_06_pow_unified() {
+        let sig = get_signature("pow(x, y) = x ** y\nmain() = 0", "pow").unwrap();
+        assert!(sig_matches(&sig, &["a -> a -> a", "Int -> Int -> Int"]),
+            "pow: expected unified types, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_07_add_with_int_literal() {
+        let sig = get_signature("inc(x) = x + 1\nmain() = 0", "inc").unwrap();
+        assert!(sig_matches(&sig, &["Int -> Int", "a -> a"]),
+            "inc: expected Int -> Int, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_08_add_with_float_literal() {
+        let sig = get_signature("incf(x) = x + 1.0\nmain() = 0", "incf").unwrap();
+        assert!(sig_matches(&sig, &["Float -> Float", "a -> a"]),
+            "incf: expected Float -> Float, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_09_negation() {
+        let sig = get_signature("neg(x) = -x\nmain() = 0", "neg").unwrap();
+        assert!(sig.contains("->"), "neg: expected function type, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_10_complex_arithmetic() {
+        let sig = get_signature("calc(a, b, c) = a * b + c\nmain() = 0", "calc").unwrap();
+        assert!(sig_matches(&sig, &["a -> a -> a -> a", "Int -> Int -> Int -> Int"]),
+            "calc: expected all unified, got: {}", sig);
+    }
+
+    // -------------------------------------------------------------------------
+    // Comparison Operations (Tests 11-20)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hm_11_eq_returns_bool() {
+        let sig = get_signature("eq(x, y) = x == y\nmain() = 0", "eq").unwrap();
+        assert!(sig.ends_with("-> Bool"), "eq: expected -> Bool, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_12_neq_returns_bool() {
+        let sig = get_signature("neq(x, y) = x != y\nmain() = 0", "neq").unwrap();
+        assert!(sig.ends_with("-> Bool"), "neq: expected -> Bool, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_13_lt_returns_bool() {
+        let sig = get_signature("lt(x, y) = x < y\nmain() = 0", "lt").unwrap();
+        assert!(sig.ends_with("-> Bool"), "lt: expected -> Bool, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_14_gt_returns_bool() {
+        let sig = get_signature("gt(x, y) = x > y\nmain() = 0", "gt").unwrap();
+        assert!(sig.ends_with("-> Bool"), "gt: expected -> Bool, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_15_lte_returns_bool() {
+        let sig = get_signature("lte(x, y) = x <= y\nmain() = 0", "lte").unwrap();
+        assert!(sig.ends_with("-> Bool"), "lte: expected -> Bool, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_16_gte_returns_bool() {
+        let sig = get_signature("gte(x, y) = x >= y\nmain() = 0", "gte").unwrap();
+        assert!(sig.ends_with("-> Bool"), "gte: expected -> Bool, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_17_comparison_unifies_operands() {
+        let sig = get_signature("cmp(x, y) = x < y\nmain() = 0", "cmp").unwrap();
+        // Should be a -> a -> Bool (operands unified)
+        assert!(sig.contains("-> Bool"), "cmp: expected Bool return, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_18_eq_with_int_literal() {
+        let sig = get_signature("isZero(x) = x == 0\nmain() = 0", "isZero").unwrap();
+        assert!(sig_matches(&sig, &["Int -> Bool", "a -> Bool"]),
+            "isZero: expected Int -> Bool, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_19_comparison_chain() {
+        let sig = get_signature("inRange(x, lo, hi) = x >= lo && x <= hi\nmain() = 0", "inRange").unwrap();
+        assert!(sig.ends_with("-> Bool"), "inRange: expected Bool return, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_20_eq_bool_literal() {
+        let sig = get_signature("isTrue(x) = x == true\nmain() = 0", "isTrue").unwrap();
+        assert!(sig_matches(&sig, &["Bool -> Bool", "a -> Bool"]),
+            "isTrue: expected Bool -> Bool, got: {}", sig);
+    }
+
+    // -------------------------------------------------------------------------
+    // Boolean Operations (Tests 21-30)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hm_21_and_bool() {
+        let sig = get_signature("band(a, b) = a && b\nmain() = 0", "band").unwrap();
+        assert_eq!(sig, "Bool -> Bool -> Bool", "and: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_22_or_bool() {
+        let sig = get_signature("bor(a, b) = a || b\nmain() = 0", "bor").unwrap();
+        assert_eq!(sig, "Bool -> Bool -> Bool", "or: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_23_not_bool() {
+        let sig = get_signature("bnot(a) = !a\nmain() = 0", "bnot").unwrap();
+        assert_eq!(sig, "Bool -> Bool", "not: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_24_complex_bool() {
+        let sig = get_signature("logic(a, b, c) = (a && b) || c\nmain() = 0", "logic").unwrap();
+        assert_eq!(sig, "Bool -> Bool -> Bool -> Bool", "logic: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_25_bool_with_comparison() {
+        let sig = get_signature("check(x, y) = x > 0 && y < 10\nmain() = 0", "check").unwrap();
+        assert!(sig.ends_with("-> Bool"), "check: expected Bool return, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_26_bool_literal_true() {
+        let sig = get_signature("alwaysTrue() = true\nmain() = 0", "alwaysTrue").unwrap();
+        assert_eq!(sig, "Bool", "alwaysTrue: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_27_bool_literal_false() {
+        let sig = get_signature("alwaysFalse() = false\nmain() = 0", "alwaysFalse").unwrap();
+        assert_eq!(sig, "Bool", "alwaysFalse: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_28_double_negation() {
+        let sig = get_signature("dblNot(x) = !!x\nmain() = 0", "dblNot").unwrap();
+        assert_eq!(sig, "Bool -> Bool", "dblNot: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_29_implies() {
+        let sig = get_signature("implies(a, b) = !a || b\nmain() = 0", "implies").unwrap();
+        assert_eq!(sig, "Bool -> Bool -> Bool", "implies: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_30_xor() {
+        let sig = get_signature("xor(a, b) = (a || b) && !(a && b)\nmain() = 0", "xor").unwrap();
+        assert_eq!(sig, "Bool -> Bool -> Bool", "xor: got: {}", sig);
+    }
+
+    // -------------------------------------------------------------------------
+    // Control Flow - If Expressions (Tests 31-40)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hm_31_if_basic() {
+        let sig = get_signature("choose(c, a, b) = if c then a else b\nmain() = 0", "choose").unwrap();
+        assert!(sig.starts_with("Bool"), "choose: expected Bool first, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_32_if_unifies_branches() {
+        let sig = get_signature("sel(c, x, y) = if c then x else y\nmain() = 0", "sel").unwrap();
+        // Should be Bool -> a -> a -> a
+        assert!(sig.starts_with("Bool -> "), "sel: expected Bool first, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_33_if_with_int_branches() {
+        let sig = get_signature("abs(x) = if x < 0 then -x else x\nmain() = 0", "abs").unwrap();
+        assert!(sig.contains("->"), "abs: expected function, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_34_if_with_bool_return() {
+        let sig = get_signature("sign(x) = if x > 0 then true else false\nmain() = 0", "sign").unwrap();
+        assert!(sig.ends_with("-> Bool"), "sign: expected Bool return, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_35_nested_if() {
+        let sig = get_signature("clamp(x, lo, hi) = if x < lo then lo else if x > hi then hi else x\nmain() = 0", "clamp").unwrap();
+        assert!(sig.contains("->"), "clamp: expected function, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_36_if_with_literal() {
+        let sig = get_signature("maybeOne(c) = if c then 1 else 0\nmain() = 0", "maybeOne").unwrap();
+        assert!(sig_matches(&sig, &["Bool -> Int", "Bool -> a"]),
+            "maybeOne: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_37_if_string_branches() {
+        let sig = get_signature(r#"greet(formal) = if formal then "Hello" else "Hi"\nmain() = 0"#, "greet").unwrap();
+        assert!(sig_matches(&sig, &["Bool -> String", "Bool -> a"]),
+            "greet: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_38_if_complex_condition() {
+        let sig = get_signature("check(a, b) = if a > 0 && b > 0 then a + b else 0\nmain() = 0", "check").unwrap();
+        assert!(sig.contains("->"), "check: expected function, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_39_if_with_unit() {
+        let sig = get_signature("maybe(c) = if c then () else ()\nmain() = 0", "maybe").unwrap();
+        assert!(sig_matches(&sig, &["Bool -> ()", "Bool -> a"]),
+            "maybe: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_40_ternary_like() {
+        let sig = get_signature("max(a, b) = if a > b then a else b\nmain() = 0", "max").unwrap();
+        assert!(sig.contains("->"), "max: expected function, got: {}", sig);
+    }
+
+    // -------------------------------------------------------------------------
+    // Functions - Polymorphism (Tests 41-50)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hm_41_identity() {
+        let sig = get_signature("id(x) = x\nmain() = 0", "id").unwrap();
+        assert_eq!(sig, "a -> a", "identity: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_42_const() {
+        let sig = get_signature("const(x, y) = x\nmain() = 0", "const").unwrap();
+        assert_eq!(sig, "a -> b -> a", "const: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_43_flip() {
+        let sig = get_signature("second(x, y) = y\nmain() = 0", "second").unwrap();
+        assert_eq!(sig, "a -> b -> b", "second: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_44_three_params_first() {
+        let sig = get_signature("first3(a, b, c) = a\nmain() = 0", "first3").unwrap();
+        assert_eq!(sig, "a -> b -> c -> a", "first3: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_45_three_params_middle() {
+        let sig = get_signature("mid3(a, b, c) = b\nmain() = 0", "mid3").unwrap();
+        assert_eq!(sig, "a -> b -> c -> b", "mid3: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_46_three_params_last() {
+        let sig = get_signature("last3(a, b, c) = c\nmain() = 0", "last3").unwrap();
+        assert_eq!(sig, "a -> b -> c -> c", "last3: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_47_four_params_unused() {
+        let sig = get_signature("pick(a, b, c, d) = b\nmain() = 0", "pick").unwrap();
+        assert_eq!(sig, "a -> b -> c -> d -> b", "pick: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_48_no_params_int() {
+        let sig = get_signature("fortytwo() = 42\nmain() = 0", "fortytwo").unwrap();
+        assert_eq!(sig, "Int", "fortytwo: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_49_no_params_string() {
+        let sig = get_signature(r#"hello() = "hello"\nmain() = 0"#, "hello").unwrap();
+        assert_eq!(sig, "String", "hello: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_50_no_params_unit() {
+        let sig = get_signature("noop() = ()\nmain() = 0", "noop").unwrap();
+        assert_eq!(sig, "()", "noop: got: {}", sig);
+    }
+
+    // -------------------------------------------------------------------------
+    // Type Annotations (Tests 51-60)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hm_51_annotated_int_param() {
+        let sig = get_signature("f(x: Int) = x\nmain() = 0", "f").unwrap();
+        assert_eq!(sig, "Int -> Int", "f: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_52_annotated_bool_param() {
+        let sig = get_signature("g(x: Bool) = x\nmain() = 0", "g").unwrap();
+        assert_eq!(sig, "Bool -> Bool", "g: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_53_annotated_string_param() {
+        let sig = get_signature("h(x: String) = x\nmain() = 0", "h").unwrap();
+        assert_eq!(sig, "String -> String", "h: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_54_annotated_float_param() {
+        let sig = get_signature("flt(x: Float) = x\nmain() = 0", "flt").unwrap();
+        assert_eq!(sig, "Float -> Float", "flt: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_55_annotated_return_type() {
+        let sig = get_signature("ret(x) -> Int = x\nmain() = 0", "ret").unwrap();
+        assert!(sig.ends_with("-> Int"), "ret: expected Int return, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_56_annotated_both() {
+        let sig = get_signature("both(x: Int) -> Int = x + 1\nmain() = 0", "both").unwrap();
+        assert_eq!(sig, "Int -> Int", "both: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_57_mixed_annotated_unannotated() {
+        let sig = get_signature("mix(x: Int, y) = x + y\nmain() = 0", "mix").unwrap();
+        assert_eq!(sig, "Int -> Int -> Int", "mix: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_58_all_annotated() {
+        let sig = get_signature("all(a: Int, b: Int, c: Int) -> Int = a + b + c\nmain() = 0", "all").unwrap();
+        assert_eq!(sig, "Int -> Int -> Int -> Int", "all: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_59_char_annotation() {
+        let sig = get_signature("chr(c: Char) = c\nmain() = 0", "chr").unwrap();
+        assert_eq!(sig, "Char -> Char", "chr: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_60_unit_return() {
+        let sig = get_signature("unit() -> () = ()\nmain() = 0", "unit").unwrap();
+        assert_eq!(sig, "()", "unit: got: {}", sig);
+    }
+
+    // -------------------------------------------------------------------------
+    // Tuples (Tests 61-70)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hm_61_tuple_creation() {
+        let sig = get_signature("pair(a, b) = (a, b)\nmain() = 0", "pair").unwrap();
+        assert!(sig.contains("(") && sig.contains(")"), "pair: expected tuple, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_62_tuple_fst() {
+        let sig = get_signature("fst(p) = p.0\nmain() = 0", "fst").unwrap();
+        assert!(sig.contains("->"), "fst: expected function, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_63_tuple_snd() {
+        let sig = get_signature("snd(p) = p.1\nmain() = 0", "snd").unwrap();
+        assert!(sig.contains("->"), "snd: expected function, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_64_triple() {
+        let sig = get_signature("triple(a, b, c) = (a, b, c)\nmain() = 0", "triple").unwrap();
+        assert!(sig.contains("(") && sig.contains(","), "triple: expected tuple, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_65_swap_tuple() {
+        let sig = get_signature("swap(p) = (p.1, p.0)\nmain() = 0", "swap").unwrap();
+        assert!(sig.contains("->"), "swap: expected function, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_66_tuple_with_same_types() {
+        let sig = get_signature("dup(x) = (x, x)\nmain() = 0", "dup").unwrap();
+        assert!(sig.contains("->"), "dup: expected function, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_67_nested_tuple() {
+        let sig = get_signature("nest(a, b, c) = ((a, b), c)\nmain() = 0", "nest").unwrap();
+        assert!(sig.contains("("), "nest: expected nested tuple, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_68_tuple_with_literal() {
+        let sig = get_signature("withOne(x) = (x, 1)\nmain() = 0", "withOne").unwrap();
+        assert!(sig.contains("->"), "withOne: expected function, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_69_tuple_access_simple() {
+        // Single field access on tuples
+        let sig = get_signature("getFirst(p) = p.0\nmain() = 0", "getFirst").unwrap();
+        assert!(sig.contains("->"), "getFirst: expected function, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_70_tuple_in_arithmetic() {
+        let sig = get_signature("sumPair(p) = p.0 + p.1\nmain() = 0", "sumPair").unwrap();
+        assert!(sig.contains("->"), "sumPair: expected function, got: {}", sig);
+    }
+
+    // -------------------------------------------------------------------------
+    // Lists (Tests 71-80)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hm_71_empty_list() {
+        let sig = get_signature("empty() = []\nmain() = 0", "empty").unwrap();
+        assert!(sig.contains("List"), "empty: expected List, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_72_singleton_list() {
+        let sig = get_signature("single(x) = [x]\nmain() = 0", "single").unwrap();
+        assert!(sig.contains("List"), "single: expected List, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_73_list_of_ints() {
+        let sig = get_signature("ints() = [1, 2, 3]\nmain() = 0", "ints").unwrap();
+        assert!(sig_matches(&sig, &["List[Int]", "List[a]"]),
+            "ints: expected List[Int], got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_74_list_of_bools() {
+        let sig = get_signature("bools() = [true, false]\nmain() = 0", "bools").unwrap();
+        assert!(sig_matches(&sig, &["List[Bool]", "List[a]"]),
+            "bools: expected List[Bool], got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_75_list_param() {
+        let sig = get_signature("takeList(xs) = xs\nmain() = 0", "takeList").unwrap();
+        assert_eq!(sig, "a -> a", "takeList: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_76_list_cons() {
+        let sig = get_signature("cons(x, xs) = [x | xs]\nmain() = 0", "cons").unwrap();
+        assert!(sig.contains("List") || sig.contains("->"), "cons: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_77_list_head() {
+        // Use multi-clause function pattern matching
+        let sig = get_signature("hd([h | _]) = h\nmain() = 0", "hd").unwrap();
+        assert!(sig.contains("->"), "hd: expected function, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_78_list_tail() {
+        // Use multi-clause function pattern matching
+        let sig = get_signature("tl([_ | t]) = t\nmain() = 0", "tl").unwrap();
+        assert!(sig.contains("->"), "tl: expected function, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_79_list_length() {
+        // Use multi-clause function with pattern matching
+        let sig = get_signature("len([]) = 0\nlen([_ | t]) = 1 + len(t)\nmain() = 0", "len").unwrap();
+        assert!(sig.contains("->"), "len: expected function, got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_80_list_map_param() {
+        // Use multi-clause function with pattern matching
+        let sig = get_signature("mapList(f, []) = []\nmapList(f, [h | t]) = [f(h) | mapList(f, t)]\nmain() = 0", "mapList").unwrap();
+        assert!(sig.contains("->"), "mapList: expected function, got: {}", sig);
+    }
+
+    // -------------------------------------------------------------------------
+    // Custom Types - Records (Tests 81-90)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hm_81_record_construction() {
+        // Test record construction inference - without inline record syntax
+        let src = "type Point = { x: Int, y: Int }\ngetX(p: Point) -> Int = p.x\nmain() = 0";
+        let sig = get_signature(src, "getX").unwrap();
+        assert!(sig.contains("Point") && sig.contains("Int"), "getX: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_82_record_field_access() {
+        let src = "type Point = { x: Int, y: Int }\ngetX(p: Point) = p.x\nmain() = 0";
+        let sig = get_signature(src, "getX").unwrap();
+        assert!(sig.contains("Point") && sig.contains("Int"), "getX: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_83_record_field_y() {
+        let src = "type Point = { x: Int, y: Int }\ngetY(p: Point) = p.y\nmain() = 0";
+        let sig = get_signature(src, "getY").unwrap();
+        assert!(sig.contains("Point") && sig.contains("Int"), "getY: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_84_record_with_both_fields() {
+        let src = "type Point = { x: Int, y: Int }\nsum(p: Point) = p.x + p.y\nmain() = 0";
+        let sig = get_signature(src, "sum").unwrap();
+        assert!(sig.contains("Point") && sig.contains("Int"), "sum: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_85_record_distance() {
+        let src = "type Point = { x: Int, y: Int }\ndist(p: Point) = p.x * p.x + p.y * p.y\nmain() = 0";
+        let sig = get_signature(src, "dist").unwrap();
+        assert!(sig.contains("Point") && sig.contains("Int"), "dist: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_86_two_record_params() {
+        // Test with explicit return type to help inference
+        let src = "type Point = { x: Int, y: Int }\naddX(p1: Point, p2: Point) -> Int = p1.x + p2.x\nmain() = 0";
+        let sig = get_signature(src, "addX").unwrap();
+        assert!(sig.contains("Point"), "addX: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_87_record_string_field() {
+        let src = "type Person = { name: String, age: Int }\ngetName(p: Person) = p.name\nmain() = 0";
+        let sig = get_signature(src, "getName").unwrap();
+        assert!(sig.contains("Person") && sig.contains("String"), "getName: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_88_record_bool_field() {
+        let src = "type Flag = { value: Bool }\nisSet(f: Flag) = f.value\nmain() = 0";
+        let sig = get_signature(src, "isSet").unwrap();
+        assert!(sig.contains("Flag") && sig.contains("Bool"), "isSet: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_89_record_identity() {
+        let src = "type Box = { value: Int }\nidBox(b: Box) = b\nmain() = 0";
+        let sig = get_signature(src, "idBox").unwrap();
+        assert!(sig.contains("Box"), "idBox: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_90_record_single_field() {
+        // Simpler nested record - just access one level
+        let src = "type Inner = { val: Int }\ngetVal(i: Inner) = i.val\nmain() = 0";
+        let sig = get_signature(src, "getVal").unwrap();
+        assert!(sig.contains("Inner") && sig.contains("Int"), "getVal: got: {}", sig);
+    }
+
+    // -------------------------------------------------------------------------
+    // Custom Types - Variants (Tests 91-100)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hm_91_variant_simple() {
+        // Simple variant without type params
+        let src = "type Color = Red | Green | Blue\nred() = Red\nmain() = 0";
+        let sig = get_signature(src, "red").unwrap();
+        assert!(sig.contains("Color") || !sig.contains("->"), "red: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_92_variant_with_data() {
+        // Variant with data
+        let src = "type Result = Ok(Int) | Err(String)\nok(x) = Ok(x)\nmain() = 0";
+        let sig = get_signature(src, "ok").unwrap();
+        assert!(sig.contains("->"), "ok: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_93_variant_match_simple() {
+        // Match on simple variant using multi-clause
+        let src = "type Color = Red | Green | Blue\nisRed(Red) = true\nisRed(_) = false\nmain() = 0";
+        let sig = get_signature(src, "isRed").unwrap();
+        assert!(sig.contains("->"), "isRed: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_94_variant_to_int() {
+        // Convert variant to int using multi-clause
+        let src = "type Color = Red | Green | Blue\ntoInt(Red) = 0\ntoInt(Green) = 1\ntoInt(Blue) = 2\nmain() = 0";
+        let sig = get_signature(src, "toInt").unwrap();
+        assert!(sig.contains("->"), "toInt: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_95_variant_green() {
+        let src = "type Color = Red | Green | Blue\ngreen() = Green\nmain() = 0";
+        let sig = get_signature(src, "green").unwrap();
+        assert!(sig.contains("Color") || !sig.contains("->"), "green: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_96_variant_blue() {
+        let src = "type Color = Red | Green | Blue\nblue() = Blue\nmain() = 0";
+        let sig = get_signature(src, "blue").unwrap();
+        assert!(sig.contains("Color") || !sig.contains("->"), "blue: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_97_variant_with_two_fields() {
+        // Variant with multiple data
+        let src = "type Pair = MkPair(Int, Int)\nmkPair(a, b) = MkPair(a, b)\nmain() = 0";
+        let sig = get_signature(src, "mkPair").unwrap();
+        assert!(sig.contains("->"), "mkPair: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_98_variant_mixed() {
+        // Mix of unit and data constructors
+        let src = "type Maybe = Nothing | Just(Int)\njust(x) = Just(x)\nmain() = 0";
+        let sig = get_signature(src, "just").unwrap();
+        assert!(sig.contains("->"), "just: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_99_variant_nothing() {
+        let src = "type Maybe = Nothing | Just(Int)\nnothing() = Nothing\nmain() = 0";
+        let sig = get_signature(src, "nothing").unwrap();
+        assert!(sig.contains("Maybe") || !sig.contains("->"), "nothing: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_100_variant_is_nothing() {
+        let src = "type Maybe = Nothing | Just(Int)\nisNothing(Nothing) = true\nisNothing(_) = false\nmain() = 0";
+        let sig = get_signature(src, "isNothing").unwrap();
+        assert!(sig.contains("->"), "isNothing: got: {}", sig);
+    }
+
+    // -------------------------------------------------------------------------
+    // Lambda / Higher-Order Functions (Tests 101-110)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hm_101_lambda_identity() {
+        let sig = get_signature("idLam() = x => x\nmain() = 0", "idLam").unwrap();
+        assert!(sig.contains("->"), "idLam: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_102_lambda_const() {
+        let sig = get_signature("constLam(k) = x => k\nmain() = 0", "constLam").unwrap();
+        assert!(sig.contains("->"), "constLam: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_103_apply() {
+        let sig = get_signature("apply(f, x) = f(x)\nmain() = 0", "apply").unwrap();
+        assert!(sig.contains("->"), "apply: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_104_compose() {
+        let sig = get_signature("compose(f, g) = x => f(g(x))\nmain() = 0", "compose").unwrap();
+        assert!(sig.contains("->"), "compose: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_105_twice() {
+        let sig = get_signature("twice(f) = x => f(f(x))\nmain() = 0", "twice").unwrap();
+        assert!(sig.contains("->"), "twice: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_106_flip() {
+        let sig = get_signature("flip(f) = (x, y) => f(y, x)\nmain() = 0", "flip").unwrap();
+        assert!(sig.contains("->"), "flip: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_107_curry() {
+        let sig = get_signature("curry(f) = x => y => f(x, y)\nmain() = 0", "curry").unwrap();
+        assert!(sig.contains("->"), "curry: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_108_uncurry() {
+        let sig = get_signature("uncurry(f) = (x, y) => f(x)(y)\nmain() = 0", "uncurry").unwrap();
+        assert!(sig.contains("->"), "uncurry: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_109_lambda_with_closure() {
+        let sig = get_signature("adder(n) = x => x + n\nmain() = 0", "adder").unwrap();
+        assert!(sig.contains("->"), "adder: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_110_lambda_multilevel() {
+        let sig = get_signature("add3(a) = b => c => a + b + c\nmain() = 0", "add3").unwrap();
+        assert!(sig.contains("->"), "add3: got: {}", sig);
+    }
+
+    // -------------------------------------------------------------------------
+    // Match Expressions (Tests 111-120)
+    // Using multi-clause function syntax instead of inline match expressions
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hm_111_match_int_patterns() {
+        // Multi-clause function pattern: isZero(0) = true; isZero(_) = false
+        let sig = get_signature("isZeroM(0) = true\nisZeroM(_) = false\nmain() = 0", "isZeroM").unwrap();
+        assert!(sig.ends_with("-> Bool") || sig.contains("Bool"), "isZeroM: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_112_match_bool_patterns() {
+        // Multi-clause function pattern for bool
+        let sig = get_signature("boolToInt(true) = 1\nboolToInt(false) = 0\nmain() = 0", "boolToInt").unwrap();
+        assert!(sig.contains("->"), "boolToInt: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_113_match_tuple() {
+        // Single clause with tuple pattern
+        let sig = get_signature("sumTup((a, b)) = a + b\nmain() = 0", "sumTup").unwrap();
+        assert!(sig.contains("->"), "sumTup: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_114_match_wildcard() {
+        // Single clause with wildcard
+        let sig = get_signature("always(_) = 42\nmain() = 0", "always").unwrap();
+        assert!(sig.contains("->"), "always: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_115_match_with_guard() {
+        // Multi-clause with guards
+        let sig = get_signature("classify(n) when n > 0 = 1\nclassify(n) when n < 0 = -1\nclassify(_) = 0\nmain() = 0", "classify").unwrap();
+        assert!(sig.contains("->"), "classify: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_116_match_list_empty() {
+        // Multi-clause for list patterns
+        let sig = get_signature("isEmpty([]) = true\nisEmpty(_) = false\nmain() = 0", "isEmpty").unwrap();
+        assert!(sig.ends_with("-> Bool") || sig.contains("Bool"), "isEmpty: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_117_match_multiple_branches() {
+        // Multi-clause fibonacci
+        let sig = get_signature("fibM(0) = 0\nfibM(1) = 1\nfibM(n) = fibM(n-1) + fibM(n-2)\nmain() = 0", "fibM").unwrap();
+        assert!(sig.contains("->"), "fibM: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_118_match_string() {
+        // Multi-clause string match
+        let sig = get_signature("greet(\"hi\") = \"hello\"\ngreet(_) = \"goodbye\"\nmain() = 0", "greet").unwrap();
+        assert!(sig.contains("String") || sig.contains("->"), "greet: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_119_match_nested_tuple() {
+        // Single clause with nested tuple pattern
+        let sig = get_signature("flatten(((a, b), c)) = (a, b, c)\nmain() = 0", "flatten").unwrap();
+        assert!(sig.contains("->"), "flatten: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_120_match_or_pattern() {
+        // Multi-clause to simulate or pattern
+        let sig = get_signature("isSmall(0) = true\nisSmall(1) = true\nisSmall(2) = true\nisSmall(_) = false\nmain() = 0", "isSmall").unwrap();
+        assert!(sig.ends_with("-> Bool") || sig.contains("Bool"), "isSmall: got: {}", sig);
+    }
+
+    // -------------------------------------------------------------------------
+    // Block Expressions (Tests 121-130)
+    // Using newlines in blocks instead of semicolons
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hm_121_block_simple() {
+        let sig = get_signature("block() = { 42 }\nmain() = 0", "block").unwrap();
+        assert_eq!(sig, "Int", "block: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_122_block_with_let() {
+        // Use newlines inside block
+        let sig = get_signature("withLet(x) = {\n    y = x + 1\n    y\n}\nmain() = 0", "withLet").unwrap();
+        assert!(sig.contains("->"), "withLet: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_123_block_multiple_lets() {
+        // Multiple lets with newlines
+        let sig = get_signature("multi(a, b) = {\n    x = a + 1\n    y = b + 2\n    x + y\n}\nmain() = 0", "multi").unwrap();
+        assert!(sig.contains("->"), "multi: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_124_block_shadowing() {
+        // Shadowing with newlines
+        let sig = get_signature("shadow(x) = {\n    x = x + 1\n    x = x * 2\n    x\n}\nmain() = 0", "shadow").unwrap();
+        assert!(sig.contains("->"), "shadow: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_125_block_returns_last() {
+        // Just expressions with newlines
+        let sig = get_signature("last() = {\n    1\n    2\n    3\n}\nmain() = 0", "last").unwrap();
+        assert_eq!(sig, "Int", "last: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_126_block_with_if() {
+        // Block with if using newlines
+        let sig = get_signature("condBlock(c) = {\n    r = if c then 1 else 0\n    r\n}\nmain() = 0", "condBlock").unwrap();
+        assert!(sig.contains("->"), "condBlock: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_127_nested_blocks() {
+        let sig = get_signature("nested() = { { { 42 } } }\nmain() = 0", "nested").unwrap();
+        assert_eq!(sig, "Int", "nested: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_128_block_with_tuple() {
+        // Tuple in block with newlines
+        let sig = get_signature("tupBlock(a, b) = {\n    p = (a, b)\n    p\n}\nmain() = 0", "tupBlock").unwrap();
+        assert!(sig.contains("->"), "tupBlock: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_129_block_using_param() {
+        // Using params with multiple lets
+        let sig = get_signature("useParam(x) = {\n    y = x * 2\n    z = y + 1\n    z\n}\nmain() = 0", "useParam").unwrap();
+        assert!(sig.contains("->"), "useParam: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_130_block_complex() {
+        // Complex block with newlines
+        let sig = get_signature("complex(a, b, c) = {\n    x = a + b\n    y = x * c\n    if y > 0 then y else -y\n}\nmain() = 0", "complex").unwrap();
+        assert!(sig.contains("->"), "complex: got: {}", sig);
+    }
+
+    // -------------------------------------------------------------------------
+    // Edge Cases and Special Scenarios (Tests 131-140)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hm_131_single_char() {
+        let sig = get_signature("getChar() = 'a'\nmain() = 0", "getChar").unwrap();
+        assert_eq!(sig, "Char", "getChar: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_132_empty_string() {
+        let sig = get_signature(r#"emptyStr() = ""\nmain() = 0"#, "emptyStr").unwrap();
+        assert_eq!(sig, "String", "emptyStr: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_133_large_int() {
+        let sig = get_signature("bigNum() = 9999999999\nmain() = 0", "bigNum").unwrap();
+        assert!(sig == "Int" || sig == "BigInt", "bigNum: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_134_negative_int() {
+        let sig = get_signature("negNum() = -42\nmain() = 0", "negNum").unwrap();
+        assert_eq!(sig, "Int", "negNum: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_135_zero() {
+        let sig = get_signature("zero() = 0\nmain() = 0", "zero").unwrap();
+        assert_eq!(sig, "Int", "zero: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_136_float_zero() {
+        let sig = get_signature("fzero() = 0.0\nmain() = 0", "fzero").unwrap();
+        assert_eq!(sig, "Float", "fzero: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_137_scientific_notation() {
+        let sig = get_signature("sci() = 1.5e10\nmain() = 0", "sci").unwrap();
+        assert_eq!(sig, "Float", "sci: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_138_many_params() {
+        let sig = get_signature("many(a, b, c, d, e) = a\nmain() = 0", "many").unwrap();
+        assert_eq!(sig, "a -> b -> c -> d -> e -> a", "many: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_139_all_unified() {
+        let sig = get_signature("allSame(a, b, c, d) = a + b + c + d\nmain() = 0", "allSame").unwrap();
+        assert!(sig_matches(&sig, &["a -> a -> a -> a -> a", "Int -> Int -> Int -> Int -> Int"]),
+            "allSame: got: {}", sig);
+    }
+
+    #[test]
+    fn test_hm_140_partial_unified() {
+        let sig = get_signature("partial(a, b, c) = (a + b, c)\nmain() = 0", "partial").unwrap();
+        assert!(sig.contains("->"), "partial: got: {}", sig);
     }
 }

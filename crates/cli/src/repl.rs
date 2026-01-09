@@ -12,6 +12,7 @@
 //! - `:deps <name>` - Show what a function depends on
 //! - `:rdeps <name>` - Show what depends on a function
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -28,7 +29,9 @@ use nostos_vm::parallel::{ParallelVM, ParallelConfig};
 
 use reedline::{
     Reedline, Signal, FileBackedHistory, Highlighter, StyledText, 
-    Prompt, PromptEditMode, PromptHistorySearch
+    Prompt, PromptEditMode, PromptHistorySearch, Completer, Suggestion, Span,
+    ReedlineMenu, ColumnarMenu, MenuBuilder,
+    default_emacs_keybindings, KeyModifiers, KeyCode, ReedlineEvent, Emacs
 };
 use nu_ansi_term::{Color, Style};
 
@@ -148,6 +151,65 @@ impl Prompt for NostosPrompt {
     }
 }
 
+struct NostosCompleter;
+
+impl Completer for NostosCompleter {
+    fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
+        let (start, word) = find_word_at_pos(line, pos);
+        let span = Span::new(start, pos);
+
+        if word.starts_with(':') {
+            let commands = vec![
+                ":help", ":quit", ":exit", ":load", ":reload", ":browse", ":info",
+                ":view", ":type", ":deps", ":rdeps", ":functions", ":types",
+                ":traits", ":module", ":vars", ":bindings",
+                ":h", ":q", ":l", ":r", ":b", ":i", ":v", ":t", ":d", ":rd", ":fns", ":m"
+            ];
+            
+            commands.iter()
+                .filter(|cmd| cmd.starts_with(word))
+                .map(|cmd| Suggestion {
+                    value: cmd.to_string(),
+                    description: None,
+                    style: None,
+                    extra: None,
+                    span,
+                    append_whitespace: true,
+                })
+                .collect()
+        } else if !word.is_empty() {
+            // Keywords
+            let keywords = vec![
+                "type", "var", "if", "then", "else", "match", "when", "trait", "module", "end",
+                "use", "private", "pub", "self", "Self", "try", "catch", "finally", "do",
+                "while", "for", "to", "break", "continue", "spawn", "receive", "after", "panic",
+                "extern", "test", "deriving", "quote", "true", "false"
+            ];
+
+            keywords.iter()
+                .filter(|kw| kw.starts_with(word))
+                .map(|kw| Suggestion {
+                    value: kw.to_string(),
+                    description: None,
+                    style: None,
+                    extra: None,
+                    span,
+                    append_whitespace: true,
+                })
+                .collect()
+        } else {
+            vec![]
+        }
+    }
+}
+
+fn find_word_at_pos(line: &str, pos: usize) -> (usize, &str) {
+    let start = line[..pos].rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != ':')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    (start, &line[start..pos])
+}
+
 
 /// REPL configuration
 pub struct ReplConfig {
@@ -165,6 +227,17 @@ impl Default for ReplConfig {
 }
 
 /// The REPL state
+/// Information about a REPL variable binding
+#[derive(Clone)]
+struct VarBinding {
+    /// The thunk function name (e.g., "__repl_var_x__")
+    thunk_name: String,
+    /// Whether the variable was declared with `var` (mutable)
+    mutable: bool,
+    /// Type annotation if provided
+    type_annotation: Option<String>,
+}
+
 pub struct Repl {
     compiler: Compiler,
     vm: ParallelVM,
@@ -173,6 +246,14 @@ pub struct Repl {
     stdlib_path: Option<PathBuf>,
     call_graph: CallGraph,
     eval_counter: u64,
+    /// Current active module (default: "repl")
+    current_module: String,
+    /// Module name -> source file path (for file-backed modules)
+    module_sources: HashMap<String, PathBuf>,
+    /// Variable bindings: name -> VarBinding
+    var_bindings: HashMap<String, VarBinding>,
+    /// Counter for unique variable thunk names
+    var_counter: u64,
 }
 
 impl Repl {
@@ -194,6 +275,10 @@ impl Repl {
             stdlib_path: None,
             call_graph: CallGraph::new(),
             eval_counter: 0,
+            current_module: "repl".to_string(),
+            module_sources: HashMap::new(),
+            var_bindings: HashMap::new(),
+            var_counter: 0,
         }
     }
 
@@ -267,10 +352,28 @@ impl Repl {
                 .unwrap_or_else(|_| FileBackedHistory::new(1000).expect("Error creating history"))
         );
 
-        // Create Reedline instance with highlighter and history
+        // Create completion menu
+        let completion_menu = Box::new(ColumnarMenu::default().with_name("completion_menu"));
+
+        // Setup keybindings
+        let mut keybindings = default_emacs_keybindings();
+        keybindings.add_binding(
+            KeyModifiers::NONE,
+            KeyCode::Tab,
+            ReedlineEvent::UntilFound(vec![
+                ReedlineEvent::Menu("completion_menu".to_string()),
+                ReedlineEvent::MenuNext,
+            ]),
+        );
+        let edit_mode = Box::new(Emacs::new(keybindings));
+
+        // Create Reedline instance with highlighter, history, completer and menu
         let mut line_editor = Reedline::create()
             .with_history(history)
-            .with_highlighter(Box::new(NostosHighlighter));
+            .with_highlighter(Box::new(NostosHighlighter))
+            .with_completer(Box::new(NostosCompleter))
+            .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
+            .with_edit_mode(edit_mode);
 
         // Buffer for multi-line input
         let mut input_buffer = String::new();
@@ -281,7 +384,12 @@ impl Repl {
             let p: Box<dyn Prompt> = if in_multiline {
                 Box::new(NostosPrompt::new("... ".to_string()))
             } else {
-                Box::new(NostosPrompt::new("nos> ".to_string()))
+                let prompt = if self.current_module == "repl" {
+                    "nos> ".to_string()
+                } else {
+                    format!("{}> ", self.current_module)
+                };
+                Box::new(NostosPrompt::new(prompt))
             };
 
             let sig = line_editor.read_line(&*p);
@@ -443,6 +551,25 @@ impl Repl {
                 CommandResult::Continue
             }
 
+            ":module" | ":m" => {
+                if args.is_empty() {
+                    // Show current module
+                    println!("Current module: {}", self.current_module);
+                    if let Some(path) = self.module_sources.get(&self.current_module) {
+                        println!("Source file: {}", path.display());
+                    }
+                } else {
+                    // Switch to module
+                    self.switch_module(args);
+                }
+                CommandResult::Continue
+            }
+
+            ":vars" | ":bindings" => {
+                self.list_vars();
+                CommandResult::Continue
+            }
+
             _ => CommandResult::Error(format!("Unknown command: {}. Type :help for available commands.", cmd)),
         }
     }
@@ -454,6 +581,7 @@ impl Repl {
         println!("  :quit, :q, :exit     Exit the REPL");
         println!("  :load <file>, :l     Load a Nostos file");
         println!("  :reload, :r          Reload previously loaded files");
+        println!("  :module [name], :m   Show/switch current module");
         println!("  :browse [module], :b List functions (optionally in a module)");
         println!("  :info <name>, :i     Show info about a function or type");
         println!("  :view <name>, :v     Show source code of a function");
@@ -463,9 +591,12 @@ impl Repl {
         println!("  :functions, :fns     List all functions");
         println!("  :types               List all types");
         println!("  :traits              List all traits");
+        println!("  :vars, :bindings     List variable bindings");
         println!();
         println!("Input:");
         println!("  <expression>         Evaluate an expression");
+        println!("  <name> = <expr>      Bind a variable (immutable)");
+        println!("  var <name> = <expr>  Bind a mutable variable");
         println!("  <name>(...) = ...    Define a function");
         println!("  type <Name> = ...    Define a type");
         println!();
@@ -492,6 +623,12 @@ impl Repl {
 
         let module = module_opt.ok_or("Failed to parse file")?;
 
+        // Derive module name from file path (e.g., "foo/bar.nos" -> "bar")
+        let module_name = path.file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
         // Add to compiler
         self.compiler.add_module(&module, vec![], Arc::new(source.clone()), path_str.to_string())
             .map_err(|e| format!("Compilation error: {}", e))?;
@@ -508,7 +645,12 @@ impl Repl {
 
         // Track loaded file for reload
         if !self.loaded_files.contains(&path) {
-            self.loaded_files.push(path);
+            self.loaded_files.push(path.clone());
+        }
+
+        // Track module source for file sync
+        if !module_name.is_empty() {
+            self.module_sources.insert(module_name, path);
         }
 
         Ok(())
@@ -682,10 +824,27 @@ impl Repl {
         }
     }
 
-    /// Show type of an expression (placeholder - needs type inference)
-    fn show_type(&self, _expr: &str) {
-        // TODO: Implement type inference for expressions
-        println!("Type inference not yet implemented");
+    /// Show type of an expression or function
+    fn show_type(&self, expr: &str) {
+        let name = expr.trim();
+
+        // First try as a function name
+        if let Some(sig) = self.compiler.get_function_signature(name) {
+            println!("{} :: {}", name, sig);
+            return;
+        }
+
+        // Try with current module prefix
+        if !self.current_module.is_empty() {
+            let qualified_name = format!("{}::{}", self.current_module, name);
+            if let Some(sig) = self.compiler.get_function_signature(&qualified_name) {
+                println!("{} :: {}", name, sig);
+                return;
+            }
+        }
+
+        // Not found
+        println!("Unknown: {}", name);
     }
 
     /// Show dependencies of a function
@@ -768,6 +927,145 @@ impl Repl {
         }
     }
 
+    /// Switch to a different module
+    fn switch_module(&mut self, module_name: &str) {
+        // Check if the module exists in the compiler (loaded from file)
+        let module_exists = self.compiler.module_exists(module_name);
+
+        if module_exists {
+            self.current_module = module_name.to_string();
+            println!("Switched to module '{}'", module_name);
+            if let Some(path) = self.module_sources.get(module_name) {
+                println!("Source file: {}", path.display());
+            }
+        } else if module_name == "repl" {
+            // Always allow switching to repl module
+            self.current_module = "repl".to_string();
+            println!("Switched to module 'repl'");
+        } else {
+            // Create a new virtual module
+            self.current_module = module_name.to_string();
+            println!("Created new module '{}' (not file-backed)", module_name);
+        }
+    }
+
+    /// List all variable bindings
+    fn list_vars(&self) {
+        if self.var_bindings.is_empty() {
+            println!("No variable bindings");
+            return;
+        }
+
+        println!("Variable bindings ({}):", self.var_bindings.len());
+        let mut names: Vec<_> = self.var_bindings.keys().collect();
+        names.sort();
+        for name in names {
+            let binding = &self.var_bindings[name];
+            let mutability = if binding.mutable { "var " } else { "" };
+            let type_str = binding.type_annotation.as_ref()
+                .map(|t| format!(": {}", t))
+                .unwrap_or_default();
+            println!("  {}{}{}", mutability, name, type_str);
+        }
+    }
+
+    /// Check if input is a variable binding (e.g., "x = 5" or "var y = 10")
+    fn is_var_binding(input: &str) -> Option<(String, bool, String)> {
+        let input = input.trim();
+
+        // Check for "var name = expr" pattern
+        if input.starts_with("var ") {
+            let rest = input[4..].trim();
+            if let Some(eq_pos) = rest.find('=') {
+                let name = rest[..eq_pos].trim();
+                let expr = rest[eq_pos + 1..].trim();
+                // Make sure it's not a function definition (no parentheses in name)
+                if !name.contains('(') && !name.is_empty() && !expr.is_empty() {
+                    return Some((name.to_string(), true, expr.to_string()));
+                }
+            }
+        }
+
+        // Check for "name = expr" pattern (not a function definition)
+        if let Some(eq_pos) = input.find('=') {
+            // Make sure it's not ==, !=, <=, >=, or => operators
+            let before_eq = if eq_pos > 0 { input.chars().nth(eq_pos - 1) } else { None };
+            let after_eq = input.chars().nth(eq_pos + 1);
+
+            let is_comparison = matches!(before_eq, Some('!' | '<' | '>' | '='))
+                || matches!(after_eq, Some('=') | Some('>'));
+
+            if eq_pos > 0 && !is_comparison {
+                let name = input[..eq_pos].trim();
+                let expr = input[eq_pos + 1..].trim();
+                // Make sure it's not a function definition (no parentheses before =)
+                // and the name is a valid identifier (lowercase start)
+                if !name.contains('(') && !name.is_empty() && !expr.is_empty() {
+                    if let Some(first_char) = name.chars().next() {
+                        if first_char.is_lowercase() || first_char == '_' {
+                            return Some((name.to_string(), false, expr.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Define a variable binding
+    fn define_var(&mut self, name: &str, mutable: bool, expr: &str) -> bool {
+        self.var_counter += 1;
+        let thunk_name = format!("__repl_var_{}_{}", name, self.var_counter);
+
+        // Create a thunk function that returns the expression value
+        let wrapper = format!("{}() = {}", thunk_name, expr);
+        let (wrapper_module_opt, errors) = parse(&wrapper);
+
+        if !errors.is_empty() {
+            let source_errors = parse_errors_to_source_errors(&errors);
+            eprint_errors(&source_errors, "<repl>", &wrapper);
+            return false;
+        }
+
+        let wrapper_module = match wrapper_module_opt {
+            Some(m) => m,
+            None => {
+                eprintln!("Failed to parse expression");
+                return false;
+            }
+        };
+
+        // Add the thunk function
+        if let Err(e) = self.compiler.add_module(&wrapper_module, vec![], Arc::new(wrapper.clone()), "<repl>".to_string()) {
+            eprintln!("Error: {}", e);
+            return false;
+        }
+
+        // Compile
+        if let Err((e, filename, source)) = self.compiler.compile_all() {
+            let source_error = e.to_source_error();
+            source_error.eprint(&filename, &source);
+            return false;
+        }
+
+        // Sync VM
+        self.sync_vm();
+
+        // Store the binding
+        self.var_bindings.insert(name.to_string(), VarBinding {
+            thunk_name,
+            mutable,
+            type_annotation: None,
+        });
+
+        // Report the binding
+        let mutability = if mutable { "var " } else { "" };
+        println!("{}{} = {}", mutability, name, expr);
+
+        true
+    }
+
     /// Check if module has function or type definitions
     fn has_definitions(module: &nostos_syntax::Module) -> bool {
         for item in &module.items {
@@ -803,6 +1101,12 @@ impl Repl {
 
     /// Process user input (expression or definition)
     fn process_input(&mut self, input: &str) {
+        // Check for variable binding first (e.g., "x = 5" or "var y = 10")
+        if let Some((name, mutable, expr)) = Self::is_var_binding(input) {
+            self.define_var(&name, mutable, &expr);
+            return;
+        }
+
         // Try to parse as a module (which includes definitions and expressions)
         let (module_opt, errors) = parse(input);
 
@@ -823,8 +1127,16 @@ impl Repl {
 
         // Check if this is a function/type definition or an expression
         if Self::has_definitions(&module) {
+            // Determine module path based on current module
+            let module_path = if self.current_module == "repl" {
+                vec![]
+            } else {
+                // Split module name by . for nested modules
+                self.current_module.split('.').map(String::from).collect()
+            };
+
             // Definition(s) - add to compiler
-            if let Err(e) = self.compiler.add_module(&module, vec![], Arc::new(input.to_string()), "<repl>".to_string()) {
+            if let Err(e) = self.compiler.add_module(&module, module_path.clone(), Arc::new(input.to_string()), "<repl>".to_string()) {
                 eprintln!("Error: {}", e);
                 return;
             }
@@ -839,56 +1151,86 @@ impl Repl {
             // Sync VM
             self.sync_vm();
 
-            // Report what was defined
+            // Report what was defined (with module prefix if applicable)
+            let prefix = if module_path.is_empty() {
+                String::new()
+            } else {
+                format!("{}.", module_path.join("."))
+            };
+
             for fn_def in Self::get_fn_defs(&module) {
                 let name = &fn_def.name.node;
-                if let Some(sig) = self.compiler.get_function_signature(name) {
-                    println!("{} :: {}", name, sig);
+                let qualified_name = format!("{}{}", prefix, name);
+                if let Some(sig) = self.compiler.get_function_signature(&qualified_name) {
+                    println!("{} :: {}", qualified_name, sig);
                 } else {
-                    println!("Defined {}", name);
+                    println!("Defined {}", qualified_name);
                 }
             }
             for type_def in Self::get_type_defs(&module) {
-                println!("Defined type {}", type_def.full_name());
+                let type_name = type_def.full_name();
+                println!("Defined type {}{}", prefix, type_name);
             }
         }
     }
 
     /// Try to evaluate input as an expression
     fn try_eval_expression(&mut self, input: &str) {
+        if let Some(result) = self.eval_expression_inner(input) {
+            println!("{}", result);
+        }
+    }
+
+    /// Inner evaluation that returns the result as a string (for testing)
+    fn eval_expression_inner(&mut self, input: &str) -> Option<String> {
         // Use a unique name for each evaluation to avoid caching issues
         self.eval_counter += 1;
         let eval_name = format!("__repl_eval_{}__", self.eval_counter);
 
-        // Wrap in a temporary function and execute
-        let wrapper = format!("{}() = {}", eval_name, input);
+        // Build variable bindings preamble
+        let bindings_preamble = if self.var_bindings.is_empty() {
+            String::new()
+        } else {
+            let bindings: Vec<String> = self.var_bindings
+                .iter()
+                .map(|(name, binding)| format!("{} = {}()", name, binding.thunk_name))
+                .collect();
+            bindings.join("\n    ") + "\n    "
+        };
+
+        // Wrap in a temporary function with variable bindings injected
+        let wrapper = if bindings_preamble.is_empty() {
+            format!("{}() = {}", eval_name, input)
+        } else {
+            format!("{}() = {{\n    {}{}\n}}", eval_name, bindings_preamble, input)
+        };
         let (wrapper_module_opt, errors) = parse(&wrapper);
 
         if !errors.is_empty() {
             let source_errors = parse_errors_to_source_errors(&errors);
             eprint_errors(&source_errors, "<repl>", &wrapper);
-            return;
+            return None;
         }
 
         let wrapper_module = match wrapper_module_opt {
             Some(m) => m,
             None => {
                 eprintln!("Failed to parse expression");
-                return;
+                return None;
             }
         };
 
         // Add wrapper function temporarily
         if let Err(e) = self.compiler.add_module(&wrapper_module, vec![], Arc::new(wrapper.clone()), "<repl>".to_string()) {
             eprintln!("Error: {}", e);
-            return;
+            return None;
         }
 
         // Compile
         if let Err((e, filename, source)) = self.compiler.compile_all() {
             let source_error = e.to_source_error();
             source_error.eprint(&filename, &source);
-            return;
+            return None;
         }
 
         // Sync VM and execute
@@ -898,18 +1240,21 @@ impl Repl {
             match self.vm.run(func.clone()) {
                 Ok(Some(val)) => {
                     if !val.is_unit() {
-                        println!("{}", val.display());
+                        return Some(val.display());
                     }
+                    return None; // Unit type, no display
                 }
                 Ok(None) => {
-                    // VM returned None, try direct call if possible
+                    return None;
                 }
                 Err(e) => {
                     eprintln!("Runtime error: {}", e);
+                    return None;
                 }
             }
         } else {
             eprintln!("Internal error: evaluation function not found");
+            None
         }
     }
 
@@ -962,6 +1307,93 @@ impl Repl {
             }
         }
     }
+
+    // ===== Public API for testing =====
+
+    /// Evaluate input and return the result as a string (for testing)
+    /// This handles variable bindings, function definitions, and expressions.
+    pub fn eval(&mut self, input: &str) -> Option<String> {
+        // Check for variable binding first (e.g., "x = 5" or "var y = 10")
+        if let Some((name, mutable, expr)) = Self::is_var_binding(input) {
+            if self.define_var(&name, mutable, &expr) {
+                return Some(format!("{} = <bound>", name));
+            }
+            return None;
+        }
+
+        // Try to parse as a module (which includes definitions and expressions)
+        let (module_opt, errors) = parse(input);
+
+        // If parsing failed or no definitions, try as expression
+        if !errors.is_empty() || module_opt.as_ref().map(|m| !Self::has_definitions(m)).unwrap_or(true) {
+            return self.eval_expression_inner(input);
+        }
+
+        let module = match module_opt {
+            Some(m) => m,
+            None => return None,
+        };
+
+        // Definition(s) - add to compiler
+        let module_path = if self.current_module == "repl" {
+            vec![]
+        } else {
+            self.current_module.split('.').map(String::from).collect()
+        };
+
+        if self.compiler.add_module(&module, module_path.clone(), Arc::new(input.to_string()), "<repl>".to_string()).is_err() {
+            return None;
+        }
+
+        if self.compiler.compile_all().is_err() {
+            return None;
+        }
+
+        self.sync_vm();
+
+        // Return a summary of what was defined
+        let prefix = if module_path.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", module_path.join("."))
+        };
+
+        let mut defined = Vec::new();
+        for fn_def in Self::get_fn_defs(&module) {
+            defined.push(format!("{}{}()", prefix, fn_def.name.node));
+        }
+        for type_def in Self::get_type_defs(&module) {
+            defined.push(format!("type {}{}", prefix, type_def.full_name()));
+        }
+
+        if defined.is_empty() {
+            None
+        } else {
+            Some(format!("Defined: {}", defined.join(", ")))
+        }
+    }
+
+    /// Get all variable binding names
+    pub fn get_var_names(&self) -> Vec<String> {
+        let mut names: Vec<_> = self.var_bindings.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// Check if a variable exists
+    pub fn has_var(&self, name: &str) -> bool {
+        self.var_bindings.contains_key(name)
+    }
+
+    /// Get the current module name
+    pub fn get_current_module(&self) -> &str {
+        &self.current_module
+    }
+
+    /// Set the current module (for testing)
+    pub fn set_module(&mut self, name: &str) {
+        self.switch_module(name);
+    }
 }
 
 /// Result of handling a command
@@ -987,4 +1419,344 @@ fn visit_dirs(dir: &std::path::Path, files: &mut Vec<PathBuf>) -> Result<(), Str
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_repl() -> Repl {
+        let config = ReplConfig {
+            enable_jit: false, // Disable JIT for faster tests
+            num_threads: 1,
+        };
+        let mut repl = Repl::new(config);
+        // Load stdlib for tests
+        let _ = repl.load_stdlib();
+        repl
+    }
+
+    #[test]
+    fn test_simple_expression() {
+        let mut repl = create_test_repl();
+        assert_eq!(repl.eval("1 + 2"), Some("3".to_string()));
+        assert_eq!(repl.eval("10 * 5"), Some("50".to_string()));
+    }
+
+    #[test]
+    fn test_variable_binding() {
+        let mut repl = create_test_repl();
+
+        // Bind a variable
+        let result = repl.eval("x = 42");
+        assert!(result.is_some());
+        assert!(repl.has_var("x"));
+        assert_eq!(repl.get_var_names(), vec!["x"]);
+
+        // Use the variable
+        assert_eq!(repl.eval("x"), Some("42".to_string()));
+        assert_eq!(repl.eval("x + 8"), Some("50".to_string()));
+    }
+
+    #[test]
+    fn test_multiple_variables() {
+        let mut repl = create_test_repl();
+
+        repl.eval("a = 10");
+        repl.eval("b = 20");
+        repl.eval("c = 30");
+
+        assert_eq!(repl.get_var_names(), vec!["a", "b", "c"]);
+        assert_eq!(repl.eval("a + b + c"), Some("60".to_string()));
+    }
+
+    #[test]
+    fn test_var_mutable_binding() {
+        let mut repl = create_test_repl();
+
+        // Bind with var keyword
+        let result = repl.eval("var count = 100");
+        assert!(result.is_some());
+        assert!(repl.has_var("count"));
+
+        // Verify value
+        assert_eq!(repl.eval("count"), Some("100".to_string()));
+    }
+
+    #[test]
+    fn test_variable_in_expression() {
+        let mut repl = create_test_repl();
+
+        repl.eval("x = 5");
+        repl.eval("y = 10");
+
+        // Variables should be accessible in expressions
+        assert_eq!(repl.eval("x * y"), Some("50".to_string()));
+        assert_eq!(repl.eval("x + y + 5"), Some("20".to_string()));
+    }
+
+    #[test]
+    fn test_function_definition() {
+        let mut repl = create_test_repl();
+
+        // Define a function
+        let result = repl.eval("double(n) = n * 2");
+        assert!(result.is_some());
+
+        // Call the function
+        assert_eq!(repl.eval("double(21)"), Some("42".to_string()));
+    }
+
+    #[test]
+    fn test_function_with_variables() {
+        let mut repl = create_test_repl();
+
+        // Define a variable
+        repl.eval("factor = 3");
+
+        // Variable should be accessible in expression (but not in function body directly)
+        assert_eq!(repl.eval("factor * 10"), Some("30".to_string()));
+    }
+
+    #[test]
+    fn test_module_switching() {
+        let mut repl = create_test_repl();
+
+        assert_eq!(repl.get_current_module(), "repl");
+
+        repl.set_module("MyModule");
+        assert_eq!(repl.get_current_module(), "MyModule");
+
+        repl.set_module("repl");
+        assert_eq!(repl.get_current_module(), "repl");
+    }
+
+    #[test]
+    fn test_is_var_binding_detection() {
+        // Should detect variable bindings
+        assert!(Repl::is_var_binding("x = 5").is_some());
+        assert!(Repl::is_var_binding("var y = 10").is_some());
+        assert!(Repl::is_var_binding("myVar = 1 + 2").is_some());
+
+        // Should NOT detect these as variable bindings
+        assert!(Repl::is_var_binding("foo(x) = x * 2").is_none()); // function def
+        assert!(Repl::is_var_binding("1 + 2").is_none()); // expression
+        assert!(Repl::is_var_binding("x == 5").is_none()); // comparison
+        assert!(Repl::is_var_binding("Type = Something").is_none()); // starts with uppercase
+    }
+
+    #[test]
+    fn test_rebind_variable() {
+        let mut repl = create_test_repl();
+
+        repl.eval("x = 10");
+        assert_eq!(repl.eval("x"), Some("10".to_string()));
+
+        // Rebind to a new value
+        repl.eval("x = 20");
+        assert_eq!(repl.eval("x"), Some("20".to_string()));
+    }
+
+    #[test]
+    fn test_string_variable() {
+        let mut repl = create_test_repl();
+
+        repl.eval(r#"name = "hello""#);
+        assert!(repl.has_var("name"));
+        // Note: string display doesn't include quotes
+        assert_eq!(repl.eval("name"), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn test_list_variable() {
+        let mut repl = create_test_repl();
+
+        repl.eval("nums = [1, 2, 3]");
+        assert!(repl.has_var("nums"));
+        assert_eq!(repl.eval("nums"), Some("[1, 2, 3]".to_string()));
+    }
+
+    #[test]
+    fn test_function_signature_type_variables() {
+        let mut repl = create_test_repl();
+
+        // Define an untyped function
+        let result = repl.eval("madd(x, y) = x + y");
+        assert!(result.is_some());
+        // The signature should use type variables (a, b, c) instead of ?
+        let result_str = result.unwrap();
+        assert!(result_str.contains("madd()"), "Should define madd function: {}", result_str);
+
+        // Function should work
+        assert_eq!(repl.eval("madd(3, 4)"), Some("7".to_string()));
+    }
+
+    #[test]
+    fn test_function_signature_with_types() {
+        let mut repl = create_test_repl();
+
+        // Define a typed function
+        let result = repl.eval("typed_add(x: Int, y: Int) -> Int = x + y");
+        assert!(result.is_some());
+
+        // Function should work
+        assert_eq!(repl.eval("typed_add(10, 20)"), Some("30".to_string()));
+    }
+
+    #[test]
+    fn test_function_redefinition_basic() {
+        let mut repl = create_test_repl();
+
+        // Define function A
+        repl.eval("get_value() = 10");
+        assert_eq!(repl.eval("get_value()"), Some("10".to_string()));
+
+        // Redefine function A with a different value
+        repl.eval("get_value() = 42");
+        assert_eq!(repl.eval("get_value()"), Some("42".to_string()));
+    }
+
+    #[test]
+    fn test_function_redefinition_updates_callers() {
+        let mut repl = create_test_repl();
+
+        // Define function A that returns a constant
+        repl.eval("base() = 10");
+
+        // Define function B that calls A
+        repl.eval("derived() = base() * 2");
+
+        // Initially B should return 10 * 2 = 20
+        assert_eq!(repl.eval("derived()"), Some("20".to_string()));
+
+        // Redefine A to return a different value
+        repl.eval("base() = 100");
+
+        // Now B should return 100 * 2 = 200
+        assert_eq!(repl.eval("derived()"), Some("200".to_string()));
+    }
+
+    #[test]
+    fn test_function_redefinition_chain() {
+        let mut repl = create_test_repl();
+
+        // Create a chain: A -> B -> C
+        repl.eval("a() = 5");
+        repl.eval("b() = a() + 1");  // b = 6
+        repl.eval("c() = b() * 2");  // c = 12
+
+        assert_eq!(repl.eval("c()"), Some("12".to_string()));
+
+        // Redefine A
+        repl.eval("a() = 10");
+
+        // Now c should be (10 + 1) * 2 = 22
+        assert_eq!(repl.eval("c()"), Some("22".to_string()));
+    }
+
+    #[test]
+    fn test_function_redefinition_zero_arg_in_parameterized() {
+        let mut repl = create_test_repl();
+
+        // Define a zero-arg function that a parameterized function uses
+        repl.eval("get_mult() = 2");
+
+        // Define a parameterized function that uses it
+        repl.eval("scale(x) = x * get_mult()");
+
+        assert_eq!(repl.eval("scale(5)"), Some("10".to_string()));
+
+        // Redefine the zero-arg function
+        repl.eval("get_mult() = 3");
+
+        // scale should pick up the new get_mult
+        assert_eq!(repl.eval("scale(5)"), Some("15".to_string()));
+    }
+
+    #[test]
+    fn test_function_redefinition_multiple_callers() {
+        let mut repl = create_test_repl();
+
+        // Define base function
+        repl.eval("factor() = 2");
+
+        // Define multiple functions that use it
+        repl.eval("double(x) = x * factor()");
+        repl.eval("add_factor(x) = x + factor()");
+
+        assert_eq!(repl.eval("double(10)"), Some("20".to_string()));
+        assert_eq!(repl.eval("add_factor(10)"), Some("12".to_string()));
+
+        // Redefine factor
+        repl.eval("factor() = 5");
+
+        // Both callers should use the new definition
+        assert_eq!(repl.eval("double(10)"), Some("50".to_string()));
+        assert_eq!(repl.eval("add_factor(10)"), Some("15".to_string()));
+    }
+
+    #[test]
+    fn test_function_redefinition_with_recursion_wrapper() {
+        let mut repl = create_test_repl();
+
+        // Define a simple non-recursive helper
+        repl.eval("multiplier() = 2");
+
+        // Define a function that uses the helper
+        repl.eval("apply_mult(x) = x * multiplier()");
+
+        assert_eq!(repl.eval("apply_mult(5)"), Some("10".to_string()));
+
+        // Redefine the helper
+        repl.eval("multiplier() = 3");
+
+        // apply_mult should use the new multiplier
+        assert_eq!(repl.eval("apply_mult(5)"), Some("15".to_string()));
+    }
+
+    #[test]
+    fn test_function_redefinition_with_closure() {
+        let mut repl = create_test_repl();
+
+        // Define a constant provider
+        repl.eval("get_multiplier() = 2");
+
+        // Define a function that creates a closure-like behavior
+        repl.eval("scale(x) = x * get_multiplier()");
+
+        assert_eq!(repl.eval("scale(5)"), Some("10".to_string()));
+
+        // Change the multiplier
+        repl.eval("get_multiplier() = 10");
+
+        // Scale should now use new multiplier
+        assert_eq!(repl.eval("scale(5)"), Some("50".to_string()));
+    }
+
+    #[test]
+    fn test_function_redefinition_preserves_unrelated() {
+        let mut repl = create_test_repl();
+
+        // Define multiple independent functions
+        repl.eval("foo() = 1");
+        repl.eval("bar() = 2");
+        repl.eval("baz() = 3");
+
+        // Define a function that uses only foo
+        repl.eval("use_foo() = foo() + 100");
+
+        assert_eq!(repl.eval("use_foo()"), Some("101".to_string()));
+        assert_eq!(repl.eval("bar()"), Some("2".to_string()));
+        assert_eq!(repl.eval("baz()"), Some("3".to_string()));
+
+        // Redefine foo
+        repl.eval("foo() = 50");
+
+        // use_foo should update
+        assert_eq!(repl.eval("use_foo()"), Some("150".to_string()));
+
+        // bar and baz should be unchanged
+        assert_eq!(repl.eval("bar()"), Some("2".to_string()));
+        assert_eq!(repl.eval("baz()"), Some("3".to_string()));
+    }
 }

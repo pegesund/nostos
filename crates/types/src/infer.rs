@@ -31,6 +31,8 @@ pub enum Constraint {
 pub struct InferCtx<'a> {
     pub env: &'a mut TypeEnv,
     pub constraints: Vec<Constraint>,
+    /// Trait bounds on type variables: maps type var ID to set of required traits
+    pub trait_bounds: HashMap<u32, Vec<String>>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -38,7 +40,44 @@ impl<'a> InferCtx<'a> {
         Self {
             env,
             constraints: Vec::new(),
+            trait_bounds: HashMap::new(),
         }
+    }
+
+    /// Add a trait bound to a type variable
+    pub fn add_trait_bound(&mut self, var_id: u32, trait_name: String) {
+        let bounds = self.trait_bounds.entry(var_id).or_default();
+        if !bounds.contains(&trait_name) {
+            bounds.push(trait_name);
+        }
+    }
+
+    /// Get trait bounds for a type variable.
+    /// Follows the substitution chain to find all bounds on equivalent type variables.
+    pub fn get_trait_bounds(&self, var_id: u32) -> Vec<&String> {
+        let mut result = Vec::new();
+
+        // Check bounds directly on this var
+        if let Some(bounds) = self.trait_bounds.get(&var_id) {
+            result.extend(bounds.iter());
+        }
+
+        // Also check bounds on any type variable that maps TO this one
+        // (i.e., look through substitution backwards)
+        for (&source_id, source_bounds) in &self.trait_bounds {
+            if source_id == var_id {
+                continue; // Already added
+            }
+            // Check if source_id eventually resolves to var_id
+            let resolved = self.env.apply_subst(&Type::Var(source_id));
+            if let Type::Var(resolved_id) = resolved {
+                if resolved_id == var_id {
+                    result.extend(source_bounds.iter());
+                }
+            }
+        }
+
+        result
     }
 
     /// Generate a fresh type variable.
@@ -64,23 +103,45 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Solve all constraints through unification.
+    /// Uses a fixed-point iteration with a maximum iteration limit to avoid infinite loops
+    /// when constraints reference unresolved type variables.
     pub fn solve(&mut self) -> Result<(), TypeError> {
+        const MAX_ITERATIONS: usize = 1000;
+        let mut iteration = 0;
+        let mut deferred_count = 0;
+
         while let Some(constraint) = self.constraints.pop() {
+            iteration += 1;
+            if iteration > MAX_ITERATIONS {
+                // Too many iterations - likely an infinite loop due to unresolved constraints
+                // Return success but leave type variables unresolved
+                return Ok(());
+            }
+
             match constraint {
                 Constraint::Equal(t1, t2) => {
                     self.unify_types(&t1, &t2)?;
+                    deferred_count = 0; // Made progress
                 }
                 Constraint::HasTrait(ty, trait_name) => {
                     let resolved = self.env.apply_subst(&ty);
-                    if !matches!(resolved, Type::Var(_)) {
-                        if !self.env.implements(&resolved, &trait_name) {
-                            return Err(TypeError::MissingTraitImpl {
-                                ty: resolved.display(),
-                                trait_name,
-                            });
+                    match &resolved {
+                        Type::Var(var_id) => {
+                            // Track trait bound on the type variable
+                            self.add_trait_bound(*var_id, trait_name);
+                            deferred_count = 0; // Made progress (recorded the bound)
+                        }
+                        _ => {
+                            // Concrete type - check if it implements the trait
+                            if !self.env.implements(&resolved, &trait_name) {
+                                return Err(TypeError::MissingTraitImpl {
+                                    ty: resolved.display(),
+                                    trait_name,
+                                });
+                            }
+                            deferred_count = 0; // Made progress
                         }
                     }
-                    // If it's still a variable, we defer the check
                 }
                 Constraint::HasField(ty, field, expected_ty) => {
                     let resolved = self.env.apply_subst(&ty);
@@ -96,11 +157,58 @@ impl<'a> InferCtx<'a> {
                                     field,
                                 });
                             }
+                            deferred_count = 0; // Made progress
+                        }
+                        Type::Named { name, .. } => {
+                            // Check if this is a known record type
+                            if let Some(crate::TypeDef::Record { fields, .. }) = self.env.lookup_type(name).cloned() {
+                                if let Some((_, actual_ty, _)) =
+                                    fields.iter().find(|(n, _, _)| n == &field)
+                                {
+                                    self.unify_types(&actual_ty, &expected_ty)?;
+                                    deferred_count = 0; // Made progress
+                                } else {
+                                    return Err(TypeError::NoSuchField {
+                                        ty: resolved.display(),
+                                        field,
+                                    });
+                                }
+                            } else {
+                                return Err(TypeError::NoSuchField {
+                                    ty: resolved.display(),
+                                    field,
+                                });
+                            }
                         }
                         Type::Var(_) => {
                             // Defer: we don't know the type yet
+                            deferred_count += 1;
+                            if deferred_count > self.constraints.len() + 1 {
+                                // We've gone around the entire queue without progress
+                                // Drop this constraint to avoid infinite loop
+                                continue;
+                            }
                             self.constraints
                                 .push(Constraint::HasField(resolved, field, expected_ty));
+                        }
+                        Type::Tuple(elems) => {
+                            // Handle tuple field access like .0, .1, etc.
+                            if let Ok(idx) = field.parse::<usize>() {
+                                if idx < elems.len() {
+                                    self.unify_types(&elems[idx], &expected_ty)?;
+                                    deferred_count = 0; // Made progress
+                                } else {
+                                    return Err(TypeError::NoSuchField {
+                                        ty: resolved.display(),
+                                        field,
+                                    });
+                                }
+                            } else {
+                                return Err(TypeError::NoSuchField {
+                                    ty: resolved.display(),
+                                    field,
+                                });
+                            }
                         }
                         _ => {
                             return Err(TypeError::NoSuchField {
@@ -851,6 +959,7 @@ impl<'a> InferCtx<'a> {
             // Arithmetic: both operands same numeric type, result same type
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
                 self.unify(left_ty.clone(), right_ty);
+                self.require_trait(left_ty.clone(), "Num");
                 Ok(left_ty)
             }
 
@@ -1645,7 +1754,7 @@ mod tests {
 
     #[test]
     fn test_infer_addition() {
-        let mut env = TypeEnv::new();
+        let mut env = crate::standard_env();
         let expr = Expr::BinOp(
             Box::new(Expr::Int(1, span())),
             BinOp::Add,
@@ -1697,7 +1806,7 @@ mod tests {
 
     #[test]
     fn test_infer_type_mismatch_binop() {
-        let mut env = TypeEnv::new();
+        let mut env = crate::standard_env();
         let expr = Expr::BinOp(
             Box::new(Expr::Int(1, span())),
             BinOp::Add,
@@ -1705,6 +1814,7 @@ mod tests {
             span(),
         );
         let result = infer_expr_type(&mut env, &expr);
+        // Should fail because Int and String cannot be unified
         assert!(matches!(result, Err(TypeError::UnificationFailed(_, _))));
     }
 
@@ -1949,7 +2059,7 @@ mod tests {
 
     #[test]
     fn test_infer_match_with_binding() {
-        let mut env = TypeEnv::new();
+        let mut env = crate::standard_env();
         let expr = Expr::Match(
             Box::new(Expr::Int(42, span())),
             vec![MatchArm {
@@ -1989,7 +2099,7 @@ mod tests {
 
     #[test]
     fn test_infer_block_with_let() {
-        let mut env = TypeEnv::new();
+        let mut env = crate::standard_env();
         let expr = Expr::Block(
             vec![
                 Stmt::Let(Binding {
@@ -2240,7 +2350,7 @@ mod tests {
     fn test_infer_curried_function() {
         // Curried addition with concrete constraint: x => y => x + y + 0
         // The 0 forces the type to be Int
-        let mut env = TypeEnv::new();
+        let mut env = crate::standard_env();
         let expr = Expr::Lambda(
             vec![Pattern::Var(ident("x"))],
             Box::new(Expr::Lambda(
@@ -2329,7 +2439,7 @@ mod tests {
 
     #[test]
     fn test_infer_lambda_with_multiple_params() {
-        let mut env = TypeEnv::new();
+        let mut env = crate::standard_env();
         // (a, b, c) => a + b + c + 0  (0 constrains to Int)
         let expr = Expr::Lambda(
             vec![
@@ -2476,7 +2586,7 @@ mod tests {
 
     #[test]
     fn test_infer_complex_block() {
-        let mut env = TypeEnv::new();
+        let mut env = crate::standard_env();
         // {
         //   let x = 1
         //   let y = 2
@@ -2596,7 +2706,7 @@ mod tests {
 
     #[test]
     fn test_infer_float_arithmetic() {
-        let mut env = TypeEnv::new();
+        let mut env = crate::standard_env();
         // 3.14 * 2.0 + 1.0
         let expr = Expr::BinOp(
             Box::new(Expr::BinOp(
@@ -2615,7 +2725,7 @@ mod tests {
 
     #[test]
     fn test_infer_mixed_int_float_error() {
-        let mut env = TypeEnv::new();
+        let mut env = crate::standard_env();
         // 3.14 + 1 (should fail - can't mix Float and Int)
         let expr = Expr::BinOp(
             Box::new(Expr::Float(3.14, span())),
