@@ -8,4 +8,9 @@ nostos-syntax = { path = "../syntax" }
 nostos-types = { path = "../types" }
 thiserror = "2.0"
 
+[[bench]]
+name = "vm_vs_runtime"
+harness = false
+
 [dev-dependencies]
+nostos-compiler = { path = "../compiler" }
