@@ -447,9 +447,37 @@ impl ReplEngine {
                 let type_name = type_def.full_name();
                 output.push_str(&format!("Defined type {}{}\n", prefix, type_name));
             }
+
+            // Auto-save to SourceManager if available (directory mode)
+            if self.source_manager.is_some() {
+                // Collect all defined names from this input
+                let mut all_names: Vec<String> = Vec::new();
+                for fn_def in Self::get_fn_defs(&module) {
+                    all_names.push(fn_def.name.node.clone());
+                }
+                for type_def in Self::get_type_defs(&module) {
+                    all_names.push(type_def.name.node.clone());
+                }
+                for trait_def in Self::get_trait_defs(&module) {
+                    all_names.push(trait_def.name.node.clone());
+                }
+
+                // Save each definition to SourceManager
+                for name in &all_names {
+                    let full_name = format!("{}{}", prefix, name);
+                    // Get definition source from the parsed module
+                    if let Some(def_source) = Self::get_def_source(&module, name, input) {
+                        if let Err(e) = self.save_definition(&full_name, &def_source) {
+                            // Don't fail the eval, just log
+                            output.push_str(&format!("\n(auto-save warning: {})", e));
+                        }
+                    }
+                }
+            }
+
             return Ok(output.trim_end().to_string());
         }
-        
+
         Ok(String::new())
     }
 
@@ -578,7 +606,36 @@ impl ReplEngine {
             }
         }).collect()
     }
-    
+
+    fn get_trait_defs(module: &nostos_syntax::Module) -> Vec<&nostos_syntax::ast::TraitDef> {
+        module.items.iter().filter_map(|item| {
+            if let Item::TraitDef(trait_def) = item {
+                Some(trait_def)
+            } else {
+                None
+            }
+        }).collect()
+    }
+
+    /// Extract definition source from input by name
+    fn get_def_source(module: &nostos_syntax::Module, name: &str, input: &str) -> Option<String> {
+        for item in &module.items {
+            match item {
+                Item::FnDef(fn_def) if fn_def.name.node == name => {
+                    return Some(input[fn_def.span.start..fn_def.span.end].to_string());
+                }
+                Item::TypeDef(type_def) if type_def.name.node == name => {
+                    return Some(input[type_def.span.start..type_def.span.end].to_string());
+                }
+                Item::TraitDef(trait_def) if trait_def.name.node == name => {
+                    return Some(input[trait_def.span.start..trait_def.span.end].to_string());
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     // Introspection methods returning String instead of printing
     pub fn get_functions(&self) -> Vec<String> {
         let mut functions: Vec<_> = self.compiler.get_function_names().into_iter().map(String::from).collect();
