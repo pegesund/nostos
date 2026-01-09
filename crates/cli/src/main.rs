@@ -345,7 +345,7 @@ fn run_with_async_vm(
     entry_point_name: &str,
     profiling_enabled: bool,
     enable_jit: bool,
-    extension_paths: &[String],
+    ext_mgr: Option<std::sync::Arc<nostos_vm::ExtensionManager>>,
 ) -> ExitCode {
     let config = AsyncConfig {
         profiling_enabled,
@@ -356,24 +356,8 @@ fn run_with_async_vm(
     // Register default native functions
     vm.register_default_natives();
 
-    // Load extensions if specified
-    if !extension_paths.is_empty() {
-        // Create tokio runtime for extension manager
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime for extensions");
-        let ext_mgr = std::sync::Arc::new(nostos_vm::ExtensionManager::new(rt.handle().clone()));
-
-        for path in extension_paths {
-            let ext_path = std::path::Path::new(path);
-            match ext_mgr.load(ext_path) {
-                Ok(msg) => eprintln!("{}", msg),
-                Err(e) => {
-                    eprintln!("Error loading extension '{}': {}", path, e);
-                    return ExitCode::FAILURE;
-                }
-            }
-        }
-
-        // Set extension manager on VM
+    // Set extension manager if provided
+    if let Some(ext_mgr) = ext_mgr {
         vm.set_extension_manager(ext_mgr);
     }
 
@@ -902,18 +886,35 @@ fn main() -> ExitCode {
     // Initialize empty compiler
     let mut compiler = Compiler::new_empty();
 
-    // Pre-load extensions to get function indices for CallExtensionIdx optimization
+    // Load extensions once - used for both getting indices AND execution
+    // We keep the runtime alive for the duration of the program
+    let _ext_runtime: Option<tokio::runtime::Runtime>;
+    let ext_mgr: Option<std::sync::Arc<nostos_vm::ExtensionManager>>;
+
     if !extension_paths.is_empty() {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime for extensions");
-        let ext_mgr = nostos_vm::ExtensionManager::new(rt.handle().clone());
+        let mgr = std::sync::Arc::new(nostos_vm::ExtensionManager::new(rt.handle().clone()));
+
         for path in &extension_paths {
             let ext_path = std::path::Path::new(path);
-            if let Err(e) = ext_mgr.load(ext_path) {
-                eprintln!("Warning: Failed to pre-load extension '{}': {}", path, e);
+            match mgr.load(ext_path) {
+                Ok(msg) => eprintln!("{}", msg),
+                Err(e) => {
+                    eprintln!("Error loading extension '{}': {}", path, e);
+                    return ExitCode::FAILURE;
+                }
             }
         }
+
         // Set extension indices on compiler for CallExtensionIdx optimization
-        compiler.set_extension_indices(ext_mgr.get_all_function_indices());
+        compiler.set_extension_indices(mgr.get_all_function_indices());
+
+        // Keep runtime and manager alive
+        _ext_runtime = Some(rt);
+        ext_mgr = Some(mgr);
+    } else {
+        _ext_runtime = None;
+        ext_mgr = None;
     }
 
     // Load stdlib
@@ -1107,5 +1108,5 @@ fn main() -> ExitCode {
     };
 
     // Run with AsyncVM
-    run_with_async_vm(&compiler, &entry_point_name, profiling_enabled, enable_jit, &extension_paths)
+    run_with_async_vm(&compiler, &entry_point_name, profiling_enabled, enable_jit, ext_mgr)
 }
