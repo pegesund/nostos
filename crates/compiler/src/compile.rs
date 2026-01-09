@@ -538,6 +538,8 @@ pub enum MvarInitValue {
     String(String),
     Char(char),
     EmptyList,
+    IntList(Vec<i64>),
+    StringList(Vec<String>),
 }
 
 /// Mvar access information for a function (for deadlock detection).
@@ -1246,6 +1248,33 @@ impl Compiler {
             Expr::String(StringLit::Plain(s), _) => Some(MvarInitValue::String(s.clone())),
             Expr::Char(c, _) => Some(MvarInitValue::Char(*c)),
             Expr::List(items, None, _) if items.is_empty() => Some(MvarInitValue::EmptyList),
+            Expr::List(items, None, _) => {
+                // Try to parse as list of ints
+                let mut ints = Vec::new();
+                let mut is_int_list = true;
+                for item in items {
+                    if let Expr::Int(n, _) = item {
+                        ints.push(*n);
+                    } else {
+                        is_int_list = false;
+                        break;
+                    }
+                }
+                if is_int_list {
+                    return Some(MvarInitValue::IntList(ints));
+                }
+
+                // Try to parse as list of strings
+                let mut strings = Vec::new();
+                for item in items {
+                    if let Expr::String(StringLit::Plain(s), _) = item {
+                        strings.push(s.clone());
+                    } else {
+                        return None; // Not a homogeneous list of constants
+                    }
+                }
+                Some(MvarInitValue::StringList(strings))
+            }
             _ => None,
         }
     }
