@@ -1,0 +1,48 @@
+# Simple Web Server
+#
+# A minimal HTTP server demonstrating the spawn-per-request pattern.
+# Each request is handled in its own lightweight process.
+#
+# Test:
+#   curl http://localhost:8080/
+#   curl http://localhost:8080/hello
+#   curl http://localhost:8080/echo -d "test data"
+
+# Handle requests based on path
+handle(req) = {
+    match req.path {
+        "/" ->
+            Server.respond(req.id, 200, [("Content-Type", "text/plain")],
+                "Simple Web Server\n\nRoutes:\n  /hello - greeting\n  /echo  - echo POST body")
+
+        "/hello" ->
+            Server.respond(req.id, 200, [("Content-Type", "text/plain")],
+                "Hello, World!")
+
+        "/echo" ->
+            Server.respond(req.id, 200, [("Content-Type", "text/plain")],
+                "You sent: " ++ req.body)
+
+        _ ->
+            Server.respond(req.id, 404, [("Content-Type", "text/plain")],
+                "Not Found: " ++ req.path)
+    }
+}
+
+# Accept loop: spawns a new process for each request
+# The recursion is OUTSIDE the try block for proper tail-call optimization
+acceptLoop(server) = {
+    ok = try {
+        req = Server.accept(server)
+        spawn { handle(req) }
+        true
+    } catch { _ -> false }
+
+    if ok then acceptLoop(server) else ()
+}
+
+main() = {
+    server = Server.bind(8080)
+    println("Server running on http://localhost:8080")
+    acceptLoop(server)
+}
