@@ -1401,13 +1401,32 @@ impl ReplEngine {
         Some((names, expr.to_string()))
     }
 
+    /// Check if a type annotation is safe to use in wrapper code.
+    /// Returns false for types that would cause compilation errors:
+    /// - Module-qualified types (like "testvec.Vec") - not in scope
+    /// - Type parameters (single lowercase letter like "a") - not concrete
+    fn is_safe_type_annotation(type_ann: &str) -> bool {
+        // Skip module-qualified types
+        if type_ann.contains('.') {
+            return false;
+        }
+        // Skip type parameters (single lowercase letter)
+        if type_ann.len() == 1 {
+            if let Some(c) = type_ann.chars().next() {
+                if c.is_ascii_lowercase() {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Define a variable binding
     fn define_var(&mut self, name: &str, mutable: bool, expr: &str) -> Result<String, String> {
         self.var_counter += 1;
         let thunk_name = format!("__repl_var_{}_{}", name, self.var_counter);
 
         // Build bindings preamble to inject existing variables (excluding the one being defined)
-        // Include type annotations so the compiler knows variable types for trait dispatch
         let bindings_preamble = if self.var_bindings.is_empty() {
             String::new()
         } else {
@@ -1415,9 +1434,12 @@ impl ReplEngine {
                 .iter()
                 .filter(|(var_name, _)| *var_name != name) // Don't inject the variable being defined
                 .map(|(var_name, binding)| {
-                    // Include type annotation if available for proper trait dispatch
                     if let Some(ref type_ann) = binding.type_annotation {
-                        format!("{}: {} = {}()", var_name, type_ann, binding.thunk_name)
+                        if Self::is_safe_type_annotation(type_ann) {
+                            format!("{}: {} = {}()", var_name, type_ann, binding.thunk_name)
+                        } else {
+                            format!("{} = {}()", var_name, binding.thunk_name)
+                        }
                     } else {
                         format!("{} = {}()", var_name, binding.thunk_name)
                     }
@@ -1435,6 +1457,7 @@ impl ReplEngine {
         } else {
             format!("{}() = {{\n    {}{}\n}}", thunk_name, bindings_preamble, expr)
         };
+
         let (wrapper_module_opt, errors) = parse(&wrapper);
 
         if !errors.is_empty() {
@@ -1480,7 +1503,7 @@ impl ReplEngine {
         }
 
         self.var_bindings.insert(name.to_string(), VarBinding {
-            thunk_name,
+            thunk_name: thunk_name.clone(),
             mutable,
             type_annotation: inferred_type.clone(),
         });
@@ -1951,9 +1974,12 @@ impl ReplEngine {
             let bindings: Vec<String> = self.var_bindings
                 .iter()
                 .map(|(name, binding)| {
-                    // Include type annotation if available for proper trait dispatch
                     if let Some(ref type_ann) = binding.type_annotation {
-                        format!("{}: {} = {}()", name, type_ann, binding.thunk_name)
+                        if Self::is_safe_type_annotation(type_ann) {
+                            format!("{}: {} = {}()", name, type_ann, binding.thunk_name)
+                        } else {
+                            format!("{} = {}()", name, binding.thunk_name)
+                        }
                     } else {
                         format!("{} = {}()", name, binding.thunk_name)
                     }
@@ -2549,11 +2575,105 @@ impl ReplEngine {
         Some(stripped)
     }
 
+    /// Find a binary operator (+, -, *, /) at the top level of an expression
+    /// Returns (left_operand, operator, right_operand) if found
+    fn find_top_level_binary_op<'a>(&self, expr: &'a str) -> Option<(&'a str, char, &'a str)> {
+        let bytes = expr.as_bytes();
+        let mut paren_depth: i32 = 0;
+        let mut bracket_depth: i32 = 0;
+        let mut brace_depth: i32 = 0;
+        let mut in_string = false;
+
+        // Scan right to left to find the lowest precedence operator at top level
+        // + and - have lower precedence than * and /
+        let mut last_additive_pos: Option<usize> = None;
+        let mut last_multiplicative_pos: Option<usize> = None;
+
+        let mut i = 0;
+        while i < bytes.len() {
+            let c = bytes[i] as char;
+
+            // Handle string literals
+            if c == '"' && (i == 0 || bytes[i - 1] != b'\\') {
+                in_string = !in_string;
+                i += 1;
+                continue;
+            }
+
+            if in_string {
+                i += 1;
+                continue;
+            }
+
+            match c {
+                '(' => paren_depth += 1,
+                ')' => paren_depth = paren_depth.saturating_sub(1),
+                '[' => bracket_depth += 1,
+                ']' => bracket_depth = bracket_depth.saturating_sub(1),
+                '{' => brace_depth += 1,
+                '}' => brace_depth = brace_depth.saturating_sub(1),
+                '+' | '-' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                    // Make sure it's not a unary operator (at start or after another operator)
+                    if i > 0 {
+                        let prev = bytes[i - 1] as char;
+                        if !matches!(prev, '+' | '-' | '*' | '/' | '(' | '[' | '{' | ',' | '=') {
+                            last_additive_pos = Some(i);
+                        }
+                    }
+                }
+                '*' | '/' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                    last_multiplicative_pos = Some(i);
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+
+        // Prefer lower-precedence operators (+ -) over higher-precedence (* /)
+        let op_pos = last_additive_pos.or(last_multiplicative_pos)?;
+        let op = bytes[op_pos] as char;
+        let left = expr[..op_pos].trim();
+        let right = expr[op_pos + 1..].trim();
+
+        if !left.is_empty() && !right.is_empty() {
+            Some((left, op, right))
+        } else {
+            None
+        }
+    }
+
+    /// Infer the type of a binary operation expression
+    fn infer_binary_op_type(&self, expr: &str) -> Option<String> {
+        let (left, _op, right) = self.find_top_level_binary_op(expr)?;
+
+        // Get the type of the left operand
+        let left_type = self.get_expr_base_type(left)
+            .or_else(|| self.infer_expr_type_from_structure(left))?;
+
+        // Get the type of the right operand
+        let right_type = self.get_expr_base_type(right)
+            .or_else(|| self.infer_expr_type_from_structure(right))?;
+
+        // If both operands have the same type, the result has that type
+        // (This works for any type that implements the Num trait)
+        if left_type == right_type {
+            Some(left_type)
+        } else {
+            None
+        }
+    }
+
     /// Try to infer a better type from the expression structure
     /// This is used when HM inference returns a generic type parameter
     fn infer_expr_type_from_structure(&self, expr: &str) -> Option<String> {
         // Parse the expression to look for method calls
         let trimmed = expr.trim();
+
+        // Check for binary operations (+ - * /) at the top level
+        // For Num trait operators, if both sides have the same type, result has that type
+        if let Some(op_result) = self.infer_binary_op_type(trimmed) {
+            return Some(op_result);
+        }
 
         // Check for function calls
         if let Some(paren_pos) = trimmed.find('(') {
@@ -5954,7 +6074,7 @@ impl ReplEngine {
         self.eval_counter += 1;
         let eval_name = format!("__repl_eval_{}__", self.eval_counter);
 
-        // Include type annotations so the compiler knows variable types for trait dispatch
+        // Include type annotations for trait dispatch
         let bindings_preamble = if self.var_bindings.is_empty() {
             String::new()
         } else {
@@ -5962,7 +6082,11 @@ impl ReplEngine {
                 .iter()
                 .map(|(name, binding)| {
                     if let Some(ref type_ann) = binding.type_annotation {
-                        format!("{}: {} = {}()", name, type_ann, binding.thunk_name)
+                        if Self::is_safe_type_annotation(type_ann) {
+                            format!("{}: {} = {}()", name, type_ann, binding.thunk_name)
+                        } else {
+                            format!("{} = {}()", name, binding.thunk_name)
+                        }
                     } else {
                         format!("{} = {}()", name, binding.thunk_name)
                     }
@@ -6040,7 +6164,7 @@ impl ReplEngine {
         self.eval_counter += 1;
         let eval_name = format!("__repl_eval_{}__", self.eval_counter);
 
-        // Include type annotations so the compiler knows variable types for trait dispatch
+        // Include type annotations for trait dispatch
         let bindings_preamble = if self.var_bindings.is_empty() {
             String::new()
         } else {
@@ -6048,7 +6172,11 @@ impl ReplEngine {
                 .iter()
                 .map(|(name, binding)| {
                     if let Some(ref type_ann) = binding.type_annotation {
-                        format!("{}: {} = {}()", name, type_ann, binding.thunk_name)
+                        if Self::is_safe_type_annotation(type_ann) {
+                            format!("{}: {} = {}()", name, type_ann, binding.thunk_name)
+                        } else {
+                            format!("{} = {}()", name, binding.thunk_name)
+                        }
                     } else {
                         format!("{} = {}()", name, binding.thunk_name)
                     }
@@ -12558,5 +12686,373 @@ pub vec(data) -> Vec = Vec(data)
             matches!(item, BrowserItem::Function { name, .. } if name == "vec")
         });
         assert!(has_vec_fn, "testmod should contain vec function");
+    }
+}
+
+#[cfg(test)]
+mod nalgebra_debug_tests {
+    use super::*;
+
+    #[test]
+    fn test_nalgebra_vec_addition() {
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        
+        println!("\n=== use nalgebra.* ===");
+        match engine.eval("use nalgebra.*") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => println!("ERR: {}", e),
+        }
+        
+        println!("\n=== v7 = vec([1.0,2.0,3.1]) ===");
+        match engine.eval("v7 = vec([1.0,2.0,3.1])") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => println!("ERR: {}", e),
+        }
+        
+        println!("\n=== v8 = v7 + v7 ===");
+        match engine.eval("v8 = v7 + v7") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => println!("ERR: {}", e),
+        }
+        
+        println!("\n=== v8 ===");
+        match engine.eval("v8") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => println!("ERR: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_binary_op_type_inference() {
+        let mut engine = ReplEngine::new(ReplConfig::default());
+
+        // Manually set up a variable binding with a known type
+        engine.var_bindings.insert("v7".to_string(), VarBinding {
+            thunk_name: "__repl_var_v7_1".to_string(),
+            mutable: false,
+            type_annotation: Some("nalgebra.Vec".to_string()),
+        });
+
+        // Test that find_top_level_binary_op works
+        let result = engine.find_top_level_binary_op("v7 + v7");
+        assert_eq!(result, Some(("v7", '+', "v7")));
+
+        // Test that infer_binary_op_type returns the correct type
+        let inferred = engine.infer_binary_op_type("v7 + v7");
+        assert_eq!(inferred, Some("nalgebra.Vec".to_string()));
+
+        // Test more complex expressions
+        let result2 = engine.find_top_level_binary_op("v7 * v7 + v7");
+        assert_eq!(result2, Some(("v7 * v7", '+', "v7")));
+
+        // Test with parentheses (should not find op inside parens)
+        let result3 = engine.find_top_level_binary_op("(v7 + v7)");
+        assert_eq!(result3, None); // The + is inside parens
+
+        println!("Binary operation type inference tests passed!");
+    }
+
+    #[test]
+    fn test_var_bindings_flow() {
+        let mut engine = ReplEngine::new(ReplConfig::default());
+
+        // Test 1: Define a simple variable
+        println!("\n=== x = 42 ===");
+        match engine.eval("x = 42") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed to define x");
+            }
+        }
+
+        // Check var_bindings
+        println!("var_bindings after x = 42: {:?}", engine.var_bindings.keys().collect::<Vec<_>>());
+
+        // Test 2: Use the variable
+        println!("\n=== x ===");
+        match engine.eval("x") {
+            Ok(result) => {
+                println!("OK: {}", result);
+                assert_eq!(result.trim(), "42");
+            }
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed to eval x: {}", e);
+            }
+        }
+
+        // Test 3: Use variable in expression
+        println!("\n=== x + x ===");
+        match engine.eval("x + x") {
+            Ok(result) => {
+                println!("OK: {}", result);
+                assert_eq!(result.trim(), "84");
+            }
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed to eval x + x: {}", e);
+            }
+        }
+
+        // Test 4: Define y = x + x
+        println!("\n=== y = x + x ===");
+        match engine.eval("y = x + x") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed to define y: {}", e);
+            }
+        }
+
+        // Test 5: Use y
+        println!("\n=== y ===");
+        match engine.eval("y") {
+            Ok(result) => {
+                println!("OK: {}", result);
+                assert_eq!(result.trim(), "84");
+            }
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed to eval y: {}", e);
+            }
+        }
+
+        println!("\nVar bindings flow test passed!");
+    }
+
+    #[test]
+    fn test_var_bindings_with_use_statement() {
+        // This test replicates the exact REPL environment:
+        // 1. Load stdlib (like real REPL)
+        // 2. Run a use statement
+        // 3. Test variable bindings after use
+
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().ok();
+
+        // Test 1: Define a variable BEFORE use statement
+        println!("\n=== x = 42 (before use) ===");
+        match engine.eval("x = 42") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed to define x");
+            }
+        }
+        println!("var_bindings after x = 42: {:?}", engine.var_bindings.keys().collect::<Vec<_>>());
+
+        // Test 2: Use statement (importing from stdlib)
+        println!("\n=== use list.* ===");
+        match engine.eval("use list.*") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => println!("ERR (may be expected): {}", e),
+        }
+        println!("var_bindings after use: {:?}", engine.var_bindings.keys().collect::<Vec<_>>());
+
+        // Test 3: Check if x is still accessible after use statement
+        println!("\n=== x (after use) ===");
+        match engine.eval("x") {
+            Ok(result) => {
+                println!("OK: {}", result);
+                assert_eq!(result.trim(), "42", "x should still be 42");
+            }
+            Err(e) => {
+                println!("ERR: {}", e);
+                println!("var_bindings at error time: {:?}", engine.var_bindings.keys().collect::<Vec<_>>());
+                panic!("FOUND THE BUG: x is not accessible after use statement: {}", e);
+            }
+        }
+
+        // Test 4: Define another variable after use
+        println!("\n=== y = x + 10 (after use) ===");
+        match engine.eval("y = x + 10") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed to define y: {}", e);
+            }
+        }
+
+        // Test 5: Use y
+        println!("\n=== y ===");
+        match engine.eval("y") {
+            Ok(result) => {
+                println!("OK: {}", result);
+                assert_eq!(result.trim(), "52");
+            }
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed to eval y: {}", e);
+            }
+        }
+
+        println!("\nVar bindings with use statement test passed!");
+    }
+
+    #[test]
+    fn test_var_bindings_with_function_call() {
+        // Test that var bindings work when RHS is a function call
+        // This mimics: v7 = vec([1.0,2.0,3.1])
+
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().ok();
+
+        // First, define a simple function
+        println!("\n=== Define makeList(x) ===");
+        match engine.eval("makeList(x) = [x, x, x]") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed to define makeList");
+            }
+        }
+
+        // Test: assign result of function call to variable
+        println!("\n=== v = makeList(5) ===");
+        match engine.eval("v = makeList(5)") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed to define v");
+            }
+        }
+        println!("var_bindings after v = makeList(5): {:?}", engine.var_bindings.keys().collect::<Vec<_>>());
+
+        // Test: use v
+        println!("\n=== v ===");
+        match engine.eval("v") {
+            Ok(result) => {
+                println!("OK: {}", result);
+                assert!(result.contains("[5, 5, 5]"), "Expected [5, 5, 5], got: {}", result);
+            }
+            Err(e) => {
+                println!("ERR: {}", e);
+                println!("var_bindings: {:?}", engine.var_bindings);
+                panic!("v not accessible: {}", e);
+            }
+        }
+
+        // Test with nested call: w = makeList(makeList(1))
+        println!("\n=== w = [makeList(1)] ===");
+        match engine.eval("w = [makeList(1)]") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed to define w");
+            }
+        }
+
+        println!("\n=== w ===");
+        match engine.eval("w") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("w not accessible: {}", e);
+            }
+        }
+
+        println!("\nVar bindings with function call test passed!");
+    }
+
+    #[test]
+    fn test_var_bindings_with_extension_module() {
+        // Simulate loading an extension module like nalgebra
+        // This tests the exact flow: load extension -> use ext.* -> assign -> use variable
+
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().ok();
+
+        // Simulate loading an extension module (like nalgebra.nos but simpler)
+        let ext_source = r#"
+# Simple vector-like type
+pub type Vec = { data: List }
+
+# Constructor
+pub vec(data: List) -> Vec = Vec(data)
+
+# Get data back
+pub vecData(v: Vec) -> List = v.data
+"#;
+
+        println!("\n=== Loading test extension ===");
+        match engine.load_extension_module("testvec", ext_source, "<test>") {
+            Ok(_) => println!("OK: Extension loaded"),
+            Err(e) => {
+                println!("ERR: {}", e);
+                // Continue anyway - the native functions won't work but types should
+            }
+        }
+
+        // Use the extension
+        println!("\n=== use testvec.* ===");
+        match engine.eval("use testvec.*") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed to import testvec");
+            }
+        }
+        println!("var_bindings after use: {:?}", engine.var_bindings.keys().collect::<Vec<_>>());
+
+        // Assign variable using extension function
+        println!("\n=== v7 = vec([1, 2, 3]) ===");
+        match engine.eval("v7 = vec([1, 2, 3])") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed to define v7");
+            }
+        }
+        println!("var_bindings after v7 assignment: {:?}", engine.var_bindings.keys().collect::<Vec<_>>());
+
+        // THE CRITICAL TEST: Try to use v7
+        println!("\n=== v7 ===");
+        match engine.eval("v7") {
+            Ok(result) => {
+                println!("OK: {}", result);
+            }
+            Err(e) => {
+                println!("ERR: {}", e);
+                println!("var_bindings at error: {:?}", engine.var_bindings);
+                panic!("FOUND THE BUG: v7 not accessible after assignment: {}", e);
+            }
+        }
+
+        // Test operation on the variable
+        println!("\n=== vecData(v7) ===");
+        match engine.eval("vecData(v7)") {
+            Ok(result) => {
+                println!("OK: {}", result);
+                assert!(result.contains("[1, 2, 3]"), "Expected [1, 2, 3], got: {}", result);
+            }
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed vecData(v7): {}", e);
+            }
+        }
+
+        // Test v8 = v7 scenario (assigning variable to another variable)
+        println!("\n=== v8 = v7 ===");
+        match engine.eval("v8 = v7") {
+            Ok(result) => println!("OK: {}", result),
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed v8 = v7: {}", e);
+            }
+        }
+
+        println!("\n=== v8 ===");
+        match engine.eval("v8") {
+            Ok(result) => {
+                println!("OK: {}", result);
+            }
+            Err(e) => {
+                println!("ERR: {}", e);
+                panic!("Failed to access v8: {}", e);
+            }
+        }
+
+        println!("\nExtension module var bindings test passed!");
     }
 }
