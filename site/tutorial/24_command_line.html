@@ -286,6 +286,18 @@ Loaded extension nalgebra v0.1.0
                                 <td class="py-3">Same as <code>repl</code> - starts the TUI</td>
                             </tr>
                             <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">nostos extension install URL</code></td>
+                                <td class="py-3">Install a native extension from a GitHub repository</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">nostos extension list</code></td>
+                                <td class="py-3">List installed native extensions</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3"><code class="text-emerald-400">nostos extension remove NAME</code></td>
+                                <td class="py-3">Remove an installed extension</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
                                 <td class="py-3"><code class="text-emerald-400">nostos nostlet list</code></td>
                                 <td class="py-3">List available nostlets (plugins) from the registry</td>
                             </tr>
@@ -299,6 +311,59 @@ Loaded extension nalgebra v0.1.0
                             </tr>
                         </tbody>
                     </table>
+                </div>
+
+                <!-- Installing Extensions -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Installing Extensions from GitHub</h2>
+                <p class="text-slate-400 mb-4">
+                    Native extensions can be installed directly from GitHub repositories using the <code>extension</code> command:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-bash"># Install an extension from GitHub
+$ nostos extension install https://github.com/pegesund/nostos-nalgebra
+Installing extension from https://github.com/pegesund/nostos-nalgebra...
+Fetching extension nostos-nalgebra...
+Building extension in "/home/user/.nostos/extensions/nostos-nalgebra"...
+
+Extension installed successfully!
+  Location: /home/user/.nostos/extensions/nostos-nalgebra
+  Library:  /home/user/.nostos/extensions/nostos-nalgebra/target/release/libnostos_nalgebra.so
+
+Use it with:
+    nostos --use nalgebra yourprogram.nos</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">
+                    List your installed extensions:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-bash">$ nostos extension list
+Installed extensions in /home/user/.nostos/extensions:
+------------------------------------------------------------
+  nostos-nalgebra [built]
+      Use with: nostos --use nalgebra &lt;file.nos&gt;
+
+  nostos-glam [built]
+      Use with: nostos --use glam &lt;file.nos&gt;</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">
+                    Remove an extension you no longer need:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-bash">$ nostos extension remove nalgebra
+Removing extension at /home/user/.nostos/extensions/nostos-nalgebra...
+Extension 'nalgebra' removed.</code></pre>
+                </div>
+
+                <div class="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-4 mb-8">
+                    <p class="text-emerald-300 text-sm">
+                        <strong>Note:</strong> Extensions vs Nostlets:
+                    </p>
+                    <ul class="text-emerald-300 text-sm mt-2 list-disc list-inside">
+                        <li><strong>Extensions</strong> are native Rust libraries compiled to .so/.dylib files. They provide high-performance functionality like linear algebra, database drivers, etc.</li>
+                        <li><strong>Nostlets</strong> are pure Nostos code plugins (.nos files). They're simpler to create but don't have native performance.</li>
+                    </ul>
                 </div>
 
                 <!-- Examples -->
