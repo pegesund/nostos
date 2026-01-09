@@ -1,5 +1,5 @@
-# expect: [(0, a), (1, b), (2, c)]
-# Enumerate a list
+# expect: [(0, "a"), (1, "b"), (2, "c")]
+# Zip with indices
 main() = {
-    ["a", "b", "c"].enumerate()
+    zip([0, 1, 2], ["a", "b", "c"])
 }

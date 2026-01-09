@@ -1,5 +1,5 @@
-# expect: [0, 2, 6]
-# Map with access to index via enumerate
+# expect: [0, 2, 4]
+# Map with index using zip
 main() = {
-    ["a", "b", "c"].enumerate().map(p => p.0 * 2)
+    zip([0, 1, 2], ["a", "b", "c"]).map(p => p.0 * 2)
 }

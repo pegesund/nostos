@@ -1,4 +1,4 @@
-# expect: [(1, a), (2, b), (3, c)]
+# expect: [(1, "a"), (2, "b"), (3, "c")]
 # Zip two lists
 main() = {
     zip([1, 2, 3], ["a", "b", "c"])

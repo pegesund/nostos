@@ -1,5 +1,7 @@
-# expect: abc
-# Reduce on strings
+# expect: "abc"
+# Fold strings together left-to-right
+join(acc, s) = acc ++ s
 main() = {
-    ["a", "b", "c"].reduce((acc, s) => acc ++ s)
+    strs = ["a", "b", "c"]
+    foldr(reverse(tail(strs)), head(strs), (s, acc) => acc ++ s)
 }

@@ -1,4 +1,4 @@
-# expect: (world, hello)
+# expect: ("world", "hello")
 # Generic function operating on pairs
 swap(pair) = (pair.1, pair.0)
 main() = {

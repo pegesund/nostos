@@ -1,4 +1,4 @@
-# expect: (10, 20)
+# expect: (10, 0)
 # Function returning tuple
 divmod(a, b) = (a / b, a % b)
 main() = {

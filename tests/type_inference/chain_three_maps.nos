@@ -1,4 +1,4 @@
-# expect: [8, 27, 64]
+# expect: [8, 13, 20]
 # Three chained maps
 main() = {
     [2, 3, 4].map(x => x * x).map(x => x - 1).map(x => x + 5)

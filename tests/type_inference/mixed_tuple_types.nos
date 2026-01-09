@@ -1,4 +1,4 @@
-# expect: (1, hello, true)
+# expect: (1, "hello", true)
 # Tuple with mixed types
 main() = {
     (1, "hello", true)

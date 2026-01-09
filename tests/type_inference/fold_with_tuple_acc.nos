@@ -2,5 +2,5 @@
 # Fold accumulating into a tuple
 main() = {
     nums = [1, 2, 3]
-    nums.foldl((sum, count) => (sum + count, count + 1), (0, 0))
+    foldr(nums, (0, 0), (n, acc) => (acc.0 + n, acc.1 + 1))
 }

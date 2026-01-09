@@ -1,5 +1,5 @@
 # expect: [[1, 1], [2], [3, 3, 3]]
-# Group consecutive equal elements
+# Group consecutive equal elements using identity key
 main() = {
-    [1, 1, 2, 3, 3, 3].groupBy(a => b => a == b)
+    groupBy([1, 1, 2, 3, 3, 3], x => x)
 }

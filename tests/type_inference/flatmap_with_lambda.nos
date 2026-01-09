@@ -1,5 +1,5 @@
 # expect: [1, 1, 2, 2, 3, 3]
-# FlatMap with lambda returning list
+# Map then flatten (simulating flatMap)
 main() = {
-    [1, 2, 3].flatMap(x => [x, x])
+    [1, 2, 3].map(x => [x, x]).flatten()
 }

@@ -1,6 +1,10 @@
 # expect: [1, 2, 3]
 # Map and get from option
+getOrZero(o) = match o { 
+    Some(x) -> x
+    None -> 0 
+}
 main() = {
     opts = [Some(1), Some(2), Some(3)]
-    opts.map(o => match o { Some(x) -> x; None -> 0 })
+    opts.map(o => getOrZero(o))
 }
