@@ -582,6 +582,8 @@ impl JitCompiler {
         }
 
         let mut detected_type: Option<NumericType> = None;
+        let mut bool_regs: std::collections::HashSet<u8> = std::collections::HashSet::new(); // Registers holding Bool values
+        let mut return_reg: Option<u8> = None; // Track which register is returned
         let code = &func.code.code;
 
         // Check all instructions and constants to determine the type
@@ -629,13 +631,22 @@ impl JitCompiler {
                     }
                 }
                 // Allowed for any type
-                Instruction::Move(_, _) => {}
-                Instruction::LoadTrue(_) | Instruction::LoadFalse(_) => {}
+                Instruction::Move(dst, src) => {
+                    // Propagate bool register tracking
+                    if bool_regs.contains(src) {
+                        bool_regs.insert(*dst);
+                    }
+                }
+                Instruction::LoadTrue(dst) | Instruction::LoadFalse(dst) => {
+                    bool_regs.insert(*dst); // Track that this register holds a Bool
+                }
                 Instruction::LoadUnit(_) => {} // Loops emit this for their result
                 Instruction::Jump(_) => {}
                 Instruction::JumpIfTrue(_, _) => {}
                 Instruction::JumpIfFalse(_, _) => {}
-                Instruction::Return(_) => {}
+                Instruction::Return(src) => {
+                    return_reg = Some(*src); // Track which register is returned
+                }
                 Instruction::CallSelf(_, _) => {}
                 Instruction::TailCallSelf(_) => {}
                 // Pattern matching - TestConst compares value against integer constant
@@ -678,36 +689,46 @@ impl JitCompiler {
                     }
                 }
 
-                // Integer arithmetic
+                // Integer arithmetic (produces Int)
                 Instruction::AddInt(_, _, _) |
                 Instruction::SubInt(_, _, _) |
                 Instruction::MulInt(_, _, _) |
-                Instruction::NegInt(_, _) |
-                Instruction::EqInt(_, _, _) |
-                Instruction::NeInt(_, _, _) |
-                Instruction::LtInt(_, _, _) |
-                Instruction::LeInt(_, _, _) |
-                Instruction::GtInt(_, _, _) |
-                Instruction::GeInt(_, _, _) => {
+                Instruction::NegInt(_, _) => {
                     // Integer instructions - if no type detected yet, default to Int64
                     if detected_type.is_none() {
                         detected_type = Some(NumericType::Int64);
                     }
                 }
 
-                // Float arithmetic
+                // Integer comparison (produces Bool, not Int!)
+                Instruction::EqInt(dst, _, _) |
+                Instruction::NeInt(dst, _, _) |
+                Instruction::LtInt(dst, _, _) |
+                Instruction::LeInt(dst, _, _) |
+                Instruction::GtInt(dst, _, _) |
+                Instruction::GeInt(dst, _, _) => {
+                    // Comparison instructions produce Bool values
+                    bool_regs.insert(*dst);
+                }
+
+                // Float arithmetic (produces Float)
                 Instruction::AddFloat(_, _, _) |
                 Instruction::SubFloat(_, _, _) |
                 Instruction::MulFloat(_, _, _) |
                 Instruction::DivFloat(_, _, _) |
-                Instruction::NegFloat(_, _) |
-                Instruction::LtFloat(_, _, _) |
-                Instruction::LeFloat(_, _, _) |
-                Instruction::EqFloat(_, _, _) => {
+                Instruction::NegFloat(_, _) => {
                     // Float instructions - if no type detected yet, default to Float64
                     if detected_type.is_none() {
                         detected_type = Some(NumericType::Float64);
                     }
+                }
+
+                // Float comparison (produces Bool, not Float!)
+                Instruction::LtFloat(dst, _, _) |
+                Instruction::LeFloat(dst, _, _) |
+                Instruction::EqFloat(dst, _, _) => {
+                    // Comparison instructions produce Bool values
+                    bool_regs.insert(*dst);
                 }
 
                 // Not supported
@@ -716,6 +737,14 @@ impl JitCompiler {
                         format!("unsupported instruction: {:?}", other)
                     ));
                 }
+            }
+        }
+
+        // Reject functions that return Bool values (from LoadTrue/LoadFalse or comparisons)
+        // These should not be JIT-compiled as Int64 since that would corrupt the Bool type
+        if let Some(ret) = return_reg {
+            if bool_regs.contains(&ret) {
+                return Err(JitError::NotSuitable("returns Bool - cannot JIT as numeric".to_string()));
             }
         }
 
