@@ -245,6 +245,30 @@ mod expressions {
     }
 
     #[test]
+    fn test_match_brace_style() {
+        parse_expr_ok("match x { Some(n) -> n, None -> 0 }");
+        parse_expr_ok("match opt { Some(v) -> v, None -> default }");
+    }
+
+    #[test]
+    fn test_match_comma_separators() {
+        // Comma between arms (single line)
+        parse_expr_ok("match x { A -> 1, B -> 2, C -> 3 }");
+        // Trailing comma allowed
+        parse_expr_ok("match x { A -> 1, B -> 2, }");
+        // Mix of newlines and commas
+        parse_ok("main() = match x { A -> 1, B -> 2 }");
+    }
+
+    #[test]
+    fn test_lambda_with_match_comma() {
+        // Lambda returning match with comma-separated arms
+        parse_expr_ok("x => match x { Some(n) -> n, None -> 0 }");
+        // Lambda assignment in block with match
+        parse_ok("main() = { f = x => match x { A -> 1, B -> 2 }; f(A) }");
+    }
+
+    #[test]
     fn test_block_expr() {
         parse_expr_ok("{ x }");
         parse_expr_ok("{ x = 1, x + 1 }");
