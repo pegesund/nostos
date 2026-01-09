@@ -462,14 +462,42 @@ fn main() -> ExitCode {
         let mut stdlib_files = Vec::new();
         visit_dirs(&stdlib_path, &mut stdlib_files).ok();
 
-        for path in &stdlib_files {
-             let source = fs::read_to_string(path).expect("Failed to read stdlib file");
+        // Track all stdlib function names for prelude imports
+        let mut stdlib_functions: Vec<(String, String)> = Vec::new();
+
+        for file_path in &stdlib_files {
+             let source = fs::read_to_string(file_path).expect("Failed to read stdlib file");
              let (module_opt, _) = parse(&source);
              if let Some(module) = module_opt {
-                 // Add stdlib functions to root namespace (no prefix needed)
-                 // This allows calling map(), filter(), etc. directly
-                 compiler.add_module(&module, vec![], std::sync::Arc::new(source.clone()), path.to_str().unwrap().to_string()).expect("Failed to compile stdlib");
+                 // Build module path: stdlib.list, stdlib.json, etc.
+                 let relative = file_path.strip_prefix(&stdlib_path).unwrap();
+                 let mut components: Vec<String> = vec!["stdlib".to_string()];
+                 for component in relative.components() {
+                     let s = component.as_os_str().to_string_lossy().to_string();
+                     if s.ends_with(".nos") {
+                         components.push(s.trim_end_matches(".nos").to_string());
+                     } else {
+                         components.push(s);
+                     }
+                 }
+                 let module_prefix = components.join(".");
+
+                 // Collect function names from this module for prelude imports
+                 for item in &module.items {
+                     if let nostos_syntax::ast::Item::FnDef(fn_def) = item {
+                         let local_name = fn_def.name.node.clone();
+                         let qualified_name = format!("{}.{}", module_prefix, local_name);
+                         stdlib_functions.push((local_name, qualified_name));
+                     }
+                 }
+
+                 compiler.add_module(&module, components, std::sync::Arc::new(source.clone()), file_path.to_str().unwrap().to_string()).expect("Failed to compile stdlib");
              }
+        }
+
+        // Register prelude imports so stdlib functions are available without prefix
+        for (local_name, qualified_name) in stdlib_functions {
+            compiler.add_prelude_import(local_name, qualified_name);
         }
     }
 
