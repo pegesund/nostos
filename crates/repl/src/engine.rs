@@ -215,6 +215,12 @@ pub struct ReplEngine {
     extension_runtime: Option<tokio::runtime::Runtime>,
     /// Imported module names (extension modules loaded via import)
     imported_modules: HashSet<String>,
+    /// REPL-specific imports (explicit `use` statements in REPL, NOT inherited from project files)
+    repl_imports: Arc<std::sync::RwLock<HashMap<String, String>>>,
+    /// Module exports cache (module name -> list of public function local names)
+    module_exports: Arc<std::sync::RwLock<HashMap<String, Vec<String>>>>,
+    /// Trait implementations from compiler (for operator dispatch in eval)
+    trait_impls: Arc<std::sync::RwLock<Vec<(String, String, Vec<String>)>>>,
 }
 
 impl ReplEngine {
@@ -272,6 +278,21 @@ impl ReplEngine {
         let dynamic_var_bindings_for_eval = dynamic_var_bindings.clone();
         let dynamic_var_bindings_for_self = dynamic_var_bindings.clone();
 
+        // Create REPL-specific imports (explicit `use` statements, NOT inherited from project)
+        let repl_imports: Arc<std::sync::RwLock<HashMap<String, String>>> = Arc::new(std::sync::RwLock::new(HashMap::new()));
+        let repl_imports_for_eval = repl_imports.clone();
+        let repl_imports_for_self = repl_imports.clone();
+
+        // Create module exports cache (for `use module.*` support)
+        let module_exports: Arc<std::sync::RwLock<HashMap<String, Vec<String>>>> = Arc::new(std::sync::RwLock::new(HashMap::new()));
+        let module_exports_for_eval = module_exports.clone();
+        let module_exports_for_self = module_exports.clone();
+
+        // Create trait implementations storage (for operator dispatch in eval)
+        let trait_impls: Arc<std::sync::RwLock<Vec<(String, String, Vec<String>)>>> = Arc::new(std::sync::RwLock::new(Vec::new()));
+        let trait_impls_for_eval = trait_impls.clone();
+        let trait_impls_for_self = trait_impls.clone();
+
         // Get stdlib_functions, function list, and prelude_imports for eval to access all REPL compiler functions
         let stdlib_functions = vm.get_stdlib_functions();
         let stdlib_types = vm.get_stdlib_types();
@@ -294,11 +315,20 @@ impl ReplEngine {
                 eval_compiler.register_external_functions_with_list(&stdlib_funcs, &func_list[..]);
             }
 
-            // Pre-populate compiler with prelude imports (local name -> qualified name mappings)
+            // Pre-populate compiler with REPL-specific imports (explicit `use` statements only)
+            // NOTE: We do NOT inherit imports from project files - REPL requires explicit `use`
             {
-                let imports = prelude_imports.read().expect("prelude_imports lock poisoned");
+                let imports = repl_imports_for_eval.read().expect("repl_imports lock poisoned");
                 for (local_name, qualified_name) in imports.iter() {
                     eval_compiler.add_prelude_import(local_name.clone(), qualified_name.clone());
+                }
+            }
+
+            // Pre-populate compiler with trait implementations (for operator dispatch)
+            {
+                let impls = trait_impls_for_eval.read().expect("trait_impls lock poisoned");
+                for (type_name, trait_name, method_names) in impls.iter() {
+                    eval_compiler.register_trait_impl_simple(type_name, trait_name, method_names.clone());
                 }
             }
 
@@ -475,7 +505,7 @@ impl ReplEngine {
             }).unwrap_or(false);
 
             if is_use_stmt && direct_errors.is_empty() {
-                // Handle use statement - add imports to prelude_imports
+                // Handle use statement - add imports to REPL-specific imports
                 use nostos_syntax::ast::UseImports;
                 let module = direct_module_opt.as_ref().unwrap();
                 let mut imported_names = Vec::new();
@@ -490,11 +520,21 @@ impl ReplEngine {
 
                         match &use_stmt.imports {
                             UseImports::All => {
-                                // Can't easily support `use Foo.*` without module introspection
-                                return Err("use Foo.* is not supported in REPL".to_string());
+                                // Support `use module.*` by looking up cached exports
+                                let exports = module_exports_for_eval.read().expect("module_exports lock poisoned");
+                                if let Some(export_names) = exports.get(&module_path) {
+                                    let mut imports = repl_imports_for_eval.write().expect("repl_imports lock poisoned");
+                                    for local_name in export_names {
+                                        let qualified_name = format!("{}.{}", module_path, local_name);
+                                        imports.insert(local_name.clone(), qualified_name);
+                                        imported_names.push(local_name.clone());
+                                    }
+                                } else {
+                                    return Err(format!("Module '{}' not found or has no exports. Try `import {}` first.", module_path, module_path));
+                                }
                             }
                             UseImports::Named(items) => {
-                                let mut imports = prelude_imports.write().expect("prelude_imports lock poisoned");
+                                let mut imports = repl_imports_for_eval.write().expect("repl_imports lock poisoned");
                                 for item in items {
                                     let local_name = item.alias.as_ref()
                                         .map(|a| a.node.clone())
@@ -689,6 +729,9 @@ impl ReplEngine {
             extension_manager: None,
             extension_runtime: None,
             imported_modules: HashSet::new(),
+            repl_imports: repl_imports_for_self,
+            module_exports: module_exports_for_self,
+            trait_impls: trait_impls_for_self,
         }
     }
 
@@ -2015,6 +2058,40 @@ impl ReplEngine {
         self.synced_dynamic_types.contains(type_name)
     }
 
+    /// Update module exports cache for REPL `use module.*` support.
+    fn update_module_exports(&self) {
+        let mut exports = self.module_exports.write().expect("module_exports lock poisoned");
+
+        // Get all known modules from the compiler
+        for module_name in self.compiler.get_known_modules() {
+            let public_funcs = self.compiler.get_module_public_functions(module_name);
+            let local_names: Vec<String> = public_funcs
+                .into_iter()
+                .map(|(local_name, _)| {
+                    // Strip signature suffix (e.g., "vec/List" -> "vec")
+                    local_name.split('/').next().unwrap_or(&local_name).to_string()
+                })
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+
+            if !local_names.is_empty() {
+                exports.insert(module_name.to_string(), local_names);
+            }
+        }
+    }
+
+    /// Update trait implementations for REPL operator dispatch.
+    fn update_trait_impls(&self) {
+        let compiler_impls = self.compiler.get_all_trait_impls();
+        let mut impls = self.trait_impls.write().expect("trait_impls lock poisoned");
+        impls.clear();
+
+        for (type_name, trait_name, info) in compiler_impls {
+            impls.push((type_name, trait_name, info.method_names));
+        }
+    }
+
     fn sync_vm(&mut self) {
         // First sync any dynamic functions from eval to the compiler
         self.sync_dynamic_functions();
@@ -2036,6 +2113,13 @@ impl ReplEngine {
         self.vm.set_prelude_imports(
             self.compiler.get_prelude_imports().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
         );
+
+        // Update module exports cache for REPL `use module.*` support
+        self.update_module_exports();
+
+        // Update trait implementations for REPL operator dispatch
+        self.update_trait_impls();
+
         // Register mvars (module-level mutable variables)
         // Only register NEW mvars - don't reset existing ones!
         // Also skip dynamic mvars from eval - they're accessed via dynamic_mvars, not mvars
