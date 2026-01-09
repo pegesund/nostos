@@ -75,7 +75,8 @@ pub struct ReplEngine {
 impl ReplEngine {
     /// Create a new REPL instance
     pub fn new(config: ReplConfig) -> Self {
-        let compiler = Compiler::new_empty();
+        let mut compiler = Compiler::new_empty();
+        compiler.set_repl_mode(true); // REPL can access private functions
         let vm_config = ParallelConfig {
             num_threads: config.num_threads,
             ..Default::default()
@@ -265,6 +266,7 @@ impl ReplEngine {
 
         // Reset compiler (but keep stdlib)
         self.compiler = Compiler::new_empty();
+        self.compiler.set_repl_mode(true);
         self.call_graph = CallGraph::new();
         if let Err(e) = self.load_stdlib() {
             return Err(format!("Warning: Failed to reload stdlib: {}", e));
@@ -370,8 +372,21 @@ impl ReplEngine {
 
         let (module_opt, errors) = parse(input);
 
-        if !errors.is_empty() || module_opt.as_ref().map(|m| !Self::has_definitions(m)).unwrap_or(true) {
+        // Check if this looks like a definition (has definitions parsed)
+        let has_definitions = module_opt.as_ref().map(|m| Self::has_definitions(m)).unwrap_or(false);
+
+        // No definitions - try as expression first
+        // (expression parsing is separate from module parsing)
+        if !has_definitions {
             return self.eval_expression_inner(input);
+        }
+
+        // Has definitions but also has parse errors - report the errors
+        if !errors.is_empty() {
+            let error_msgs: Vec<String> = errors.iter()
+                .map(|e| format!("{:?}", e))
+                .collect();
+            return Err(format!("Parse error: {}", error_msgs.join(", ")));
         }
 
         let module = module_opt.ok_or("Failed to parse input")?;
@@ -1251,10 +1266,10 @@ mod tests {
         let defs_dir = temp_dir.join(".nostos").join("defs").join("utils");
         fs::create_dir_all(&defs_dir).unwrap();
 
-        // Create a module file (pub makes it accessible outside the module)
+        // Create a module file (private - but REPL can still access it)
         let triple_path = defs_dir.join("triple.nos");
         let mut f = fs::File::create(&triple_path).unwrap();
-        writeln!(f, "pub triple(x: Int) = x * 3").unwrap();
+        writeln!(f, "triple(x: Int) = x * 3").unwrap();
 
         // Create nostos.toml to make it a valid project
         let mut config = fs::File::create(temp_dir.join("nostos.toml")).unwrap();
