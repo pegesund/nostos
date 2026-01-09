@@ -187,6 +187,39 @@ impl ReplPanel {
         }
     }
 
+    /// Check if all braces/brackets/parens are balanced in the current input
+    fn has_balanced_delimiters(&self) -> bool {
+        let mut brace_count = 0i32;
+        let mut bracket_count = 0i32;
+        let mut paren_count = 0i32;
+        let mut in_string = false;
+        let mut prev_char = '\0';
+
+        for line in &self.current.input {
+            for ch in line.chars() {
+                // Simple string detection (not handling escape sequences perfectly)
+                if ch == '"' && prev_char != '\\' {
+                    in_string = !in_string;
+                }
+
+                if !in_string {
+                    match ch {
+                        '{' => brace_count += 1,
+                        '}' => brace_count -= 1,
+                        '[' => bracket_count += 1,
+                        ']' => bracket_count -= 1,
+                        '(' => paren_count += 1,
+                        ')' => paren_count -= 1,
+                        _ => {}
+                    }
+                }
+                prev_char = ch;
+            }
+        }
+
+        brace_count == 0 && bracket_count == 0 && paren_count == 0
+    }
+
     /// Evaluate the current input
     /// Returns Exit if :exit command was entered
     fn evaluate(&mut self) -> EvalResult {
@@ -205,8 +238,18 @@ impl ReplPanel {
         // Evaluate using the engine
         let result = self.engine.borrow_mut().eval(&input_text);
 
+        // Drain any output from spawned processes
+        let spawned_output = self.engine.borrow().drain_output();
+
         self.current.output = Some(match result {
-            Ok(output) => {
+            Ok(mut output) => {
+                // Append any output from spawned processes
+                for line in spawned_output {
+                    if !output.is_empty() {
+                        output.push('\n');
+                    }
+                    output.push_str(&line);
+                }
                 if output.is_empty() || output.starts_with("Defined") || output.starts_with("Type") {
                     ReplOutput::Definition(output)
                 } else {
@@ -752,7 +795,15 @@ impl View for ReplPanel {
                 let current_line = &self.current.input[self.cursor.1];
                 let trimmed = current_line.trim_end();
 
-                if trimmed.ends_with('\\') || trimmed.ends_with('{') || trimmed.ends_with("do") {
+                // Continue multiline if:
+                // 1. Current line ends with continuation chars ({ do \)
+                // 2. OR delimiters are not balanced (we're inside a block/array/etc)
+                let needs_continuation = trimmed.ends_with('\\')
+                    || trimmed.ends_with('{')
+                    || trimmed.ends_with("do")
+                    || !self.has_balanced_delimiters();
+
+                if needs_continuation {
                     self.insert_newline();
                 } else {
                     // Evaluate and check for :exit

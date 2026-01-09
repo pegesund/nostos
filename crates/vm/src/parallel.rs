@@ -41,6 +41,11 @@ pub type InspectSender = crossbeam::channel::Sender<InspectEntry>;
 /// Type alias for the inspect receiver channel
 pub type InspectReceiver = crossbeam::channel::Receiver<InspectEntry>;
 
+/// Type alias for the output sender channel (for println from any process)
+pub type OutputSender = crossbeam::channel::Sender<String>;
+/// Type alias for the output receiver channel
+pub type OutputReceiver = crossbeam::channel::Receiver<String>;
+
 // JIT function pointer types (moved from runtime.rs)
 pub type JitIntFn = fn(i64) -> i64;
 pub type JitIntFn0 = fn() -> i64;
@@ -138,6 +143,8 @@ pub struct SharedState {
     pub io_sender: Option<tokio_mpsc::UnboundedSender<IoRequest>>,
     /// Inspect sender (for sending values to TUI inspector)
     pub inspect_sender: Option<InspectSender>,
+    /// Output sender (for println from any process to TUI console)
+    pub output_sender: Option<OutputSender>,
 }
 
 /// Configuration for the parallel VM.
@@ -607,6 +614,7 @@ impl ParallelVM {
             num_threads,
             io_sender: Some(io_sender),
             inspect_sender: None,
+            output_sender: None,
         });
 
         Self {
@@ -907,6 +915,19 @@ impl ParallelVM {
         receiver
     }
 
+    /// Set up the output channel for capturing println from all processes.
+    /// Returns a receiver that will receive output strings from any process.
+    pub fn setup_output(&mut self) -> OutputReceiver {
+        let (sender, receiver) = channel::unbounded();
+
+        // Store sender in shared state
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot setup output after threads started")
+            .output_sender = Some(sender);
+
+        receiver
+    }
+
     /// Register a type.
     pub fn register_type(&mut self, name: &str, type_val: Arc<TypeValue>) {
         Arc::get_mut(&mut self.shared)
@@ -1083,13 +1104,20 @@ impl ThreadWorker {
     /// Main execution loop for this thread.
     fn run(mut self) -> ThreadResult {
         loop {
+            // Drain inbox FIRST - this delivers cross-thread spawns before we check shutdown
+            self.drain_inbox();
+
             // Check for shutdown
             if self.shared.shutdown.load(Ordering::Relaxed) {
+                // Run any processes in run_queue one more time before exiting
+                // This gives newly spawned processes a chance to execute
+                while let Some(local_id) = self.run_queue.pop_front() {
+                    if let Ok(SliceResult::Continue) = self.execute_slice(local_id) {
+                        // If process needs more time, just drop it (we're shutting down)
+                    }
+                }
                 break;
             }
-
-            // Drain inbox (deliver cross-thread messages)
-            self.drain_inbox();
 
             // Wake up any processes whose timers have expired
             self.check_timers();
@@ -5314,8 +5342,13 @@ impl ThreadWorker {
                     let frame = proc.frames.last().unwrap();
                     proc.heap.display_value(&frame.registers[*src as usize])
                 };
-                println!("{}", s);
-                // Now push to output (mutable borrow)
+                // Send to output channel if available (for TUI), otherwise print to stdout
+                if let Some(ref sender) = self.shared.output_sender {
+                    let _ = sender.send(s.clone());
+                } else {
+                    println!("{}", s);
+                }
+                // Still push to per-process output for main process result
                 let proc = self.get_process_mut(local_id).unwrap();
                 proc.output.push(s);
             }
