@@ -3329,12 +3329,13 @@ impl ReplEngine {
         } else if let Some(type_def) = self.compiler.get_type_def(name) {
             // Reconstruct type definition
             let mut output = String::new();
-            if type_def.visibility == nostos_syntax::ast::Visibility::Private {
-                output.push_str("private ");
-            }
             if type_def.reactive {
+                // reactive types don't support private modifier
                 output.push_str("reactive ");
             } else {
+                if type_def.visibility == nostos_syntax::ast::Visibility::Private {
+                    output.push_str("private ");
+                }
                 output.push_str("type ");
             }
             output.push_str(&type_def.full_name());
