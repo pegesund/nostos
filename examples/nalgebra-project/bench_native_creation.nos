@@ -1,0 +1,63 @@
+# Benchmark with native data creation (no Nostos list overhead)
+import nalgebra
+use nalgebra.*
+
+main() = {
+    vecSize = 10000
+    vecIters = 10000
+    matSize = 200
+    matIters = 100
+
+    println("Creating data with native functions...")
+    t0 = Time.now()
+
+    # Use native creation functions (no Nostos list intermediary)
+    v1 = vecFromSeed(vecSize, 42)
+    v2 = vecFromSeed(vecSize, 123)
+    m = matFromSeed(matSize, matSize, 42)
+
+    t1 = Time.now()
+    println("Data creation: " ++ show(t1 - t0) ++ "ms")
+
+    # === START TIMING FFI CALLS ===
+    startTime = Time.now()
+
+    # Benchmark 1: Vector dot product
+    var r1 = 0.0
+    for i = 0 to vecIters {
+        r1 = r1 + vecDot(v1, v2)
+    }
+
+    # Benchmark 2: Vector norm
+    var r2 = 0.0
+    for i = 0 to vecIters {
+        r2 = r2 + vecNorm(v1)
+    }
+
+    # Benchmark 3: Vector sum
+    var r3 = 0.0
+    for i = 0 to vecIters {
+        r3 = r3 + vecSum(v1)
+    }
+
+    # Benchmark 4: Matrix trace
+    var r4 = 0.0
+    for i = 0 to matIters {
+        r4 = r4 + matTrace(m)
+    }
+
+    # Benchmark 5: Matrix determinant
+    var r5 = 0.0
+    for i = 0 to matIters {
+        r5 = r5 + matDeterminant(m)
+    }
+
+    # === END TIMING ===
+    endTime = Time.now()
+
+    result = r1 + r2 + r3 + r4 + r5
+    println("FFI time: " ++ show(endTime - startTime) ++ "ms")
+    println("Total (creation + FFI): " ++ show(endTime - t0) ++ "ms")
+    println(show(result))
+    0
+}
