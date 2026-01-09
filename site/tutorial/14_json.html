@@ -82,16 +82,14 @@
             <div class="mb-12">
                 <h1 class="text-4xl font-bold text-white mb-6">JSON</h1>
                 <p class="text-lg text-slate-400 leading-relaxed mb-8">
-                    Nostos provides comprehensive JSON support for parsing, serialization, and typed deserialization. The <code>jsonToType[T]</code> builtin makes it easy to convert JSON directly to your custom types with full type safety.
+                    Nostos provides comprehensive JSON support for parsing, serialization, and typed deserialization. The <code>fromJson[T]</code> builtin makes it easy to convert JSON directly to your custom types with full type safety.
                 </p>
 
                 <!-- Parsing JSON -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Parsing JSON</h2>
-                <p class="text-slate-400 mb-4">Use <code>jsonParse</code> from the stdlib to parse a JSON string into a <code>Json</code> value.</p>
+                <p class="text-slate-400 mb-4">Use <code>jsonParse</code> to parse a JSON string into a <code>Json</code> value. It's available in the prelude, no import needed.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.json.{jsonParse, jsonStringify}
-
-main() = {
+<pre><code class="language-nostos">main() = {
     # Parse a JSON string
     json = jsonParse("{\"name\": \"Alice\", \"age\": 30}")
 
@@ -104,12 +102,10 @@ main() = {
                 </div>
 
                 <!-- Typed Deserialization -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Typed Deserialization with jsonToType</h2>
-                <p class="text-slate-400 mb-4">The <code>jsonToType[T](json)</code> builtin converts JSON to typed Nostos values. This is the recommended way to work with JSON data.</p>
+                <h2 class="text-2xl font-semibold text-white mb-4">Typed Deserialization with fromJson</h2>
+                <p class="text-slate-400 mb-4">The <code>fromJson[T](json)</code> builtin converts JSON to typed Nostos values. This is the recommended way to work with JSON data.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.json.{jsonParse, jsonStringify}
-
-# Define your types
+<pre><code class="language-nostos"># Define your types
 type Person = { name: String, age: Int }
 
 main() = {
@@ -117,20 +113,22 @@ main() = {
     json = jsonParse("{\"name\": \"Alice\", \"age\": 30}")
 
     # Convert to typed value
-    person = jsonToType[Person](json)
+    person = fromJson[Person](json)
 
     println(person.name)  # "Alice"
     println(person.age)   # 30
 }</code></pre>
                 </div>
 
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <p class="text-slate-400 text-sm"><strong>Note:</strong> <code>jsonToType[T]</code> is an alias for <code>fromJson[T]</code> and works identically.</p>
+                </div>
+
                 <!-- Supported Types -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Supported Types</h2>
-                <p class="text-slate-400 mb-4"><code>jsonToType</code> supports all Nostos types including numeric types, records, variants, tuples, and nested structures.</p>
+                <p class="text-slate-400 mb-4"><code>fromJson</code> supports all Nostos types including numeric types, records, variants, tuples, and nested structures.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.json.{jsonParse, jsonStringify}
-
-# All numeric types work
+<pre><code class="language-nostos"># All numeric types work
 type Sizes = {
     i8: Int8, i16: Int16, i32: Int32, i64: Int,
     u8: UInt8, u16: UInt16, u32: UInt32, u64: UInt64,
@@ -150,59 +148,59 @@ type Pair = { data: (Int, String) }
 main() = {
     # Nested record example
     json = jsonParse("{\"name\": \"Bob\", \"address\": {\"city\": \"Oslo\", \"zip\": 1234}}")
-    person = jsonToType[Person](json)
+    person = fromJson[Person](json)
     println(person.address.city)  # "Oslo"
 
     # Tuple example
     json2 = jsonParse("{\"data\": [42, \"hello\"]}")
-    pair = jsonToType[Pair](json2)
+    pair = fromJson[Pair](json2)
     println(pair.data)  # (42, hello)
 }</code></pre>
                 </div>
 
                 <!-- Variants / Sum Types -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Variants (Sum Types)</h2>
-                <p class="text-slate-400 mb-4">Variants use a JSON object with the constructor name as the key. Fields are named <code>_0</code>, <code>_1</code>, etc.</p>
+                <p class="text-slate-400 mb-4">Variants use a JSON object with the constructor name as the key. Single-field variants use the value directly; multi-field use <code>_0</code>, <code>_1</code>, etc.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.json.{jsonParse, jsonStringify}
-
-type Result = Ok(Int) | Err(String)
+<pre><code class="language-nostos">type Result = Ok(Int) | Err(String)
 
 getValue(Ok(n)) = n
 getValue(Err(_)) = 0
 
 main() = {
-    # Ok(42) is represented as: {"Ok": {"_0": 42}}
-    json = jsonParse("{\"Ok\": {\"_0\": 42}}")
-    result = jsonToType[Result](json)
+    # Ok(42) is represented as: {"Ok": 42}
+    json = jsonParse("{\"Ok\": 42}")
+    result = fromJson[Result](json)
 
     println(getValue(result))  # 42
 
-    # Err("fail") is: {"Err": {"_0": "fail"}}
-    json2 = jsonParse("{\"Err\": {\"_0\": \"something went wrong\"}}")
-    result2 = jsonToType[Result](json2)
+    # Err("fail") is: {"Err": "something went wrong"}
+    json2 = jsonParse("{\"Err\": \"something went wrong\"}")
+    result2 = fromJson[Result](json2)
     println(tagOf(result2))  # "Err"
 }
 
-# Unit variants (no payload) use empty object:
+# Multi-field variants use _0, _1:
+type Coord = Point(Int, Int)
+# Point(10, 20) is: {"Point": {"_0": 10, "_1": 20}}
+
+# Unit variants (no payload) use null:
 type Status = Active | Pending | Done
-# Active is: {"Active": {}}</code></pre>
+# Active is: {"Active": null}</code></pre>
                 </div>
 
                 <!-- Error Handling -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Error Handling</h2>
-                <p class="text-slate-400 mb-4"><code>jsonToType</code> throws catchable exceptions when the JSON doesn't match the expected type.</p>
+                <p class="text-slate-400 mb-4"><code>fromJson</code> throws catchable exceptions when the JSON doesn't match the expected type.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.json.{jsonParse, jsonStringify}
-
-type Person = { name: String, age: Int }
+<pre><code class="language-nostos">type Person = { name: String, age: Int }
 
 main() = {
     # Missing required field
     json = jsonParse("{\"name\": \"Alice\"}")
 
     try {
-        person = jsonToType[Person](json)
+        person = fromJson[Person](json)
         "success: " ++ person.name
     } catch e -> "Error: " ++ e end
     # Returns: "Error: Missing field: age"
@@ -221,11 +219,9 @@ main() = {
 
                 <!-- Round-Trip Example -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Round-Trip: Value to JSON and Back</h2>
-                <p class="text-slate-400 mb-4">Use <code>reflect()</code> to convert a typed value to JSON, and <code>jsonToType</code> to parse it back.</p>
+                <p class="text-slate-400 mb-4">Use <code>reflect()</code> to convert a typed value to JSON, and <code>fromJson</code> to parse it back.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.json.{jsonParse, jsonStringify}
-
-type User = { id: Int, name: String, active: Bool }
+<pre><code class="language-nostos">type User = { id: Int, name: String, active: Bool }
 
 main() = {
     # Create a user
@@ -238,7 +234,7 @@ main() = {
 
     # Parse back to typed value
     parsed = jsonParse(jsonStr)
-    user2 = jsonToType[User](parsed)
+    user2 = fromJson[User](parsed)
 
     println("Equal: " ++ show(user == user2))  # true
 }</code></pre>
@@ -246,18 +242,16 @@ main() = {
 
                 <!-- Practical Example: API Response -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Practical Example: Parsing API Responses</h2>
-                <p class="text-slate-400 mb-4">Combine HTTP requests with <code>jsonToType</code> for type-safe API consumption.</p>
+                <p class="text-slate-400 mb-4">Combine HTTP requests with <code>fromJson</code> for type-safe API consumption.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.json.{jsonParse, jsonStringify}
-
-type IpResponse = { origin: String }
+<pre><code class="language-nostos">type IpResponse = { origin: String }
 
 main() = {
     (status, resp) = Http.get("https://httpbin.org/ip")
 
     if status == "ok" then {
         json = jsonParse(resp.body)
-        ipResp = jsonToType[IpResponse](json)
+        ipResp = fromJson[IpResponse](json)
         println("Your IP: " ++ ipResp.origin)
     } else {
         println("Failed to fetch IP")
@@ -309,7 +303,9 @@ main() = {
                 <h3 class="text-xl font-semibold text-white mb-3">String-Based Variants</h3>
                 <p class="text-slate-400 mb-4">For fully dynamic scenarios where the type name is known at runtime, use the string-based versions.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos"># When type name is known at runtime
+<pre><code class="language-nostos">import stdlib.json
+
+# When type name is known at runtime
 typeName = "Person"
 fields = %{"name": String("Bob"), "age": Number(25.0)}
 person = makeRecordByName(typeName, fields)
@@ -317,9 +313,9 @@ person = makeRecordByName(typeName, fields)
 # Same for variants
 result = makeVariantByName("Result", "Ok", %{"_0": Number(100.0)})
 
-# And for JSON conversion
+# And for JSON conversion using stdlib fromJsonValue
 json = jsonParse("{\"name\": \"Charlie\", \"age\": 35}")
-person2 = jsonToTypeByName("Person", json)</code></pre>
+person2 = stdlib.json.fromJsonValue("Person", json)</code></pre>
                 </div>
 
                 <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
