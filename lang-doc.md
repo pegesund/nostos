@@ -1124,6 +1124,472 @@ These builtins enable metaprogramming scenarios like:
 - ORM-style database mapping
 - Dynamic form generation from type schemas
 
+## UUID
+
+Generate and validate UUIDs:
+
+```nos
+# Generate a random UUID v4
+id = Uuid.v4()
+# id = "550e8400-e29b-41d4-a716-446655440000"
+
+# Check if a string is a valid UUID
+valid = Uuid.isValid(id)         # true
+invalid = Uuid.isValid("not-uuid")  # false
+```
+
+## Cryptography
+
+Cryptographic hashing and password functions:
+
+### Hashing
+
+```nos
+# SHA-256 hash (returns hex string)
+hash = Crypto.sha256("hello")
+# "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+
+# SHA-512 hash
+hash512 = Crypto.sha512("hello")
+
+# MD5 hash (for compatibility, not secure)
+md5 = Crypto.md5("hello")
+# "5d41402abc4b2a76b9719d911017c592"
+```
+
+### Password Hashing
+
+```nos
+# Hash a password with bcrypt (cost 10 is recommended for production)
+hash = Crypto.bcryptHash("mypassword", 10)
+# "$2b$10$..."
+
+# Verify a password against a hash
+valid = Crypto.bcryptVerify("mypassword", hash)  # true
+wrong = Crypto.bcryptVerify("wrongpass", hash)   # false
+```
+
+### Random Bytes
+
+```nos
+# Generate cryptographically secure random bytes (hex string)
+randomHex = Crypto.randomBytes(16)
+# "3fb7afff58ee14ac2dfcf0d791ded729"
+```
+
+## Regular Expressions
+
+Pattern matching with regex:
+
+```nos
+# Check if string matches pattern
+matches = Regex.matches("hello123", "[a-z]+[0-9]+")  # true
+
+# Find first match
+found = Regex.find("hello123world456", "[0-9]+")  # "123"
+
+# Find all matches
+all = Regex.findAll("a1b2c3", "[0-9]")  # ["1", "2", "3"]
+
+# Replace first match
+replaced = Regex.replace("hello world", "world", "there")
+# "hello there"
+
+# Replace all matches
+replacedAll = Regex.replaceAll("a1b2c3", "[0-9]", "X")
+# "aXbXcX"
+
+# Split by pattern
+parts = Regex.split("a,b;c:d", "[,;:]")  # ["a", "b", "c", "d"]
+
+# Get capture groups
+caps = Regex.captures("John Doe", "([A-Z][a-z]+) ([A-Z][a-z]+)")
+# ["John Doe", "John", "Doe"]
+```
+
+## Environment Variables
+
+Access and modify environment variables:
+
+```nos
+# Get an environment variable (returns Option)
+home = Env.get("HOME")  # Some("/home/user")
+
+# Set an environment variable
+Env.set("MY_VAR", "value")
+
+# Remove an environment variable
+Env.remove("MY_VAR")
+
+# Get all environment variables as list of tuples
+all = Env.all()  # [("HOME", "/home/user"), ("PATH", "..."), ...]
+
+# Get current working directory
+cwd = Env.cwd()
+
+# Set current working directory
+Env.setCwd("/tmp")
+
+# Get home directory
+home = Env.home()  # Some("/home/user")
+
+# Get command-line arguments
+args = Env.args()  # ["arg1", "arg2", ...]
+
+# Get platform name
+platform = Env.platform()  # "linux", "macos", or "windows"
+```
+
+## Path Operations
+
+File path manipulation:
+
+```nos
+# Join path components
+path = Path.join("/home", "user")  # "/home/user"
+
+# Get directory name
+dir = Path.dirname("/home/user/file.txt")  # "/home/user"
+
+# Get file name
+name = Path.basename("/home/user/file.txt")  # "file.txt"
+
+# Get file extension
+ext = Path.extension("file.txt")  # "txt"
+
+# Replace file extension
+newPath = Path.withExtension("file.txt", "md")  # "file.md"
+
+# Normalize path
+normalized = Path.normalize("/home/../home/./user")  # "/home/user"
+
+# Check if path is absolute
+isAbs = Path.isAbsolute("/home/user")  # true
+isRel = Path.isRelative("./file.txt")  # true
+
+# Split into components
+parts = Path.split("/home/user/file.txt")  # ["", "home", "user", "file.txt"]
+```
+
+## Random Numbers
+
+Generate random values:
+
+```nos
+# Random integer in range [min, max] (inclusive)
+n = Random.int(1, 100)
+
+# Random float in [0.0, 1.0)
+f = Random.float()
+
+# Random boolean
+b = Random.bool()
+
+# Pick random element from list
+item = Random.choice(["a", "b", "c"])
+
+# Shuffle a list
+shuffled = Random.shuffle([1, 2, 3, 4, 5])
+
+# Generate random bytes (list of 0-255 values)
+bytes = Random.bytes(8)  # [42, 128, 3, ...]
+```
+
+## Time Functions
+
+Work with timestamps and dates:
+
+```nos
+# Get current Unix timestamp in milliseconds
+now = Time.now()
+
+# Get current Unix timestamp in seconds
+nowSecs = Time.nowSecs()
+
+# Format timestamp with strftime pattern
+formatted = Time.format(now, "%Y-%m-%d %H:%M:%S")
+# "2024-01-15 14:30:45"
+
+# Format as UTC
+utc = Time.formatUtc(now, "%Y-%m-%d %H:%M:%S")
+
+# Parse time string (returns Option Int)
+parsed = Time.parse("2024-01-15", "%Y-%m-%d")
+
+# Extract components from timestamp
+year = Time.year(now)    # 2024
+month = Time.month(now)  # 1-12
+day = Time.day(now)      # 1-31
+hour = Time.hour(now)    # 0-23
+minute = Time.minute(now) # 0-59
+second = Time.second(now) # 0-59
+weekday = Time.weekday(now)  # 0=Sunday, 6=Saturday
+
+# Get timezone info
+tz = Time.timezone()        # "Europe/Oslo"
+offset = Time.timezoneOffset()  # Minutes from UTC
+
+# Create timestamp from date/time
+ts = Time.fromDate(2024, 1, 15)  # Midnight UTC
+ts = Time.fromDateTime(2024, 1, 15, 14, 30, 0)
+```
+
+## String Functions
+
+String manipulation (all strings are UTF-8):
+
+```nos
+# Length in characters
+len = String.length("hello")  # 5
+
+# Convert to/from char list
+chars = String.chars("hi")  # ['h', 'i']
+str = String.from_chars(['h', 'i'])  # "hi"
+
+# Parsing
+num = String.toInt("42")     # Some(42)
+f = String.toFloat("3.14")   # Some(3.14)
+
+# Trimming
+trimmed = String.trim("  hello  ")     # "hello"
+left = String.trimStart("  hello")     # "hello"
+right = String.trimEnd("hello  ")      # "hello"
+
+# Case conversion
+upper = String.toUpper("hello")  # "HELLO"
+lower = String.toLower("HELLO")  # "hello"
+
+# Searching
+has = String.contains("hello", "ell")   # true
+starts = String.startsWith("hello", "he")  # true
+ends = String.endsWith("hello", "lo")   # true
+idx = String.indexOf("hello", "l")      # 2
+last = String.lastIndexOf("hello", "l") # 3
+
+# Manipulation
+sub = String.substring("hello", 1, 4)  # "ell"
+rep = String.replace("hello", "l", "L")  # "heLlo"
+repAll = String.replaceAll("hello", "l", "L")  # "heLLo"
+repeated = String.repeat("ab", 3)  # "ababab"
+padded = String.padStart("42", 5, "0")  # "00042"
+padEnd = String.padEnd("hi", 5, "!")   # "hi!!!"
+rev = String.reverse("hello")  # "olleh"
+
+# Splitting
+lines = String.lines("a\nb\nc")  # ["a", "b", "c"]
+words = String.words("a b c")   # ["a", "b", "c"]
+
+# Check empty
+empty = String.isEmpty("")  # true
+```
+
+## List Functions
+
+Common list operations:
+
+```nos
+# Basic operations
+len = List.length([1, 2, 3])  # 3
+h = List.head([1, 2, 3])      # 1
+t = List.tail([1, 2, 3])      # [2, 3]
+last = List.last([1, 2, 3])   # 3
+init = List.init([1, 2, 3])   # [1, 2]
+nth = List.nth([1, 2, 3], 1)  # 2
+
+# Modification
+pushed = List.push([1, 2], 3)  # [1, 2, 3]
+popped = List.pop([1, 2, 3])   # [1, 2]
+sliced = List.slice([1, 2, 3, 4], 1, 3)  # [2, 3]
+concat = List.concat([1, 2], [3, 4])  # [1, 2, 3, 4]
+rev = List.reverse([1, 2, 3])  # [3, 2, 1]
+sorted = List.sort([3, 1, 2])  # [1, 2, 3]
+
+# Higher-order functions
+mapped = List.map([1, 2, 3], x => x * 2)  # [2, 4, 6]
+filtered = List.filter([1, 2, 3, 4], x => x > 2)  # [3, 4]
+folded = List.fold([1, 2, 3], 0, (acc, x) => acc + x)  # 6
+
+# Searching
+anyMatch = List.any([1, 2, 3], x => x > 2)  # true
+allMatch = List.all([1, 2, 3], x => x > 0)  # true
+found = List.find([1, 2, 3], x => x > 1)    # 2
+pos = List.position([1, 2, 3], x => x > 1)  # 1
+
+# Other
+unique = List.unique([1, 2, 2, 3])  # [1, 2, 3]
+flat = List.flatten([[1, 2], [3, 4]])  # [1, 2, 3, 4]
+zipped = List.zip([1, 2], ["a", "b"])  # [(1, "a"), (2, "b")]
+taken = List.take([1, 2, 3, 4], 2)  # [1, 2]
+dropped = List.drop([1, 2, 3, 4], 2)  # [3, 4]
+ranged = List.range(1, 5)  # [1, 2, 3, 4]
+replicated = List.replicate(3, "x")  # ["x", "x", "x"]
+
+# Aggregation
+sum = List.sum([1, 2, 3])       # 6
+product = List.product([2, 3, 4])  # 24
+```
+
+## Map Functions
+
+Dictionary/hash map operations:
+
+```nos
+# Create a map
+m = %{"a": 1, "b": 2}
+
+# Insert (returns new map)
+m2 = Map.insert(m, "c", 3)  # %{"a": 1, "b": 2, "c": 3}
+
+# Remove (returns new map)
+m3 = Map.remove(m2, "b")  # %{"a": 1, "c": 3}
+
+# Get value (returns Option)
+val = Map.get(m, "a")  # Some(1)
+missing = Map.get(m, "z")  # None
+
+# Check key exists
+has = Map.contains(m, "a")  # true
+
+# Get all keys/values
+keys = Map.keys(m)    # ["a", "b"]
+vals = Map.values(m)  # [1, 2]
+
+# Size
+size = Map.size(m)  # 2
+empty = Map.isEmpty(%{})  # true
+```
+
+## Set Functions
+
+Unordered unique collections:
+
+```nos
+# Create a set
+s = #{1, 2, 3}
+
+# Insert (returns new set)
+s2 = Set.insert(s, 4)  # #{1, 2, 3, 4}
+
+# Remove (returns new set)
+s3 = Set.remove(s, 2)  # #{1, 3}
+
+# Check membership
+has = Set.contains(s, 2)  # true
+
+# Size
+size = Set.size(s)  # 3
+empty = Set.isEmpty(#{})  # true
+
+# Convert to list
+lst = Set.toList(s)  # [1, 2, 3]
+
+# Set operations
+union = Set.union(#{1, 2}, #{2, 3})  # #{1, 2, 3}
+inter = Set.intersection(#{1, 2, 3}, #{2, 3, 4})  # #{2, 3}
+diff = Set.difference(#{1, 2, 3}, #{2})  # #{1, 3}
+```
+
+## Math Functions
+
+Mathematical operations:
+
+```nos
+# Basic math
+sqrt = Math.sqrt(16.0)   # 4.0
+abs = Math.abs(-5)       # 5
+min = Math.min(3, 5)     # 3
+max = Math.max(3, 5)     # 5
+pow = Math.pow(2.0, 3.0) # 8.0
+
+# Rounding
+floor = Math.floor(3.7)  # 3.0
+ceil = Math.ceil(3.2)    # 4.0
+round = Math.round(3.5)  # 4.0
+
+# Logarithms
+log = Math.log(10.0)     # Natural log
+log10 = Math.log10(100.0)  # 2.0
+
+# Trigonometry
+sin = Math.sin(0.0)      # 0.0
+cos = Math.cos(0.0)      # 1.0
+tan = Math.tan(0.0)      # 0.0
+```
+
+## PostgreSQL Database
+
+Connect to and query PostgreSQL databases:
+
+```nos
+# Connect to database
+handle = Pg.connect("host=localhost user=postgres password=secret dbname=mydb")
+
+# Execute query with parameters
+rows = Pg.query(handle, "SELECT id, name FROM users WHERE age > $1", [18])
+# Returns list of lists: [[1, "Alice"], [2, "Bob"]]
+
+# Execute statement (INSERT, UPDATE, DELETE)
+affected = Pg.execute(handle, "INSERT INTO users (name, age) VALUES ($1, $2)", ["Charlie", 25])
+# Returns number of affected rows
+
+# Transaction management
+Pg.begin(handle)
+Pg.execute(handle, "UPDATE accounts SET balance = balance - 100 WHERE id = $1", [1])
+Pg.execute(handle, "UPDATE accounts SET balance = balance + 100 WHERE id = $1", [2])
+Pg.commit(handle)  # or Pg.rollback(handle) to cancel
+
+# Prepared statements for repeated queries
+Pg.prepare(handle, "get_user", "SELECT * FROM users WHERE id = $1")
+rows = Pg.queryPrepared(handle, "get_user", [42])
+Pg.deallocate(handle, "get_user")
+
+# Close connection
+Pg.close(handle)
+```
+
+## HTTP Server
+
+Create HTTP servers:
+
+```nos
+# Bind server to port
+handle = Server.bind(8080)
+
+# Accept incoming request (blocking)
+# Returns: { id: Int, method: String, path: String, headers: [(String, String)], body: String }
+request = Server.accept(handle)
+
+# Send response
+headers = [("Content-Type", "text/plain")]
+Server.respond(request.id, 200, headers, "Hello, World!")
+
+# Close server
+Server.close(handle)
+```
+
+### Simple Web Server Example
+
+```nos
+handleRequest(req) = match req.path
+    "/" -> (200, "Welcome!")
+    "/api/hello" -> (200, "{\"message\": \"Hello!\"}")
+    _ -> (404, "Not found")
+end
+
+serverLoop(handle) = {
+    req = Server.accept(handle)
+    (status, body) = handleRequest(req)
+    Server.respond(req.id, status, [("Content-Type", "text/plain")], body)
+    serverLoop(handle)
+}
+
+main() = {
+    handle = Server.bind(8080)
+    println("Server running on port 8080")
+    serverLoop(handle)
+}
+```
+
 ## Command-Line Interface
 
 ### Running Programs
