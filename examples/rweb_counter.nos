@@ -9,7 +9,7 @@ reactive Counter = { value: Int }
 
 # Session setup - creates fresh state per session
 # Returns (renderPage, onAction) tuple
-sessionSetup() = {
+sessionSetup(writerId) = {
     counter = Counter(0)
 
     # Render function captures counter
