@@ -932,9 +932,8 @@ impl ReplEngine {
     /// Save definition source to SourceManager (auto-commits to .nostos/defs/)
     pub fn save_definition(&mut self, name: &str, source: &str) -> Result<bool, String> {
         if let Some(ref mut sm) = self.source_manager {
-            // Strip module prefix if present (e.g., "main.foo" -> "foo")
-            let simple_name = name.rsplit('.').next().unwrap_or(name);
-            sm.update_definition(simple_name, source)
+            // Pass full qualified name so SourceManager can determine the correct module
+            sm.update_definition(name, source)
         } else {
             // No SourceManager - just update compiler (for non-directory mode)
             // This is the existing behavior through eval

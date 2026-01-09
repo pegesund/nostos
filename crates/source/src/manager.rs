@@ -624,18 +624,28 @@ impl SourceManager {
         Ok(())
     }
 
-    /// Update a definition's source
-    /// Returns true if the definition changed
+    /// Update a definition's source (or add if new)
+    /// Handles both simple names (greet) and qualified names (utils.greet)
+    /// Returns true if the definition changed or was added
     pub fn update_definition(&mut self, name: &str, new_source: &str) -> Result<bool, String> {
-        if let Some(module_key) = self.def_index.get(name).cloned() {
+        // Parse the qualified name to extract module path and simple name
+        let parts: Vec<&str> = name.split('.').collect();
+        let (module_path_parts, simple_name) = if parts.len() > 1 {
+            (&parts[..parts.len()-1], parts[parts.len()-1])
+        } else {
+            (&[][..], parts[0])
+        };
+
+        // Try to find existing definition first
+        if let Some(module_key) = self.def_index.get(simple_name).cloned() {
             if let Some(module) = self.modules.get_mut(&module_key) {
-                if let Some(group) = module.get_definition_mut(name) {
+                if let Some(group) = module.get_definition_mut(simple_name) {
                     let changed = group.update_from_source(new_source);
                     if changed {
                         module.dirty = true;
                         // Write to .nostos/defs/ and commit
-                        self.write_definition_to_defs(&module_key, name)?;
-                        self.commit_definition(&module_key, name)?;
+                        self.write_definition_to_defs(&module_key, simple_name)?;
+                        self.commit_definition(&module_key, simple_name)?;
                         // Also sync to the main .nos source file
                         self.write_module_files()?;
                     }
@@ -645,26 +655,99 @@ impl SourceManager {
         }
 
         // Check REPL definitions
-        if let Some(group) = self.repl_defs.get_mut(name) {
+        if let Some(group) = self.repl_defs.get_mut(simple_name) {
             return Ok(group.update_from_source(new_source));
         }
 
-        Err(format!("Definition not found: {}", name))
+        // Definition not found - add as new definition
+        let module_key = module_path_parts.join(".");
+        let module_path: ModulePath = if module_key.is_empty() {
+            vec![]
+        } else {
+            module_key.split('.').map(String::from).collect()
+        };
+
+        // Ensure module exists
+        self.modules
+            .entry(module_key.clone())
+            .or_insert_with(|| Module::new(module_path));
+
+        // Determine kind from source
+        let kind = if new_source.trim_start().starts_with("type ") {
+            DefKind::Type
+        } else if new_source.trim_start().starts_with("trait ") {
+            DefKind::Trait
+        } else if new_source.trim_start().starts_with("var ") {
+            DefKind::Variable
+        } else {
+            DefKind::Function
+        };
+
+        // Add the new definition
+        if let Some(module) = self.modules.get_mut(&module_key) {
+            let group = DefinitionGroup::new(simple_name.to_string(), kind, new_source.to_string());
+            module.add_definition(group);
+            module.dirty = true;
+        }
+
+        // Update def_index
+        self.def_index.insert(simple_name.to_string(), module_key.clone());
+
+        // Write to .nostos/defs/ and commit
+        self.write_definition_to_defs(&module_key, simple_name)?;
+        self.commit_definition(&module_key, simple_name)?;
+        self.write_module_files()?;
+
+        Ok(true)
     }
 
     /// Update grouped source (content from editor that may contain together directive and multiple definitions)
-    /// The `primary_name` is the definition that was originally opened
-    /// Returns list of definition names that were updated
+    /// The `primary_name` is the definition that was originally opened (can be qualified like "utils.greet")
+    /// Returns list of definition names that were updated or added
     /// Handles both simple names (greet) and qualified names (utils.greet)
+    /// For new definitions, extracts module from qualified name
     pub fn update_group_source(&mut self, primary_name: &str, source: &str) -> Result<Vec<String>, String> {
         use nostos_syntax::parse;
 
-        // Strip module prefix if present (e.g., "utils.greet" -> "greet")
-        let simple_name = primary_name.rsplit('.').next().unwrap_or(primary_name);
+        eprintln!("[SourceManager] update_group_source called with primary_name='{}'", primary_name);
 
-        let module_key = self.def_index.get(simple_name)
-            .ok_or_else(|| format!("Definition not found: {}", primary_name))?
-            .clone();
+        // Parse the qualified name to extract module path and simple name
+        // e.g., "utils.sub.foo" -> module_path=["utils", "sub"], simple_name="foo"
+        let parts: Vec<&str> = primary_name.split('.').collect();
+        let (module_path_parts, simple_name) = if parts.len() > 1 {
+            (&parts[..parts.len()-1], parts[parts.len()-1])
+        } else {
+            (&[][..], parts[0])
+        };
+
+        eprintln!("[SourceManager] Parsed: module_path_parts={:?}, simple_name='{}'", module_path_parts, simple_name);
+
+        // Try to find existing definition first
+        let module_key = if let Some(key) = self.def_index.get(simple_name) {
+            eprintln!("[SourceManager] Found existing definition in module '{}'", key);
+            key.clone()
+        } else {
+            // New definition - use module path from qualified name
+            let key = module_path_parts.join(".");
+            eprintln!("[SourceManager] New definition, using module key from qualified name: '{}'", key);
+            key
+        };
+
+        // Ensure module exists
+        let module_path: ModulePath = if module_key.is_empty() {
+            vec![]
+        } else {
+            module_key.split('.').map(String::from).collect()
+        };
+
+        let module_existed = self.modules.contains_key(&module_key);
+        self.modules
+            .entry(module_key.clone())
+            .or_insert_with(|| Module::new(module_path));
+
+        if !module_existed {
+            eprintln!("[SourceManager] Created new module: '{}'", module_key);
+        }
 
         // Parse together directives from the source
         let new_groups = parse_together_directives(source);
@@ -689,6 +772,7 @@ impl SourceManager {
         // Extract definitions from parsed content
         // Track which definitions actually changed (for git commit)
         let mut changed_names: Vec<String> = Vec::new();
+        let mut new_defs: Vec<String> = Vec::new();
         let mut all_names: Vec<String> = Vec::new();
         let mut groups_changed = false;
 
@@ -721,7 +805,8 @@ impl SourceManager {
                 ));
             }
 
-            // Update each definition from parsed items
+            eprintln!("[SourceManager] Processing {} parsed items", parsed.items.len());
+            // Update or add each definition from parsed items
             for item in &parsed.items {
                 match item {
                     Item::FnDef(fn_def) => {
@@ -730,11 +815,19 @@ impl SourceManager {
                         let def_source = code_only[span.start..span.end].to_string();
 
                         if module.has_definition(&name) {
+                            eprintln!("[SourceManager] Updating existing function: {}", name);
                             if let Some(def_group) = module.get_definition_mut(&name) {
                                 if def_group.update_from_source(&def_source) {
                                     changed_names.push(name.clone());
                                 }
                             }
+                        } else {
+                            // Add new definition
+                            eprintln!("[SourceManager] Adding NEW function: {} to module '{}'", name, module_key);
+                            let group = DefinitionGroup::new(name.clone(), DefKind::Function, def_source);
+                            module.add_definition(group);
+                            new_defs.push(name.clone());
+                            changed_names.push(name.clone());
                         }
                         all_names.push(name);
                     }
@@ -749,6 +842,12 @@ impl SourceManager {
                                     changed_names.push(name.clone());
                                 }
                             }
+                        } else {
+                            // Add new definition
+                            let group = DefinitionGroup::new(name.clone(), DefKind::Type, def_source);
+                            module.add_definition(group);
+                            new_defs.push(name.clone());
+                            changed_names.push(name.clone());
                         }
                         all_names.push(name);
                     }
@@ -763,6 +862,12 @@ impl SourceManager {
                                     changed_names.push(name.clone());
                                 }
                             }
+                        } else {
+                            // Add new definition
+                            let group = DefinitionGroup::new(name.clone(), DefKind::Trait, def_source);
+                            module.add_definition(group);
+                            new_defs.push(name.clone());
+                            changed_names.push(name.clone());
                         }
                         all_names.push(name);
                     }
@@ -783,6 +888,13 @@ impl SourceManager {
                                         changed_names.push(name.clone());
                                     }
                                 }
+                            } else {
+                                // Add new definition
+                                let kind = if binding.mutable { DefKind::Variable } else { DefKind::Function };
+                                let group = DefinitionGroup::new(name.clone(), kind, def_source);
+                                module.add_definition(group);
+                                new_defs.push(name.clone());
+                                changed_names.push(name.clone());
                             }
                             all_names.push(name);
                         }
@@ -796,8 +908,16 @@ impl SourceManager {
             }
         }
 
+        // Update def_index for new definitions
+        eprintln!("[SourceManager] new_defs={:?}, changed_names={:?}", new_defs, changed_names);
+        for name in &new_defs {
+            eprintln!("[SourceManager] Adding to def_index: {} -> {}", name, module_key);
+            self.def_index.insert(name.clone(), module_key.clone());
+        }
+
         // Write and commit only definitions that actually changed
         for name in &changed_names {
+            eprintln!("[SourceManager] Writing definition to defs: {}", name);
             self.write_definition_to_defs(&module_key, name)?;
             self.commit_definition(&module_key, name)?;
         }
@@ -812,6 +932,7 @@ impl SourceManager {
             self.write_module_files()?;
         }
 
+        eprintln!("[SourceManager] update_group_source completed, returning {:?}", changed_names);
         Ok(changed_names)
     }
 
