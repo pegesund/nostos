@@ -1,0 +1,105 @@
+# Reactive Records Example
+# Demonstrates reactive records with onChange callbacks and parent/child introspection
+
+reactive Point = { x: Int, y: Int }
+reactive Line = { start: Point, finish: Point }
+
+# Example 1: Basic onChange callback
+demo_onChange() = {
+    println("=== onChange Demo ===")
+
+    p = Point(x: 0, y: 0)
+
+    # Register a callback that fires on every field change
+    p.onChange((fieldName, oldValue, newValue) => {
+        println("  " ++ fieldName ++ " changed: " ++ show(oldValue) ++ " -> " ++ show(newValue))
+    })
+
+    println("Changing p.x to 10:")
+    p.x = 10
+
+    println("Changing p.y to 20:")
+    p.y = 20
+
+    println("Final point: (" ++ show(p.x) ++ ", " ++ show(p.y) ++ ")")
+    println("")
+}
+
+# Example 2: Parent/child introspection
+demo_introspection() = {
+    println("=== Parent/Child Introspection Demo ===")
+
+    p1 = Point(x: 0, y: 0)
+    p2 = Point(x: 100, y: 100)
+    line = Line(start: p1, finish: p2)
+
+    # Check p1's parents
+    println("p1's parents:")
+    match p1.parents {
+        [(parent, fieldName)] -> println("  p1 is held in field '" ++ fieldName ++ "'")
+        [] -> println("  p1 has no parent")
+        _ -> println("  p1 has multiple parents")
+    }
+
+    # Check line's children
+    println("line's children count: " ++ show(length(line.children)))
+
+    println("")
+}
+
+# Example 3: Multiple callbacks and ordering
+demo_multiple_callbacks() = {
+    println("=== Multiple Callbacks Demo ===")
+
+    p = Point(x: 0, y: 0)
+
+    # Register multiple callbacks - they execute in registration order
+    p.onChange((f, old, new) => println("  Callback 1: " ++ f ++ " = " ++ show(new)))
+    p.onChange((f, old, new) => println("  Callback 2: " ++ f ++ " = " ++ show(new)))
+
+    println("Setting x = 42:")
+    p.x = 42
+
+    println("")
+}
+
+# Example 4: Change history tracking
+reactive Document = { title: String, content: String }
+
+type ChangeRecord = { fieldName: String, oldVal: String, newVal: String }
+
+mvar changeHistory: List[ChangeRecord] = []
+
+demo_history() = {
+    println("=== Change History Demo ===")
+
+    doc = Document(title: "Untitled", content: "")
+
+    doc.onChange((field, old, new) => {
+        changeHistory = changeHistory ++ [
+            ChangeRecord(fieldName: field, oldVal: show(old), newVal: show(new))
+        ]
+    })
+
+    doc.title = "My Document"
+    doc.content = "Hello, World!"
+    doc.title = "My Awesome Document"
+    doc.content = "Hello, Nostos!"
+
+    println("Change history:")
+    changeHistory.each(change => {
+        println("  " ++ change.fieldName ++ ": " ++ change.oldVal ++ " -> " ++ change.newVal)
+    })
+    println("")
+}
+
+# Run all demos
+main() = {
+    demo_onChange()
+    demo_introspection()
+    demo_multiple_callbacks()
+    demo_history()
+
+    println("=== All demos complete ===")
+    0
+}

@@ -25,6 +25,8 @@ const tutorialChapters = [
     { num: 21, file: "21_mutability.html", title: "Mutability" },
     { num: 22, file: "22_complete_web_app.html", title: "Complete Web App" },
     { num: 23, file: "23_ffi.html", title: "FFI & Extensions" },
+    { num: 24, file: "24_command_line.html", title: "Command Line" },
+    { num: 25, file: "25_reactive_records.html", title: "Reactive Records" },
 ];
 
 function generateTutorialSidebar() {
