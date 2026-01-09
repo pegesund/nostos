@@ -1,6 +1,9 @@
 //! Nostos CLI - Command-line interface for running Nostos programs.
 
 mod repl;
+mod tui;
+mod editor;
+mod custom_views;
 
 use nostos_compiler::compile::{compile_module, Compiler};
 use nostos_jit::{JitCompiler, JitConfig};
@@ -252,8 +255,13 @@ fn main() -> ExitCode {
     }
 
     // Check for repl subcommand
-    if args.len() >= 2 && args[1] == "repl" {
-        return run_repl(&args[2..]);
+    if args.len() >= 2 {
+        if args[1] == "repl" {
+            return run_repl(&args[2..]);
+        }
+        if args[1] == "tui" {
+            return tui::run_tui(&args[2..]);
+        }
     }
 
     // Parse options

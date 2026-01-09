@@ -294,6 +294,7 @@ impl ReplEngine {
 
     /// Process input (eval or define). Returns output string or error.
     pub fn eval(&mut self, input: &str) -> Result<String, String> {
+        let input = input.trim();
         // Check for variable binding
         if let Some((name, mutable, expr)) = Self::is_var_binding(input) {
             return self.define_var(&name, mutable, &expr);
@@ -372,7 +373,7 @@ impl ReplEngine {
         let (wrapper_module_opt, errors) = parse(&wrapper);
 
         if !errors.is_empty() {
-            return Err("Parse error".to_string());
+            return Err(format!("Parse error: {:?}", errors));
         }
 
         let wrapper_module = wrapper_module_opt.ok_or("Failed to parse expression")?;
