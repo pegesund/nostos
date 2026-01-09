@@ -5541,6 +5541,102 @@ impl AsyncProcess {
                 }
             }
 
+            // WebSocket operations
+            WebSocketSend(dst, request_id_reg, message_reg) => {
+                let request_id = match reg!(request_id_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let message = match reg!(message_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr).map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::WebSocketSend { request_id, message, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(_) => {
+                            set_reg!(dst, GcValue::Unit);
+                        }
+                        Err(e) => {
+                            self.throw_exception("websocket_error", format!("{}", e))?;
+                        }
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            WebSocketReceive(dst, request_id_reg) => {
+                let request_id = match reg!(request_id_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::WebSocketReceive { request_id, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(resp) => {
+                            let gc_value = self.io_response_to_gc_value(resp);
+                            set_reg!(dst, gc_value);
+                        }
+                        Err(e) => {
+                            self.throw_exception("websocket_error", format!("{}", e))?;
+                        }
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            WebSocketClose(dst, request_id_reg) => {
+                let request_id = match reg!(request_id_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::WebSocketClose { request_id, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(_) => {
+                            set_reg!(dst, GcValue::Unit);
+                        }
+                        Err(e) => {
+                            self.throw_exception("websocket_error", format!("{}", e))?;
+                        }
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
             // PostgreSQL operations - return values directly, panic on error
             PgConnect(dst, conn_str_reg) => {
                 let conn_string = match reg!(conn_str_reg) {
@@ -6700,7 +6796,7 @@ impl AsyncProcess {
                 }
             }
             IoResponseValue::ServerHandle(handle_id) => GcValue::Int64(handle_id as i64),
-            IoResponseValue::ServerRequest { request_id, method, path, headers, body, query_params, cookies, form_params } => {
+            IoResponseValue::ServerRequest { request_id, method, path, headers, body, query_params, cookies, form_params, is_websocket } => {
                 let header_tuples: Vec<GcValue> = headers
                     .into_iter()
                     .map(|(k, v)| {
@@ -6757,9 +6853,9 @@ impl AsyncProcess {
 
                 GcValue::Record(self.heap.alloc_record(
                     "HttpRequest".to_string(),
-                    vec!["id".to_string(), "method".to_string(), "path".to_string(), "headers".to_string(), "body".to_string(), "queryParams".to_string(), "cookies".to_string(), "formParams".to_string()],
-                    vec![GcValue::Int64(request_id as i64), method_str, path_str, headers_list, body_value, query_params_list, cookies_list, form_params_list],
-                    vec![false, false, false, false, false, false, false, false],
+                    vec!["id".to_string(), "method".to_string(), "path".to_string(), "headers".to_string(), "body".to_string(), "queryParams".to_string(), "cookies".to_string(), "formParams".to_string(), "isWebSocket".to_string()],
+                    vec![GcValue::Int64(request_id as i64), method_str, path_str, headers_list, body_value, query_params_list, cookies_list, form_params_list, GcValue::Bool(is_websocket)],
+                    vec![false, false, false, false, false, false, false, false, false],
                 ))
             }
             IoResponseValue::ExecResult { exit_code, stdout, stderr } => {

@@ -23,6 +23,7 @@ use tokio_postgres::{AsyncMessage, Client as PgClient, NoTls, Statement};
 use postgres_native_tls::MakeTlsConnector;
 use native_tls::TlsConnector;
 use deadpool_postgres::{Manager as PgPoolManager, Pool as PgPool, Runtime as DeadpoolRuntime, ManagerConfig, RecyclingMethod};
+use futures::{SinkExt, StreamExt};
 
 use crate::process::{IoResponseValue, PgValue};
 
@@ -383,6 +384,24 @@ pub enum IoRequest {
         response: IoResponse,
     },
 
+    // WebSocket operations
+    /// Send a message on a WebSocket connection
+    WebSocketSend {
+        request_id: u64,
+        message: String,
+        response: IoResponse,
+    },
+    /// Receive a message from a WebSocket connection
+    WebSocketReceive {
+        request_id: u64,
+        response: IoResponse,
+    },
+    /// Close a WebSocket connection
+    WebSocketClose {
+        request_id: u64,
+        response: IoResponse,
+    },
+
     // External process operations
     /// Run a command and wait for completion (captures stdout/stderr)
     ExecRun {
@@ -598,8 +617,8 @@ impl IoRuntime {
         let mut next_handle: u64 = 1;
 
         // HTTP Server state
-        // Request type: (request_id, method, path, headers, body, query_params, cookies, form_params)
-        type ServerRequest = (u64, String, String, Vec<(String, String)>, Vec<u8>, Vec<(String, String)>, Vec<(String, String)>, Vec<(String, String)>);
+        // Request type: (request_id, method, path, headers, body, query_params, cookies, form_params, is_websocket)
+        type ServerRequest = (u64, String, String, Vec<(String, String)>, Vec<u8>, Vec<(String, String)>, Vec<(String, String)>, Vec<(String, String)>, bool);
         #[allow(dead_code)]
         type ServerRequestTx = mpsc::UnboundedSender<ServerRequest>;
         type ServerRequestRx = mpsc::UnboundedReceiver<ServerRequest>;
@@ -640,6 +659,19 @@ impl IoRuntime {
         // PostgreSQL listener connections (for LISTEN/NOTIFY)
         let pg_listeners: Arc<TokioMutex<HashMap<u64, PgListenerConnection>>> = Arc::new(TokioMutex::new(HashMap::new()));
         let mut next_listener_handle: u64 = 1;
+
+        // WebSocket connection storage
+        // Maps request_id -> (sender, receiver) for active WebSocket connections
+        use tokio_tungstenite::WebSocketStream;
+        use tokio_tungstenite::tungstenite::Message as WsMessage;
+        type WsStream = WebSocketStream<hyper_util::rt::TokioIo<hyper::upgrade::Upgraded>>;
+        type WsSender = futures::stream::SplitSink<WsStream, WsMessage>;
+        type WsReceiver = futures::stream::SplitStream<WsStream>;
+        let ws_connections: Arc<TokioMutex<HashMap<u64, (WsSender, WsReceiver)>>> = Arc::new(TokioMutex::new(HashMap::new()));
+
+        // Pending WebSocket upgrades (stores the OnUpgrade handle until accept is called)
+        use hyper::upgrade::OnUpgrade;
+        let pending_ws_upgrades: Arc<TokioMutex<HashMap<u64, OnUpgrade>>> = Arc::new(TokioMutex::new(HashMap::new()));
 
         while let Some(request) = request_rx.recv().await {
             match request {
@@ -938,12 +970,16 @@ impl IoRuntime {
                     // Clone shared state for the axum handler
                     let pending = pending_responses.clone();
                     let req_id_gen = next_request_id.clone();
+                    let pending_upgrades = pending_ws_upgrades.clone();
+                    let ws_conns = ws_connections.clone();
 
                     // Create the router
-                    let app = Router::new().fallback(any(move |request: Request| {
+                    let app = Router::new().fallback(any(move |mut request: Request| {
                         let req_tx = req_tx.clone();
                         let pending = pending.clone();
                         let req_id_gen = req_id_gen.clone();
+                        let pending_upgrades = pending_upgrades.clone();
+                        let ws_conns = ws_conns.clone();
                         async move {
                             // Extract request parts
                             let method = request.method().to_string();
@@ -996,10 +1032,33 @@ impl IoRuntime {
                                 })
                                 .collect();
 
-                            // Read body
-                            let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
-                                Ok(bytes) => bytes.to_vec(),
-                                Err(_) => vec![],
+                            // Check if this is a WebSocket upgrade request
+                            let is_websocket = headers.iter().any(|(k, v)| {
+                                k.eq_ignore_ascii_case("upgrade") && v.eq_ignore_ascii_case("websocket")
+                            }) && headers.iter().any(|(k, v)| {
+                                k.eq_ignore_ascii_case("connection") && v.to_lowercase().contains("upgrade")
+                            });
+
+                            // Get sec-websocket-key for WebSocket handshake
+                            let ws_key = headers.iter()
+                                .find(|(k, _)| k.eq_ignore_ascii_case("sec-websocket-key"))
+                                .map(|(_, v)| v.clone());
+
+                            // For WebSocket requests, extract the OnUpgrade handle BEFORE reading body
+                            let on_upgrade = if is_websocket {
+                                request.extensions_mut().remove::<hyper::upgrade::OnUpgrade>()
+                            } else {
+                                None
+                            };
+
+                            // Read body (empty for WebSocket requests)
+                            let body = if is_websocket {
+                                vec![]
+                            } else {
+                                match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+                                    Ok(bytes) => bytes.to_vec(),
+                                    Err(_) => vec![],
+                                }
                             };
 
                             // Parse form body if Content-Type is application/x-www-form-urlencoded
@@ -1037,21 +1096,76 @@ impl IoRuntime {
                             // Store the response channel
                             pending.lock().await.insert(request_id, resp_tx);
 
+                            // Store OnUpgrade for WebSocket requests
+                            if let Some(upgrade) = on_upgrade {
+                                pending_upgrades.lock().await.insert(request_id, upgrade);
+                            }
+
                             // Send request to the Nostos process
-                            let _ = req_tx.send((request_id, method, path, headers, body, query_params, cookies, form_params));
+                            let _ = req_tx.send((request_id, method, path, headers, body, query_params, cookies, form_params, is_websocket));
 
                             // Wait for response from Nostos
                             match resp_rx.await {
-                                Ok((status, headers, body)) => {
+                                Ok((status, resp_headers, body)) => {
+                                    // Check if this is a WebSocket upgrade response (status 101)
+                                    if status == 101 && is_websocket {
+                                        // Complete the WebSocket upgrade
+                                        if let Some(upgrade) = pending_upgrades.lock().await.remove(&request_id) {
+                                            // Calculate the WebSocket accept key
+                                            let accept_key = if let Some(ref key) = ws_key {
+                                                use sha1::{Sha1, Digest};
+                                                let mut hasher = Sha1::new();
+                                                hasher.update(key.as_bytes());
+                                                hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+                                                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, hasher.finalize())
+                                            } else {
+                                                String::new()
+                                            };
+
+                                            // Spawn task to complete upgrade and store WebSocket
+                                            let ws_conns = ws_conns.clone();
+                                            tokio::spawn(async move {
+                                                match upgrade.await {
+                                                    Ok(upgraded) => {
+                                                        // Create WebSocket from upgraded connection using tokio-tungstenite
+                                                        use tokio_tungstenite::WebSocketStream;
+                                                        let io = hyper_util::rt::TokioIo::new(upgraded);
+                                                        let ws = WebSocketStream::from_raw_socket(
+                                                            io,
+                                                            tokio_tungstenite::tungstenite::protocol::Role::Server,
+                                                            None,
+                                                        ).await;
+                                                        let (sender, receiver) = ws.split();
+                                                        ws_conns.lock().await.insert(request_id, (sender, receiver));
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!("WebSocket upgrade failed: {}", e);
+                                                    }
+                                                }
+                                            });
+
+                                            // Return 101 response with WebSocket headers
+                                            return axum::response::Response::builder()
+                                                .status(101)
+                                                .header("Upgrade", "websocket")
+                                                .header("Connection", "Upgrade")
+                                                .header("Sec-WebSocket-Accept", accept_key)
+                                                .body(axum::body::Body::empty())
+                                                .unwrap();
+                                        }
+                                    }
+
+                                    // Normal HTTP response
                                     let mut response = axum::response::Response::builder()
                                         .status(status);
-                                    for (key, value) in headers {
+                                    for (key, value) in resp_headers {
                                         response = response.header(key, value);
                                     }
                                     response.body(axum::body::Body::from(body)).unwrap()
                                 }
                                 Err(_) => {
-                                    // Request was abandoned
+                                    // Request was abandoned - clean up pending upgrade if any
+                                    pending_upgrades.lock().await.remove(&request_id);
                                     axum::response::Response::builder()
                                         .status(500)
                                         .body(axum::body::Body::from("Internal Server Error"))
@@ -1097,7 +1211,7 @@ impl IoRuntime {
                                 // Only one waiter at a time can hold this lock
                                 let result = rx.lock().await.recv().await;
                                 match result {
-                                    Some((request_id, method, path, headers, body, query_params, cookies, form_params)) => {
+                                    Some((request_id, method, path, headers, body, query_params, cookies, form_params, is_websocket)) => {
                                         let _ = response.send(Ok(IoResponseValue::ServerRequest {
                                             request_id,
                                             method,
@@ -1107,6 +1221,7 @@ impl IoRuntime {
                                             query_params,
                                             cookies,
                                             form_params,
+                                            is_websocket,
                                         }));
                                     }
                                     None => {
@@ -1141,6 +1256,71 @@ impl IoRuntime {
                         abort_handle.abort();
                     }
                     let _ = response.send(Ok(IoResponseValue::Unit));
+                }
+
+                // WebSocket operations
+                IoRequest::WebSocketSend { request_id, message, response } => {
+                    let ws_conns = ws_connections.clone();
+                    tokio::spawn(async move {
+                        let mut conns = ws_conns.lock().await;
+                        if let Some((sender, _)) = conns.get_mut(&request_id) {
+                            match sender.send(WsMessage::Text(message.into())).await {
+                                Ok(()) => {
+                                    let _ = response.send(Ok(IoResponseValue::Unit));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::IoError(format!("WebSocket send failed: {}", e))));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::IoError("WebSocket connection not found".to_string())));
+                        }
+                    });
+                }
+
+                IoRequest::WebSocketReceive { request_id, response } => {
+                    let ws_conns = ws_connections.clone();
+                    tokio::spawn(async move {
+                        let mut conns = ws_conns.lock().await;
+                        if let Some((_, receiver)) = conns.get_mut(&request_id) {
+                            match receiver.next().await {
+                                Some(Ok(msg)) => {
+                                    let text: String = match msg {
+                                        WsMessage::Text(t) => t.to_string(),
+                                        WsMessage::Binary(b) => String::from_utf8_lossy(&b).to_string(),
+                                        WsMessage::Close(_) => {
+                                            let _ = response.send(Err(IoError::IoError("WebSocket closed".to_string())));
+                                            return;
+                                        }
+                                        _ => String::new(),
+                                    };
+                                    let _ = response.send(Ok(IoResponseValue::String(text)));
+                                }
+                                Some(Err(e)) => {
+                                    let _ = response.send(Err(IoError::IoError(format!("WebSocket receive failed: {}", e))));
+                                }
+                                None => {
+                                    let _ = response.send(Err(IoError::IoError("WebSocket connection closed".to_string())));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::IoError("WebSocket connection not found".to_string())));
+                        }
+                    });
+                }
+
+                IoRequest::WebSocketClose { request_id, response } => {
+                    let ws_conns = ws_connections.clone();
+                    tokio::spawn(async move {
+                        let mut conns = ws_conns.lock().await;
+                        if let Some((mut sender, _)) = conns.remove(&request_id) {
+                            let _ = sender.send(WsMessage::Close(None)).await;
+                            let _ = sender.close().await;
+                            let _ = response.send(Ok(IoResponseValue::Unit));
+                        } else {
+                            let _ = response.send(Ok(IoResponseValue::Unit)); // Already closed, that's OK
+                        }
+                    });
                 }
 
                 // External process operations

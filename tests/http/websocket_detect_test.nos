@@ -1,0 +1,30 @@
+# expect: 0
+# Tests WebSocket upgrade detection in HttpRequest
+
+handle(req) = {
+    # Regular HTTP request should NOT be a WebSocket upgrade
+    isWs = req.isWebSocket
+    Server.respond(req.id, 200, [], if isWs then "ws" else "http")
+}
+
+main() = {
+    server = Server.bind(18090)
+
+    spawn {
+        req = Server.accept(server)
+        handle(req)
+    }
+
+    sleep(100)
+
+    # Make regular HTTP request (not WebSocket upgrade)
+    resp = Http.get("http://localhost:18090/test")
+
+    Server.close(server)
+
+    # Regular request should NOT be WebSocket
+    if resp.body == "http" then 0 else {
+        println("Expected http, got: " ++ resp.body)
+        1
+    }
+}

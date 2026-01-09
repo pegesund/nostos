@@ -1006,6 +1006,14 @@ pub enum Instruction {
     /// Close HTTP server: dst = Server.close(server_handle)
     ServerClose(Reg, Reg),
 
+    // === WebSocket Operations ===
+    /// Send message on WebSocket: dst = WebSocket.send(request_id, message)
+    WebSocketSend(Reg, Reg, Reg),
+    /// Receive message from WebSocket: dst = WebSocket.receive(request_id)
+    WebSocketReceive(Reg, Reg),
+    /// Close WebSocket: dst = WebSocket.close(request_id)
+    WebSocketClose(Reg, Reg),
+
     // === PostgreSQL Operations ===
     /// Connect to PostgreSQL: dst = Pg.connect(connection_string)
     /// Returns (status, handle) where handle is Int
