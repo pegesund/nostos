@@ -135,6 +135,21 @@ pub struct PanelState {
     pub visible: bool,
 }
 
+/// Nostlet information - a pluggable panel defined in Nostos code
+#[derive(Debug, Clone)]
+pub struct NostletInfo {
+    /// Display name shown in the picker
+    pub name: String,
+    /// Description of what the nostlet does
+    pub description: String,
+    /// Module name (e.g., "nostlets.vm_stats")
+    pub module_name: String,
+    /// Fully qualified name of render function (returns String)
+    pub render_fn: String,
+    /// Fully qualified name of key handler function (receives key name as String)
+    pub key_handler_fn: String,
+}
+
 /// The REPL state
 pub struct ReplEngine {
     compiler: Compiler,
@@ -190,6 +205,8 @@ pub struct ReplEngine {
     dynamic_var_bindings: Arc<std::sync::RwLock<HashMap<String, String>>>,
     /// Debugger breakpoints: function names to break on
     debug_breakpoints: HashSet<String>,
+    /// Registered nostlets: module_name -> NostletInfo
+    nostlets: HashMap<String, NostletInfo>,
 }
 
 impl ReplEngine {
@@ -616,6 +633,7 @@ impl ReplEngine {
             dynamic_var_types: dynamic_var_types_for_self,
             dynamic_var_bindings: dynamic_var_bindings_for_self,
             debug_breakpoints: HashSet::new(),
+            nostlets: HashMap::new(),
         }
     }
 
@@ -725,6 +743,148 @@ impl ReplEngine {
         }
 
         Ok(())
+    }
+
+    /// Discover and register nostlets from the nostlets/ directory
+    /// Nostlets are Nostos modules that export: nostlet_name(), nostlet_description(), render(), onKey(key)
+    pub fn discover_nostlets(&mut self) -> Result<usize, String> {
+        let nostlets_candidates = vec![
+            PathBuf::from("nostlets"),
+            PathBuf::from("../nostlets"),
+            PathBuf::from("../../nostlets"),
+        ];
+
+        let mut nostlets_path = None;
+
+        for path in nostlets_candidates {
+            if path.is_dir() {
+                nostlets_path = Some(path);
+                break;
+            }
+        }
+
+        // Try relative to executable
+        if nostlets_path.is_none() {
+            if let Ok(mut p) = std::env::current_exe() {
+                p.pop(); // remove binary name
+                p.pop(); // remove release/debug
+                p.pop(); // remove target
+                p.push("nostlets");
+                if p.is_dir() {
+                    nostlets_path = Some(p);
+                }
+            }
+        }
+
+        let Some(path) = nostlets_path else {
+            // No nostlets directory found - that's OK
+            return Ok(0);
+        };
+
+        let mut nostlet_files = Vec::new();
+        visit_dirs(&path, &mut nostlet_files)?;
+
+        let mut count = 0;
+
+        for file_path in &nostlet_files {
+            let source = match fs::read_to_string(file_path) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+
+            let (module_opt, _) = parse(&source);
+            let Some(module) = module_opt else { continue };
+
+            // Build module name: nostlets.vm_stats, etc.
+            let relative = file_path.strip_prefix(&path).unwrap();
+            let mut components: Vec<String> = vec!["nostlets".to_string()];
+            for component in relative.components() {
+                let s = component.as_os_str().to_string_lossy().to_string();
+                if s.ends_with(".nos") {
+                    components.push(s.trim_end_matches(".nos").to_string());
+                } else {
+                    components.push(s);
+                }
+            }
+            let module_name = components.join(".");
+
+            // Check for required exports: nostlet_name, nostlet_description, render, onKey
+            let mut has_name = false;
+            let mut has_description = false;
+            let mut has_render = false;
+            let mut has_on_key = false;
+
+            for item in &module.items {
+                if let nostos_syntax::ast::Item::FnDef(fn_def) = item {
+                    match fn_def.name.node.as_str() {
+                        "nostlet_name" => has_name = true,
+                        "nostlet_description" => has_description = true,
+                        "render" => has_render = true,
+                        "onKey" => has_on_key = true,
+                        _ => {}
+                    }
+                }
+            }
+
+            if has_name && has_description && has_render && has_on_key {
+                // Add the module to the compiler
+                self.compiler.add_module(&module, components.clone(), Arc::new(source.clone()), file_path.to_str().unwrap().to_string())
+                    .map_err(|e| format!("Failed to compile nostlet {}: {}", module_name, e))?;
+
+                // Register the nostlet - we'll get name/description by evaluating the functions later
+                // For now, use placeholder values
+                let info = NostletInfo {
+                    name: module_name.clone(), // Will be updated when TUI starts
+                    description: String::new(),
+                    module_name: module_name.clone(),
+                    render_fn: format!("{}.render", module_name),
+                    key_handler_fn: format!("{}.onKey", module_name),
+                };
+                self.register_nostlet(info);
+                count += 1;
+            }
+        }
+
+        // Recompile to include nostlet modules
+        if count > 0 {
+            if let Err((e, _, _)) = self.compiler.compile_all() {
+                return Err(format!("Failed to compile nostlets: {}", e));
+            }
+            // Sync to VM
+            self.vm.set_stdlib_functions(
+                self.compiler.get_all_functions().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            );
+        }
+
+        Ok(count)
+    }
+
+    /// Resolve nostlet name and description by evaluating nostlet_name() and nostlet_description()
+    /// Should be called after the engine is fully initialized
+    pub fn resolve_nostlet_metadata(&mut self) {
+        let module_names: Vec<String> = self.nostlets.keys().cloned().collect();
+
+        for module_name in module_names {
+            // Try to get name
+            let name_call = format!("{}.nostlet_name()", module_name);
+            let name = match self.eval(&name_call) {
+                Ok(result) => result.trim().trim_matches('"').to_string(),
+                Err(_) => module_name.clone(),
+            };
+
+            // Try to get description
+            let desc_call = format!("{}.nostlet_description()", module_name);
+            let description = match self.eval(&desc_call) {
+                Ok(result) => result.trim().trim_matches('"').to_string(),
+                Err(_) => String::new(),
+            };
+
+            // Update the nostlet info
+            if let Some(info) = self.nostlets.get_mut(&module_name) {
+                info.name = name;
+                info.description = description;
+            }
+        }
     }
 
     /// Load a file into the REPL
@@ -4791,6 +4951,27 @@ impl ReplEngine {
     /// Called internally when processing panel registrations from the VM channel
     pub fn register_panel(&mut self, info: PanelInfo) {
         self.registered_panels.insert(info.key.clone(), info);
+    }
+
+    /// Register a nostlet
+    /// Called when discovering nostlets from the nostlets/ directory or via Nostlet.register()
+    pub fn register_nostlet(&mut self, info: NostletInfo) {
+        self.nostlets.insert(info.module_name.clone(), info);
+    }
+
+    /// Get all registered nostlets
+    pub fn get_nostlets(&self) -> Vec<&NostletInfo> {
+        self.nostlets.values().collect()
+    }
+
+    /// Get a nostlet by module name
+    pub fn get_nostlet(&self, module_name: &str) -> Option<&NostletInfo> {
+        self.nostlets.get(module_name)
+    }
+
+    /// Check if a nostlet is registered
+    pub fn has_nostlet(&self, module_name: &str) -> bool {
+        self.nostlets.contains_key(module_name)
     }
 
     /// Drain all pending panel commands from the VM channel.
