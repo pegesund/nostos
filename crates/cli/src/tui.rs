@@ -666,15 +666,37 @@ pub fn run_tui(args: &[String]) -> ExitCode {
     siv.set_on_pre_event(Event::Key(Key::F5), |s| {
         send_debug_command(s, nostos_vm::shared_types::DebugCommand::Continue);
     });
+    siv.set_on_pre_event(Event::Char('c'), |s| {
+        if has_active_debug_session(s) {
+            send_debug_command(s, nostos_vm::shared_types::DebugCommand::Continue);
+        }
+    });
 
     // F10 or 'n' - Step Over
     siv.set_on_pre_event(Event::Key(Key::F10), |s| {
         send_debug_command(s, nostos_vm::shared_types::DebugCommand::StepOver);
     });
+    siv.set_on_pre_event(Event::Char('n'), |s| {
+        if has_active_debug_session(s) {
+            send_debug_command(s, nostos_vm::shared_types::DebugCommand::StepOver);
+        }
+    });
 
     // F11 or 's' - Step In
     siv.set_on_pre_event(Event::Key(Key::F11), |s| {
         send_debug_command(s, nostos_vm::shared_types::DebugCommand::StepLine);
+    });
+    siv.set_on_pre_event(Event::Char('s'), |s| {
+        if has_active_debug_session(s) {
+            send_debug_command(s, nostos_vm::shared_types::DebugCommand::StepLine);
+        }
+    });
+
+    // 'o' - Step Out
+    siv.set_on_pre_event(Event::Char('o'), |s| {
+        if has_active_debug_session(s) {
+            send_debug_command(s, nostos_vm::shared_types::DebugCommand::StepOut);
+        }
     });
 
     // Dynamic global keybindings - panels register via Panel.registerHotkey() from Nostos code
@@ -781,6 +803,24 @@ fn poll_inspect_entries(s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>) {
     }
     // If inspector is closed, entries are simply discarded
     // (they were already drained from the queue)
+}
+
+/// Check if any REPL panel has an active debug session.
+fn has_active_debug_session(s: &mut Cursive) -> bool {
+    let repl_ids: Vec<usize> = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().open_repls.clone()
+    }).unwrap_or_default();
+
+    for repl_id in repl_ids {
+        let panel_id = format!("repl_panel_{}", repl_id);
+        let has_session = s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
+            panel.has_debug_session()
+        }).unwrap_or(false);
+        if has_session {
+            return true;
+        }
+    }
+    false
 }
 
 /// Send a debug command to the active debug session (if any).
