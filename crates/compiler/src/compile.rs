@@ -454,15 +454,35 @@ impl Compiler {
         }
         // Otherwise, check if it's a known function or type or constructor in the current module
         let qualified = self.qualify_name(name);
-        if self.functions.contains_key(&qualified) || self.types.contains_key(&qualified) || self.known_constructors.contains(&qualified) {
+        if self.has_function_with_base(&qualified) || self.types.contains_key(&qualified) || self.known_constructors.contains(&qualified) {
             return qualified;
         }
         // Check if it's in the global scope
-        if self.functions.contains_key(name) || self.types.contains_key(name) || self.known_constructors.contains(name) {
+        if self.has_function_with_base(name) || self.types.contains_key(name) || self.known_constructors.contains(name) {
             return name.to_string();
         }
         // Return the original name (will error later if not found)
         name.to_string()
+    }
+
+    /// Check if there's any function with the given base name (ignoring signature suffix).
+    fn has_function_with_base(&self, base_name: &str) -> bool {
+        let prefix = format!("{}/", base_name);
+        // Check compiled functions
+        if self.functions.keys().any(|k| k.starts_with(&prefix)) {
+            return true;
+        }
+        // Check pending ASTs
+        if self.fn_asts.keys().any(|k| k.starts_with(&prefix)) {
+            return true;
+        }
+        // Check if current function matches (for recursion during compilation)
+        if let Some(current) = &self.current_function_name {
+            if current.starts_with(&prefix) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Check if an expression is float-typed (for type-directed operator selection).
@@ -1587,6 +1607,102 @@ impl Compiler {
         }
     }
 
+    /// Find a function by base name and argument types.
+    /// Returns the qualified function name (with signature) if found.
+    ///
+    /// Resolution order:
+    /// 1. Exact match: `name/Type1,Type2,...`
+    /// 2. Wildcard match: `name/_,_,...` (untyped parameters match any type)
+    /// 3. Partial wildcard: `name/Type1,_,...` (specific types take precedence)
+    fn resolve_function_call(&self, base_name: &str, arg_types: &[Option<String>]) -> Option<String> {
+        let arity = arg_types.len();
+        let prefix = format!("{}/", base_name);
+
+        // Collect candidates from both compiled functions and pending ASTs
+        let mut candidates: Vec<String> = Vec::new();
+
+        // Check compiled functions
+        for key in self.functions.keys() {
+            if let Some(suffix) = key.strip_prefix(&prefix) {
+                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                if param_count == arity {
+                    candidates.push(key.clone());
+                }
+            }
+        }
+
+        // Check fn_asts (for functions being compiled or not yet compiled)
+        for key in self.fn_asts.keys() {
+            if let Some(suffix) = key.strip_prefix(&prefix) {
+                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                if param_count == arity && !candidates.contains(key) {
+                    candidates.push(key.clone());
+                }
+            }
+        }
+
+        // Also check if current function matches (for self-recursion during compilation)
+        if let Some(current) = &self.current_function_name {
+            if let Some(suffix) = current.strip_prefix(&prefix) {
+                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                if param_count == arity && !candidates.contains(current) {
+                    candidates.push(current.clone());
+                }
+            }
+        }
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // Score each candidate: exact type match = 2, wildcard (_) = 1, mismatch = 0
+        let mut best_match: Option<(String, usize)> = None;
+
+        for candidate in &candidates {
+            let suffix = candidate.strip_prefix(&prefix).unwrap();
+            let candidate_types: Vec<&str> = if suffix.is_empty() {
+                vec![]
+            } else {
+                suffix.split(',').collect()
+            };
+
+            let mut score = 0;
+            let mut valid = true;
+
+            for (i, cand_type) in candidate_types.iter().enumerate() {
+                if i >= arg_types.len() {
+                    valid = false;
+                    break;
+                }
+
+                if *cand_type == "_" {
+                    // Wildcard accepts anything
+                    score += 1;
+                } else if let Some(arg_type) = &arg_types[i] {
+                    if cand_type == arg_type {
+                        // Exact type match
+                        score += 2;
+                    } else {
+                        // Type mismatch
+                        valid = false;
+                        break;
+                    }
+                } else {
+                    // Unknown argument type - wildcard in candidate accepts unknown
+                    score += 1;
+                }
+            }
+
+            if valid {
+                if best_match.is_none() || score > best_match.as_ref().unwrap().1 {
+                    best_match = Some((candidate.clone(), score));
+                }
+            }
+        }
+
+        best_match.map(|(name, _)| name)
+    }
+
     /// Find the implementation of a trait method for a given type.
     pub fn find_trait_method(&self, type_name: &str, method_name: &str) -> Option<String> {
         // Look through all traits this type implements
@@ -1759,8 +1875,16 @@ impl Compiler {
         self.locals = HashMap::new();
         self.next_reg = 0;
 
-        // Use qualified name (with module path prefix)
-        let name = self.qualify_name(&def.name.node);
+        // Use qualified name with type signature to support function overloading
+        // Format: name/type1,type2,... where untyped params use "_"
+        let base_name = self.qualify_name(&def.name.node);
+        let param_types: Vec<String> = def.clauses[0].params.iter()
+            .map(|p| p.ty.as_ref()
+                .map(|t| self.type_expr_to_string(t))
+                .unwrap_or_else(|| "_".to_string()))
+            .collect();
+        let signature = param_types.join(",");
+        let name = format!("{}/{}", base_name, signature);
 
         // Track current function name for self-recursion optimization
         self.current_function_name = Some(name.clone());
@@ -2165,13 +2289,37 @@ impl Compiler {
                     self.chunk.emit(Instruction::GetCapture(dst, capture_idx), line);
                     Ok(dst)
                 } else if self.functions.contains_key(name) {
-                    // It's a function reference
+                    // It's a function reference (exact match)
                     let dst = self.alloc_reg();
                     let func = self.functions.get(name).unwrap().clone();
                     let idx = self.chunk.add_constant(Value::Function(func));
                     self.chunk.emit(Instruction::LoadConst(dst, idx), line);
                     Ok(dst)
                 } else {
+                    // Check for function with signature (new naming convention)
+                    let resolved = self.resolve_name(name);
+                    let prefix = format!("{}/", resolved);
+                    // First find the key, then get the function (to avoid borrow issues)
+                    let func_key = self.functions.keys()
+                        .find(|k| k.starts_with(&prefix))
+                        .cloned();
+                    if let Some(key) = func_key {
+                        let dst = self.alloc_reg();
+                        let func = self.functions.get(&key).unwrap().clone();
+                        let idx = self.chunk.add_constant(Value::Function(func));
+                        self.chunk.emit(Instruction::LoadConst(dst, idx), line);
+                        return Ok(dst);
+                    }
+                    // Check if it's a function currently being compiled (for self-recursion)
+                    // or in fn_asts (for mutual recursion or forward references)
+                    let has_fn = self.current_function_name.as_ref().map_or(false, |c| c.starts_with(&prefix))
+                        || self.fn_asts.keys().any(|k| k.starts_with(&prefix));
+                    if has_fn {
+                        // For recursive calls during compilation, we can't load the function value yet
+                        // But this shouldn't happen - recursive calls should go through compile_call
+                        // If we reach here, it's a first-class reference to a function not yet compiled
+                        // Return an error for now - this case needs special handling
+                    }
                     Err(CompileError::UnknownVariable {
                         name: name.clone(),
                         span: ident.span,
@@ -2558,9 +2706,28 @@ impl Compiler {
 
                     let resolved_name = self.resolve_name(&qualified_name);
 
-                    if self.functions.contains_key(&resolved_name) {
+                    // Compute argument types for function overloading
+                    let arg_types: Vec<Option<String>> = args.iter()
+                        .map(|a| self.expr_type_name(a))
+                        .collect();
+
+                    // Resolve to the correct function variant using signature matching
+                    let call_name = if let Some(resolved) = self.resolve_function_call(&resolved_name, &arg_types) {
+                        resolved
+                    } else {
+                        // Fall back to trying with all wildcards
+                        let wildcard_sig = vec!["_".to_string(); arg_types.len()].join(",");
+                        format!("{}/{}", resolved_name, wildcard_sig)
+                    };
+
+                    // Check for user-defined function
+                    let fn_exists = self.functions.contains_key(&call_name)
+                        || self.fn_asts.contains_key(&call_name)
+                        || self.current_function_name.as_ref() == Some(&call_name);
+
+                    if fn_exists {
                         // Check visibility before allowing the call
-                        self.check_visibility(&resolved_name, method.span)?;
+                        self.check_visibility(&call_name, method.span)?;
 
                         // Compile arguments
                         let mut arg_regs = Vec::new();
@@ -2571,14 +2738,14 @@ impl Compiler {
 
                         let dst = self.alloc_reg();
                         // Direct function call by index (no HashMap lookup at runtime!)
-                        let func_idx = *self.function_indices.get(&resolved_name)
-                            .expect("Function should have been assigned an index");
-                        if is_tail {
-                            self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
-                            return Ok(0);
-                        } else {
-                            self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
-                            return Ok(dst);
+                        if let Some(&func_idx) = self.function_indices.get(&call_name) {
+                            if is_tail {
+                                self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
+                                return Ok(0);
+                            } else {
+                                self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
+                                return Ok(dst);
+                            }
                         }
                     }
                 }
@@ -2590,6 +2757,20 @@ impl Compiler {
                         let mut all_args = vec![obj.as_ref().clone()];
                         all_args.extend(args.iter().cloned());
 
+                        // Compute argument types for function overloading
+                        let arg_types: Vec<Option<String>> = all_args.iter()
+                            .map(|a| self.expr_type_name(a))
+                            .collect();
+
+                        // Resolve to the correct function variant using signature matching
+                        let call_name = if let Some(resolved) = self.resolve_function_call(&qualified_method, &arg_types) {
+                            resolved
+                        } else {
+                            // Fall back to trying with all wildcards
+                            let wildcard_sig = vec!["_".to_string(); arg_types.len()].join(",");
+                            format!("{}/{}", qualified_method, wildcard_sig)
+                        };
+
                         // Compile arguments
                         let mut arg_regs = Vec::new();
                         for arg in &all_args {
@@ -2599,14 +2780,14 @@ impl Compiler {
 
                         let dst = self.alloc_reg();
                         // Direct function call by index (no HashMap lookup at runtime!)
-                        let func_idx = *self.function_indices.get(&qualified_method)
-                            .expect("Trait method should have been assigned an index");
-                        if is_tail {
-                            self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
-                            return Ok(0);
-                        } else {
-                            self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
-                            return Ok(dst);
+                        if let Some(&func_idx) = self.function_indices.get(&call_name) {
+                            if is_tail {
+                                self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
+                                return Ok(0);
+                            } else {
+                                self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
+                                return Ok(dst);
+                            }
                         }
                     }
                 } else {
@@ -3474,61 +3655,37 @@ impl Compiler {
             // Resolve the name (handles imports and module path)
             let resolved_name = self.resolve_name(&qualified_name);
 
+            // Get argument types for function overloading resolution
+            let arg_types: Vec<Option<String>> = args.iter()
+                .map(|arg| self.expr_type_name(arg))
+                .collect();
+
             // Check trait bounds if the function has type parameters with constraints
-            if let Some(type_params) = self.fn_type_params.get(&resolved_name).cloned() {
-                if !type_params.is_empty() {
-                    // Get argument types for bound checking
-                    let arg_types: Vec<Option<String>> = args.iter()
-                        .map(|arg| self.expr_type_name(arg))
-                        .collect();
-                    self.check_trait_bounds(&resolved_name, &type_params, &arg_types, func.span())?;
+            // Note: fn_type_params keys now include signature, so we need to find the right one
+            for (fn_name, type_params) in &self.fn_type_params {
+                if fn_name.starts_with(&format!("{}/", resolved_name)) && !type_params.is_empty() {
+                    self.check_trait_bounds(fn_name, type_params, &arg_types, func.span())?;
+                    break;
                 }
             }
 
-            // Try monomorphization: if we know argument types, compile specialized variant
-            let call_name = if self.fn_asts.contains_key(&resolved_name) && !args.is_empty() {
-                // Get argument types
-                let arg_types: Vec<Option<String>> = args.iter()
-                    .map(|arg| self.expr_type_name(arg))
-                    .collect();
-
-                // If at least one argument type is known, try monomorphization
-                if arg_types.iter().any(|t| t.is_some()) {
-                    // Get param names from the function's AST
-                    let param_names: Vec<String> = if let Some(fn_def) = self.fn_asts.get(&resolved_name) {
-                        fn_def.clauses[0].params.iter().enumerate().map(|(i, param)| {
-                            self.pattern_binding_name(&param.pattern)
-                                .unwrap_or_else(|| format!("_arg{}", i))
-                        }).collect()
-                    } else {
-                        vec![]
-                    };
-
-                    // Convert to non-optional (use "?" for unknown types)
-                    let type_names: Vec<String> = arg_types.iter()
-                        .map(|t| t.clone().unwrap_or_else(|| "?".to_string()))
-                        .collect();
-
-                    // Only monomorphize if all types are known
-                    if !type_names.contains(&"?".to_string()) {
-                        match self.compile_monomorphized_variant(&resolved_name, &type_names, &param_names) {
-                            Ok(mangled) => mangled,
-                            Err(_) => resolved_name.clone(), // Fall back to original
-                        }
-                    } else {
-                        resolved_name.clone()
-                    }
-                } else {
-                    resolved_name.clone()
-                }
+            // Resolve the function call using signature-based overloading
+            let call_name = if let Some(resolved) = self.resolve_function_call(&resolved_name, &arg_types) {
+                resolved
             } else {
-                resolved_name.clone()
+                // Fall back to trying with all wildcards (for backward compatibility)
+                let wildcard_sig = vec!["_".to_string(); arg_types.len()].join(",");
+                format!("{}/{}", resolved_name, wildcard_sig)
             };
 
             // Check for user-defined function
-            if self.functions.contains_key(&call_name) {
+            // Also check fn_asts and current_function_name for functions being compiled
+            let fn_exists = self.functions.contains_key(&call_name)
+                || self.fn_asts.contains_key(&call_name)
+                || self.current_function_name.as_ref() == Some(&call_name);
+            if fn_exists {
                 // Self-recursion optimization: use CallSelf to avoid HashMap lookup
-                let is_self_call = self.current_function_name.as_ref() == Some(&resolved_name);
+                let is_self_call = self.current_function_name.as_ref() == Some(&call_name);
                 let dst = self.alloc_reg();
 
                 if is_self_call {
@@ -3540,10 +3697,8 @@ impl Compiler {
                         self.chunk.emit(Instruction::CallSelf(dst, arg_regs.into()), line);
                         return Ok(dst);
                     }
-                } else {
+                } else if let Some(&func_idx) = self.function_indices.get(&call_name) {
                     // Direct function call by index (no HashMap lookup at runtime!)
-                    let func_idx = *self.function_indices.get(&call_name)
-                        .expect("Function should have been assigned an index");
                     if is_tail {
                         self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
                         return Ok(0);
@@ -3551,6 +3706,14 @@ impl Compiler {
                         self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
                         return Ok(dst);
                     }
+                } else {
+                    // Function exists in fn_asts but not yet compiled (forward reference or mutual recursion)
+                    // For now, this is an error - mutual recursion requires forward declarations
+                    // TODO: Support forward declarations for mutual recursion
+                    return Err(CompileError::UnknownFunction {
+                        name: call_name,
+                        span: func.span(),
+                    });
                 }
             }
         }
@@ -3672,6 +3835,62 @@ impl Compiler {
                                 }
                             }
                         }
+                    }
+                }
+                None
+            }
+            // Binary operations - try to determine result type
+            Expr::BinOp(lhs, op, rhs, _) => {
+                match op {
+                    // Arithmetic operators preserve numeric type
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
+                        // If either operand has a known type, use that
+                        if let Some(lhs_type) = self.expr_type_name(lhs) {
+                            return Some(lhs_type);
+                        }
+                        if let Some(rhs_type) = self.expr_type_name(rhs) {
+                            return Some(rhs_type);
+                        }
+                        None
+                    }
+                    // Comparison and logical operators return Bool
+                    BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq |
+                    BinOp::Gt | BinOp::GtEq | BinOp::And | BinOp::Or => {
+                        Some("Bool".to_string())
+                    }
+                    // String/List concatenation - try to preserve type
+                    BinOp::Concat => {
+                        if let Some(lhs_type) = self.expr_type_name(lhs) {
+                            return Some(lhs_type);
+                        }
+                        if let Some(rhs_type) = self.expr_type_name(rhs) {
+                            return Some(rhs_type);
+                        }
+                        Some("String".to_string()) // Default to String
+                    }
+                    // Pipe doesn't change type (returns result of RHS function)
+                    BinOp::Pipe => None,
+                }
+            }
+            // Unary operations
+            Expr::UnaryOp(op, inner, _) => {
+                match op {
+                    UnaryOp::Neg => self.expr_type_name(inner),
+                    UnaryOp::Not => Some("Bool".to_string()),
+                }
+            }
+            // If expression - try to get type from branches
+            Expr::If(_, then_branch, else_branch, _) => {
+                if let Some(ty) = self.expr_type_name(then_branch) {
+                    return Some(ty);
+                }
+                self.expr_type_name(else_branch)
+            }
+            // Block - type is type of last expression
+            Expr::Block(stmts, _) => {
+                if let Some(last) = stmts.last() {
+                    if let Stmt::Expr(e) = last {
+                        return self.expr_type_name(e);
                     }
                 }
                 None
@@ -3868,7 +4087,9 @@ impl Compiler {
         }
 
         // Access denied
-        let function_name = qualified_name.rsplit('.').next().unwrap_or(qualified_name);
+        let function_name_with_sig = qualified_name.rsplit('.').next().unwrap_or(qualified_name);
+        // Strip signature suffix (e.g., "private_fn/" -> "private_fn")
+        let function_name = function_name_with_sig.split('/').next().unwrap_or(function_name_with_sig);
         let module_name = if function_module.is_empty() {
             "<root>".to_string()
         } else {
@@ -4951,7 +5172,7 @@ impl Compiler {
 
     /// Get a compiled function.
     pub fn get_function(&self, name: &str) -> Option<Arc<FunctionValue>> {
-        self.functions.get(name).cloned()
+        self.find_function(name).cloned()
     }
 
     /// Get all compiled functions.
@@ -5034,8 +5255,92 @@ impl Compiler {
     // =========================================================================
 
     /// Get all function names in the compiler.
+    /// Returns the full names including type signatures (e.g., "greet/String").
     pub fn get_function_names(&self) -> Vec<&str> {
         self.functions.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Get function names formatted for user display.
+    /// Groups overloaded functions and shows their signatures.
+    pub fn get_function_names_display(&self) -> Vec<String> {
+        use std::collections::BTreeMap;
+
+        // Group functions by base name
+        let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for name in self.functions.keys() {
+            let base_name = name.split('/').next().unwrap_or(name);
+            let signature = name.split('/').nth(1).unwrap_or("");
+            groups.entry(base_name.to_string())
+                .or_default()
+                .push(signature.to_string());
+        }
+
+        // Format for display
+        let mut result = Vec::new();
+        for (base_name, sigs) in groups {
+            if sigs.len() == 1 && sigs[0].is_empty() {
+                // Zero-arg function: main/
+                result.push(base_name);
+            } else if sigs.len() == 1 {
+                // Single function with parameters: show with signature
+                result.push(format!("{}({})", base_name, sigs[0].replace(',', ", ")));
+            } else {
+                // Overloaded function: show all variants
+                for sig in sigs {
+                    if sig.is_empty() {
+                        result.push(format!("{}()", base_name));
+                    } else {
+                        result.push(format!("{}({})", base_name, sig.replace(',', ", ")));
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// Get all variants of a function by base name.
+    /// Returns a list of (full_name, display_name) tuples.
+    pub fn get_function_variants(&self, base_name: &str) -> Vec<(String, String)> {
+        let prefix = format!("{}/", base_name);
+        let mut variants = Vec::new();
+
+        for name in self.functions.keys() {
+            if name.starts_with(&prefix) || name == base_name {
+                let sig = name.split('/').nth(1).unwrap_or("");
+                let display = if sig.is_empty() {
+                    format!("{}()", base_name)
+                } else {
+                    format!("{}({})", base_name, sig.replace(',', ", "))
+                };
+                variants.push((name.clone(), display));
+            }
+        }
+
+        // Sort by signature for consistent ordering
+        variants.sort_by(|a, b| a.0.cmp(&b.0));
+        variants
+    }
+
+    /// Convert a full function name to a display-friendly format.
+    /// "greet/String" -> "greet(String)"
+    /// "main/" -> "main()"
+    pub fn function_name_display(name: &str) -> String {
+        if let Some((base, sig)) = name.split_once('/') {
+            if sig.is_empty() {
+                format!("{}()", base)
+            } else {
+                format!("{}({})", base, sig.replace(',', ", "))
+            }
+        } else {
+            name.to_string()
+        }
+    }
+
+    /// Extract the base name from a full function name.
+    /// "greet/String" -> "greet"
+    /// "main/" -> "main"
+    pub fn function_base_name(name: &str) -> &str {
+        name.split('/').next().unwrap_or(name)
     }
 
     /// Get all type names in the compiler.
@@ -5048,21 +5353,40 @@ impl Compiler {
         self.trait_defs.keys().map(|s| s.as_str()).collect()
     }
 
+    /// Find a function by base name or full qualified name.
+    /// Supports both "add" and "add/_,_" formats.
+    fn find_function(&self, name: &str) -> Option<&Arc<FunctionValue>> {
+        // Try exact match first
+        if let Some(f) = self.functions.get(name) {
+            return Some(f);
+        }
+        // If name doesn't contain '/', search for functions with that base name
+        if !name.contains('/') {
+            let prefix = format!("{}/", name);
+            for (key, func) in &self.functions {
+                if key.starts_with(&prefix) {
+                    return Some(func);
+                }
+            }
+        }
+        None
+    }
+
     /// Get a function's signature as a displayable string.
     pub fn get_function_signature(&self, name: &str) -> Option<String> {
-        self.functions.get(name).and_then(|f| f.signature.clone())
+        self.find_function(name).and_then(|f| f.signature.clone())
     }
 
     /// Get a function's source code.
     pub fn get_function_source(&self, name: &str) -> Option<String> {
-        self.functions.get(name)
+        self.find_function(name)
             .and_then(|f| f.source_code.as_ref())
             .map(|s| s.to_string())
     }
 
     /// Get a function's doc comment.
     pub fn get_function_doc(&self, name: &str) -> Option<String> {
-        self.functions.get(name).and_then(|f| f.doc.clone())
+        self.find_function(name).and_then(|f| f.doc.clone())
     }
 
     /// Get all traits implemented by a type.
@@ -5084,8 +5408,36 @@ impl Compiler {
     }
 
     /// Get a FnDef AST for a function (for introspection).
+    /// Supports both full names ("greet/String") and base names ("greet").
     pub fn get_fn_def(&self, name: &str) -> Option<&FnDef> {
-        self.fn_asts.get(name)
+        // Try exact match first
+        if let Some(def) = self.fn_asts.get(name) {
+            return Some(def);
+        }
+        // If name doesn't contain '/', search for functions with that base name
+        if !name.contains('/') {
+            let prefix = format!("{}/", name);
+            for (key, def) in &self.fn_asts {
+                if key.starts_with(&prefix) {
+                    return Some(def);
+                }
+            }
+        }
+        None
+    }
+
+    /// Get all FnDef ASTs for a function by base name (for viewing overloaded functions).
+    pub fn get_all_fn_defs(&self, base_name: &str) -> Vec<(&str, &FnDef)> {
+        let prefix = format!("{}/", base_name);
+        let mut results = Vec::new();
+        for (key, def) in &self.fn_asts {
+            if key.starts_with(&prefix) || key == base_name {
+                results.push((key.as_str(), def));
+            }
+        }
+        // Sort by name for consistent ordering
+        results.sort_by(|a, b| a.0.cmp(b.0));
+        results
     }
 
     /// Check if a module exists (has any functions/types with that prefix).
@@ -5675,7 +6027,8 @@ impl Compiler {
             }
         }
 
-        // Collect and merge function definitions by name
+        // Collect and merge function definitions by name AND signature
+        // Functions with the same name but different type signatures are different functions
         let mut fn_clauses: std::collections::HashMap<String, Vec<FnClause>> = std::collections::HashMap::new();
         let mut fn_order: Vec<String> = Vec::new();
         let mut fn_spans: std::collections::HashMap<String, Span> = std::collections::HashMap::new();
@@ -5684,7 +6037,16 @@ impl Compiler {
 
         for item in items {
             if let Item::FnDef(fn_def) = item {
-                let qualified_name = self.qualify_name(&fn_def.name.node);
+                let base_name = self.qualify_name(&fn_def.name.node);
+                // Build signature from first clause's parameter types
+                let param_types: Vec<String> = fn_def.clauses[0].params.iter()
+                    .map(|p| p.ty.as_ref()
+                        .map(|t| self.type_expr_to_string(t))
+                        .unwrap_or_else(|| "_".to_string()))
+                    .collect();
+                let signature = param_types.join(",");
+                let qualified_name = format!("{}/{}", base_name, signature);
+
                 if !fn_clauses.contains_key(&qualified_name) {
                     fn_order.push(qualified_name.clone());
                     fn_spans.insert(qualified_name.clone(), fn_def.span);
@@ -5697,12 +6059,17 @@ impl Compiler {
         }
 
         // Fourth pass: forward declare all functions (for recursion)
+        // Use the new naming scheme with type signatures
         for name in &fn_order {
             let clauses = fn_clauses.get(name).unwrap();
             let arity = clauses[0].params.len();
+
+            // name already includes signature from collection phase (e.g., "greet/Int")
+            let full_name = name.clone();
+
             // Insert a placeholder function for forward reference
             let placeholder = FunctionValue {
-                name: name.clone(),
+                name: full_name.clone(),
                 arity,
                 param_names: vec![],
                 code: Arc::new(Chunk::new()),
@@ -5719,13 +6086,13 @@ impl Compiler {
                 param_types: vec![],
                 return_type: None,
             };
-            self.functions.insert(name.clone(), Arc::new(placeholder));
+            self.functions.insert(full_name.clone(), Arc::new(placeholder));
 
             // Assign function index for direct calls (no HashMap lookup at runtime!)
-            if !self.function_indices.contains_key(name) {
+            if !self.function_indices.contains_key(&full_name) {
                 let idx = self.function_list.len() as u16;
-                self.function_indices.insert(name.clone(), idx);
-                self.function_list.push(name.clone());
+                self.function_indices.insert(full_name.clone(), idx);
+                self.function_list.push(full_name);
             }
         }
 
@@ -5733,11 +6100,13 @@ impl Compiler {
         for name in &fn_order {
             let clauses = fn_clauses.get(name).unwrap();
             let span = fn_spans.get(name).copied().unwrap_or_default();
-            // Extract the local name (without module prefix)
-            let local_name = if name.contains('.') {
-                name.rsplit('.').next().unwrap_or(name)
+            // Extract the local name (without module prefix and without signature)
+            // name is like "module.greet/Int" or "greet/Int", we want just "greet"
+            let name_without_sig = name.split('/').next().unwrap_or(name);
+            let local_name = if name_without_sig.contains('.') {
+                name_without_sig.rsplit('.').next().unwrap_or(name_without_sig)
             } else {
-                name.as_str()
+                name_without_sig
             };
             let merged_fn = FnDef {
                 visibility: *fn_visibility.get(name).unwrap_or(&Visibility::Private),
@@ -5841,8 +6210,9 @@ mod tests {
             return Err("No functions to run".to_string());
         };
 
-        vm.run(main_func)
-            .map_err(|e| format!("Runtime error: {:?}", e))?
+        let result = vm.run(main_func)
+            .map_err(|e| format!("Runtime error: {:?}", e))?;
+        result.value
             .map(|v| v.to_value())
             .ok_or_else(|| "No result returned".to_string())
     }

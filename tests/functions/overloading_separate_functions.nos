@@ -1,0 +1,39 @@
+# expect: ()
+# Test that overloaded functions are truly separate and don't interfere
+# Multi-clause patterns within same signature vs different signatures
+
+# Factorial with Int - multi-clause pattern matching
+factorial(0: Int) = 1
+factorial(n: Int) = n * factorial(n - 1)
+
+# Completely separate "factorial" for String (counts characters) - different signature
+factorial(s: String) = length(s)
+
+# Another overload test: describe function
+describe(x: Int) = "integer"
+describe(x: String) = "string"
+describe(x: Bool) = "boolean"
+
+# Test wildcards vs typed
+identity(x) = x                    # Wildcard version
+typed_double(x: Int) = x * 2       # Typed version
+
+main() = {
+    # Test Int factorial uses pattern matching correctly
+    assert_eq(factorial(0), 1)
+    assert_eq(factorial(5), 120)
+
+    # Test String factorial is completely separate
+    assert_eq(factorial("hello"), 5)
+    assert_eq(factorial(""), 0)
+
+    # Test describe dispatches correctly by type
+    assert_eq(describe(42), "integer")
+    assert_eq(describe("hi"), "string")
+    assert_eq(describe(true), "boolean")
+
+    # Test that wildcard and typed functions coexist
+    assert_eq(identity("test"), "test")
+    assert_eq(identity(123), 123)
+    assert_eq(typed_double(21), 42)
+}

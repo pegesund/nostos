@@ -713,40 +713,56 @@ impl Repl {
 
     /// Show info about a function or type
     fn show_info(&self, name: &str) {
-        // Try as function first
-        if let Some(fn_def) = self.compiler.get_fn_def(name) {
-            println!("{}  (function)", name);
+        use nostos_compiler::compile::Compiler;
 
-            // Signature
-            let sig = fn_def.signature();
-            if !sig.is_empty() && sig != "?" {
-                println!("  :: {}", sig);
-            }
+        // Try as function first - get all variants if overloaded
+        let all_defs = self.compiler.get_all_fn_defs(name);
 
-            // Doc comment
-            if let Some(doc) = &fn_def.doc {
-                println!();
-                for line in doc.lines() {
-                    println!("  {}", line);
+        if !all_defs.is_empty() {
+            let is_overloaded = all_defs.len() > 1;
+
+            for (full_name, fn_def) in &all_defs {
+                let display_name = Compiler::function_name_display(full_name);
+                println!("{}  (function)", display_name);
+
+                // Signature
+                let sig = fn_def.signature();
+                if !sig.is_empty() && sig != "?" {
+                    println!("  :: {}", sig);
+                }
+
+                // Doc comment
+                if let Some(doc) = &fn_def.doc {
+                    println!();
+                    for line in doc.lines() {
+                        println!("  {}", line);
+                    }
+                }
+
+                // Module/file info
+                if let Some(source) = self.compiler.get_function_source(full_name) {
+                    let lines = source.lines().count();
+                    println!();
+                    println!("  Defined in {} lines", lines);
+                }
+
+                // Dependencies
+                let deps = self.call_graph.direct_dependencies(full_name);
+                if !deps.is_empty() {
+                    println!();
+                    let mut deps_vec: Vec<_> = deps.iter().collect();
+                    deps_vec.sort();
+                    let deps_display: Vec<_> = deps_vec.iter()
+                        .map(|s| Compiler::function_name_display(s))
+                        .collect();
+                    println!("  Depends on: {}", deps_display.join(", "));
+                }
+
+                // Add separator between overloaded variants
+                if is_overloaded {
+                    println!();
                 }
             }
-
-            // Module/file info
-            if let Some(source) = self.compiler.get_function_source(name) {
-                let lines = source.lines().count();
-                println!();
-                println!("  Defined in {} lines", lines);
-            }
-
-            // Dependencies
-            let deps = self.call_graph.direct_dependencies(name);
-            if !deps.is_empty() {
-                println!();
-                let mut deps_vec: Vec<_> = deps.iter().collect();
-                deps_vec.sort();
-                println!("  Depends on: {}", deps_vec.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
-            }
-
             return;
         }
 
@@ -795,6 +811,25 @@ impl Repl {
 
     /// Show source code of a function
     fn show_source(&self, name: &str) {
+        // Get all variants of an overloaded function
+        let variants = self.compiler.get_function_variants(name);
+        if !variants.is_empty() {
+            let is_overloaded = variants.len() > 1;
+            for (full_name, display_name) in variants {
+                if let Some(source) = self.compiler.get_function_source(&full_name) {
+                    if is_overloaded {
+                        println!("# {}", display_name);
+                    }
+                    println!("{}", source);
+                    if is_overloaded {
+                        println!();
+                    }
+                }
+            }
+            return;
+        }
+
+        // Try single function by exact name
         if let Some(source) = self.compiler.get_function_source(name) {
             println!("{}", source);
         } else if let Some(type_def) = self.compiler.get_type_def(name) {
@@ -879,7 +914,7 @@ impl Repl {
 
     /// List all functions
     fn list_functions(&self) {
-        let mut functions: Vec<_> = self.compiler.get_function_names().into_iter().collect();
+        let mut functions = self.compiler.get_function_names_display();
         functions.sort();
 
         if functions.is_empty() {
@@ -1276,7 +1311,7 @@ impl Repl {
         // Sync VM and execute
         self.sync_vm();
 
-        if let Some(func) = self.compiler.get_all_functions().get(&eval_name) {
+        if let Some(func) = self.compiler.get_function(&eval_name) {
             match self.vm.run(func.clone()) {
                 Ok(result) => {
                     // Output is already printed to stdout by the VM

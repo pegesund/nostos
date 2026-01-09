@@ -1,0 +1,31 @@
+# expect: ()
+# Function overloading by type signature
+# Functions with the same name but different parameter types are treated as different functions
+
+# Test 1: Basic overloading by type
+greet(name: String) = "Hello, " ++ name ++ "!"
+greet(n: Int) = "Hello number " ++ show(n) ++ "!"
+
+# Test 2: Overloading with multiple parameters
+add(a: Int, b: Int) = a + b
+add(a: String, b: String) = a ++ b
+
+# Test 3: Mixed typed/untyped parameters
+# process with Int parameter
+process(x: Int) = x * 2
+# process with untyped parameter (wildcard)
+process_generic(x) = x
+
+main() = {
+    # Test 1: Basic overloading
+    assert_eq(greet("World"), "Hello, World!")
+    assert_eq(greet(42), "Hello number 42!")
+
+    # Test 2: Multiple parameters
+    assert_eq(add(10, 20), 30)
+    assert_eq(add("Hello, ", "World"), "Hello, World")
+
+    # Test 3: Typed parameter takes precedence over wildcard
+    assert_eq(process(5), 10)
+    assert_eq(process_generic("test"), "test")
+}
