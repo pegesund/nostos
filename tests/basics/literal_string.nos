@@ -1,4 +1,7 @@
-# expect: "hello"
+# expect: ()
 # String literal
 
-main() = "hello"
+main() = {
+    assert_eq("hello", "hello"),
+    ()
+}

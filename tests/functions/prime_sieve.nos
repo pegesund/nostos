@@ -1,4 +1,4 @@
-# expect: [2, 3, 5, 7, 11, 13, 17, 19]
+# expect: ()
 # Sieve of Eratosthenes for prime numbers
 
 # Generate range [start, stop)
@@ -15,4 +15,7 @@ sieve([p | rest]) = [p | sieve(filter(x => x % p != 0, rest))]
 # Get primes up to n
 primes(n) = sieve(range(2, n + 1))
 
-main() = primes(20)
+main() = {
+    assert_eq([2, 3, 5, 7, 11, 13, 17, 19], primes(20)),
+    ()
+}

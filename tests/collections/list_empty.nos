@@ -1,4 +1,7 @@
-# expect: []
+# expect: ()
 # Empty list
 
-main() = []
+main() = {
+    assert_eq([], []),
+    ()
+}

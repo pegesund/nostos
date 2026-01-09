@@ -1,4 +1,7 @@
-# expect: 14
+# expect: ()
 # Operator precedence: multiplication before addition
 
-main() = 2 + 3 * 4
+main() = {
+    assert_eq(14, 2 + 3 * 4),
+    ()
+}

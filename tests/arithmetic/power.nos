@@ -1,4 +1,7 @@
-# expect: 8
+# expect: ()
 # Power operator (requires floats)
 
-main() = 2.0 ** 3.0
+main() = {
+    assert_eq(8.0, 2.0 ** 3.0),
+    ()
+}

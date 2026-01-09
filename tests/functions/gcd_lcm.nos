@@ -1,4 +1,4 @@
-# expect: 60
+# expect: ()
 # GCD and LCM using Euclidean algorithm
 
 gcd(a, 0) = a
@@ -7,4 +7,7 @@ gcd(a, b) = gcd(b, a % b)
 lcm(a, b) = (a * b) / gcd(a, b)
 
 # LCM of 12 and 20 is 60
-main() = lcm(12, 20)
+main() = {
+    assert_eq(60, lcm(12, 20)),
+    ()
+}

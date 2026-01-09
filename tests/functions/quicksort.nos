@@ -1,4 +1,4 @@
-# expect: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+# expect: ()
 # Quicksort implementation
 
 # Append two lists
@@ -17,4 +17,7 @@ quicksort([pivot | rest]) = {
     append(quicksort(less), [pivot | quicksort(greater)])
 }
 
-main() = quicksort([5, 3, 8, 1, 9, 2, 7, 4, 6])
+main() = {
+    assert_eq([1, 2, 3, 4, 5, 6, 7, 8, 9], quicksort([5, 3, 8, 1, 9, 2, 7, 4, 6])),
+    ()
+}

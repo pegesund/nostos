@@ -1,7 +1,10 @@
-# expect: 1
+# expect: ()
 # List head/tail pattern
 
 head([h | _]) = h
 head([]) = 0
 
-main() = head([1, 2, 3])
+main() = {
+    assert_eq(1, head([1, 2, 3])),
+    ()
+}

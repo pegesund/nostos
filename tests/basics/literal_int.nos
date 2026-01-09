@@ -1,4 +1,7 @@
-# expect: 42
+# expect: ()
 # Basic integer literal
 
-main() = 42
+main() = {
+    assert_eq(42, 42),
+    ()
+}

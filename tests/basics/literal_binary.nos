@@ -1,4 +1,7 @@
-# expect: 10
+# expect: ()
 # Binary integer literal
 
-main() = 0b1010
+main() = {
+    assert_eq(10, 0b1010),
+    ()
+}
