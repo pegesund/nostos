@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JSON - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75;
+        }
+        .hljs-function {
+            color: #e5c07b;
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/pegesund/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+
+        <!-- Sidebar -->
+        <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_concurrency.html" class="block text-slate-400 hover:text-white transition">7. Concurrency</a></li>
+                    <li><a href="08_async_io_http.html" class="block text-slate-400 hover:text-white transition">8. Async I/O & HTTP</a></li>
+                    <li><a href="09_type_system.html" class="block text-slate-400 hover:text-white transition">9. Type System</a></li>
+                    <li><a href="10_error_handling.html" class="block text-slate-400 hover:text-white transition">10. Error Handling</a></li>
+                    <li><a href="11_traits.html" class="block text-slate-400 hover:text-white transition">11. Traits</a></li>
+                    <li><a href="12_deriving.html" class="block text-slate-400 hover:text-white transition">12. Builtin Traits</a></li>
+                    <li><a href="13_trait_bounds.html" class="block text-slate-400 hover:text-white transition">13. Trait Bounds</a></li>
+                    <li><a href="14_json.html" class="block text-blue-400 font-medium">14. JSON</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">JSON</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Nostos provides comprehensive JSON support for parsing, serialization, and typed deserialization. The <code>jsonToType[T]</code> builtin makes it easy to convert JSON directly to your custom types with full type safety.
+                </p>
+
+                <!-- Parsing JSON -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Parsing JSON</h2>
+                <p class="text-slate-400 mb-4">Use <code>jsonParse</code> from the stdlib to parse a JSON string into a <code>Json</code> value.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.json.{jsonParse, jsonStringify}
+
+main() = {
+    # Parse a JSON string
+    json = jsonParse("{\"name\": \"Alice\", \"age\": 30}")
+
+    # The Json type is a variant:
+    # Null | Bool(Bool) | Number(Float) | String(String)
+    # | Array(List[Json]) | Object(List[(String, Json)])
+
+    println(json)
+}</code></pre>
+                </div>
+
+                <!-- Typed Deserialization -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Typed Deserialization with jsonToType</h2>
+                <p class="text-slate-400 mb-4">The <code>jsonToType[T](json)</code> builtin converts JSON to typed Nostos values. This is the recommended way to work with JSON data.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.json.{jsonParse, jsonStringify}
+
+# Define your types
+type Person = { name: String, age: Int }
+
+main() = {
+    # Parse JSON string
+    json = jsonParse("{\"name\": \"Alice\", \"age\": 30}")
+
+    # Convert to typed value
+    person = jsonToType[Person](json)
+
+    println(person.name)  # "Alice"
+    println(person.age)   # 30
+}</code></pre>
+                </div>
+
+                <!-- Supported Types -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Supported Types</h2>
+                <p class="text-slate-400 mb-4"><code>jsonToType</code> supports all Nostos types including numeric types, records, variants, tuples, and nested structures.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.json.{jsonParse, jsonStringify}
+
+# All numeric types work
+type Sizes = {
+    i8: Int8, i16: Int16, i32: Int32, i64: Int,
+    u8: UInt8, u16: UInt16, u32: UInt32, u64: UInt64,
+    f32: Float32, f64: Float
+}
+
+# Records with any field types
+type Config = { name: String, enabled: Bool, value: Float }
+
+# Nested types
+type Address = { city: String, zip: Int }
+type Person = { name: String, address: Address }
+
+# Tuples (represented as JSON arrays)
+type Pair = { data: (Int, String) }
+
+main() = {
+    # Nested record example
+    json = jsonParse("{\"name\": \"Bob\", \"address\": {\"city\": \"Oslo\", \"zip\": 1234}}")
+    person = jsonToType[Person](json)
+    println(person.address.city)  # "Oslo"
+
+    # Tuple example
+    json2 = jsonParse("{\"data\": [42, \"hello\"]}")
+    pair = jsonToType[Pair](json2)
+    println(pair.data)  # (42, hello)
+}</code></pre>
+                </div>
+
+                <!-- Variants / Sum Types -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Variants (Sum Types)</h2>
+                <p class="text-slate-400 mb-4">Variants use a JSON object with the constructor name as the key. Fields are named <code>_0</code>, <code>_1</code>, etc.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.json.{jsonParse, jsonStringify}
+
+type Result = Ok(Int) | Err(String)
+
+getValue(Ok(n)) = n
+getValue(Err(_)) = 0
+
+main() = {
+    # Ok(42) is represented as: {"Ok": {"_0": 42}}
+    json = jsonParse("{\"Ok\": {\"_0\": 42}}")
+    result = jsonToType[Result](json)
+
+    println(getValue(result))  # 42
+
+    # Err("fail") is: {"Err": {"_0": "fail"}}
+    json2 = jsonParse("{\"Err\": {\"_0\": \"something went wrong\"}}")
+    result2 = jsonToType[Result](json2)
+    println(tagOf(result2))  # "Err"
+}
+
+# Unit variants (no payload) use empty object:
+type Status = Active | Pending | Done
+# Active is: {"Active": {}}</code></pre>
+                </div>
+
+                <!-- Error Handling -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Error Handling</h2>
+                <p class="text-slate-400 mb-4"><code>jsonToType</code> throws catchable exceptions when the JSON doesn't match the expected type.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.json.{jsonParse, jsonStringify}
+
+type Person = { name: String, age: Int }
+
+main() = {
+    # Missing required field
+    json = jsonParse("{\"name\": \"Alice\"}")
+
+    try {
+        person = jsonToType[Person](json)
+        "success: " ++ person.name
+    } catch e -> "Error: " ++ e end
+    # Returns: "Error: Missing field: age"
+}</code></pre>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <h3 class="text-lg font-semibold text-white mb-3">Common Errors</h3>
+                    <ul class="list-disc list-inside text-slate-400 space-y-2">
+                        <li><code class="text-blue-400">Missing field: &lt;name&gt;</code> - Required field not in JSON</li>
+                        <li><code class="text-blue-400">Unknown constructor: &lt;name&gt;</code> - Variant constructor doesn't exist</li>
+                        <li><code class="text-blue-400">Unknown type: &lt;name&gt;</code> - Type not defined</li>
+                        <li><code class="text-blue-400">Expected Json Object, found &lt;type&gt;</code> - Wrong JSON structure</li>
+                    </ul>
+                </div>
+
+                <!-- Round-Trip Example -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Round-Trip: Value to JSON and Back</h2>
+                <p class="text-slate-400 mb-4">Use <code>reflect()</code> to convert a typed value to JSON, and <code>jsonToType</code> to parse it back.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.json.{jsonParse, jsonStringify}
+
+type User = { id: Int, name: String, active: Bool }
+
+main() = {
+    # Create a user
+    user = User { id: 1, name: "Bob", active: true }
+
+    # Convert to JSON using reflect
+    json = reflect(user)
+    jsonStr = jsonStringify(json)
+    println("JSON: " ++ jsonStr)
+
+    # Parse back to typed value
+    parsed = jsonParse(jsonStr)
+    user2 = jsonToType[User](parsed)
+
+    println("Equal: " ++ show(user == user2))  # true
+}</code></pre>
+                </div>
+
+                <!-- Practical Example: API Response -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Practical Example: Parsing API Responses</h2>
+                <p class="text-slate-400 mb-4">Combine HTTP requests with <code>jsonToType</code> for type-safe API consumption.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.json.{jsonParse, jsonStringify}
+
+type IpResponse = { origin: String }
+
+main() = {
+    (status, resp) = Http.get("https://httpbin.org/ip")
+
+    if status == "ok" then {
+        json = jsonParse(resp.body)
+        ipResp = jsonToType[IpResponse](json)
+        println("Your IP: " ++ ipResp.origin)
+    } else {
+        println("Failed to fetch IP")
+    }
+}</code></pre>
+                </div>
+
+                <!-- Navigation -->
+                <div class="mt-12 pt-8 border-t border-slate-800 flex justify-between">
+                    <a href="13_trait_bounds.html" class="text-blue-400 hover:text-blue-300 transition">&larr; Previous: Trait Bounds</a>
+                    <span class="text-slate-600">End of Tutorial</span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="../js/nostos-highlight.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>
+        if (typeof nostos_highlight !== 'undefined') {
+            hljs.registerLanguage('nostos', nostos_highlight);
+        }
+        hljs.highlightAll();
+    </script>
+
+</body>
+</html>
