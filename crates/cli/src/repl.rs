@@ -2217,4 +2217,38 @@ mod tests {
         assert_eq!(repl.eval("second()"), Some("2".to_string()));
         assert_eq!(repl.eval("third()"), Some("3".to_string()));
     }
+
+    #[test]
+    fn test_int32_variable_type_annotation() {
+        let mut repl = create_test_repl();
+
+        // Define Int32 variable
+        repl.eval("a = 1.asInt32()");
+        assert!(repl.has_var("a"), "Should have variable 'a'");
+
+        // Check the type annotation is correctly set
+        let binding = repl.var_bindings.get("a").expect("Should have binding for 'a'");
+        assert_eq!(binding.type_annotation, Some("Int32".to_string()),
+            "Variable 'a' should have type annotation Int32, got {:?}", binding.type_annotation);
+
+        // Check the value
+        assert!(repl.eval("a").unwrap().contains("1"), "a should be 1");
+    }
+
+    #[test]
+    fn test_int32_variable_autocomplete() {
+        let mut repl = create_test_repl();
+
+        // Define Int32 variable
+        repl.eval("a = 1.asInt32()");
+
+        // Update completion state
+        repl.update_completion_state();
+
+        // Check that variable_types has the correct type
+        let state = repl.completion_state.read().unwrap();
+        let a_type = state.variable_types.get("a");
+        assert_eq!(a_type, Some(&"Int32".to_string()),
+            "Completion state should have type Int32 for 'a', got {:?}", a_type);
+    }
 }
