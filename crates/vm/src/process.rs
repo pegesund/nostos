@@ -58,6 +58,16 @@ pub enum IoResponseValue {
         headers: Vec<(String, String)>,
         body: Vec<u8>,
     },
+    /// Process execution result (from Exec.run)
+    ExecResult {
+        exit_code: i32,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    },
+    /// Process handle (from Exec.spawn)
+    ExecHandle(u64),
+    /// Process exit code (from Exec.wait)
+    ExitCode(i32),
 }
 
 /// A call frame on the stack.

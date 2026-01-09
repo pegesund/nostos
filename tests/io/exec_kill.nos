@@ -1,0 +1,17 @@
+# expect: 0
+# Test Exec.kill
+
+main() = {
+    # Spawn a long-running process (sleep)
+    (status, handle) = Exec.start("sleep", ["100"])
+    assert(status == "ok")
+
+    # Kill it immediately
+    (ks, _) = Exec.kill(handle)
+    assert(ks == "ok")
+
+    # The process should be terminated
+    # (we can't easily verify this without wait, but at least it shouldn't hang)
+
+    0
+}

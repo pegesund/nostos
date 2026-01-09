@@ -1,0 +1,32 @@
+# expect: 0
+# Test Exec.spawn with streaming I/O
+
+main() = {
+    # Spawn a cat process that echoes stdin to stdout
+    (status, handle) = Exec.start("cat", [])
+    assert(status == "ok")
+
+    # Write some lines to stdin
+    Exec.write(handle, "line 1\n")
+    Exec.write(handle, "line 2\n")
+    Exec.write(handle, "line 3\n")
+
+    # Read lines back from stdout
+    (s1, line1) = Exec.readline(handle)
+    (s2, line2) = Exec.readline(handle)
+    (s3, line3) = Exec.readline(handle)
+
+    assert(s1 == "ok")
+    assert(s2 == "ok")
+    assert(s3 == "ok")
+
+    # Verify the output
+    assert(line1 == "line 1\n")
+    assert(line2 == "line 2\n")
+    assert(line3 == "line 3\n")
+
+    # Kill the process (cat would wait forever otherwise)
+    Exec.kill(handle)
+
+    0
+}

@@ -1,0 +1,21 @@
+# expect: 0
+# Test Exec.run - run command and wait for completion
+
+main() = {
+    # Run echo command
+    (status, result) = Exec.run("echo", ["hello", "world"])
+
+    # Check status is ok
+    assert(status == "ok")
+
+    # Check exit code is 0
+    assert(result.exitCode == 0)
+
+    # Check stdout contains the expected output
+    assert(result.stdout == "hello world\n")
+
+    # Check stderr is empty
+    assert(result.stderr == "")
+
+    0
+}

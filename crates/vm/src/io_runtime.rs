@@ -248,6 +248,46 @@ pub enum IoRequest {
         response: IoResponse,
     },
 
+    // External process operations
+    /// Run a command and wait for completion (captures stdout/stderr)
+    ExecRun {
+        command: String,
+        args: Vec<String>,
+        response: IoResponse,
+    },
+    /// Spawn a process with streaming I/O (returns handle)
+    ExecSpawn {
+        command: String,
+        args: Vec<String>,
+        response: IoResponse,
+    },
+    /// Read a line from spawned process stdout
+    ExecReadLine {
+        handle: u64,
+        response: IoResponse,
+    },
+    /// Read a line from spawned process stderr
+    ExecReadStderr {
+        handle: u64,
+        response: IoResponse,
+    },
+    /// Write to spawned process stdin
+    ExecWrite {
+        handle: u64,
+        data: Vec<u8>,
+        response: IoResponse,
+    },
+    /// Wait for spawned process to exit (returns exit code)
+    ExecWait {
+        handle: u64,
+        response: IoResponse,
+    },
+    /// Kill a spawned process
+    ExecKill {
+        handle: u64,
+        response: IoResponse,
+    },
+
     // Shutdown
     Shutdown,
 }
@@ -338,6 +378,18 @@ impl IoRuntime {
         let pending_responses: Arc<Mutex<HashMap<u64, ResponseSender>>> = Arc::new(Mutex::new(HashMap::new()));
         let mut next_server_handle: u64 = 1;
         let mut next_request_id: Arc<std::sync::atomic::AtomicU64> = Arc::new(std::sync::atomic::AtomicU64::new(1));
+
+        // Spawned process state
+        // Each spawned process has optional stdin, buffered stdout/stderr readers
+        use tokio::process::{Child, ChildStdin, ChildStdout, ChildStderr};
+        struct SpawnedProcess {
+            child: Child,
+            stdin: Option<ChildStdin>,
+            stdout: Option<BufReader<ChildStdout>>,
+            stderr: Option<BufReader<ChildStderr>>,
+        }
+        let spawned_processes: Arc<Mutex<HashMap<u64, SpawnedProcess>>> = Arc::new(Mutex::new(HashMap::new()));
+        let mut next_process_handle: u64 = 1;
 
         while let Some(request) = request_rx.recv().await {
             match request {
@@ -764,6 +816,206 @@ impl IoRuntime {
                     // Note: The actual TCP listener continues but new requests will have nowhere to go
                     server_request_receivers.lock().await.remove(&handle);
                     let _ = response.send(Ok(IoResponseValue::Unit));
+                }
+
+                // External process operations
+                IoRequest::ExecRun { command, args, response } => {
+                    // Spawn and run in background task to avoid blocking
+                    tokio::spawn(async move {
+                        use tokio::process::Command;
+                        let result = Command::new(&command)
+                            .args(&args)
+                            .output()
+                            .await;
+
+                        let result = match result {
+                            Ok(output) => Ok(IoResponseValue::ExecResult {
+                                exit_code: output.status.code().unwrap_or(-1),
+                                stdout: output.stdout,
+                                stderr: output.stderr,
+                            }),
+                            Err(e) => Err(IoError::IoError(format!("Failed to execute {}: {}", command, e))),
+                        };
+                        let _ = response.send(result);
+                    });
+                }
+
+                IoRequest::ExecSpawn { command, args, response } => {
+                    use tokio::process::Command;
+                    use std::process::Stdio;
+
+                    let child_result = Command::new(&command)
+                        .args(&args)
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .spawn();
+
+                    match child_result {
+                        Ok(mut child) => {
+                            let handle = next_process_handle;
+                            next_process_handle += 1;
+
+                            let stdin = child.stdin.take();
+                            let stdout = child.stdout.take().map(BufReader::new);
+                            let stderr = child.stderr.take().map(BufReader::new);
+
+                            spawned_processes.lock().await.insert(handle, SpawnedProcess {
+                                child,
+                                stdin,
+                                stdout,
+                                stderr,
+                            });
+
+                            let _ = response.send(Ok(IoResponseValue::ExecHandle(handle)));
+                        }
+                        Err(e) => {
+                            let _ = response.send(Err(IoError::IoError(format!("Failed to spawn {}: {}", command, e))));
+                        }
+                    }
+                }
+
+                IoRequest::ExecReadLine { handle, response } => {
+                    let processes = spawned_processes.clone();
+                    tokio::spawn(async move {
+                        let mut procs = processes.lock().await;
+                        match procs.get_mut(&handle) {
+                            Some(proc) => {
+                                match &mut proc.stdout {
+                                    Some(stdout) => {
+                                        let mut line = String::new();
+                                        match stdout.read_line(&mut line).await {
+                                            Ok(0) => {
+                                                let _ = response.send(Ok(IoResponseValue::OptionString(None)));
+                                            }
+                                            Ok(_) => {
+                                                let _ = response.send(Ok(IoResponseValue::OptionString(Some(line))));
+                                            }
+                                            Err(e) => {
+                                                let _ = response.send(Err(IoError::IoError(e.to_string())));
+                                            }
+                                        }
+                                    }
+                                    None => {
+                                        let _ = response.send(Err(IoError::Other("Process stdout not available".to_string())));
+                                    }
+                                }
+                            }
+                            None => {
+                                let _ = response.send(Err(IoError::InvalidHandle));
+                            }
+                        }
+                    });
+                }
+
+                IoRequest::ExecReadStderr { handle, response } => {
+                    let processes = spawned_processes.clone();
+                    tokio::spawn(async move {
+                        let mut procs = processes.lock().await;
+                        match procs.get_mut(&handle) {
+                            Some(proc) => {
+                                match &mut proc.stderr {
+                                    Some(stderr) => {
+                                        let mut line = String::new();
+                                        match stderr.read_line(&mut line).await {
+                                            Ok(0) => {
+                                                let _ = response.send(Ok(IoResponseValue::OptionString(None)));
+                                            }
+                                            Ok(_) => {
+                                                let _ = response.send(Ok(IoResponseValue::OptionString(Some(line))));
+                                            }
+                                            Err(e) => {
+                                                let _ = response.send(Err(IoError::IoError(e.to_string())));
+                                            }
+                                        }
+                                    }
+                                    None => {
+                                        let _ = response.send(Err(IoError::Other("Process stderr not available".to_string())));
+                                    }
+                                }
+                            }
+                            None => {
+                                let _ = response.send(Err(IoError::InvalidHandle));
+                            }
+                        }
+                    });
+                }
+
+                IoRequest::ExecWrite { handle, data, response } => {
+                    let processes = spawned_processes.clone();
+                    tokio::spawn(async move {
+                        let mut procs = processes.lock().await;
+                        match procs.get_mut(&handle) {
+                            Some(proc) => {
+                                match &mut proc.stdin {
+                                    Some(stdin) => {
+                                        match stdin.write_all(&data).await {
+                                            Ok(()) => {
+                                                let _ = response.send(Ok(IoResponseValue::Unit));
+                                            }
+                                            Err(e) => {
+                                                let _ = response.send(Err(IoError::IoError(e.to_string())));
+                                            }
+                                        }
+                                    }
+                                    None => {
+                                        let _ = response.send(Err(IoError::Other("Process stdin not available".to_string())));
+                                    }
+                                }
+                            }
+                            None => {
+                                let _ = response.send(Err(IoError::InvalidHandle));
+                            }
+                        }
+                    });
+                }
+
+                IoRequest::ExecWait { handle, response } => {
+                    let processes = spawned_processes.clone();
+                    tokio::spawn(async move {
+                        // Take ownership of the process to wait on it
+                        let proc_opt = {
+                            let mut procs = processes.lock().await;
+                            procs.remove(&handle)
+                        };
+
+                        match proc_opt {
+                            Some(mut proc) => {
+                                match proc.child.wait().await {
+                                    Ok(status) => {
+                                        let _ = response.send(Ok(IoResponseValue::ExitCode(status.code().unwrap_or(-1))));
+                                    }
+                                    Err(e) => {
+                                        let _ = response.send(Err(IoError::IoError(e.to_string())));
+                                    }
+                                }
+                            }
+                            None => {
+                                let _ = response.send(Err(IoError::InvalidHandle));
+                            }
+                        }
+                    });
+                }
+
+                IoRequest::ExecKill { handle, response } => {
+                    let mut procs = spawned_processes.lock().await;
+                    match procs.get_mut(&handle) {
+                        Some(proc) => {
+                            match proc.child.kill().await {
+                                Ok(()) => {
+                                    // Remove the process after killing
+                                    procs.remove(&handle);
+                                    let _ = response.send(Ok(IoResponseValue::Unit));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::IoError(e.to_string())));
+                                }
+                            }
+                        }
+                        None => {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    }
                 }
             }
         }

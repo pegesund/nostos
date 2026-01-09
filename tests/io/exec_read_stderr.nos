@@ -1,0 +1,22 @@
+# expect: 0
+# Test Exec.readStderr for streaming stderr
+
+main() = {
+    # Spawn a process that outputs to stderr then exits
+    (status, handle) = Exec.start("sh", ["-c", "echo stderr line >&2"])
+    assert(status == "ok")
+
+    # Read stderr
+    (rs, line) = Exec.readStderr(handle)
+    assert(rs == "ok")
+
+    # Verify the output
+    assert(line == "stderr line\n")
+
+    # Wait for process to complete
+    (ws, exitCode) = Exec.wait(handle)
+    assert(ws == "ok")
+    assert(exitCode == 0)
+
+    0
+}

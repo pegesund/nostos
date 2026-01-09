@@ -688,6 +688,22 @@ pub enum Instruction {
     /// Kill a process: Process.kill(pid)
     ProcessKill(Reg, Reg),
 
+    // === External process execution ===
+    /// Run command and wait: dst = Exec.run(cmd, args)
+    ExecRun(Reg, Reg, Reg),
+    /// Spawn process with streaming: dst = Exec.spawn(cmd, args)
+    ExecSpawn(Reg, Reg, Reg),
+    /// Read line from stdout: dst = Exec.readline(handle)
+    ExecReadLine(Reg, Reg),
+    /// Read line from stderr: dst = Exec.readStderr(handle)
+    ExecReadStderr(Reg, Reg),
+    /// Write to stdin: Exec.write(handle, data)
+    ExecWrite(Reg, Reg, Reg),
+    /// Wait for process exit: dst = Exec.wait(handle)
+    ExecWait(Reg, Reg),
+    /// Kill process: Exec.kill(handle)
+    ExecKill(Reg, Reg),
+
     // === Error handling ===
     /// Push exception handler
     PushHandler(JumpOffset),
