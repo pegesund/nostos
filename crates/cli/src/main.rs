@@ -10,6 +10,7 @@ mod inspector_panel;
 mod nostos_panel;
 mod debug_panel;
 mod git_panel;
+mod tutorial;
 
 use nostos_compiler::compile::{compile_module, Compiler, MvarInitValue};
 use nostos_jit::{JitCompiler, JitConfig};

@@ -33,6 +33,13 @@ use std::io::Write;
 
 use crate::autocomplete::{Autocomplete, CompletionContext, CompletionItem, CompletionKind, CompletionSource, get_file_completions};
 
+/// Commands that the REPL panel can request from the TUI
+#[derive(Debug, Clone)]
+pub enum ReplPanelCommand {
+    /// Open the tutorial panel
+    OpenTutorial,
+}
+
 /// Wrapper to implement CompletionSource for ReplEngine
 struct EngineCompletionSource<'a> {
     engine: &'a ReplEngine,
@@ -224,6 +231,8 @@ pub struct ReplPanel {
     eval_handle: Option<ThreadedEvalHandle>,
     /// Handle for debug session (when debugging)
     debug_session: Option<nostos_vm::DebugSession>,
+    /// Pending command for TUI to handle
+    pending_tui_command: Option<ReplPanelCommand>,
 }
 
 impl ReplPanel {
@@ -253,6 +262,7 @@ impl ReplPanel {
             eval_in_progress: false,
             eval_handle: None,
             debug_session: None,
+            pending_tui_command: None,
         };
         debug_log(&format!("[ReplPanel::new] repl_id={}, self_ptr={:p}", instance_id, &panel as *const _));
         panel
@@ -377,25 +387,32 @@ impl ReplPanel {
 
         self.current.output = Some(match result {
             Ok(result_str) => {
-                // Prepend spawned output BEFORE the result (println happens during execution)
-                let mut output = String::new();
-                for line in spawned_output {
-                    if !output.is_empty() {
-                        output.push('\n');
-                    }
-                    output.push_str(&line);
-                }
-                // Add result after spawned output
-                if !result_str.is_empty() {
-                    if !output.is_empty() {
-                        output.push('\n');
-                    }
-                    output.push_str(&result_str);
-                }
-                if output.is_empty() || output.starts_with("Defined") || output.starts_with("Type") {
-                    ReplOutput::Definition(output)
+                // Check for special TUI commands
+                if result_str == "__OPEN_TUTORIAL__" {
+                    self.pending_tui_command = Some(ReplPanelCommand::OpenTutorial);
+                    // Don't show the internal command in output
+                    ReplOutput::Definition(String::new())
                 } else {
-                    ReplOutput::Success(output)
+                    // Prepend spawned output BEFORE the result (println happens during execution)
+                    let mut output = String::new();
+                    for line in spawned_output {
+                        if !output.is_empty() {
+                            output.push('\n');
+                        }
+                        output.push_str(&line);
+                    }
+                    // Add result after spawned output
+                    if !result_str.is_empty() {
+                        if !output.is_empty() {
+                            output.push('\n');
+                        }
+                        output.push_str(&result_str);
+                    }
+                    if output.is_empty() || output.starts_with("Defined") || output.starts_with("Type") {
+                        ReplOutput::Definition(output)
+                    } else {
+                        ReplOutput::Success(output)
+                    }
                 }
             }
             Err(e) => ReplOutput::Error(e),
@@ -1416,6 +1433,11 @@ impl ReplPanel {
     /// Get the history for preservation across rebuilds
     pub fn get_history(&self) -> Vec<ReplEntry> {
         self.history.clone()
+    }
+
+    /// Take any pending TUI command (polled by TUI)
+    pub fn take_pending_tui_command(&mut self) -> Option<ReplPanelCommand> {
+        self.pending_tui_command.take()
     }
 
     /// Set the history (restore after rebuild)
