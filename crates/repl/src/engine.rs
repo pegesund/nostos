@@ -3021,6 +3021,36 @@ impl ReplEngine {
         self.compile_status.get(name)
     }
 
+    /// Check if module content would compile without actually saving it
+    /// This is used for live compile status in the editor
+    pub fn check_module_compiles(&self, module_name: &str, content: &str) -> Result<(), String> {
+        use nostos_syntax::{parse, parse_errors_to_source_errors, offset_to_line_col};
+
+        // First do a quick parse check
+        let (module_opt, errors) = parse(content);
+
+        if !errors.is_empty() {
+            // Convert raw parse errors to SourceErrors
+            let source_errors = parse_errors_to_source_errors(&errors);
+            if let Some(first) = source_errors.first() {
+                let (line, _col) = offset_to_line_col(content, first.span.start);
+                return Err(format!("line {}: {}", line, first.message));
+            }
+            return Err("Parse error".to_string());
+        }
+
+        if module_opt.is_none() {
+            return Err("Failed to parse module".to_string());
+        }
+
+        // For now, just check parsing - full type checking would require
+        // cloning the compiler state which is expensive
+        // TODO: Add lightweight type checking if needed
+        let _ = module_name; // Silence unused warning for now
+
+        Ok(())
+    }
+
     /// Clear compile status for a definition (e.g., when deleted)
     pub fn clear_compile_status(&mut self, name: &str) {
         self.compile_status.remove(name);

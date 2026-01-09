@@ -4,12 +4,29 @@ use cursive::view::{View, CannotFocus};
 use cursive::direction::Direction;
 use cursive::{Printer, Vec2, Rect};
 use nostos_syntax::lexer::{Token, lex};
+use nostos_syntax::{parse, parse_errors_to_source_errors, offset_to_line_col};
 use nostos_compiler::Compiler;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::time::Instant;
 use nostos_repl::ReplEngine;
 
 use crate::autocomplete::{Autocomplete, CompletionContext, CompletionItem, CompletionSource, parse_imports, extract_module_from_editor_name};
+
+/// Compile status for the editor
+#[derive(Clone, Debug)]
+pub enum CompileStatus {
+    /// Not yet checked
+    Unknown,
+    /// Code parses and compiles OK
+    Ok,
+    /// Parse error (syntax)
+    ParseError(String),
+    /// Compile error (type error, etc.)
+    CompileError(String),
+    /// Currently checking (for async in future)
+    Checking,
+}
 
 /// Wrapper to implement CompletionSource for ReplEngine with local variable inference
 struct EditorCompletionSource<'a> {
@@ -415,6 +432,16 @@ pub struct CodeEditor {
     module_name: Option<String>,
     /// Whether editor is in read-only mode (for eval'd functions)
     read_only: bool,
+    /// Current compile status
+    compile_status: CompileStatus,
+    /// Line number when we last checked compile status
+    last_check_line: usize,
+    /// Content hash when we last checked (to detect changes)
+    last_check_content: String,
+    /// Time of last edit (for debounced full compile)
+    last_edit_time: Option<Instant>,
+    /// Whether we need a full compile check (after debounce)
+    needs_full_compile: bool,
 }
 
 impl CodeEditor {
@@ -433,6 +460,101 @@ impl CodeEditor {
             ac_state: AutocompleteState::new(),
             module_name: None,
             read_only: false,
+            compile_status: CompileStatus::Unknown,
+            last_check_line: 0,
+            last_check_content: String::new(),
+            last_edit_time: None,
+            needs_full_compile: false,
+        }
+    }
+
+    /// Perform a quick parse check on the current content
+    fn check_parse(&mut self) {
+        let content = self.content.join("\n");
+
+        // Don't recheck if content hasn't changed
+        if content == self.last_check_content {
+            return;
+        }
+
+        self.last_check_content = content.clone();
+
+        // Try to parse the content
+        let (module_opt, errors) = parse(&content);
+
+        if !errors.is_empty() {
+            // Convert raw parse errors to SourceErrors
+            let source_errors = parse_errors_to_source_errors(&errors);
+            if let Some(first_error) = source_errors.first() {
+                let (line, _col) = offset_to_line_col(&content, first_error.span.start);
+                let error_msg = format!("line {}: {}", line, first_error.message);
+                self.compile_status = CompileStatus::ParseError(error_msg);
+            } else {
+                self.compile_status = CompileStatus::ParseError("Parse error".to_string());
+            }
+        } else if module_opt.is_some() {
+            // Parse OK - mark for full compile check
+            self.compile_status = CompileStatus::Ok;
+            self.needs_full_compile = true;
+        } else {
+            self.compile_status = CompileStatus::ParseError("Unknown parse error".to_string());
+        }
+    }
+
+    /// Perform a full compile check (called after debounce or on save)
+    fn check_compile(&mut self) {
+        if !self.needs_full_compile {
+            return;
+        }
+
+        let engine = match &self.engine {
+            Some(e) => e,
+            None => return,
+        };
+
+        let module_name = match &self.module_name {
+            Some(m) => m.clone(),
+            None => return,
+        };
+
+        let content = self.content.join("\n");
+
+        // Try to compile via the engine
+        let eng = engine.borrow();
+
+        // Use the engine's compile check if available
+        match eng.check_module_compiles(&module_name, &content) {
+            Ok(()) => {
+                self.compile_status = CompileStatus::Ok;
+            }
+            Err(error) => {
+                self.compile_status = CompileStatus::CompileError(error);
+            }
+        }
+
+        self.needs_full_compile = false;
+    }
+
+    /// Called when cursor moves to a different line
+    fn on_line_change(&mut self, old_line: usize, new_line: usize) {
+        if old_line != new_line {
+            // Trigger parse check when leaving a line
+            self.check_parse();
+            self.last_check_line = new_line;
+        }
+    }
+
+    /// Called on each edit to track timing for debounced compile
+    fn on_edit(&mut self) {
+        self.last_edit_time = Some(Instant::now());
+    }
+
+    /// Check if enough time has passed for a full compile (500ms)
+    pub fn maybe_full_compile(&mut self) {
+        if let Some(last_edit) = self.last_edit_time {
+            if last_edit.elapsed().as_millis() > 500 && self.needs_full_compile {
+                self.check_compile();
+            }
         }
     }
 
@@ -887,6 +1009,50 @@ impl CodeEditor {
             }
         }
     }
+
+    /// Draw compile status indicator at top-right corner
+    fn draw_compile_status(&self, printer: &Printer) {
+        let (indicator, color) = match &self.compile_status {
+            CompileStatus::Unknown => ("?", Color::Rgb(128, 128, 128)),
+            CompileStatus::Ok => ("✓", Color::Rgb(0, 255, 0)),
+            CompileStatus::ParseError(msg) => {
+                // Truncate message for display
+                let short_msg: String = msg.chars().take(40).collect();
+                let display = format!("✗ {}", short_msg);
+                // We'll handle this case specially below
+                let style = Style::from(ColorStyle::new(
+                    Color::Rgb(255, 100, 100),
+                    Color::Rgb(40, 0, 0)
+                ));
+                let x = printer.size.x.saturating_sub(display.len() + 1);
+                printer.with_style(style, |p| {
+                    p.print((x, 0), &display);
+                });
+                return;
+            }
+            CompileStatus::CompileError(msg) => {
+                let short_msg: String = msg.chars().take(40).collect();
+                let display = format!("✗ {}", short_msg);
+                let style = Style::from(ColorStyle::new(
+                    Color::Rgb(255, 150, 50),
+                    Color::Rgb(40, 20, 0)
+                ));
+                let x = printer.size.x.saturating_sub(display.len() + 1);
+                printer.with_style(style, |p| {
+                    p.print((x, 0), &display);
+                });
+                return;
+            }
+            CompileStatus::Checking => ("...", Color::Rgb(255, 255, 0)),
+        };
+
+        // Draw simple indicator
+        let style = Style::from(ColorStyle::new(color, Color::Rgb(30, 30, 30)));
+        let x = printer.size.x.saturating_sub(indicator.len() + 1);
+        printer.with_style(style, |p| {
+            p.print((x, 0), indicator);
+        });
+    }
 }
 
 impl View for CodeEditor {
@@ -1007,6 +1173,9 @@ impl View for CodeEditor {
 
         // Draw autocomplete popup
         self.draw_autocomplete(printer);
+
+        // Draw compile status indicator at top-right
+        self.draw_compile_status(printer);
     }
 
     fn layout(&mut self, size: Vec2) {
@@ -1031,6 +1200,15 @@ impl View for CodeEditor {
     }
 
     fn on_event(&mut self, event: Event) -> EventResult {
+        // Track line before event for compile status checking
+        let old_line = self.cursor.1;
+
+        // Check if this is an editing event (for tracking edit time)
+        let is_edit = matches!(event,
+            Event::Char(_) | Event::Key(Key::Enter) | Event::Key(Key::Backspace) |
+            Event::Key(Key::Del) | Event::Key(Key::Tab)
+        );
+
         // In read-only mode, ignore all editing events but allow navigation
         if self.read_only {
             match event {
@@ -1199,6 +1377,16 @@ impl View for CodeEditor {
         // After any consumed event, ensure cursor stays visible
         if matches!(result, EventResult::Consumed(_)) {
             self.ensure_cursor_visible();
+
+            // Track edits for debounced compile
+            if is_edit {
+                self.on_edit();
+            }
+
+            // Check for line change (triggers parse check)
+            if self.cursor.1 != old_line {
+                self.on_line_change(old_line, self.cursor.1);
+            }
         }
 
         result
