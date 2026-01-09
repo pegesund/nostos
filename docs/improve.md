@@ -66,17 +66,6 @@ isOdd(n) = if n == 0 then false else isEven(n - 1)
 
 ## Standard Library
 
-### String.split and String.join
-Common string operations.
-
-```nostos
-# Desired
-words = String.split("hello world", " ")  # ["hello", "world"]
-line = String.join(words, ",")            # "hello,world"
-```
-
-**Priority**: High - frequently needed
-
 ### String.drop and String.take
 Convenient string slicing.
 
@@ -184,3 +173,4 @@ Some callback patterns in the VM may have stale frame references.
 - ✅ WebSocket support with split read/write
 - ✅ MVar atomic update operation
 - ✅ PostgreSQL with connection pooling
+- ✅ String.split and String.join
