@@ -1018,6 +1018,9 @@ pub struct Compiler {
     current_function_name: Option<String>,
     /// Current function's type parameters (for checking nested trait bounds)
     current_fn_type_params: Vec<TypeParam>,
+    /// Type parameter bindings for current monomorphization: T -> Sum
+    /// Used to substitute type parameters with concrete types in expressions
+    current_type_bindings: HashMap<String, String>,
     /// Loop context stack for break/continue
     loop_stack: Vec<LoopContext>,
     /// Line starts: byte offsets where each line begins (line 1 is at index 0)
@@ -1220,6 +1223,7 @@ impl Compiler {
             polymorphic_fns: HashSet::new(),
             current_function_name: None,
             current_fn_type_params: Vec::new(),
+            current_type_bindings: HashMap::new(),
             loop_stack: Vec::new(),
             line_starts: vec![0],
             pending_functions: Vec::new(),
@@ -1750,6 +1754,7 @@ impl Compiler {
             polymorphic_fns: HashSet::new(),
             current_function_name: None,
             current_fn_type_params: Vec::new(),
+            current_type_bindings: HashMap::new(),
             loop_stack: Vec::new(),
             line_starts,
             pending_functions: Vec::new(),
@@ -4176,17 +4181,24 @@ impl Compiler {
                 let body_line = self.span_line(clause.body.span());
                 let result_reg = match self.compile_expr_tail(&clause.body, true) {
                     Ok(reg) => reg,
-                    Err(CompileError::UnresolvedTraitMethod { .. }) => {
-                        // Mark this function as needing monomorphization
-                        self.polymorphic_fns.insert(name.clone());
-                        // Restore state and return success
-                        self.chunk = saved_chunk;
-                        self.locals = saved_locals;
-                        self.next_reg = saved_next_reg;
-                        self.current_function_name = saved_function_name;
-                        self.param_types = saved_param_types;
-                        self.current_fn_type_params = saved_fn_type_params;
-                        return Ok(());
+                    Err(CompileError::UnresolvedTraitMethod { method, span }) => {
+                        // Only mark as polymorphic if the function actually has type parameters
+                        // Otherwise, this is a real error that should be reported
+                        if !def.type_params.is_empty() {
+                            // Mark this function as needing monomorphization
+                            self.polymorphic_fns.insert(name.clone());
+                            // Restore state and return success
+                            self.chunk = saved_chunk;
+                            self.locals = saved_locals;
+                            self.next_reg = saved_next_reg;
+                            self.current_function_name = saved_function_name;
+                            self.param_types = saved_param_types;
+                            self.current_fn_type_params = saved_fn_type_params;
+                            return Ok(());
+                        } else {
+                            // Non-polymorphic function with unresolved trait method - real error
+                            return Err(CompileError::UnresolvedTraitMethod { method, span });
+                        }
                     }
                     Err(e) => {
                         return Err(e);
@@ -4249,20 +4261,27 @@ impl Compiler {
             let body_line = self.span_line(clause.body.span());
             let result_reg = match self.compile_expr_tail(&clause.body, true) {
                 Ok(reg) => reg,
-                Err(CompileError::UnresolvedTraitMethod { .. }) => {
-                    // Mark this function as needing monomorphization
-                    self.polymorphic_fns.insert(name.clone());
-                    // Restore state and return success
-                    self.chunk = saved_chunk;
-                    self.locals = saved_locals;
-                    self.next_reg = saved_next_reg;
-                    self.current_function_name = saved_function_name;
-                    self.param_types = saved_param_types;
-                    self.current_fn_type_params = saved_fn_type_params;
-                    self.current_fn_mvar_reads = saved_mvar_reads;
-                    self.current_fn_mvar_writes = saved_mvar_writes;
-                    self.current_fn_calls = saved_fn_calls;
-                    return Ok(());
+                Err(CompileError::UnresolvedTraitMethod { method, span }) => {
+                    // Only mark as polymorphic if the function actually has type parameters
+                    // Otherwise, this is a real error that should be reported
+                    if !def.type_params.is_empty() {
+                        // Mark this function as needing monomorphization
+                        self.polymorphic_fns.insert(name.clone());
+                        // Restore state and return success
+                        self.chunk = saved_chunk;
+                        self.locals = saved_locals;
+                        self.next_reg = saved_next_reg;
+                        self.current_function_name = saved_function_name;
+                        self.param_types = saved_param_types;
+                        self.current_fn_type_params = saved_fn_type_params;
+                        self.current_fn_mvar_reads = saved_mvar_reads;
+                        self.current_fn_mvar_writes = saved_mvar_writes;
+                        self.current_fn_calls = saved_fn_calls;
+                        return Ok(());
+                    } else {
+                        // Non-polymorphic function with unresolved trait method - real error
+                        return Err(CompileError::UnresolvedTraitMethod { method, span });
+                    }
                 }
                 Err(e) => return Err(e),
             };
@@ -6866,6 +6885,58 @@ impl Compiler {
                         }
                     }
                 } else {
+                    // Type unknown - but we might be inside a monomorphized function with type bindings
+                    // Try trait method dispatch using current_type_bindings
+                    if !self.current_type_bindings.is_empty() {
+                        let method_name = &method.node;
+                        for (_, concrete_type) in &self.current_type_bindings.clone() {
+                            // Check if this type implements any trait with this method
+                            if let Some(impl_traits) = self.type_traits.get(concrete_type) {
+                                for trait_name in impl_traits {
+                                    if let Some(trait_info) = self.trait_defs.get(trait_name) {
+                                        if trait_info.methods.iter().any(|m| &m.name == method_name) {
+                                            // Found a trait that has this method!
+                                            // Dispatch to Type.Trait.method
+                                            let impl_fn_name = format!("{}.{}.{}", concrete_type, trait_name, method_name);
+
+                                            // Find the actual function with signature
+                                            let mut all_args = vec![obj.as_ref().clone()];
+                                            all_args.extend(args.iter().map(|a| Self::call_arg_expr(a).clone()));
+                                            let arg_types: Vec<Option<String>> = all_args.iter()
+                                                .map(|a| self.expr_type_name(a).or_else(|| Some(concrete_type.clone())))
+                                                .collect();
+
+                                            if let Some(resolved_fn) = self.resolve_function_call(&impl_fn_name, &arg_types) {
+                                                if let Some(&func_idx) = self.function_indices.get(&resolved_fn) {
+                                                    // Compile the object and arguments
+                                                    let obj_reg = self.compile_expr_tail(obj, false)?;
+                                                    let mut arg_regs = vec![obj_reg];
+                                                    for arg in args {
+                                                        let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
+                                                        arg_regs.push(reg);
+                                                    }
+
+                                                    let dst = self.alloc_reg();
+                                                    self.current_fn_calls.insert(resolved_fn);
+                                                    if is_tail {
+                                                        for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                                                            self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                                                        }
+                                                        self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
+                                                        return Ok(0);
+                                                    } else {
+                                                        self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
+                                                        return Ok(dst);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Type unknown - check if this is a trait method that needs monomorphization
                     if self.is_known_trait_method(&method.node) {
                         return Err(CompileError::UnresolvedTraitMethod {
@@ -9095,6 +9166,48 @@ impl Compiler {
                     if let Some(ret_type) = self.get_function_return_type(&ident.node)
                         .or_else(|| self.get_function_return_type(&resolved_name)) {
                         if !ret_type.is_empty() {
+                            // Check if the return type is a type parameter that needs substitution
+                            // Type parameters are single uppercase letters like "T", "U", etc.
+                            let is_type_param = ret_type.len() == 1 && ret_type.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+                            if is_type_param {
+                                // Try to substitute the type parameter with concrete type from arguments
+                                // Look up the function's AST to get parameter type annotations
+                                let fn_key = if self.fn_asts.contains_key(&ident.node) {
+                                    Some(ident.node.clone())
+                                } else {
+                                    // Try with signature suffix
+                                    self.fn_asts.keys().find(|k| k.starts_with(&format!("{}/", ident.node))).cloned()
+                                        .or_else(|| self.fn_asts.keys().find(|k| k.starts_with(&format!("{}/", resolved_name))).cloned())
+                                };
+
+                                if let Some(fn_key) = fn_key {
+                                    if let Some(fn_def) = self.fn_asts.get(&fn_key).cloned() {
+                                        // Find which parameter has this type parameter in its type annotation
+                                        if let Some(clause) = fn_def.clauses.first() {
+                                            for (param_idx, param) in clause.params.iter().enumerate() {
+                                                if let Some(TypeExpr::Name(type_ident)) = &param.ty {
+                                                    if type_ident.node == ret_type {
+                                                        // This parameter has the same type parameter as return type
+                                                        // Get the argument type at this position
+                                                        if param_idx < args.len() {
+                                                            let arg_expr = Self::call_arg_expr(&args[param_idx]);
+                                                            if let Some(arg_type) = self.expr_type_name(arg_expr) {
+                                                                // Don't substitute if arg_type is also a type parameter
+                                                                let arg_is_type_param = arg_type.len() == 1 && arg_type.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+                                                                if !arg_is_type_param {
+                                                                    return Some(arg_type);
+                                                                }
+                                                            }
+                                                        }
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             // If the return type is not already qualified, try to qualify it
                             // based on the function's module (e.g., nalgebra.vec returns Vec -> nalgebra.Vec)
                             if !ret_type.contains('.') && self.types.contains_key(&ret_type) {
@@ -9588,11 +9701,29 @@ impl Compiler {
         let saved_param_types = std::mem::take(&mut self.param_types);
         let saved_module_path = std::mem::replace(&mut self.module_path, original_module_path.clone());
         let saved_imports = std::mem::take(&mut self.imports);
+        let saved_type_bindings = std::mem::take(&mut self.current_type_bindings);
 
         // Set param_types for this specialization
         for (i, param_name) in param_names.iter().enumerate() {
             if i < arg_type_names.len() {
                 self.param_types.insert(param_name.clone(), arg_type_names[i].clone());
+            }
+        }
+
+        // Build type parameter bindings: map type param names (T, U, etc.) to concrete types
+        // This is used to substitute type parameters in lambda parameter types
+        if let Some(first_clause) = fn_def.clauses.first() {
+            for (i, param) in first_clause.params.iter().enumerate() {
+                if i < arg_type_names.len() {
+                    if let Some(TypeExpr::Name(type_ident)) = &param.ty {
+                        // If the parameter type is a type parameter (matches one in type_params)
+                        let param_type_name = &type_ident.node;
+                        let is_type_param = fn_def.type_params.iter().any(|tp| tp.name.node == *param_type_name);
+                        if is_type_param {
+                            self.current_type_bindings.insert(param_type_name.clone(), arg_type_names[i].clone());
+                        }
+                    }
+                }
             }
         }
 
@@ -9633,6 +9764,7 @@ impl Compiler {
         self.param_types = saved_param_types;
         self.module_path = saved_module_path;
         self.imports = saved_imports;
+        self.current_type_bindings = saved_type_bindings;
 
         Ok(mangled_name)
     }
@@ -9750,8 +9882,184 @@ impl Compiler {
             }
         }
 
+        // Handle lambda with expected function type - pass parameter types to lambda compilation
+        if let Expr::Lambda(params, body, _) = arg {
+            if let Some(TypeExpr::Function(param_types, _)) = expected_type {
+                // Extract concrete type names from expected parameter types
+                // If a type is a type parameter (like "a"), try to substitute it using current_type_bindings
+                let concrete_param_types: Vec<Option<String>> = param_types.iter()
+                    .map(|t| {
+                        if let Some(type_name) = self.type_expr_to_type_name(t) {
+                            Some(type_name)
+                        } else {
+                            // Type parameter - try to substitute from current_type_bindings
+                            if let TypeExpr::Name(ident) = t {
+                                self.current_type_bindings.get(&ident.node).cloned()
+                            } else {
+                                None
+                            }
+                        }
+                    })
+                    .collect();
+
+                // If we have concrete types for lambda parameters, compile with types
+                if concrete_param_types.iter().all(|t| t.is_some()) && !concrete_param_types.is_empty() {
+                    let typed_params: Vec<(String, String)> = params.iter()
+                        .zip(concrete_param_types.iter())
+                        .filter_map(|(p, ty)| {
+                            if let Some(name) = self.pattern_binding_name(p) {
+                                if let Some(t) = ty {
+                                    return Some((name, t.clone()));
+                                }
+                            }
+                            None
+                        })
+                        .collect();
+
+                    if typed_params.len() == params.len() {
+                        return self.compile_lambda_with_types(params, body, &typed_params);
+                    }
+                }
+            }
+        }
+
         // Default: compile normally
         self.compile_expr_tail(arg, false)
+    }
+
+    /// Compile a lambda with known parameter types. This is used when the lambda is passed
+    /// to a function with a known signature, allowing us to track parameter types for
+    /// trait method resolution inside the lambda body.
+    fn compile_lambda_with_types(
+        &mut self,
+        params: &[Pattern],
+        body: &Expr,
+        param_types: &[(String, String)],
+    ) -> Result<Reg, CompileError> {
+        use std::collections::HashSet;
+
+        // Step 1: Find free variables in the lambda body
+        let mut param_names_set: HashSet<String> = HashSet::new();
+        for param in params {
+            if let Some(name) = self.pattern_binding_name(param) {
+                param_names_set.insert(name);
+            }
+        }
+        let body_free_vars = free_vars(body, &param_names_set);
+
+        // Step 2: Filter to variables that exist in outer scope (locals)
+        let mut captures: Vec<(String, Reg)> = Vec::new();
+        for var_name in &body_free_vars {
+            if let Some(info) = self.locals.get(var_name) {
+                captures.push((var_name.clone(), info.reg));
+            }
+            // Also check if it's in our own captures (nested closures)
+            else if self.capture_indices.contains_key(var_name) {
+                let dst = self.alloc_reg();
+                let cap_idx = *self.capture_indices.get(var_name).unwrap();
+                self.chunk.emit(Instruction::GetCapture(dst, cap_idx), 0);
+                captures.push((var_name.clone(), dst));
+            }
+        }
+
+        // Step 3: Save state
+        let saved_chunk = std::mem::take(&mut self.chunk);
+        let saved_locals = std::mem::take(&mut self.locals);
+        let saved_next_reg = self.next_reg;
+        let saved_capture_indices = std::mem::take(&mut self.capture_indices);
+        let saved_local_types = std::mem::take(&mut self.local_types);
+        let saved_current_function_name = self.current_function_name.take();
+
+        // Step 4: Create new function for lambda
+        self.chunk = Chunk::new();
+        self.locals = HashMap::new();
+        self.capture_indices = HashMap::new();
+        self.local_types = HashMap::new();
+        self.next_reg = 0;
+
+        let arity = params.len();
+        let mut param_names = Vec::new();
+
+        // Set next_reg to be after all parameters
+        self.next_reg = arity as Reg;
+
+        // Allocate registers for parameters and handle pattern destructuring
+        // Also add types to local_types from param_types
+        for (i, param) in params.iter().enumerate() {
+            let arg_reg = i as Reg;
+            if let Some(name) = self.pattern_binding_name(param) {
+                // Simple variable pattern - bind directly to param register
+                self.locals.insert(name.clone(), LocalInfo { reg: arg_reg, is_float: false, mutable: false });
+                // Add type from param_types if available
+                if let Some((_, ty)) = param_types.iter().find(|(n, _)| n == &name) {
+                    self.local_types.insert(name.clone(), ty.clone());
+                }
+                param_names.push(name);
+            } else {
+                // Complex pattern (tuple, etc.) - need to destructure
+                param_names.push(format!("_arg{}", i));
+                let (_, bindings) = self.compile_pattern_test(param, arg_reg)?;
+                for (name, reg, is_float) in bindings {
+                    self.locals.insert(name, LocalInfo { reg, is_float, mutable: false });
+                }
+            }
+        }
+
+        // Set up capture indices for the lambda body to use
+        for (i, (name, _)) in captures.iter().enumerate() {
+            self.capture_indices.insert(name.clone(), i as u8);
+        }
+
+        // Compile body (in tail position)
+        let body_line = self.span_line(body.span());
+        let result_reg = self.compile_expr_tail(body, true)?;
+        self.chunk.emit(Instruction::Return(result_reg), body_line);
+
+        self.chunk.register_count = self.next_reg as usize;
+
+        let lambda_chunk = std::mem::take(&mut self.chunk);
+        let debug_symbols = std::mem::take(&mut self.current_fn_debug_symbols);
+
+        // Step 5: Restore state
+        self.chunk = saved_chunk;
+        self.locals = saved_locals;
+        self.next_reg = saved_next_reg;
+        self.capture_indices = saved_capture_indices;
+        self.local_types = saved_local_types;
+        self.current_function_name = saved_current_function_name;
+
+        // Step 6: Create closure with captures
+        let func = FunctionValue {
+            name: "<lambda>".to_string(),
+            arity,
+            param_names,
+            code: Arc::new(lambda_chunk),
+            module: None,
+            source_span: None,
+            jit_code: None,
+            call_count: AtomicU32::new(0),
+            debug_symbols,
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
+            required_params: None,
+        };
+
+        let dst = self.alloc_reg();
+
+        if captures.is_empty() {
+            let func_idx = self.chunk.add_constant(Value::Function(Arc::new(func)));
+            self.chunk.emit(Instruction::LoadConst(dst, func_idx), 0);
+        } else {
+            let func_idx = self.chunk.add_constant(Value::Function(Arc::new(func)));
+            let capture_regs: Vec<Reg> = captures.iter().map(|(_, reg)| *reg).collect();
+            self.chunk.emit(Instruction::MakeClosure(dst, func_idx, capture_regs.into()), 0);
+        }
+
+        Ok(dst)
     }
 
     /// Convert a TypeExpr to a concrete type name, or None if it's a type parameter.
@@ -12272,7 +12580,7 @@ impl Compiler {
 
         let lambda_chunk = std::mem::take(&mut self.chunk);
 
-        // Use accumulated debug symbols (not affected by block scope restoration)
+        // Use accumulated debug symbols (not affected by block scope restoration for compile_lambda)
         let debug_symbols = std::mem::take(&mut self.current_fn_debug_symbols);
 
         // Step 5: Restore state
