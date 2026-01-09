@@ -1426,9 +1426,6 @@ impl ReplEngine {
         self.var_counter += 1;
         let thunk_name = format!("__repl_var_{}_{}", name, self.var_counter);
 
-        // Collect modules needed for type annotations
-        let mut needed_modules: HashSet<String> = HashSet::new();
-
         // Build bindings preamble to inject existing variables (excluding the one being defined)
         let bindings_preamble = if self.var_bindings.is_empty() {
             String::new()
@@ -1438,12 +1435,11 @@ impl ReplEngine {
                 .filter(|(var_name, _)| *var_name != name) // Don't inject the variable being defined
                 .map(|(var_name, binding)| {
                     if let Some(ref type_ann) = binding.type_annotation {
-                        // Check if type is module-qualified (e.g., "testvec.Vec")
-                        if let Some(dot_pos) = type_ann.find('.') {
-                            let module = &type_ann[..dot_pos];
-                            needed_modules.insert(module.to_string());
-                            // Use the full qualified type (module will be imported)
-                            format!("{}: {} = {}()", var_name, type_ann, binding.thunk_name)
+                        // Module-qualified types (e.g., "nalgebra.Vec") don't work in
+                        // type annotations within function bodies, so skip them.
+                        // The thunk already returns the correct type.
+                        if type_ann.contains('.') {
+                            format!("{} = {}()", var_name, binding.thunk_name)
                         } else if Self::is_safe_type_annotation(type_ann) {
                             format!("{}: {} = {}()", var_name, type_ann, binding.thunk_name)
                         } else {
@@ -1461,20 +1457,10 @@ impl ReplEngine {
             }
         };
 
-        // Build import statements for modules (so qualified types like testvec.Vec work)
-        let import_statements = if needed_modules.is_empty() {
-            String::new()
-        } else {
-            needed_modules.iter()
-                .map(|m| format!("import {}", m))
-                .collect::<Vec<_>>()
-                .join("\n") + "\n"
-        };
-
         let wrapper = if bindings_preamble.is_empty() {
-            format!("{}{}() = {}", import_statements, thunk_name, expr)
+            format!("{}() = {}", thunk_name, expr)
         } else {
-            format!("{}{}() = {{\n    {}{}\n}}", import_statements, thunk_name, bindings_preamble, expr)
+            format!("{}() = {{\n    {}{}\n}}", thunk_name, bindings_preamble, expr)
         };
 
         let (wrapper_module_opt, errors) = parse(&wrapper);
