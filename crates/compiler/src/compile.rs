@@ -263,6 +263,9 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Pg.query", signature: "Int -> String -> [a] -> [[a]]", doc: "Execute query with params, returns rows as list of lists" },
     BuiltinInfo { name: "Pg.execute", signature: "Int -> String -> [a] -> Int", doc: "Execute statement with params, returns affected row count" },
     BuiltinInfo { name: "Pg.close", signature: "Int -> ()", doc: "Close PostgreSQL connection" },
+    BuiltinInfo { name: "Pg.begin", signature: "Int -> ()", doc: "Begin a transaction" },
+    BuiltinInfo { name: "Pg.commit", signature: "Int -> ()", doc: "Commit the current transaction" },
+    BuiltinInfo { name: "Pg.rollback", signature: "Int -> ()", doc: "Rollback the current transaction" },
 ];
 
 /// Extract doc comment immediately preceding a definition at the given span start.
@@ -3401,6 +3404,24 @@ impl Compiler {
                             self.chunk.emit(Instruction::PgClose(dst, handle_reg), line);
                             return Ok(dst);
                         }
+                        "Pg.begin" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgBegin(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.commit" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgCommit(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.rollback" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgRollback(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
                         // String encoding functions
                         "Base64.encode" if args.len() == 1 => {
                             let str_reg = self.compile_expr_tail(&args[0], false)?;
@@ -3879,6 +3900,24 @@ impl Compiler {
                             let handle_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgClose(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.begin" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgBegin(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.commit" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgCommit(dst, handle_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.rollback" if args.len() == 1 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgRollback(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         // === Process introspection ===

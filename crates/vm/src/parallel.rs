@@ -8415,6 +8415,96 @@ impl ThreadWorker {
                 }
             }
 
+            PgBegin(dst, handle_reg) => {
+                let handle = {
+                    let _proc = self.get_process(local_id).unwrap();
+                    match reg!(*handle_reg) {
+                        GcValue::Int64(h) => *h as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (pg handle)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    }
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::PgBegin {
+                        handle,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            PgCommit(dst, handle_reg) => {
+                let handle = {
+                    let _proc = self.get_process(local_id).unwrap();
+                    match reg!(*handle_reg) {
+                        GcValue::Int64(h) => *h as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (pg handle)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    }
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::PgCommit {
+                        handle,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            PgRollback(dst, handle_reg) => {
+                let handle = {
+                    let _proc = self.get_process(local_id).unwrap();
+                    match reg!(*handle_reg) {
+                        GcValue::Int64(h) => *h as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (pg handle)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    }
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::PgRollback {
+                        handle,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
             // === String Encoding ===
             Base64Encode(dst, str_reg) => {
                 use base64::{Engine as _, engine::general_purpose};

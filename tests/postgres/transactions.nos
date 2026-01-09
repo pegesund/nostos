@@ -1,0 +1,149 @@
+# expect: 0
+# PostgreSQL transaction tests
+# REQUIRES: PostgreSQL running at localhost with user/password: postgres/postgres
+
+test_basic_commit(conn) = {
+    # Create temp table
+    Pg.execute(conn, "CREATE TEMP TABLE tx_test (id INT, value TEXT)", [])
+
+    # Begin transaction
+    Pg.begin(conn)
+
+    # Insert in transaction
+    Pg.execute(conn, "INSERT INTO tx_test VALUES ($1, $2)", [1, "one"])
+    Pg.execute(conn, "INSERT INTO tx_test VALUES ($1, $2)", [2, "two"])
+
+    # Commit
+    Pg.commit(conn)
+
+    # Verify data persisted
+    rows = Pg.query(conn, "SELECT * FROM tx_test ORDER BY id", [])
+    assert_eq(length(rows), 2)
+    assert_eq(head(head(rows)), 1)
+
+    # Cleanup
+    Pg.execute(conn, "DROP TABLE tx_test", [])
+    ()
+}
+
+test_basic_rollback(conn) = {
+    # Create temp table
+    Pg.execute(conn, "CREATE TEMP TABLE tx_test2 (id INT, value TEXT)", [])
+
+    # Insert initial data (outside transaction)
+    Pg.execute(conn, "INSERT INTO tx_test2 VALUES ($1, $2)", [1, "one"])
+
+    # Begin transaction
+    Pg.begin(conn)
+
+    # Insert more data
+    Pg.execute(conn, "INSERT INTO tx_test2 VALUES ($1, $2)", [2, "two"])
+    Pg.execute(conn, "INSERT INTO tx_test2 VALUES ($1, $2)", [3, "three"])
+
+    # Rollback - should undo the inserts
+    Pg.rollback(conn)
+
+    # Verify only original data remains
+    rows = Pg.query(conn, "SELECT * FROM tx_test2", [])
+    assert_eq(length(rows), 1)
+    assert_eq(head(head(rows)), 1)
+
+    # Cleanup
+    Pg.execute(conn, "DROP TABLE tx_test2", [])
+    ()
+}
+
+test_transaction_isolation(conn) = {
+    # Create temp table
+    Pg.execute(conn, "CREATE TEMP TABLE tx_test3 (counter INT)", [])
+    Pg.execute(conn, "INSERT INTO tx_test3 VALUES ($1)", [0])
+
+    # Begin transaction
+    Pg.begin(conn)
+
+    # Update in transaction
+    Pg.execute(conn, "UPDATE tx_test3 SET counter = counter + 1", [])
+
+    # Verify update visible within transaction
+    r1 = Pg.query(conn, "SELECT counter FROM tx_test3", [])
+    assert_eq(head(head(r1)), 1)
+
+    # Commit
+    Pg.commit(conn)
+
+    # Verify persisted
+    r2 = Pg.query(conn, "SELECT counter FROM tx_test3", [])
+    assert_eq(head(head(r2)), 1)
+
+    # Cleanup
+    Pg.execute(conn, "DROP TABLE tx_test3", [])
+    ()
+}
+
+test_rollback_on_error(conn) = {
+    # Create temp table
+    Pg.execute(conn, "CREATE TEMP TABLE tx_test4 (id INT PRIMARY KEY)", [])
+
+    # Begin transaction
+    Pg.begin(conn)
+
+    # Insert first row
+    Pg.execute(conn, "INSERT INTO tx_test4 VALUES ($1)", [1])
+
+    # Try to insert duplicate (will fail) - catch the error
+    result = try Pg.execute(conn, "INSERT INTO tx_test4 VALUES ($1)", [1]) catch
+        ("execute_error", msg) -> "error"
+        _ -> "unexpected"
+    end
+    assert_eq(result, "error")
+
+    # Rollback the failed transaction
+    Pg.rollback(conn)
+
+    # Verify table is empty (first insert was rolled back too)
+    rows = Pg.query(conn, "SELECT * FROM tx_test4", [])
+    assert_eq(length(rows), 0)
+
+    # Cleanup
+    Pg.execute(conn, "DROP TABLE tx_test4", [])
+    ()
+}
+
+test_nested_operations(conn) = {
+    # Create temp table
+    Pg.execute(conn, "CREATE TEMP TABLE tx_test5 (id INT, name TEXT)", [])
+
+    # Transaction with multiple operations
+    Pg.begin(conn)
+
+    Pg.execute(conn, "INSERT INTO tx_test5 VALUES ($1, $2)", [1, "alice"])
+    Pg.execute(conn, "INSERT INTO tx_test5 VALUES ($1, $2)", [2, "bob"])
+    Pg.execute(conn, "UPDATE tx_test5 SET name = $1 WHERE id = $2", ["ALICE", 1])
+    Pg.execute(conn, "DELETE FROM tx_test5 WHERE id = $1", [2])
+
+    Pg.commit(conn)
+
+    # Verify final state
+    rows = Pg.query(conn, "SELECT * FROM tx_test5", [])
+    assert_eq(length(rows), 1)
+    row = head(rows)
+    assert_eq(head(row), 1)
+    assert_eq(head(tail(row)), "ALICE")
+
+    # Cleanup
+    Pg.execute(conn, "DROP TABLE tx_test5", [])
+    ()
+}
+
+main() = {
+    conn = Pg.connect("host=localhost user=postgres password=postgres")
+
+    test_basic_commit(conn)
+    test_basic_rollback(conn)
+    test_transaction_isolation(conn)
+    test_rollback_on_error(conn)
+    test_nested_operations(conn)
+
+    Pg.close(conn)
+    0
+}

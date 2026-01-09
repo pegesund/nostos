@@ -4721,6 +4721,93 @@ impl AsyncProcess {
                 }
             }
 
+            PgBegin(dst, handle_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int (pg handle)".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::PgBegin { handle, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(resp) => {
+                            let gc_value = self.io_response_to_gc_value(resp);
+                            set_reg!(dst, gc_value);
+                        }
+                        Err(e) => {
+                            self.throw_exception("transaction_error", format!("{}", e))?;
+                        }
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            PgCommit(dst, handle_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int (pg handle)".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::PgCommit { handle, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(resp) => {
+                            let gc_value = self.io_response_to_gc_value(resp);
+                            set_reg!(dst, gc_value);
+                        }
+                        Err(e) => {
+                            self.throw_exception("transaction_error", format!("{}", e))?;
+                        }
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            PgRollback(dst, handle_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int (pg handle)".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::PgRollback { handle, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(resp) => {
+                            let gc_value = self.io_response_to_gc_value(resp);
+                            set_reg!(dst, gc_value);
+                        }
+                        Err(e) => {
+                            self.throw_exception("transaction_error", format!("{}", e))?;
+                        }
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
             // Unimplemented instructions - add as needed
             _ => {
                 eprintln!("[AsyncVM] Unimplemented instruction: {:?}", instruction);
