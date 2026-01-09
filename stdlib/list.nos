@@ -58,9 +58,13 @@ sort([pivot | rest]) = {
     concat(sort(lesser), [pivot | sort(greater)])
 }
 
-# Apply function to each element
+# Apply function to each element, return new list
 map([], _) = []
 map([x | xs], f) = [f(x) | map(xs, f)]
+
+# Apply function to each element for side effects only, returns unit
+each([], _) = ()
+each([x | xs], f) = { f(x); each(xs, f) }
 
 # Keep elements that satisfy predicate
 filter([], _) = []

@@ -1917,8 +1917,27 @@ impl Worker {
                 let (func, captures) = func_result;
 
                 self.scheduler.with_process_mut(pid, |proc| {
+                    // Auto-untupling: if calling with 1 tuple arg and function expects more args
+                    let final_args = if arg_values.len() == 1 && func.arity > 1 {
+                        if let GcValue::Tuple(ptr) = &arg_values[0] {
+                            if let Some(tuple) = proc.heap.get_tuple(*ptr) {
+                                if tuple.items.len() == func.arity {
+                                    tuple.items.clone()
+                                } else {
+                                    arg_values.clone()
+                                }
+                            } else {
+                                arg_values.clone()
+                            }
+                        } else {
+                            arg_values.clone()
+                        }
+                    } else {
+                        arg_values.clone()
+                    };
+
                     let mut registers = vec![GcValue::Unit; 256];
-                    for (i, arg) in arg_values.into_iter().enumerate() {
+                    for (i, arg) in final_args.into_iter().enumerate() {
                         if i < 256 {
                             registers[i] = arg;
                         }
@@ -1965,8 +1984,27 @@ impl Worker {
                 let (func, captures) = func_result;
 
                 self.scheduler.with_process_mut(pid, |proc| {
+                    // Auto-untupling for tail calls
+                    let final_args = if arg_values.len() == 1 && func.arity > 1 {
+                        if let GcValue::Tuple(ptr) = &arg_values[0] {
+                            if let Some(tuple) = proc.heap.get_tuple(*ptr) {
+                                if tuple.items.len() == func.arity {
+                                    tuple.items.clone()
+                                } else {
+                                    arg_values.clone()
+                                }
+                            } else {
+                                arg_values.clone()
+                            }
+                        } else {
+                            arg_values.clone()
+                        }
+                    } else {
+                        arg_values.clone()
+                    };
+
                     let mut registers = vec![GcValue::Unit; 256];
-                    for (i, arg) in arg_values.into_iter().enumerate() {
+                    for (i, arg) in final_args.into_iter().enumerate() {
                         if i < 256 {
                             registers[i] = arg;
                         }
