@@ -2098,13 +2098,34 @@ fn close_editor_and_browse(s: &mut Cursive, name: &str) {
 
 /// Open the module browser dialog
 fn open_browser(s: &mut Cursive) {
-    // Get engine reference
-    let engine = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
-        state.borrow().engine.clone()
+    // Get engine reference and current editor info
+    let (engine, open_editors, active_idx) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let state = state.borrow();
+        (state.engine.clone(), state.open_editors.clone(), state.active_window_idx)
     }).unwrap();
 
-    // Initial path is empty (root)
-    let path: Vec<String> = vec![];
+    // Try to find the module path from the currently active editor
+    let mut path: Vec<String> = vec![];
+
+    // Build window list to find what's at active_idx
+    // Order: console (if open), editors, repls, inspector, nostos_panel
+    let console_open = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().console_open
+    }).unwrap_or(true);
+
+    let console_offset = if console_open { 1 } else { 0 };
+
+    // Check if active window is an editor
+    if active_idx >= console_offset && active_idx < console_offset + open_editors.len() {
+        let editor_idx = active_idx - console_offset;
+        if let Some(editor_name) = open_editors.get(editor_idx) {
+            // Extract module path from function name (e.g., "myModule.myFunc" -> ["myModule"])
+            if let Some(dot_pos) = editor_name.rfind('.') {
+                let module_part = &editor_name[..dot_pos];
+                path = module_part.split('.').map(|s| s.to_string()).collect();
+            }
+        }
+    }
 
     show_browser_dialog(s, engine, path);
 }
