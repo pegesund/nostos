@@ -3332,7 +3332,11 @@ impl ReplEngine {
             if type_def.visibility == nostos_syntax::ast::Visibility::Private {
                 output.push_str("private ");
             }
-            output.push_str("type ");
+            if type_def.reactive {
+                output.push_str("reactive ");
+            } else {
+                output.push_str("type ");
+            }
             output.push_str(&type_def.full_name());
 
             let body = type_def.body_string();
