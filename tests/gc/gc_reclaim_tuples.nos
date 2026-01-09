@@ -1,0 +1,15 @@
+# expect: ()
+# GC reclaims unreferenced tuples
+
+discard_tuples(0, count) = count
+discard_tuples(n, count) = {
+    t1 = (1, 2, 3)
+    t2 = (4, 5, 6)
+    t3 = ((1, 2), (3, 4))
+    discard_tuples(n - 1, count + 1)
+}
+
+main() = {
+    result = discard_tuples(10000, 0)
+    assert_eq(10000, result)
+}

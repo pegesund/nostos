@@ -1,0 +1,24 @@
+# expect: ()
+# GC preserves record structures with multiple fields
+
+type Person = { name: String, age: Int, score: Int }
+
+make_person_chain(0, acc) = acc
+make_person_chain(n, acc) = {
+    garbage = Person("garbage", 0, 0)
+    p = Person("person", n, n * 10)
+    make_person_chain(n - 1, [p | acc])
+}
+
+sum_scores([]) = 0
+sum_scores([p | rest]) = {
+    garbage = Person("temp", 999, 999)
+    p.score + sum_scores(rest)
+}
+
+main() = {
+    people = make_person_chain(50, [])
+    total = sum_scores(people)
+    # Sum of 1*10 + 2*10 + ... + 50*10 = 10 * (1+2+...+50) = 10 * 1275 = 12750
+    assert_eq(12750, total)
+}

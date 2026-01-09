@@ -1,0 +1,15 @@
+# expect: ()
+# GC reclaims unreferenced closures
+
+discard_closures(0, count) = count
+discard_closures(n, count) = {
+    f1 = x => x + n
+    f2 = x => x * n
+    f3 = x => x - n
+    discard_closures(n - 1, count + 1)
+}
+
+main() = {
+    result = discard_closures(10000, 0)
+    assert_eq(10000, result)
+}

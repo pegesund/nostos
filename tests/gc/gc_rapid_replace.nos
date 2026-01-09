@@ -1,0 +1,17 @@
+# expect: ()
+# GC handles rapid replacement of variables
+
+rapid_replace(0, val) = val
+rapid_replace(n, val) = {
+    # Replace value multiple times, making old ones garbage
+    temp1 = [val, val]
+    temp2 = [temp1, temp1]
+    temp3 = (temp2, n)
+    rapid_replace(n - 1, n)
+}
+
+main() = {
+    result = rapid_replace(1000, 0)
+    # Final value should be 1
+    assert_eq(1, result)
+}

@@ -1,0 +1,20 @@
+# expect: ()
+# GC preserves tuple structures
+
+type Chain = Link(Int, Chain) | End(Int)
+
+make_chain(0, val) = End(val)
+make_chain(n, val) = {
+    garbage = (999, 888, 777)
+    Link(n, make_chain(n - 1, val))
+}
+
+sum_chain(End(x)) = x
+sum_chain(Link(a, rest)) = a + sum_chain(rest)
+
+main() = {
+    chain = make_chain(5, 100)
+    result = sum_chain(chain)
+    # 5 + 4 + 3 + 2 + 1 + 100 = 115
+    assert_eq(115, result)
+}

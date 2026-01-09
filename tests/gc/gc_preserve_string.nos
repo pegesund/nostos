@@ -1,0 +1,16 @@
+# expect: ()
+# GC preserves string values during heavy allocation
+
+concat_with_garbage(0, s) = s
+concat_with_garbage(n, s) = {
+    garbage1 = "this string is garbage"
+    garbage2 = "another garbage string"
+    garbage3 = "yet more garbage"
+    concat_with_garbage(n - 1, s ++ "x")
+}
+
+main() = {
+    result = concat_with_garbage(50, "start:")
+    expected = "start:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    assert_eq(expected, result)
+}

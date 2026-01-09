@@ -1,0 +1,25 @@
+# expect: ()
+# GC preserves recursive data structures
+
+type Tree = Leaf(Int) | Branch(Tree, Tree)
+
+build_tree(0) = Leaf(1)
+build_tree(n) = {
+    garbage = Branch(Leaf(0), Leaf(0))
+    left = build_tree(n - 1)
+    right = build_tree(n - 1)
+    Branch(left, right)
+}
+
+sum_tree(Leaf(x)) = x
+sum_tree(Branch(l, r)) = {
+    garbage = Leaf(999)
+    sum_tree(l) + sum_tree(r)
+}
+
+main() = {
+    tree = build_tree(7)
+    result = sum_tree(tree)
+    # 2^7 = 128 leaves, each with value 1
+    assert_eq(128, result)
+}

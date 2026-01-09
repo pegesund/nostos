@@ -1,0 +1,26 @@
+# expect: ()
+# GC preserves list of maps structure
+
+build_map_list(0, acc) = acc
+build_map_list(n, acc) = {
+    garbage = %{"garbage": 0}
+    m = %{"value": n, "double": n * 2}
+    build_map_list(n - 1, [m | acc])
+}
+
+sum_map_values([]) = 0
+sum_map_values([m | rest]) = {
+    garbage = %{}
+    match m
+        %{"value": v, "double": d} -> v + d + sum_map_values(rest)
+        _ -> sum_map_values(rest)
+    end
+}
+
+main() = {
+    maps = build_map_list(50, [])
+    result = sum_map_values(maps)
+    # Each map contributes n + 2n = 3n
+    # Sum = 3 * (1+2+...+50) = 3 * 1275 = 3825
+    assert_eq(3825, result)
+}

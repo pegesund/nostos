@@ -1,0 +1,22 @@
+# expect: ()
+# GC handles large single allocations
+
+build_large_list(0, acc) = acc
+build_large_list(n, acc) = build_large_list(n - 1, [n | acc])
+
+sum_list([]) = 0
+sum_list([h | t]) = h + sum_list(t)
+
+main() = {
+    # Build a 1000-element list, creating garbage along the way
+    var i = 0
+    var result = 0
+    while i < 10 {
+        garbage = build_large_list(500, [])
+        large = build_large_list(1000, [])
+        result = sum_list(large)
+        i = i + 1
+    }
+    # Sum of 1..1000 = 500500
+    assert_eq(500500, result)
+}

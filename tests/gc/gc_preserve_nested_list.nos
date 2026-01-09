@@ -1,0 +1,20 @@
+# expect: ()
+# GC preserves deeply nested list structures
+
+type Nested = Wrap(List) | Val(Int)
+
+build_nested(0, inner) = inner
+build_nested(n, inner) = {
+    garbage = ["discard", "temp", "junk"]
+    build_nested(n - 1, Wrap([inner]))
+}
+
+depth(Val(_)) = 0
+depth(Wrap([inner])) = 1 + depth(inner)
+depth(_) = 0
+
+main() = {
+    nested = build_nested(20, Val(42))
+    d = depth(nested)
+    assert_eq(20, d)
+}

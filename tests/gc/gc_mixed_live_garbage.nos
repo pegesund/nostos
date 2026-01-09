@@ -1,0 +1,28 @@
+# expect: ()
+# GC correctly separates live data from garbage
+
+process(0, live_list) = live_list
+process(n, live_list) = {
+    # Garbage - not added to result
+    garbage1 = [999, 888, 777]
+    garbage2 = (0, 0, 0)
+    garbage3 = "discard me"
+
+    # Live data - added to accumulator
+    keep = n * 3
+
+    # More garbage
+    garbage4 = %{"garbage": 0}
+
+    process(n - 1, [keep | live_list])
+}
+
+sum_list([]) = 0
+sum_list([h | t]) = h + sum_list(t)
+
+main() = {
+    live = process(100, [])
+    result = sum_list(live)
+    # Sum of 3*1 + 3*2 + ... + 3*100 = 3 * 5050 = 15150
+    assert_eq(15150, result)
+}

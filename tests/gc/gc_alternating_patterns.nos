@@ -1,0 +1,27 @@
+# expect: ()
+# GC handles alternating allocation patterns
+
+alternate(0, acc) = acc
+alternate(n, acc) = {
+    # Alternate between different allocation types
+    result = if n % 4 == 0 then {
+        garbage = "string garbage"
+        acc + 1
+    } else if n % 4 == 1 then {
+        garbage = [1, 2, 3]
+        acc + 2
+    } else if n % 4 == 2 then {
+        garbage = (1, 2)
+        acc + 3
+    } else {
+        garbage = %{"key": n}
+        acc + 4
+    }
+    alternate(n - 1, result)
+}
+
+main() = {
+    result = alternate(1000, 0)
+    # 250 * (1+2+3+4) = 250 * 10 = 2500
+    assert_eq(2500, result)
+}

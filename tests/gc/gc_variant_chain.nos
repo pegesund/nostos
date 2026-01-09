@@ -1,0 +1,23 @@
+# expect: ()
+# GC preserves chains of variant types
+
+type Node = Cons(Int, Node) | Nil
+
+build_chain(0) = Nil
+build_chain(n) = {
+    garbage = Cons(999, Nil)
+    Cons(n, build_chain(n - 1))
+}
+
+sum_chain(Nil) = 0
+sum_chain(Cons(val, rest)) = {
+    garbage = Cons(0, Nil)
+    val + sum_chain(rest)
+}
+
+main() = {
+    chain = build_chain(100)
+    result = sum_chain(chain)
+    # Sum of 1..100 = 5050
+    assert_eq(5050, result)
+}
