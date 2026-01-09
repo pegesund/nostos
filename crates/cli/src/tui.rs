@@ -578,6 +578,7 @@ pub fn run_tui(args: &[String]) -> ExitCode {
             env!("CARGO_PKG_VERSION")
         ))
         .scrollable()
+        .scroll_x(true)
     ).with_name("repl_log");
 
     // Wrap console with OnEventView for Ctrl+Y copy (same pattern as Ctrl+S on editor)
@@ -799,7 +800,7 @@ fn rebuild_workspace(s: &mut Cursive) {
     let total_windows = 1 + editor_names.len() + repl_ids.len() + inspector_count + nostos_panel_count;
 
     let repl_log = FocusableConsole::new(
-        TextView::new(repl_log_content).scrollable()
+        TextView::new(repl_log_content).scrollable().scroll_x(true)
     ).with_name("repl_log");
 
     // Wrap console with OnEventView for Ctrl+Y copy (same pattern as Ctrl+S on editor)
@@ -2914,7 +2915,7 @@ fn rebuild_workspace_with_viewer(s: &mut Cursive, viewer_name: &str, viewer_cont
     let total_windows = 1 + editor_names.len();
 
     let repl_log = FocusableConsole::new(
-        TextView::new(repl_log_content).scrollable()
+        TextView::new(repl_log_content).scrollable().scroll_x(true)
     ).with_name("repl_log");
 
     let repl_log_with_events = OnEventView::new(repl_log)
