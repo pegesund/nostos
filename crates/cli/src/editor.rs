@@ -354,6 +354,40 @@ impl<'a> CompletionSource for EditorCompletionSource<'a> {
 /// Maximum items to show in autocomplete popup
 const AC_MAX_VISIBLE: usize = 10;
 
+/// Signature help state (shows function parameters when typing '(')
+struct SignatureHelpState {
+    /// Whether signature help popup is visible
+    active: bool,
+    /// Function name being called
+    function_name: String,
+    /// Parameter info: (name, type, is_optional, default_preview)
+    params: Vec<(String, String, bool, Option<String>)>,
+    /// Full signature string (for builtins that don't have param details)
+    signature: Option<String>,
+    /// Current parameter index (based on comma count)
+    current_param: usize,
+}
+
+impl SignatureHelpState {
+    fn new() -> Self {
+        Self {
+            active: false,
+            function_name: String::new(),
+            params: Vec::new(),
+            signature: None,
+            current_param: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.active = false;
+        self.function_name.clear();
+        self.params.clear();
+        self.signature = None;
+        self.current_param = 0;
+    }
+}
+
 /// Autocomplete state for the editor
 struct AutocompleteState {
     /// Whether autocomplete popup is visible
@@ -459,6 +493,8 @@ pub struct CodeEditor {
     autocomplete: Autocomplete,
     /// Autocomplete state
     ac_state: AutocompleteState,
+    /// Signature help state
+    sig_help: SignatureHelpState,
     /// Module name being edited (e.g., "Math" when editing "Math.add")
     module_name: Option<String>,
     /// Function name being edited (the simple name, e.g., "main" or "add")
@@ -491,6 +527,7 @@ impl CodeEditor {
             saved_content,
             autocomplete: Autocomplete::new(),
             ac_state: AutocompleteState::new(),
+            sig_help: SignatureHelpState::new(),
             module_name: None,
             function_name: None,
             read_only: false,
@@ -764,8 +801,72 @@ impl CodeEditor {
         }
         self.cursor.0 += 1;
 
+        // Handle signature help triggers
+        match c {
+            '(' => self.trigger_signature_help(),
+            ',' => self.update_signature_help_param(),
+            ')' => self.close_signature_help(),
+            _ => {}
+        }
+
         // Update autocomplete after each character
         self.update_autocomplete();
+    }
+
+    /// Trigger signature help when '(' is typed
+    fn trigger_signature_help(&mut self) {
+        let engine = match &self.engine {
+            Some(e) => e,
+            None => return,
+        };
+
+        let line = &self.content[self.cursor.1];
+        // Get text before cursor (before the '(' we just inserted)
+        let before_paren: String = line.chars().take(self.cursor.0.saturating_sub(1)).collect();
+
+        // Extract the function name before the '('
+        let func_name: String = before_paren
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+
+        if func_name.is_empty() {
+            return;
+        }
+
+        let eng = engine.borrow();
+
+        // Try to get function params
+        if let Some(params) = eng.get_function_params(&func_name) {
+            self.sig_help.active = true;
+            self.sig_help.function_name = func_name;
+            self.sig_help.params = params;
+            self.sig_help.signature = None;
+            self.sig_help.current_param = 0;
+        } else if let Some(sig) = eng.get_function_signature(&func_name) {
+            // Fall back to signature string for builtins
+            self.sig_help.active = true;
+            self.sig_help.function_name = func_name;
+            self.sig_help.params.clear();
+            self.sig_help.signature = Some(sig);
+            self.sig_help.current_param = 0;
+        }
+    }
+
+    /// Update current parameter position when ',' is typed
+    fn update_signature_help_param(&mut self) {
+        if self.sig_help.active {
+            self.sig_help.current_param += 1;
+        }
+    }
+
+    /// Close signature help when ')' is typed
+    fn close_signature_help(&mut self) {
+        self.sig_help.reset();
     }
 
     fn insert_newline(&mut self) {
@@ -1167,6 +1268,48 @@ impl CodeEditor {
             p.print((x, 0), indicator);
         });
     }
+
+    /// Draw signature help popup above the cursor
+    fn draw_signature_help(&self, printer: &Printer) {
+        if !self.sig_help.active {
+            return;
+        }
+
+        // Calculate cursor screen position
+        let screen_x = self.cursor.0.saturating_sub(self.scroll_offset.0);
+        let screen_y = self.cursor.1.saturating_sub(self.scroll_offset.1);
+
+        // Position popup above cursor if possible
+        let popup_y = if screen_y > 0 { screen_y - 1 } else { screen_y + 1 };
+
+        // Build the signature help text
+        let text = if !self.sig_help.params.is_empty() {
+            // Show detailed params with current param highlighted
+            let params_str: Vec<String> = self.sig_help.params.iter().enumerate()
+                .map(|(i, (name, typ, is_opt, _default))| {
+                    let opt_marker = if *is_opt { "?" } else { "" };
+                    if i == self.sig_help.current_param {
+                        format!("[{}{}:{}]", name, opt_marker, typ)
+                    } else {
+                        format!("{}{}:{}", name, opt_marker, typ)
+                    }
+                })
+                .collect();
+            format!("{}({})", self.sig_help.function_name, params_str.join(", "))
+        } else if let Some(ref sig) = self.sig_help.signature {
+            // Show simple signature
+            format!("{} :: {}", self.sig_help.function_name, sig)
+        } else {
+            return;
+        };
+
+        // Draw background
+        let width = text.chars().count().min(printer.size.x.saturating_sub(screen_x));
+        let bg_style = Style::from(ColorStyle::new(Color::Rgb(200, 200, 200), Color::Rgb(60, 60, 60)));
+        printer.with_style(bg_style, |p| {
+            p.print((screen_x, popup_y), &text[..text.len().min(width * 4)]); // approximate char count
+        });
+    }
 }
 
 impl View for CodeEditor {
@@ -1284,6 +1427,9 @@ impl View for CodeEditor {
                 });
             }
         }
+
+        // Draw signature help popup (above cursor)
+        self.draw_signature_help(printer);
 
         // Draw autocomplete popup
         self.draw_autocomplete(printer);
