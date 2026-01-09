@@ -382,7 +382,8 @@ rwebHandleRequest(req, title, sessionSetup) = {
     # Otherwise the spawned process blocks stdout before handshake completes
     if req.path == "/" then {
         # Serve initial HTML page - create fresh session for rendering
-        (renderPage, _) = sessionSetup()
+        # Pass 0 as writerId placeholder (real writerId assigned on WebSocket connect)
+        (renderPage, _) = sessionSetup(0)
         result = renderPage()
         html = renderRHtml(result)
         respondHtml(req, pageTemplate(title, html))
@@ -408,7 +409,8 @@ rwebHandleRequest(req, title, sessionSetup) = {
         }
 
         # Create fresh session state for this connection
-        (renderPage, onAction) = sessionSetup()
+        # Pass writerId so session can register itself for targeted messages
+        (renderPage, onAction) = sessionSetup(writerId)
         renderResult = renderPage()
 
         # Send initial full page HTML (using shared writer)
@@ -441,7 +443,8 @@ rwebHandleRequest(req, title, sessionSetup) = {
 # --- Main Entry Point ---
 
 # Start the reactive web server
-# sessionSetup: () -> (renderPage, onAction) - creates fresh state per session
+# sessionSetup: (writerId: Int) -> (renderPage, onAction) - creates fresh state per session
+#   writerId is the WebSocket writer ID for this session (use for targeted push messages)
 #   Returns a tuple of:
 #   - renderPage: () -> RHtmlResult - renders the page
 #   - onAction: (action, params) -> () - handles actions by mutating reactive records
@@ -608,7 +611,7 @@ rwebHandleRequestWithRoutes(req, title, reactiveResolver, plainResolver) = {
                 pid = self()
                 println("[RWeb] Session started: pid=" ++ show(pid) ++ " path=" ++ actualPath ++ " writerId=" ++ show(writerId))
 
-                (renderPage, onAction) = sessionSetup()
+                (renderPage, onAction) = sessionSetup(writerId)
                 renderResult = renderPage()
 
                 # Send initial full page HTML (using shared writer)
@@ -634,7 +637,8 @@ rwebHandleRequestWithRoutes(req, title, reactiveResolver, plainResolver) = {
     # Check reactive routes - serve initial HTML
     else match reactiveResolver(req.path) {
         Some(sessionSetup) -> {
-            (renderPage, _) = sessionSetup()
+            # Pass 0 as writerId placeholder (real writerId assigned on WebSocket connect)
+            (renderPage, _) = sessionSetup(0)
             result = renderPage()
             html = renderRHtml(result)
             respondHtml(req, pageTemplateWithRoutes(title, html))
@@ -653,7 +657,7 @@ rwebHandleRequestWithRoutes(req, title, reactiveResolver, plainResolver) = {
 #
 # reactiveResolver: String -> Option[() -> (RenderFn, ActionHandler)]
 #   A function that takes a path and returns Some(sessionSetup) or None()
-#   sessionSetup: () -> (renderPage, onAction)
+#   sessionSetup: (writerId: Int) -> (renderPage, onAction)
 #
 # plainResolver: String -> Option[Request -> ()]
 #   A function that takes a path and returns Some(handler) or None()

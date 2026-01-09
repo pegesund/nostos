@@ -1,5 +1,5 @@
 # RWeb External Push Example
-# Demonstrates how external processes can push updates to connected clients
+# Demonstrates how external processes can push targeted updates to specific users/rooms
 #
 # Run with: ./target/release/nostos examples/rweb_external_push.nos
 # Then open http://localhost:8080 in a browser
@@ -7,88 +7,123 @@
 # The background pusher will automatically update the page every 2 seconds!
 
 use stdlib.rweb
-use stdlib.rweb.{onSessionStartCallback, onSessionEndCallback, rwebTrigger}
+use stdlib.rweb.{rwebTrigger}
 use stdlib.rhtml
 
-# Shared MVar to store active writerIds
-mvar activeWriters: List[Int] = []
+# Room-based messaging: Map from room name to list of writerIds in that room
+mvar roomMembers: Map[String, List[Int]] = {}
 
-# Shared MVar for the latest push message (all sessions read from this)
-mvar latestPushMsg: String = ""
+# Per-room messages: Map from room name to latest message
+mvar roomMessages: Map[String, String] = {}
 
-reactive State = { counter: Int, lastPush: String }
+reactive State = { myWriterId: Int, room: String, lastMessage: String }
 
-# Background pusher - runs independently and sends actions to all connected clients
+# Helper to add a writer to a room
+joinRoom(room, writerId) = {
+    current = match Map.get(roomMembers, room) {
+        Some(members) -> members
+        None() -> []
+    }
+    roomMembers = Map.insert(roomMembers, room, current ++ [writerId])
+    println("[Room] Writer " ++ show(writerId) ++ " joined room '" ++ room ++ "'")
+}
+
+# Helper to remove a writer from a room
+leaveRoom(room, writerId) = {
+    current = match Map.get(roomMembers, room) {
+        Some(members) -> members.filter(w => w != writerId)
+        None() -> []
+    }
+    roomMembers = Map.insert(roomMembers, room, current)
+    println("[Room] Writer " ++ show(writerId) ++ " left room '" ++ room ++ "'")
+}
+
+# Helper to get all writers in a room
+getWritersInRoom(room) = match Map.get(roomMembers, room) {
+    Some(members) -> members
+    None() -> []
+}
+
+# Background pusher - sends different messages to different rooms
 backgroundPusher(n) = {
     sleep(2000)
 
-    # Get current list of active writers
-    writers = activeWriters
+    # Send to room "A"
+    msgA = "Room A: Message #" ++ show(n)
+    roomMessages = Map.insert(roomMessages, "A", msgA)
+    writersA = getWritersInRoom("A")
+    writersA.each(writerId => rwebTrigger(writerId))
 
-    if length(writers) > 0 then {
-        # Update the shared message MVar
-        msg = "Push #" ++ show(n) ++ " at " ++ show(Time.now())
-        latestPushMsg = msg
+    # Send to room "B" (different message)
+    msgB = "Room B: Update #" ++ show(n * 10)
+    roomMessages = Map.insert(roomMessages, "B", msgB)
+    writersB = getWritersInRoom("B")
+    writersB.each(writerId => rwebTrigger(writerId))
 
-        # Send trigger to each connected client (they'll respond with _external action)
-        writers.each(writerId => rwebTrigger(writerId))
-        println("[Pusher] Sent push #" ++ show(n) ++ " to " ++ show(length(writers)) ++ " client(s)")
-    } else ()
+    totalWriters = length(writersA) + length(writersB)
+    if totalWriters > 0 then
+        println("[Pusher] Sent #" ++ show(n) ++ " to " ++ show(length(writersA)) ++ " in A, " ++ show(length(writersB)) ++ " in B")
+    else ()
 
     backgroundPusher(n + 1)
 }
 
-session() = {
-    state = State(counter: 0, lastPush: "Waiting for background pusher...")
-    (
-        () => RHtml(div([
-            h1("RWeb External Push Demo"),
+# Helper to get a param with default
+getParam(params, key) = match Map.get(params, key) {
+    Some(v) -> v
+    None() -> ""
+}
 
-            div([
-                h3("Local State (click to increment):"),
-                p("Counter: " ++ show(state.counter)),
-                button("+1", dataAction: "increment")
-            ], style: "margin-bottom: 20px; padding: 10px; border: 1px solid #ccc;"),
+# Session now receives writerId as parameter!
+session(writerId) = {
+    state = State(myWriterId: writerId, room: "", lastMessage: "Join a room to receive messages...")
 
-            div([
-                h3("External Push Status:"),
-                p(state.lastPush, style: if state.lastPush == "Waiting for background pusher..." then "color: gray;" else "color: lime; font-weight: bold;")
-            ], style: "padding: 10px; border: 1px solid #ccc; background: #111;"),
+    renderPage = () => RHtml(div([
+        h1("RWeb Room-Based Push Demo"),
+        p("Your writerId: " ++ show(state.myWriterId), style: "color: #888;"),
 
-            p("The background process sends 'push' actions every 2 seconds!",
-              style: "margin-top: 20px; font-style: italic;")
-        ])),
-        (action, params) => match action {
-            "increment" -> { state.counter = state.counter + 1 }
-            "_external" -> {
-                # External trigger - read latest message from shared MVar
-                msg = latestPushMsg
-                if msg != "" then {
-                    state.lastPush = "✓ " ++ msg
-                } else ()
-            }
-            _ -> ()
-        }
-    )
+        div([
+            h3("Join a Room:"),
+            button("Join Room A", dataAction: "join", attrs: [("data-param-room", "A")]),
+            span(" "),
+            button("Join Room B", dataAction: "join", attrs: [("data-param-room", "B")])
+        ], style: "margin-bottom: 20px; padding: 10px; border: 1px solid #ccc;"),
+
+        div([
+            h3("Current Room: " ++ (if state.room == "" then "(none)" else state.room)),
+            p(state.lastMessage, style: if state.room == "" then "color: gray;" else "color: lime; font-weight: bold;")
+        ], style: "padding: 10px; border: 1px solid #ccc; background: #111;"),
+
+        p("Each room receives different messages from the background pusher!",
+          style: "margin-top: 20px; font-style: italic;")
+    ]))
+
+    onAction = (action, params) => {
+        if action == "join" then {
+            newRoom = getParam(params, "room")
+            if state.room != "" then leaveRoom(state.room, state.myWriterId) else ()
+            state.room = newRoom
+            joinRoom(newRoom, state.myWriterId)
+            state.lastMessage = "Joined room " ++ newRoom ++ ", waiting for messages..."
+        } else if action == "_external" then {
+            if state.room != "" then {
+                msg = getParam(roomMessages, state.room)
+                if msg != "" then { state.lastMessage = "✓ " ++ msg } else ()
+            } else ()
+        } else ()
+    }
+
+    (renderPage, onAction)
 }
 
 main() = {
-    println("Starting RWeb External Push Demo on http://localhost:8080")
-    println("Open in browser to see automatic updates from background pusher!")
+    println("Starting RWeb Room-Based Push Demo on http://localhost:8080")
+    println("Open multiple browser tabs and join different rooms!")
     println("")
-
-    # Set up callbacks to track writerIds for external push
-    onSessionStartCallback = Some(writerId => {
-        activeWriters = activeWriters ++ [writerId]
-    })
-
-    onSessionEndCallback = Some(writerId => {
-        activeWriters = activeWriters.filter(w => w != writerId)
-    })
 
     # Start background pusher
     spawn { backgroundPusher(1) }
 
-    # Use standard RWeb with callbacks
-    startRWeb(8080, "External Push Demo", session)
+    # Start RWeb - session now receives writerId
+    startRWeb(8080, "Room Push Demo", session)
 }
