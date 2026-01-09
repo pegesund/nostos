@@ -9458,6 +9458,12 @@ impl Compiler {
             return nostos_types::Type::List(Box::new(elem_type));
         }
 
+        // Handle function type syntax: "(params) -> ret" or "param -> ret"
+        // This includes parenthesized function types like "(() -> a)"
+        if let Some(func_type) = self.parse_function_type_string(ty) {
+            return func_type;
+        }
+
         // Check for parameterized type syntax: Name[Args]
         if let Some(bracket_pos) = ty.find('[') {
             if ty.ends_with(']') {
@@ -9640,6 +9646,94 @@ impl Compiler {
         }
 
         parts
+    }
+
+    /// Parse a function type string like "() -> Int", "a -> b", or "(() -> a)".
+    /// Returns None if the string doesn't represent a function type.
+    fn parse_function_type_string(&self, ty: &str) -> Option<nostos_types::Type> {
+        let ty = ty.trim();
+
+        // Handle parenthesized type: if entire string is wrapped in parens, unwrap and recurse
+        // But be careful: "()" is Unit, not an empty paren group
+        // And "(a, b)" is a tuple, not a paren group
+        if ty.starts_with('(') && ty.ends_with(')') && ty != "()" {
+            // Check if the parens are balanced and wrap the entire expression
+            let inner = &ty[1..ty.len() - 1];
+            let mut depth = 0;
+            let mut is_wrapped = true;
+            for (i, c) in inner.char_indices() {
+                match c {
+                    '(' | '[' | '{' => depth += 1,
+                    ')' | ']' | '}' => {
+                        depth -= 1;
+                        if depth < 0 {
+                            is_wrapped = false;
+                            break;
+                        }
+                    }
+                    ',' if depth == 0 => {
+                        // Found a comma at depth 0 - this is a tuple, not a wrapped type
+                        is_wrapped = false;
+                        break;
+                    }
+                    _ => {}
+                }
+                // If we find "->" at depth 0, we need to check if it's in the middle or at the end
+                if depth == 0 && i + 2 < inner.len() && &inner[i..i+2] == "->" {
+                    // There's an arrow inside, so this is a wrapped function type
+                    // Continue checking for balanced parens
+                }
+            }
+
+            // If the outer parens wrap the entire expression and it's balanced
+            if is_wrapped && depth == 0 {
+                // Try to parse the inner content as a function type
+                if let Some(inner_type) = self.parse_function_type_string(inner) {
+                    return Some(inner_type);
+                }
+                // If inner isn't a function type, the outer parens might just be grouping
+                // Fall through to check for arrow at this level
+            }
+        }
+
+        // Look for " -> " at depth 0 to identify function types
+        let mut depth = 0;
+        let bytes = ty.as_bytes();
+        for i in 0..bytes.len() {
+            match bytes[i] {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => depth = (depth - 1).max(0),
+                b'-' if depth == 0 && i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
+                    // Found " -> " at depth 0 - this is a function type
+                    let params_str = ty[..i].trim();
+                    let ret_str = ty[i + 2..].trim();
+
+                    // Parse parameter types
+                    let params = if params_str == "()" || params_str.is_empty() {
+                        // No parameters
+                        vec![]
+                    } else if params_str.starts_with('(') && params_str.ends_with(')') {
+                        // Multiple params or single param in parens: "(a, b)" or "(a)"
+                        let inner = &params_str[1..params_str.len() - 1];
+                        self.parse_type_args(inner)
+                    } else {
+                        // Single param without parens: "a"
+                        vec![self.type_name_to_type(params_str)]
+                    };
+
+                    let ret = self.type_name_to_type(ret_str);
+
+                    return Some(nostos_types::Type::Function(nostos_types::FunctionType {
+                        type_params: vec![],
+                        params,
+                        ret: Box::new(ret),
+                    }));
+                }
+                _ => {}
+            }
+        }
+
+        None
     }
 
 }
