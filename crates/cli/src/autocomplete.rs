@@ -865,7 +865,7 @@ impl Autocomplete {
             type_name
         };
 
-        if base_type.starts_with("Map") || base_type == "Map" {
+        let methods: Vec<(&'static str, &'static str, &'static str)> = if base_type.starts_with("Map") || base_type == "Map" {
             vec![
                 ("get", "(key) -> value", "Get the value associated with a key"),
                 ("insert", "(key, value) -> Map", "Insert a key-value pair, returning a new map"),
@@ -1010,8 +1010,30 @@ impl Autocomplete {
                 ("blockingThreads", "() -> Int", "Get number of tokio blocking threads"),
             ]
         } else {
-            vec![]
+            // For all other types, return generic builtins only
+            vec![
+                ("show", "() -> String", "Convert to string representation"),
+                ("hash", "() -> Int", "Get hash code"),
+                ("copy", "() -> Self", "Create a copy of the value"),
+            ]
+        };
+
+        // Add generic builtins that work on any type
+        // These are appended to the type-specific methods
+        let mut all_methods = methods;
+        let generic_builtins: Vec<(&'static str, &'static str, &'static str)> = vec![
+            ("show", "() -> String", "Convert to string representation"),
+            ("hash", "() -> Int", "Get hash code"),
+            ("copy", "() -> Self", "Create a copy of the value"),
+        ];
+
+        for builtin in generic_builtins {
+            if !all_methods.iter().any(|(name, _, _)| *name == builtin.0) {
+                all_methods.push(builtin);
+            }
         }
+
+        all_methods
     }
 
     /// Detect the type of a literal expression
@@ -1230,6 +1252,34 @@ impl Autocomplete {
             return None; // Unbalanced - not a complete function call
         }
 
+        // Handle generic builtins with known return types
+        match func_name {
+            "show" => return Some("String".to_string()),
+            "hash" => return Some("Int".to_string()),
+            "copy" => {
+                // copy returns the same type as its argument
+                // Extract the argument and infer its type
+                let args_str = &receiver[paren_pos + 1..receiver.len() - 1];
+                if let Some(lit_type) = Self::detect_literal_type(args_str) {
+                    return Some(lit_type.to_string());
+                }
+                // Try to infer as variable type
+                let arg_trimmed = args_str.trim();
+                if let Some(var_type) = source.get_variable_type(arg_trimmed) {
+                    return Some(var_type);
+                }
+                // Try to infer as nested function call
+                if let Some(call_type) = self.infer_function_call_type(args_str, source) {
+                    return Some(call_type);
+                }
+                // Fallback: check if it's a method chain
+                if let Some(chain_type) = self.infer_method_chain_type(args_str, source) {
+                    return Some(chain_type);
+                }
+            }
+            _ => {}
+        }
+
         // Look up the function signature
         if let Some(sig) = source.get_function_signature(func_name) {
             // Signature format: "Type1 -> Type2 -> ReturnType" or "ReturnType" (for 0-arg)
@@ -1341,6 +1391,14 @@ impl Autocomplete {
                 "toList" => Some("List".to_string()),
                 _ => None,
             };
+        }
+
+        // Generic builtins that work on any type
+        match method_name {
+            "show" => return Some("String".to_string()),
+            "hash" => return Some("Int".to_string()),
+            "copy" => return Some(type_name.to_string()),
+            _ => {}
         }
 
         None
@@ -1763,8 +1821,10 @@ mod tests {
         };
         let items = ac.get_completions(&ctx, &source);
 
-        assert_eq!(items.len(), 3);
-        assert!(items.iter().all(|i| i.kind == CompletionKind::Field));
+        // Should have fields x, y, z plus generic builtins (show, hash, copy)
+        assert!(items.iter().any(|i| i.text == "x" && i.kind == CompletionKind::Field));
+        assert!(items.iter().any(|i| i.text == "y" && i.kind == CompletionKind::Field));
+        assert!(items.iter().any(|i| i.text == "z" && i.kind == CompletionKind::Field));
     }
 
     #[test]
@@ -1800,7 +1860,7 @@ mod tests {
         };
         let items = ac.get_completions(&ctx, &source);
 
-        assert_eq!(items.len(), 3, "Should find 3 fields: {:?}", items);
+        // Should have fields exitCode, stdout, stderr plus generic builtins
         assert!(items.iter().any(|i| i.text == "exitCode"));
         assert!(items.iter().any(|i| i.text == "stdout"));
         assert!(items.iter().any(|i| i.text == "stderr"));
@@ -1839,7 +1899,7 @@ mod tests {
         };
         let items = ac.get_completions(&ctx, &source);
 
-        assert_eq!(items.len(), 2);
+        // Should have constructors Some, None plus generic builtins
         assert!(items.iter().any(|i| i.text == "Some" && i.kind == CompletionKind::Constructor));
         assert!(items.iter().any(|i| i.text == "None" && i.kind == CompletionKind::Constructor));
     }
@@ -3383,6 +3443,51 @@ mod tests {
 
         assert!(items.iter().any(|i| i.text == "toUpper"),
             "Should suggest String method 'toUpper' for p.greet() UFCS call");
+    }
+
+    #[test]
+    fn test_nested_generic_function_calls() {
+        // Test nested generic calls like show(show(123)).
+        use nostos_repl::{ReplEngine, ReplConfig};
+
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        let source = ReplEngineSource { engine: &engine };
+        let ac = Autocomplete::new();
+
+        // show(123). - show returns String
+        let line = "show(123).";
+        let ctx = ac.parse_context(line, line.len());
+        let items = ac.get_completions(&ctx, &source);
+        println!("show(123).: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+        assert!(items.iter().any(|i| i.text == "toUpper"),
+            "show(123). should suggest String methods");
+
+        // show(show(123)). - nested show, still returns String
+        let line2 = "show(show(123)).";
+        let ctx2 = ac.parse_context(line2, line2.len());
+        let items2 = ac.get_completions(&ctx2, &source);
+        println!("show(show(123)).: {:?}", items2.iter().map(|i| &i.text).collect::<Vec<_>>());
+        assert!(items2.iter().any(|i| i.text == "toUpper"),
+            "show(show(123)). should suggest String methods");
+
+        // hash(show(123)). - hash returns Int
+        let line3 = "hash(show(123)).";
+        let ctx3 = ac.parse_context(line3, line3.len());
+        let items3 = ac.get_completions(&ctx3, &source);
+        println!("hash(show(123)).: {:?}", items3.iter().map(|i| &i.text).collect::<Vec<_>>());
+        // Int doesn't have many methods, but show should work
+        assert!(items3.iter().any(|i| i.text == "show"),
+            "hash(show(123)). should suggest show for Int");
+
+        // copy("hello"). - copy returns same type (String)
+        let line4 = "copy(\"hello\").";
+        let ctx4 = ac.parse_context(line4, line4.len());
+        let items4 = ac.get_completions(&ctx4, &source);
+        println!("copy(\"hello\").: {:?}", items4.iter().map(|i| &i.text).collect::<Vec<_>>());
+        assert!(items4.iter().any(|i| i.text == "toUpper"),
+            "copy(\"hello\"). should suggest String methods");
     }
 
 }
