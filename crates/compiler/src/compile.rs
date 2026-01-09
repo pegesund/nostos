@@ -88,6 +88,8 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "join", signature: "String -> [String] -> String", doc: "Join strings with delimiter" },
     BuiltinInfo { name: "range", signature: "Int -> Int -> [Int]", doc: "Create list of integers from start to end" },
     BuiltinInfo { name: "replicate", signature: "Int -> a -> [a]", doc: "Create list of n copies of a value" },
+    BuiltinInfo { name: "toIntList", signature: "[Int] -> Int64List", doc: "Convert list to specialized Int64List for fast operations" },
+    BuiltinInfo { name: "intListRange", signature: "Int -> Int64List", doc: "Create Int64List [n, n-1, ..., 1] directly" },
     BuiltinInfo { name: "empty", signature: "[a] -> Bool", doc: "True if list is empty" },
     BuiltinInfo { name: "isEmpty", signature: "[a] -> Bool", doc: "True if list is empty (alias for empty)" },
     BuiltinInfo { name: "sum", signature: "[a] -> a", doc: "Sum of all elements" },
@@ -5732,6 +5734,18 @@ impl Compiler {
                     "rangeList" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::RangeList(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    // Specialized Int64List operations for fast integer list processing
+                    "toIntList" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ToInt64List(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    "intListRange" if arg_regs.len() == 1 => {
+                        // Create Int64List [n, n-1, ..., 1] directly
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::RangeInt64List(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
                     "range" if arg_regs.len() == 2 && !self.has_user_function("range", 2) => {

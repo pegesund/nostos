@@ -362,6 +362,7 @@ fn format_value_short(value: &GcValue) -> String {
         GcValue::Decimal(d) => format!("<Decimal {:?}>", d),
         GcValue::String(_) => "<String>".to_string(),
         GcValue::List(_) => "<List>".to_string(),
+        GcValue::Int64List(l) => format!("<Int64List[{}]>", l.len()),
         GcValue::Array(_) => "<Array>".to_string(),
         GcValue::Tuple(_) => "<Tuple>".to_string(),
         GcValue::Function(f) => format!("<fn {}>", f.name),

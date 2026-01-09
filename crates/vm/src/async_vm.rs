@@ -47,7 +47,7 @@ impl<F: Future> Future for AssertSend<F> {
     }
 }
 
-use crate::gc::{GcConfig, GcList, GcMapKey, GcValue, Heap, GcNativeFn};
+use crate::gc::{GcConfig, GcInt64List, GcList, GcMapKey, GcValue, Heap, GcNativeFn};
 
 /// Held mvar lock guard (owned so it can be stored).
 pub enum HeldMvarLock {
@@ -2805,6 +2805,83 @@ impl AsyncProcess {
                 set_reg!(dst, GcValue::List(list));
             }
 
+            // === Specialized Int64List operations ===
+            TestNilInt64(dst, list_reg) => {
+                let result = match reg_ref!(list_reg) {
+                    GcValue::Int64List(list) => list.is_empty(),
+                    _ => false,
+                };
+                set_reg!(dst, GcValue::Bool(result));
+            }
+
+            DeconsInt64(head_dst, tail_dst, list_reg) => {
+                let list_val = reg_ref!(list_reg);
+                if let GcValue::Int64List(list) = list_val {
+                    if !list.is_empty() {
+                        let head = list.head().unwrap();
+                        let tail = list.tail();
+                        set_reg!(head_dst, GcValue::Int64(head));
+                        set_reg!(tail_dst, GcValue::Int64List(tail));
+                    } else {
+                        return Err(RuntimeError::Panic("DeconsInt64: empty list".into()));
+                    }
+                } else {
+                    return Err(RuntimeError::Panic("DeconsInt64: expected Int64List".into()));
+                }
+            }
+
+            ConsInt64(dst, head_reg, tail_reg) => {
+                let head = match reg!(head_reg) {
+                    GcValue::Int64(n) => n,
+                    _ => return Err(RuntimeError::Panic("ConsInt64: head must be Int64".into())),
+                };
+                let tail = reg_ref!(tail_reg);
+                if let GcValue::Int64List(list) = tail {
+                    let new_list = list.cons(head);
+                    set_reg!(dst, GcValue::Int64List(new_list));
+                } else {
+                    return Err(RuntimeError::Panic("ConsInt64: tail must be Int64List".into()));
+                }
+            }
+
+            RangeInt64List(dst, n_reg) => {
+                let n = match reg!(n_reg) {
+                    GcValue::Int64(n) => n,
+                    _ => return Err(RuntimeError::Panic("RangeInt64List: expected Int64".into())),
+                };
+                let items: Vec<i64> = (1..=n).rev().collect();
+                set_reg!(dst, GcValue::Int64List(GcInt64List::from_vec(items)));
+            }
+
+            ToInt64List(dst, src_reg) => {
+                let src = reg_ref!(src_reg);
+                match src {
+                    GcValue::List(list) => {
+                        let mut items = Vec::with_capacity(list.len());
+                        for item in list.iter() {
+                            match item {
+                                GcValue::Int64(n) => items.push(*n),
+                                _ => return Err(RuntimeError::Panic("ToInt64List: all elements must be Int64".into())),
+                            }
+                        }
+                        set_reg!(dst, GcValue::Int64List(GcInt64List::from_vec(items)));
+                    }
+                    GcValue::Int64List(list) => {
+                        set_reg!(dst, GcValue::Int64List(list.clone()));
+                    }
+                    _ => return Err(RuntimeError::Panic("ToInt64List: expected List".into())),
+                }
+            }
+
+            SumInt64List(dst, src_reg) => {
+                let src = reg_ref!(src_reg);
+                if let GcValue::Int64List(list) = src {
+                    set_reg!(dst, GcValue::Int64(list.sum()));
+                } else {
+                    return Err(RuntimeError::Panic("SumInt64List: expected Int64List".into()));
+                }
+            }
+
             ListHead(dst, list_reg) => {
                 let list_val = reg!(list_reg);
                 let result = match list_val {
@@ -2845,6 +2922,7 @@ impl AsyncProcess {
                 let val = reg!(src);
                 let len = match val {
                     GcValue::List(list) => list.len() as i64,
+                    GcValue::Int64List(list) => list.len() as i64,
                     GcValue::String(s) => {
                         if let Some(str_val) = self.heap.get_string(s) {
                             str_val.data.chars().count() as i64
@@ -2873,22 +2951,29 @@ impl AsyncProcess {
             // === List operations ===
             ListSum(dst, src) => {
                 let val = reg!(src);
-                if let GcValue::List(list) = val {
-                    let mut sum: i64 = 0;
-                    for item in list.iter() {
-                        if let GcValue::Int64(n) = item {
-                            sum += n;
-                        } else {
-                            return Err(RuntimeError::Panic(
-                                format!("listSum: expected Int64, got {:?}", item.type_name(&self.heap))
-                            ));
+                match val {
+                    GcValue::List(list) => {
+                        let mut sum: i64 = 0;
+                        for item in list.iter() {
+                            if let GcValue::Int64(n) = item {
+                                sum += n;
+                            } else {
+                                return Err(RuntimeError::Panic(
+                                    format!("listSum: expected Int64, got {:?}", item.type_name(&self.heap))
+                                ));
+                            }
                         }
+                        set_reg!(dst, GcValue::Int64(sum));
                     }
-                    set_reg!(dst, GcValue::Int64(sum));
-                } else {
-                    return Err(RuntimeError::Panic(
-                        format!("listSum: expected List, got {:?}", val.type_name(&self.heap))
-                    ));
+                    GcValue::Int64List(list) => {
+                        // Fast path for specialized Int64List
+                        set_reg!(dst, GcValue::Int64(list.sum()));
+                    }
+                    _ => {
+                        return Err(RuntimeError::Panic(
+                            format!("listSum: expected List, got {:?}", val.type_name(&self.heap))
+                        ));
+                    }
                 }
             }
 
@@ -5805,6 +5890,7 @@ impl AsyncProcess {
                     GcValue::NativeFunction(_) => "NativeFunction",
                     GcValue::Type(_) => "Type",
                     GcValue::Pointer(_) => "Pointer",
+                    GcValue::Int64List(_) => "Int64List",
                 }.to_string();
                 let str_ptr = self.heap.alloc_string(type_name);
                 set_reg!(dst, GcValue::String(str_ptr));
@@ -6464,6 +6550,17 @@ impl AsyncProcess {
             GcValue::Pointer(p) => {
                 let str_ptr = self.heap.alloc_string(format!("<ptr:0x{:x}>", p));
                 let ptr = self.heap.alloc_variant(json_type, Arc::new("String".to_string()), vec![GcValue::String(str_ptr)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Int64List(list) => {
+                // Convert to JSON array of numbers
+                let mut json_items = Vec::new();
+                for n in list.iter() {
+                    let ptr = self.heap.alloc_variant(json_type.clone(), Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                    json_items.push(GcValue::Variant(ptr));
+                }
+                let list = GcList::from_vec(json_items);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Array".to_string()), vec![GcValue::List(list)]);
                 Ok(GcValue::Variant(ptr))
             }
         }
