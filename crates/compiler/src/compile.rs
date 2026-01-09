@@ -4371,7 +4371,144 @@ impl Compiler {
         self.current_fn_mvar_locks.clear();
 
         if needs_dispatch {
-            // Multi-clause dispatch: try each clause in order
+            // Check if we can use ListSwitch optimization for [] / [h|t] patterns
+            if let Some((head_binding, tail_binding)) = self.can_use_list_switch(&def.clauses) {
+                // ListSwitch optimization: single instruction combines test + destructure
+                let list_reg = 0 as Reg; // First parameter is the list
+                let head_reg = self.alloc_reg();
+                let tail_reg = self.alloc_reg();
+
+                // Emit ListSwitch - will jump to empty case if list is empty
+                let switch_addr = self.chunk.emit(Instruction::ListSwitch(list_reg, head_reg, tail_reg, 0), 0);
+
+                // === Cons case (non-empty list) - comes right after ListSwitch ===
+                self.locals.clear();
+                // Bind head and tail
+                if let Some(ref h) = head_binding {
+                    self.locals.insert(h.clone(), LocalInfo { reg: head_reg, is_float: false, mutable: false });
+                }
+                if let Some(ref t) = tail_binding {
+                    self.locals.insert(t.clone(), LocalInfo { reg: tail_reg, is_float: false, mutable: false });
+                }
+                // Bind other params from clause 1 (cons case)
+                for (i, param) in def.clauses[1].params.iter().skip(1).enumerate() {
+                    if let Some(n) = self.pattern_binding_name(&param.pattern) {
+                        self.locals.insert(n, LocalInfo { reg: (i + 1) as Reg, is_float: false, mutable: false });
+                    }
+                }
+                // Compile cons case body
+                let cons_body_line = self.span_line(def.clauses[1].body.span());
+                let cons_result = self.compile_expr_tail(&def.clauses[1].body, true)?;
+                for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                    self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                }
+                self.chunk.emit(Instruction::Return(cons_result), cons_body_line);
+
+                // === Empty case - patch the jump to land here ===
+                let empty_case_addr = self.chunk.code.len();
+                self.chunk.patch_jump(switch_addr, empty_case_addr);
+
+                self.locals.clear();
+                // Bind other params from clause 0 (empty case)
+                for (i, param) in def.clauses[0].params.iter().skip(1).enumerate() {
+                    if let Some(n) = self.pattern_binding_name(&param.pattern) {
+                        self.locals.insert(n, LocalInfo { reg: (i + 1) as Reg, is_float: false, mutable: false });
+                    }
+                }
+                // Compile empty case body
+                let empty_body_line = self.span_line(def.clauses[0].body.span());
+                let empty_result = self.compile_expr_tail(&def.clauses[0].body, true)?;
+                for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                    self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                }
+                self.chunk.emit(Instruction::Return(empty_result), empty_body_line);
+
+            } else if let Some((_param_idx, num_cases)) = self.can_use_int_table_jump(&def.clauses) {
+            // Check if we can use IntTableJump optimization for consecutive int patterns
+                // IntTableJump optimization: single jump via lookup table
+                let has_default = def.clauses.len() > num_cases;
+
+                // Reserve space for jump table constant (we'll patch it later)
+                let table_placeholder: Vec<Value> = vec![Value::Int64(0); num_cases + 1];
+                let table_idx = self.chunk.add_constant(Value::List(Arc::new(table_placeholder)));
+
+                // Emit the IntTableJump instruction
+                let arg_reg = 0 as Reg; // First parameter
+                let jump_instr_addr = self.chunk.emit(Instruction::IntTableJump(arg_reg, table_idx), 0);
+
+                // Track clause body start addresses
+                let mut clause_addrs: Vec<usize> = Vec::new();
+
+                // Compile each clause body
+                for clause in def.clauses.iter() {
+                    clause_addrs.push(self.chunk.code.len());
+
+                    // Clear and set up locals for this clause
+                    self.locals.clear();
+
+                    // Map all parameters to registers (all are simple var/wildcard patterns)
+                    for (i, param) in clause.params.iter().enumerate() {
+                        if let Some(n) = self.pattern_binding_name(&param.pattern) {
+                            let is_float = param.ty.as_ref().map(|t| {
+                                match t {
+                                    nostos_syntax::TypeExpr::Name(ident) => {
+                                        matches!(ident.node.as_str(), "Float" | "Float32" | "Float64")
+                                    }
+                                    _ => false,
+                                }
+                            }).unwrap_or(false);
+                            self.locals.insert(n.clone(), LocalInfo { reg: i as Reg, is_float, mutable: false });
+                        }
+                    }
+
+                    // Compile clause body
+                    let body_line = self.span_line(clause.body.span());
+                    let result_reg = self.compile_expr_tail(&clause.body, true)?;
+
+                    // Emit MvarUnlock for held locks
+                    for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                        self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                    }
+                    self.chunk.emit(Instruction::Return(result_reg), body_line);
+                }
+
+                // Build the jump table: [default_offset, case0_offset, case1_offset, ...]
+                // Offsets are relative to the IntTableJump instruction
+                let jump_base = jump_instr_addr + 1; // After the IntTableJump instruction
+                let mut offsets: Vec<Value> = Vec::new();
+
+                // Default offset (points to last clause if has_default, else to error)
+                let default_offset = if has_default {
+                    clause_addrs[num_cases] as i64 - jump_base as i64
+                } else {
+                    // Point to after all clauses (will be error handling)
+                    self.chunk.code.len() as i64 - jump_base as i64
+                };
+                offsets.push(Value::Int64(default_offset));
+
+                // Case offsets
+                for i in 0..num_cases {
+                    let offset = clause_addrs[i] as i64 - jump_base as i64;
+                    offsets.push(Value::Int64(offset));
+                }
+
+                // Patch the jump table constant
+                self.chunk.constants[table_idx as usize] = Value::List(Arc::new(offsets));
+
+                // If no default clause, emit error handling
+                if !has_default {
+                    for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                        self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                    }
+                    let error_idx = self.chunk.add_constant(Value::String(Arc::new(
+                        format!("No clause matched for function '{}'", name)
+                    )));
+                    let error_reg = self.alloc_reg();
+                    self.chunk.emit(Instruction::LoadConst(error_reg, error_idx), 0);
+                    self.chunk.emit(Instruction::Throw(error_reg), 0);
+                }
+            } else {
+            // Multi-clause dispatch: try each clause in order (fallback path)
             let mut clause_jumps: Vec<usize> = Vec::new();
 
             for (clause_idx, clause) in def.clauses.iter().enumerate() {
@@ -4460,6 +4597,7 @@ impl Compiler {
             let error_reg = self.alloc_reg();
             self.chunk.emit(Instruction::LoadConst(error_reg, error_idx), 0);
             self.chunk.emit(Instruction::Throw(error_reg), 0);
+            } // end of else block for non-optimized dispatch
         } else {
             // Simple case: single clause with only variable patterns
             let clause = &def.clauses[0];
@@ -4619,6 +4757,129 @@ impl Compiler {
     /// Check if a pattern is "simple" (just a variable or wildcard).
     fn is_simple_pattern(&self, pattern: &Pattern) -> bool {
         matches!(pattern, Pattern::Var(_) | Pattern::Wildcard(_))
+    }
+
+    /// Check if multi-clause function can use ListSwitch optimization.
+    /// Returns Some((head_binding, tail_binding)) if:
+    /// - Exactly 2 clauses
+    /// - Clause 1: first param is [] (empty list)
+    /// - Clause 2: first param is [h | t] (single cons pattern)
+    /// - All other params are simple patterns
+    /// - No guards
+    fn can_use_list_switch(&self, clauses: &[FnClause]) -> Option<(Option<String>, Option<String>)> {
+        if clauses.len() != 2 {
+            return None;
+        }
+
+        // Both clauses must have at least one param and no guards
+        if clauses[0].params.is_empty() || clauses[1].params.is_empty() {
+            return None;
+        }
+        if clauses[0].guard.is_some() || clauses[1].guard.is_some() {
+            return None;
+        }
+
+        // Clause 0: first param must be empty list []
+        let is_empty_list = matches!(
+            &clauses[0].params[0].pattern,
+            Pattern::List(ListPattern::Empty, _)
+        );
+        if !is_empty_list {
+            return None;
+        }
+
+        // Clause 1: first param must be [h | t] (single head + tail)
+        let (head_binding, tail_binding) = match &clauses[1].params[0].pattern {
+            Pattern::List(ListPattern::Cons(heads, Some(tail)), _) => {
+                if heads.len() != 1 {
+                    return None; // Must be exactly one head element
+                }
+                let head_name = self.pattern_binding_name(&heads[0]);
+                let tail_name = self.pattern_binding_name(tail);
+                // For simplicity, require head and tail to be simple var/wildcard patterns
+                if !self.is_simple_pattern(&heads[0]) || !self.is_simple_pattern(tail) {
+                    return None;
+                }
+                (head_name, tail_name)
+            }
+            _ => return None,
+        };
+
+        // All other params must be simple in both clauses
+        for param in clauses[0].params.iter().skip(1) {
+            if !self.is_simple_pattern(&param.pattern) {
+                return None;
+            }
+        }
+        for param in clauses[1].params.iter().skip(1) {
+            if !self.is_simple_pattern(&param.pattern) {
+                return None;
+            }
+        }
+
+        Some((head_binding, tail_binding))
+    }
+
+    /// Check if multi-clause function can use IntTableJump optimization.
+    /// Returns Some((param_idx, num_cases)) if all clauses dispatch on consecutive
+    /// integer literals 0..n-1 on param_idx, with optional wildcard default at end.
+    fn can_use_int_table_jump(&self, clauses: &[FnClause]) -> Option<(usize, usize)> {
+        if clauses.len() < 2 {
+            return None;
+        }
+
+        // Check first parameter of each clause for integer literal pattern
+        let mut int_patterns: Vec<Option<i64>> = Vec::new();
+        let mut has_wildcard_default = false;
+
+        for (i, clause) in clauses.iter().enumerate() {
+            if clause.params.is_empty() || clause.guard.is_some() {
+                return None; // Guards complicate things, bail out
+            }
+
+            match &clause.params[0].pattern {
+                Pattern::Int(n, _) => {
+                    int_patterns.push(Some(*n));
+                }
+                Pattern::Wildcard(_) | Pattern::Var(_) => {
+                    // Only allow wildcard/var as the last clause (default case)
+                    if i == clauses.len() - 1 {
+                        has_wildcard_default = true;
+                        int_patterns.push(None);
+                    } else {
+                        return None;
+                    }
+                }
+                _ => return None, // Non-integer pattern
+            }
+
+            // All other params must be simple (var or wildcard)
+            for param in clause.params.iter().skip(1) {
+                if !self.is_simple_pattern(&param.pattern) {
+                    return None;
+                }
+            }
+        }
+
+        // Check if integers are consecutive starting from 0
+        let num_int_cases = if has_wildcard_default {
+            int_patterns.len() - 1
+        } else {
+            int_patterns.len()
+        };
+
+        for i in 0..num_int_cases {
+            if int_patterns[i] != Some(i as i64) {
+                return None; // Not consecutive from 0
+            }
+        }
+
+        // Need at least 2 integer cases for optimization to be worth it
+        if num_int_cases >= 2 {
+            Some((0, num_int_cases))
+        } else {
+            None
+        }
     }
 
     /// Get binding name from a pattern (if it's a simple variable).

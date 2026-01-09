@@ -1,0 +1,68 @@
+# IntTableJump optimization benchmark
+# Compares consecutive int patterns (optimized) vs non-consecutive (not optimized)
+
+# Consecutive 0,1,2,3 - should use IntTableJump
+consecutive(0) = 0
+consecutive(1) = 1
+consecutive(2) = 2
+consecutive(3) = 3
+consecutive(_) = 99
+
+# Non-consecutive - cannot use IntTableJump (falls back to sequential)
+sparse(0) = 0
+sparse(10) = 10
+sparse(20) = 20
+sparse(30) = 30
+sparse(_) = 99
+
+# Benchmark loops
+benchConsec(0, acc) = acc
+benchConsec(n, acc) = benchConsec(n - 1, acc + consecutive(n % 4))
+
+benchSparse(0, acc) = acc
+benchSparse(n, acc) = benchSparse(n - 1, acc + sparse(n % 4))
+
+# Also test 8-way switch
+eight(0) = 0
+eight(1) = 1
+eight(2) = 2
+eight(3) = 3
+eight(4) = 4
+eight(5) = 5
+eight(6) = 6
+eight(7) = 7
+eight(_) = 99
+
+benchEight(0, acc) = acc
+benchEight(n, acc) = benchEight(n - 1, acc + eight(n % 8))
+
+main() = {
+    iterations = 500000
+
+    # Warmup
+    _ = benchConsec(100, 0)
+    _ = benchSparse(100, 0)
+    _ = benchEight(100, 0)
+
+    print("=== IntTableJump Optimization Benchmark ===")
+
+    # Consecutive patterns (should use IntTableJump)
+    start1 = Time.now()
+    r1 = benchConsec(iterations, 0)
+    elapsed1 = Time.now() - start1
+    print("Consecutive 0-3 (optimized): " ++ show(elapsed1) ++ " ms")
+
+    # Sparse patterns (sequential fallback)
+    start2 = Time.now()
+    r2 = benchSparse(iterations, 0)
+    elapsed2 = Time.now() - start2
+    print("Sparse 0,10,20,30 (sequential): " ++ show(elapsed2) ++ " ms")
+
+    # 8-way consecutive
+    start3 = Time.now()
+    r3 = benchEight(iterations, 0)
+    elapsed3 = Time.now() - start3
+    print("Consecutive 0-7 (optimized): " ++ show(elapsed3) ++ " ms")
+
+    42
+}

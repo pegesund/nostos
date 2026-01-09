@@ -1,0 +1,57 @@
+# ListSwitch optimization benchmark
+# Tests [] / [h|t] dispatch performance
+
+# Standard length - should use ListSwitch
+myLen([]) = 0
+myLen([_ | t]) = 1 + myLen(t)
+
+# Standard map - should use ListSwitch
+myMap([], _) = []
+myMap([x | xs], f) = [f(x) | myMap(xs, f)]
+
+# Fold - should use ListSwitch
+myFold([], acc, _) = acc
+myFold([x | xs], acc, f) = myFold(xs, f(acc, x), f)
+
+# Sum using fold
+mySum(lst) = myFold(lst, 0, (a, b) => a + b)
+
+# Build test data
+makeList(0, acc) = acc
+makeList(n, acc) = makeList(n - 1, [n | acc])
+
+# Direct iteration benchmarks
+repeatLen(0, lst, acc) = acc
+repeatLen(n, lst, acc) = repeatLen(n - 1, lst, acc + myLen(lst))
+
+repeatSum(0, lst, acc) = acc
+repeatSum(n, lst, acc) = repeatSum(n - 1, lst, acc + mySum(lst))
+
+main() = {
+    lst = makeList(10000, [])
+    iterations = 100
+
+    print("=== ListSwitch Optimization Benchmark ===")
+    print("List size: 10000, iterations: " ++ show(iterations))
+
+    # Length benchmark
+    s1 = Time.now()
+    r1 = repeatLen(iterations, lst, 0)
+    e1 = Time.now() - s1
+    print("myLen (100 iterations): " ++ show(e1) ++ " ms")
+
+    # Sum via fold benchmark
+    s2 = Time.now()
+    r2 = repeatSum(iterations, lst, 0)
+    e2 = Time.now() - s2
+    print("mySum/myFold (100 iterations): " ++ show(e2) ++ " ms")
+
+    # Verify correctness
+    print("")
+    print("Verification:")
+    print("myLen([1,2,3]) = " ++ show(myLen([1, 2, 3])))
+    print("mySum([1,2,3,4,5]) = " ++ show(mySum([1, 2, 3, 4, 5])))
+    print("myMap([1,2,3], x => x*2) = " ++ show(myMap([1, 2, 3], x => x * 2)))
+
+    42
+}

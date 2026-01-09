@@ -1,0 +1,54 @@
+# Function call overhead benchmark
+
+# Simple function - no pattern matching
+identity(x) = x
+
+# Single clause with wildcard - minimal dispatch
+wild(_) = 42
+
+# 4 clauses - constant patterns
+four(0) = 0
+four(1) = 1
+four(2) = 2
+four(_) = 99
+
+# Benchmark loop
+benchIdentity(0, acc) = acc
+benchIdentity(n, acc) = benchIdentity(n - 1, acc + identity(n))
+
+benchWild(0, acc) = acc
+benchWild(n, acc) = benchWild(n - 1, acc + wild(n))
+
+benchFour(0, acc) = acc
+benchFour(n, acc) = benchFour(n - 1, acc + four(n % 4))
+
+main() = {
+    iterations = 500000
+
+    # Warmup
+    _ = benchIdentity(100, 0)
+    _ = benchWild(100, 0)
+    _ = benchFour(100, 0)
+
+    print("=== Call Overhead Benchmark ===")
+
+    # Pure function call
+    start1 = Time.now()
+    r1 = benchIdentity(iterations, 0)
+    elapsed1 = Time.now() - start1
+    print("identity(x) - no dispatch: " ++ show(elapsed1) ++ " ms")
+
+    # Single wildcard clause
+    start2 = Time.now()
+    r2 = benchWild(iterations, 0)
+    elapsed2 = Time.now() - start2
+    print("wild(_) - single clause: " ++ show(elapsed2) ++ " ms")
+
+    # 4 constant clauses
+    start3 = Time.now()
+    r3 = benchFour(iterations, 0)
+    elapsed3 = Time.now() - start3
+    print("four(0|1|2|_) - 4 clauses: " ++ show(elapsed3) ++ " ms")
+
+    42
+}

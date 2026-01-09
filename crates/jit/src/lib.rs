@@ -2362,8 +2362,12 @@ impl JitCompiler {
         // First pass: collect head registers and their aliases
         for instr in func.code.code.iter() {
             match instr {
-                // Track the head register from Decons
+                // Track the head register from Decons or ListSwitch
                 Instruction::DeconsInt64(head, _, _) | Instruction::Decons(head, _, _) => {
+                    head_regs.insert(*head);
+                }
+                // ListSwitch also extracts head (second param is head_dst)
+                Instruction::ListSwitch(_, head, _, _) => {
                     head_regs.insert(*head);
                 }
                 // Track register copies/aliases
@@ -2383,6 +2387,11 @@ impl JitCompiler {
                 // Compiler emits generic, runtime specializes to Int64List if all elements are i64
                 Instruction::TestNilInt64(_, _) | Instruction::TestNil(_, _) => {
                     has_test_nil = true;
+                }
+                // ListSwitch combines TestNil + Decons into one instruction
+                Instruction::ListSwitch(_, _, _, _) => {
+                    has_test_nil = true;
+                    // head_regs already collected in first pass
                 }
                 // Already processed Decons in first pass
                 Instruction::DeconsInt64(_, _, _) | Instruction::Decons(_, _, _) => {}
@@ -2578,10 +2587,14 @@ impl JitCompiler {
         let mut has_tail_call = false;
         let mut adds_head = false;
 
-        // First pass: collect head registers from Decons
+        // First pass: collect head registers from Decons or ListSwitch
         for instr in func.code.code.iter() {
             match instr {
                 Instruction::DeconsInt64(head, _, _) | Instruction::Decons(head, _, _) => {
+                    head_regs.insert(*head);
+                }
+                // ListSwitch also extracts head (second param is head_dst)
+                Instruction::ListSwitch(_, head, _, _) => {
                     head_regs.insert(*head);
                 }
                 Instruction::Move(dst, src) => {
@@ -2597,6 +2610,10 @@ impl JitCompiler {
         for instr in func.code.code.iter() {
             match instr {
                 Instruction::TestNilInt64(_, _) | Instruction::TestNil(_, _) => {
+                    has_test_nil = true;
+                }
+                // ListSwitch combines TestNil + Decons into one instruction
+                Instruction::ListSwitch(_, _, _, _) => {
                     has_test_nil = true;
                 }
                 Instruction::DeconsInt64(_, _, _) | Instruction::Decons(_, _, _) => {}

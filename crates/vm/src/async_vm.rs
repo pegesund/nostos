@@ -1905,6 +1905,41 @@ impl AsyncProcess {
                 }
             }
 
+            IntTableJump(value_reg, table_idx) => {
+                // Get value and jump table from constants
+                let value = reg_ref!(value_reg);
+                let table = get_const!(table_idx);
+
+                // Extract jump table: [default_offset, case0, case1, ...]
+                let offset = if let Value::List(offsets) = &table {
+                    if let GcValue::Int64(v) = value {
+                        let idx = *v as usize;
+                        // If value is in range [0, len-2], use that offset (index+1)
+                        // Otherwise use default (index 0)
+                        if idx < offsets.len() - 1 {
+                            if let Value::Int64(off) = &offsets[idx + 1] {
+                                *off as i32
+                            } else {
+                                // Default on invalid table
+                                if let Value::Int64(off) = &offsets[0] { *off as i32 } else { 0 }
+                            }
+                        } else {
+                            // Out of range - use default
+                            if let Value::Int64(off) = &offsets[0] { *off as i32 } else { 0 }
+                        }
+                    } else {
+                        // Non-integer value - use default
+                        if let Value::Int64(off) = &offsets[0] { *off as i32 } else { 0 }
+                    }
+                } else {
+                    0 // Invalid table - no jump
+                };
+
+                // Apply jump
+                let frame = unsafe { self.frames.get_unchecked_mut(cur_frame) };
+                frame.ip = (frame.ip as isize + offset as isize) as usize;
+            }
+
             // === Return ===
             Return(src) => {
                 // Record function exit for profiling
@@ -3649,6 +3684,42 @@ impl AsyncProcess {
                     _ => {
                         return Err(RuntimeError::Panic("Decons: expected list".into()));
                     }
+                }
+            }
+
+            // Combined list dispatch: if empty jump, else destructure
+            ListSwitch(list_reg, head_dst, tail_dst, empty_offset) => {
+                let list_val = reg_ref!(list_reg);
+                let is_empty = match list_val {
+                    GcValue::List(list) => {
+                        if list.is_empty() {
+                            true
+                        } else {
+                            let head = list.head_unchecked().clone();
+                            let tail = list.tail_unchecked();
+                            set_reg!(head_dst, head);
+                            set_reg!(tail_dst, GcValue::List(tail));
+                            false
+                        }
+                    }
+                    GcValue::Int64List(list) => {
+                        if list.is_empty() {
+                            true
+                        } else {
+                            let head = list.head_unchecked();
+                            let tail = list.tail_unchecked();
+                            set_reg!(head_dst, GcValue::Int64(head));
+                            set_reg!(tail_dst, GcValue::Int64List(tail));
+                            false
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::Panic("ListSwitch: expected list".into()));
+                    }
+                };
+                if is_empty {
+                    let frame = unsafe { self.frames.get_unchecked_mut(cur_frame) };
+                    frame.ip = (frame.ip as isize + *empty_offset as isize) as usize;
                 }
             }
 

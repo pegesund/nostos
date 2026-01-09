@@ -876,6 +876,11 @@ pub enum Instruction {
     JumpIfTrue(Reg, JumpOffset),
     /// Jump if false
     JumpIfFalse(Reg, JumpOffset),
+    /// Integer switch for consecutive values 0..n-1
+    /// IntTableJump(value_reg, table_idx) where table_idx points to List constant:
+    /// [default_offset, case0_offset, case1_offset, ...]
+    /// If value in 0..(len-2), jumps to case_offsets[value+1], else to default (index 0)
+    IntTableJump(Reg, ConstIdx),
 
     // === Function calls ===
     /// Call function: dst = func(args...)
@@ -923,6 +928,11 @@ pub enum Instruction {
     TestNil(Reg, Reg),
     /// Deconstruct list: head, tail = list (fails if empty)
     Decons(Reg, Reg, Reg),
+    /// Combined list dispatch: if empty jump, else destructure
+    /// ListSwitch(list, head, tail, empty_offset)
+    /// If list is empty: jump by empty_offset
+    /// If not empty: head = first element, tail = rest, continue
+    ListSwitch(Reg, Reg, Reg, JumpOffset),
     /// Deconstruct string: head_char, tail_str = string (fails if empty)
     /// head_char is a String containing first character, tail_str is rest of string
     StringDecons(Reg, Reg, Reg),
@@ -1449,6 +1459,7 @@ impl Chunk {
             Instruction::JumpIfTrue(_, ref mut off) => *off = jump_offset,
             Instruction::JumpIfFalse(_, ref mut off) => *off = jump_offset,
             Instruction::PushHandler(ref mut off) => *off = jump_offset,
+            Instruction::ListSwitch(_, _, _, ref mut off) => *off = jump_offset,
             _ => panic!("Cannot patch non-jump instruction"),
         }
     }

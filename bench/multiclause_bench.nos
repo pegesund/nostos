@@ -1,0 +1,69 @@
+# Multi-clause function pattern matching benchmark
+
+# Multi-clause with constant patterns (4 clauses)
+describe(0) = 0
+describe(1) = 1
+describe(2) = 2
+describe(_) = 99
+
+# Multi-clause with variant patterns
+type Option[T] = Some(T) | None
+
+unwrapOr(Some(x), _) = x
+unwrapOr(None, default) = default
+
+# Multi-clause with list patterns
+sumList([]) = 0
+sumList([h | t]) = h + sumList(t)
+
+# Build test data
+makeNums(0, acc) = acc
+makeNums(n, acc) = makeNums(n - 1, [n % 4 | acc])
+
+makeSomes(0, acc) = acc
+makeSomes(n, acc) = makeSomes(n - 1, [Some(n) | acc])
+
+makeList(0, acc) = acc
+makeList(n, acc) = makeList(n - 1, [n | acc])
+
+# Benchmarks
+benchDescribe([]) = 0
+benchDescribe([h | t]) = describe(h) + benchDescribe(t)
+
+benchVariant([]) = 0
+benchVariant([h | t]) = unwrapOr(h, 0) + benchVariant(t)
+
+main() = {
+    iterations = 100000
+
+    nums = makeNums(iterations, [])
+    somes = makeSomes(iterations, [])
+    list = makeList(iterations, [])
+
+    # Warmup
+    _ = benchDescribe(makeNums(100, []))
+    _ = benchVariant(makeSomes(100, []))
+    _ = sumList(makeList(100, []))
+
+    print("=== Multi-clause Function Benchmark ===")
+
+    # Constant pattern dispatch
+    start1 = Time.now()
+    result1 = benchDescribe(nums)
+    elapsed1 = Time.now() - start1
+    print("Constant patterns (4 clauses): " ++ show(elapsed1) ++ " ms")
+
+    # Variant pattern dispatch
+    start2 = Time.now()
+    result2 = benchVariant(somes)
+    elapsed2 = Time.now() - start2
+    print("Variant patterns (2 clauses): " ++ show(elapsed2) ++ " ms")
+
+    # List pattern dispatch
+    start3 = Time.now()
+    result3 = sumList(list)
+    elapsed3 = Time.now() - start3
+    print("List patterns (2 clauses): " ++ show(elapsed3) ++ " ms")
+
+    42
+}
