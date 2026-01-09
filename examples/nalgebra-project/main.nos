@@ -1,0 +1,90 @@
+import nalgebra
+
+main() = {
+    println("=== Testing Nalgebra with Operator Overloading ===")
+    println("")
+
+    # Test Vec type with operators
+    println("--- Vec Operator Tests ---")
+    v1 = nalgebra.vec([1.0, 2.0, 3.0, 4.0, 5.0])
+    v2 = nalgebra.vec([5.0, 4.0, 3.0, 2.0, 1.0])
+
+    println("v1 = ${v1.data}")
+    println("v2 = ${v2.data}")
+
+    # Operator overloading!
+    sum = v1 + v2
+    println("v1 + v2 = ${sum.data}")
+
+    diff = v1 - v2
+    println("v1 - v2 = ${diff.data}")
+
+    prod = v1 * v2
+    println("v1 * v2 (component) = ${prod.data}")
+
+    # Function calls
+    dot = nalgebra.vecDot(v1, v2)
+    println("vecDot(v1, v2) = ${dot}")
+
+    norm = nalgebra.vecNorm(v1)
+    println("vecNorm(v1) = ${norm}")
+
+    scaled = nalgebra.vecScale(v1, 2.0)
+    println("vecScale(v1, 2.0) = ${scaled.data}")
+
+    println("")
+
+    # Test Mat type with operators
+    println("--- Mat Operator Tests ---")
+    m1 = nalgebra.mat([[1.0, 2.0], [3.0, 4.0]])
+    m2 = nalgebra.mat([[5.0, 6.0], [7.0, 8.0]])
+
+    println("m1 = ${m1.data}")
+    println("m2 = ${m2.data}")
+
+    # Matrix addition
+    msum = m1 + m2
+    println("m1 + m2 = ${msum.data}")
+
+    # Matrix multiplication
+    mprod = m1 * m2
+    println("m1 * m2 = ${mprod.data}")
+
+    # Function calls
+    det = nalgebra.matDeterminant(m1)
+    println("matDeterminant(m1) = ${det}")
+
+    inv = nalgebra.matInverse(m1)
+    println("matInverse(m1) = ${inv.data}")
+
+    # Verify M * M^-1 = I
+    identity = m1 * inv
+    println("m1 * matInverse(m1) = ${identity.data}")
+
+    println("")
+
+    # Test constructors
+    println("--- Constructor Tests ---")
+    zeros = nalgebra.vecZeros(3)
+    println("vecZeros(3) = ${zeros.data}")
+
+    ones = nalgebra.vecOnes(4)
+    println("vecOnes(4) = ${ones.data}")
+
+    eye = nalgebra.matIdentity(3)
+    println("matIdentity(3) = ${eye.data}")
+
+    println("")
+
+    # Test matrix-vector multiplication
+    println("--- Matrix-Vector Tests ---")
+    m = nalgebra.mat([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    v = nalgebra.vec([1.0, 1.0, 1.0])
+    result = nalgebra.matMulVec(m, v)
+    println("matMulVec(m, v) = ${result.data}")
+
+    println("")
+    println("=== All tests complete ===")
+
+    0
+}

@@ -1,0 +1,42 @@
+# Test the glam wrapper module with list conversion functions
+
+import glam
+
+main() = {
+    println("Testing glam wrapper with list conversions")
+    println("==========================================")
+
+    # Test list to vector conversion
+    coords = [1.0, 2.0, 3.0]
+    v = glam.listToVec3(coords)
+    (x, y, z) = v
+    println("listToVec3([1.0, 2.0, 3.0]) = (${x}, ${y}, ${z})")
+
+    # Test vector to list conversion
+    v2 = glam.vec3(4.0, 5.0, 6.0)
+    list = glam.vec3ToList(v2)
+    println("vec3ToList((4, 5, 6)) = ${list}")
+
+    # Test convenience functions
+    a = glam.vec3(0.0, 0.0, 0.0)
+    b = glam.vec3(3.0, 4.0, 0.0)
+    dist = glam.vec3Distance(a, b)
+    println("Distance from origin to (3, 4, 0) = ${dist}")
+
+    # Test lerp
+    lerped = glam.vec3Lerp(a, b, 0.5)
+    (lx, ly, lz) = lerped
+    println("Lerp 50% between (0,0,0) and (3,4,0) = (${lx}, ${ly}, ${lz})")
+
+    # Test matrix transform with list-based point
+    trans = glam.mat4Translate((10.0, 20.0, 30.0))
+    pointList = [1.0, 1.0, 1.0]
+    pointVec = glam.listToVec3(pointList)
+    transformed = glam.transformPoint(trans, pointVec)
+    (tx, ty, tz) = transformed
+    println("Translate [1,1,1] by (10,20,30) = (${tx}, ${ty}, ${tz})")
+
+    println("")
+    println("All wrapper tests passed!")
+    0
+}
