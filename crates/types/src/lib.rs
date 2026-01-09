@@ -709,6 +709,18 @@ pub fn standard_env() -> TypeEnv {
         });
     }
 
+    // Unit implements Eq and Show
+    env.impls.push(TraitImpl {
+        trait_name: "Eq".to_string(),
+        for_type: Type::Unit,
+        constraints: vec![],
+    });
+    env.impls.push(TraitImpl {
+        trait_name: "Show".to_string(),
+        for_type: Type::Unit,
+        constraints: vec![],
+    });
+
     for ty in ["Int", "Float", "Char", "String"] {
         env.impls.push(TraitImpl {
             trait_name: "Ord".to_string(),
