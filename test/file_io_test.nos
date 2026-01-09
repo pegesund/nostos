@@ -325,7 +325,10 @@ testFileReadLine() = {
     println("Testing File.readLine...")
 
     path = "/tmp/nostos_test_readline.txt"
-    content = "Line 1\nLine 2\nLine 3"
+    # Use actual newlines (multiline string)
+    content = "Line 1
+Line 2
+Line 3"
 
     # Create file
     File.writeAll(path, content)
@@ -333,15 +336,18 @@ testFileReadLine() = {
     # Open for reading
     (s, handle) = File.open(path, "r")
 
-    # Read lines
+    # Read lines - note: readLine includes the newline character
     (status1, line1) = File.readLine(handle)
-    println("Line 1: " ++ line1)
+    print("Line 1 length: ")
+    println(length(line1))
 
     (status2, line2) = File.readLine(handle)
-    println("Line 2: " ++ line2)
+    print("Line 2 length: ")
+    println(length(line2))
 
     (status3, line3) = File.readLine(handle)
-    println("Line 3: " ++ line3)
+    print("Line 3 length: ")
+    println(length(line3))
 
     # Close
     File.close(handle)
@@ -351,7 +357,7 @@ testFileReadLine() = {
     println("File.readLine test PASSED")
 }
 
-# Test file seek
+# Test file seek with all whence values
 testFileSeek() = {
     println("")
     println("Testing File.seek...")
@@ -368,13 +374,35 @@ testFileSeek() = {
     # Seek to position 10 from start
     (status1, pos1) = File.seek(handle, 10, "start")
     assert(status1 == "ok")
-    print("Position after seek: ")
+    print("Position after seek from start: ")
     println(pos1)
+    assert(pos1 == 10)
 
     # Read from that position
     (s, data) = File.read(handle, 5)
     println("Data at position 10: " ++ data)
     assert(data == "ABCDE")
+
+    # Seek relative to current position (now at 15, go back 5)
+    (status2, pos2) = File.seek(handle, -5, "current")
+    assert(status2 == "ok")
+    print("Position after seek -5 from current: ")
+    println(pos2)
+    assert(pos2 == 10)
+
+    # Read again to verify
+    (s, data2) = File.read(handle, 5)
+    assert(data2 == "ABCDE")
+
+    # Seek from end (go to last 5 bytes)
+    (status3, pos3) = File.seek(handle, -5, "end")
+    assert(status3 == "ok")
+    print("Position after seek -5 from end: ")
+    println(pos3)
+    assert(pos3 == 15)
+
+    (s, data3) = File.read(handle, 5)
+    assert(data3 == "FGHIJ")
 
     # Close
     File.close(handle)
@@ -384,24 +412,255 @@ testFileSeek() = {
     println("File.seek test PASSED")
 }
 
+# Test append mode
+testAppendMode() = {
+    println("")
+    println("Testing append mode...")
+
+    path = "/tmp/nostos_test_append.txt"
+
+    # Create initial file
+    File.writeAll(path, "Hello")
+
+    # Open in append mode and add more
+    (s1, handle) = File.open(path, "a")
+    assert(s1 == "ok")
+    File.write(handle, " World")
+    File.close(handle)
+
+    # Verify content
+    (s2, content) = File.readAll(path)
+    println("After append: " ++ content)
+    assert(content == "Hello World")
+
+    # Append more
+    (s3, handle2) = File.open(path, "a")
+    File.write(handle2, "!")
+    File.close(handle2)
+
+    (s4, content2) = File.readAll(path)
+    println("After second append: " ++ content2)
+    assert(content2 == "Hello World!")
+
+    # Cleanup
+    File.remove(path)
+    println("Append mode test PASSED")
+}
+
+# Test read/write mode
+testReadWriteMode() = {
+    println("")
+    println("Testing read/write mode...")
+
+    path = "/tmp/nostos_test_rw.txt"
+
+    # Create file with initial content
+    File.writeAll(path, "AAAAAAAAAA")
+
+    # Open in read/write mode and test seeking + writing
+    (s1, handle) = File.open(path, "rw")
+    assert(s1 == "ok")
+
+    # Seek to position 5 explicitly
+    File.seek(handle, 5, "start")
+
+    # Write at position 5 (replacing bytes 5-9)
+    File.write(handle, "BBBBB")
+    File.close(handle)
+
+    # Verify content - write should overwrite at position 5
+    (s3, content) = File.readAll(path)
+    println("After read/write: " ++ content)
+    assert(content == "AAAAABBBBB")
+
+    # Cleanup
+    File.remove(path)
+    println("Read/write mode test PASSED")
+}
+
+# Test unicode and special characters
+testUnicodeStrings() = {
+    println("")
+    println("Testing unicode and special characters...")
+
+    path = "/tmp/nostos_test_unicode.txt"
+
+    # Test various unicode strings
+    unicode1 = "Hello, 世界!"
+    File.writeAll(path, unicode1)
+    (s1, read1) = File.readAll(path)
+    println("Unicode 1: " ++ read1)
+    assert(read1 == unicode1)
+
+    # Emojis
+    unicode2 = "Test 🚀 rocket 🎉 party"
+    File.writeAll(path, unicode2)
+    (s2, read2) = File.readAll(path)
+    println("Unicode 2: " ++ read2)
+    assert(read2 == unicode2)
+
+    # Actual tab and newline using multiline string
+    special = "Tab:	here
+Newline"
+    File.writeAll(path, special)
+    (s3, read3) = File.readAll(path)
+    assert(read3 == special)
+    println("Special characters: OK")
+
+    # Empty string
+    File.writeAll(path, "")
+    (s4, read4) = File.readAll(path)
+    assert(read4 == "")
+    println("Empty string: OK")
+
+    # Cleanup
+    File.remove(path)
+    println("Unicode/special characters test PASSED")
+}
+
+# Test multiline strings
+testMultilineStrings() = {
+    println("")
+    println("Testing multiline strings...")
+
+    path = "/tmp/nostos_test_multiline.txt"
+
+    # Use actual multiline string
+    content = "Line 1
+Line 2
+Line 3
+
+Line 5 after blank
+"
+    File.writeAll(path, content)
+
+    # Read all
+    (s1, read1) = File.readAll(path)
+    assert(read1 == content)
+    println("Multiline read: OK")
+
+    # Read line by line
+    (s2, handle) = File.open(path, "r")
+
+    (s3, line1) = File.readLine(handle)
+    # Line 1 + newline = 7 chars
+    assert(length(line1) == 7)
+
+    (s4, line2) = File.readLine(handle)
+    # Line 2 + newline = 7 chars
+    assert(length(line2) == 7)
+
+    (s5, line3) = File.readLine(handle)
+    # Line 3 + newline = 7 chars
+    assert(length(line3) == 7)
+
+    (s6, line4) = File.readLine(handle)
+    # Empty line + newline = 1 char
+    assert(length(line4) == 1)
+
+    (s7, line5) = File.readLine(handle)
+    # "Line 5 after blank" + newline = 19 chars
+    assert(length(line5) == 19)
+
+    File.close(handle)
+    println("Line-by-line read: OK")
+
+    # Cleanup
+    File.remove(path)
+    println("Multiline strings test PASSED")
+}
+
+# Test error handling
+testErrorHandling() = {
+    println("")
+    println("Testing error handling...")
+
+    # Try to read non-existent file
+    (status1, result1) = File.readAll("/tmp/nostos_nonexistent_12345.txt")
+    assert(status1 == "error")
+    println("Read non-existent file: error (expected)")
+
+    # Try to open non-existent file for reading
+    (status2, result2) = File.open("/tmp/nostos_nonexistent_12345.txt", "r")
+    assert(status2 == "error")
+    println("Open non-existent file: error (expected)")
+
+    # Try to remove non-existent file
+    (status3, result3) = File.remove("/tmp/nostos_nonexistent_12345.txt")
+    assert(status3 == "error")
+    println("Remove non-existent file: error (expected)")
+
+    # Try invalid directory
+    (status4, result4) = Dir.list("/tmp/nostos_nonexistent_dir_12345")
+    assert(status4 == "error")
+    println("List non-existent dir: error (expected)")
+
+    println("Error handling test PASSED")
+}
+
+# Helper for building large strings
+buildLargeString(0, acc) = acc
+buildLargeString(n, acc) = buildLargeString(n - 1, acc ++ "X")
+
+# Test large strings
+testLargeStrings() = {
+    println("")
+    println("Testing large strings...")
+
+    path = "/tmp/nostos_test_large.txt"
+
+    large = buildLargeString(10000, "")
+    File.writeAll(path, large)
+
+    (s1, size) = File.size(path)
+    print("Large file size: ")
+    println(size)
+    assert(size == 10000)
+
+    (s2, content) = File.readAll(path)
+    assert(length(content) == 10000)
+    println("Large string read: OK")
+
+    # Cleanup
+    File.remove(path)
+    println("Large strings test PASSED")
+}
+
 main() = {
     println("=== File IO Tests ===")
     println("")
 
+    # High-level operations
     testReadWriteAll()
     testFileExists()
     testFileRemove()
     testFileRename()
     testFileCopy()
     testFileSize()
+
+    # Directory operations
     testDirCreate()
     testDirCreateAll()
     testDirList()
     testDirExists()
+
+    # Handle-based operations
     testFileHandle()
     testFileReadHandle()
     testFileReadLine()
     testFileSeek()
+
+    # File modes
+    testAppendMode()
+    testReadWriteMode()
+
+    # String handling
+    testUnicodeStrings()
+    testMultilineStrings()
+    testLargeStrings()
+
+    # Error handling
+    testErrorHandling()
 
     println("")
     println("=== All file IO tests PASSED! ===")

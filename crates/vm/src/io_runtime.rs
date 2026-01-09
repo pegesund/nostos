@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::process::IoResponseValue;
 
@@ -291,8 +292,8 @@ impl IoRuntime {
         use std::io::SeekFrom;
         use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, AsyncBufReadExt};
 
-        // Track open file handles
-        let mut open_files: HashMap<u64, tokio::fs::File> = HashMap::new();
+        // Track open file handles - use BufReader for line-by-line reading support
+        let mut open_files: HashMap<u64, BufReader<tokio::fs::File>> = HashMap::new();
         let mut next_handle: u64 = 1;
 
         while let Some(request) = request_rx.recv().await {
@@ -355,7 +356,7 @@ impl IoRuntime {
                         Ok(file) => {
                             let handle = next_handle;
                             next_handle += 1;
-                            open_files.insert(handle, file);
+                            open_files.insert(handle, BufReader::new(file));
                             Ok(IoResponseValue::FileHandle(handle))
                         }
                         Err(e) => Err(Self::convert_io_error(e, &path)),
@@ -365,8 +366,9 @@ impl IoRuntime {
 
                 IoRequest::FileWrite { handle, data, response } => {
                     let result = match open_files.get_mut(&handle) {
-                        Some(file) => {
-                            match file.write(&data).await {
+                        Some(buf_reader) => {
+                            // Access inner file for writing
+                            match buf_reader.get_mut().write(&data).await {
                                 Ok(n) => Ok(IoResponseValue::Int(n as i64)),
                                 Err(e) => Err(IoError::IoError(e.to_string())),
                             }
@@ -396,20 +398,10 @@ impl IoRuntime {
                 IoRequest::FileReadLine { handle, response } => {
                     let result = match open_files.get_mut(&handle) {
                         Some(file) => {
-                            // Read file position and content
-                            let mut buf = Vec::new();
-                            match file.read_to_end(&mut buf).await {
-                                Ok(0) => Ok(IoResponseValue::OptionString(None)),
-                                Ok(_) => {
-                                    // Find first line
-                                    if let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-                                        let line = String::from_utf8_lossy(&buf[..=pos]).to_string();
-                                        Ok(IoResponseValue::OptionString(Some(line)))
-                                    } else {
-                                        let line = String::from_utf8_lossy(&buf).to_string();
-                                        Ok(IoResponseValue::OptionString(Some(line)))
-                                    }
-                                }
+                            let mut line = String::new();
+                            match file.read_line(&mut line).await {
+                                Ok(0) => Ok(IoResponseValue::OptionString(None)), // EOF
+                                Ok(_) => Ok(IoResponseValue::OptionString(Some(line))),
                                 Err(e) => Err(IoError::IoError(e.to_string())),
                             }
                         }
@@ -420,8 +412,9 @@ impl IoRuntime {
 
                 IoRequest::FileFlush { handle, response } => {
                     let result = match open_files.get_mut(&handle) {
-                        Some(file) => {
-                            match file.flush().await {
+                        Some(buf_reader) => {
+                            // Access inner file for flushing
+                            match buf_reader.get_mut().flush().await {
                                 Ok(()) => Ok(IoResponseValue::Unit),
                                 Err(e) => Err(IoError::IoError(e.to_string())),
                             }
@@ -444,13 +437,14 @@ impl IoRuntime {
 
                 IoRequest::FileSeek { handle, offset, whence, response } => {
                     let result = match open_files.get_mut(&handle) {
-                        Some(file) => {
+                        Some(buf_reader) => {
                             let seek_from = match whence {
                                 SeekWhence::Start => SeekFrom::Start(offset as u64),
                                 SeekWhence::Current => SeekFrom::Current(offset),
                                 SeekWhence::End => SeekFrom::End(offset),
                             };
-                            match file.seek(seek_from).await {
+                            // BufReader.seek properly invalidates the buffer
+                            match buf_reader.seek(seek_from).await {
                                 Ok(pos) => Ok(IoResponseValue::Int(pos as i64)),
                                 Err(e) => Err(IoError::IoError(e.to_string())),
                             }
