@@ -9872,8 +9872,8 @@ mod repl_state_tests {
         assert!(result1.is_ok(), "1+1 should succeed");
         assert_eq!(result1.unwrap(), "2");
 
-        // Now cause a type error - Option Float doesn't implement Eq
-        let result2 = engine.eval("String.toFloat(\"2.1x\") == ()");
+        // Now cause a type error - Int doesn't have a `.xxx` method
+        let result2 = engine.eval("42.xxx()");
         println!("Second eval (type error): {:?}", result2);
         assert!(result2.is_err(), "Should fail with type error");
 
