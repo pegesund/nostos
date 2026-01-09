@@ -2,8 +2,7 @@
 # Lambda expression
 
 main() = {
-    double = x => x * 2,
-    result = double(4),
-    assert_eq(8, result),
-    ()
+    double = x => x * 2
+    result = double(4)
+    assert_eq(8, result)
 }

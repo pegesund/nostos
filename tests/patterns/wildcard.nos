@@ -4,6 +4,5 @@
 first((a, _)) = a
 
 main() = {
-    assert_eq(1, first((1, 999))),
-    ()
+    assert_eq(1, first((1, 999)))
 }

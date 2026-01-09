@@ -1,15 +1,15 @@
-# expect: 100
+# expect: ()
 # Send and receive a simple integer message
 
 worker(parent) = {
-    parent <- 100,
-    ()
+    parent <- 100
 }
 
 main() = {
     me = self()
     spawn(() => worker(me))
-    receive
+    result = receive
         n -> n
     end
+    assert_eq(100, result)
 }

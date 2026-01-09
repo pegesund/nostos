@@ -2,6 +2,5 @@
 # Complex logical expression
 
 main() = {
-    assert_eq(true, (true && false) || (true && !false)),
-    ()
+    assert_eq(true, (true && false) || (true && !false))
 }

@@ -8,6 +8,5 @@ lcm(a, b) = (a * b) / gcd(a, b)
 
 # LCM of 12 and 20 is 60
 main() = {
-    assert_eq(60, lcm(12, 20)),
-    ()
+    assert_eq(60, lcm(12, 20))
 }

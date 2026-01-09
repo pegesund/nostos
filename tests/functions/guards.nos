@@ -5,6 +5,5 @@ abs(n) when n >= 0 = n
 abs(n) = -n
 
 main() = {
-    assert_eq(3, abs(-3)),
-    ()
+    assert_eq(3, abs(-3))
 }

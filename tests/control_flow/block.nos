@@ -2,9 +2,8 @@
 # Block expression with let bindings
 
 main() = {
-    x = 5,
-    y = 10,
-    result = x + y,
-    assert_eq(15, result),
-    ()
+    x = 5
+    y = 10
+    result = x + y
+    assert_eq(15, result)
 }

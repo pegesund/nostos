@@ -2,6 +2,5 @@
 # Boolean literal
 
 main() = {
-    assert_eq(true, true),
-    ()
+    assert_eq(true, true)
 }

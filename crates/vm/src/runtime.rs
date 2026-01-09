@@ -121,6 +121,33 @@ impl Runtime {
                 }),
             }
         });
+
+        // Testing builtins
+        self.register_native("assert", 1, |args, _heap| {
+            match &args[0] {
+                GcValue::Bool(true) => Ok(GcValue::Unit),
+                GcValue::Bool(false) => Err(RuntimeError::Panic("Assertion failed".to_string())),
+                other => Err(RuntimeError::TypeError {
+                    expected: "Bool".to_string(),
+                    found: format!("{:?}", other),
+                }),
+            }
+        });
+
+        self.register_native("assert_eq", 2, |args, heap| {
+            let expected = &args[0];
+            let actual = &args[1];
+            if heap.gc_values_equal(expected, actual) {
+                Ok(GcValue::Unit)
+            } else {
+                let expected_str = heap.display_value(expected);
+                let actual_str = heap.display_value(actual);
+                Err(RuntimeError::Panic(format!(
+                    "Assertion failed: expected {}, got {}",
+                    expected_str, actual_str
+                )))
+            }
+        });
     }
 
     /// Spawn the initial process and run a function.

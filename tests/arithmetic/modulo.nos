@@ -2,6 +2,5 @@
 # Modulo operator
 
 main() = {
-    assert_eq(2, 17 % 5),
-    ()
+    assert_eq(2, 17 % 5)
 }

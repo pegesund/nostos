@@ -2,6 +2,5 @@
 # Operator precedence: multiplication before addition
 
 main() = {
-    assert_eq(14, 2 + 3 * 4),
-    ()
+    assert_eq(14, 2 + 3 * 4)
 }

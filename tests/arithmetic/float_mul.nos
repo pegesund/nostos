@@ -2,6 +2,5 @@
 # Float multiplication
 
 main() = {
-    assert_eq(6.28, 3.14 * 2.0),
-    ()
+    assert_eq(6.28, 3.14 * 2.0)
 }

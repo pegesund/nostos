@@ -4,8 +4,7 @@
 type Point = { x: Int, y: Int }
 
 main() = {
-    p = Point(42, 10),
-    result = p.x,
-    assert_eq(42, result),
-    ()
+    p = Point(42, 10)
+    result = p.x
+    assert_eq(42, result)
 }

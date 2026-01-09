@@ -2,9 +2,8 @@
 # Closure capturing outer variable
 
 main() = {
-    x = 10,
-    addX = y => x + y,
-    result = addX(5),
-    assert_eq(15, result),
-    ()
+    x = 10
+    addX = y => x + y
+    result = addX(5)
+    assert_eq(15, result)
 }

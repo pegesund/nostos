@@ -4,8 +4,7 @@
 swap((a, b)) = (b, a)
 
 main() = {
-    (x, y) = swap((3, 4)),
-    result = x + y,
-    assert_eq(7, result),
-    ()
+    (x, y) = swap((3, 4))
+    result = x + y
+    assert_eq(7, result)
 }

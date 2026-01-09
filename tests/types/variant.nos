@@ -2,6 +2,5 @@
 # Variant constructor (works like a record without type def)
 
 main() = {
-    assert_eq(Some(42), Some(42)),
-    ()
+    assert_eq(Some(42), Some(42))
 }

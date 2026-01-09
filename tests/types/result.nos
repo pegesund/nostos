@@ -7,6 +7,5 @@ unwrap_or(Ok(x), _) = x
 unwrap_or(Err(_), default) = default
 
 main() = {
-    assert_eq(10, unwrap_or(Ok(10), 0)),
-    ()
+    assert_eq(10, unwrap_or(Ok(10), 0))
 }

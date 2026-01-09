@@ -6,6 +6,5 @@ apply(f, x) = f(x)
 triple(n) = n * 3
 
 main() = {
-    assert_eq(15, apply(triple, 5)),
-    ()
+    assert_eq(15, apply(triple, 5))
 }

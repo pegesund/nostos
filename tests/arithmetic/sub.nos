@@ -2,6 +2,5 @@
 # Subtraction
 
 main() = {
-    assert_eq(7, 10 - 3),
-    ()
+    assert_eq(7, 10 - 3)
 }

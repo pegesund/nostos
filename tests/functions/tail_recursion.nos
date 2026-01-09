@@ -6,6 +6,5 @@ sum_helper(n, acc) = if n == 0 then acc else sum_helper(n - 1, acc + n)
 sum(n) = sum_helper(n, 0)
 
 main() = {
-    assert_eq(5050, sum(100)),
-    ()
+    assert_eq(5050, sum(100))
 }

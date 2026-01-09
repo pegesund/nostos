@@ -4,6 +4,5 @@
 double(x) = x * 2
 
 main() = {
-    assert_eq(10, double(5)),
-    ()
+    assert_eq(10, double(5))
 }

@@ -2,6 +2,5 @@
 # Integer division
 
 main() = {
-    assert_eq(5, 15 / 3),
-    ()
+    assert_eq(5, 15 / 3)
 }

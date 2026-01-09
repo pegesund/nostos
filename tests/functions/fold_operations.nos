@@ -17,6 +17,5 @@ product(lst) = foldl((a, b) => a * b, 1, lst)
 
 # 9! = 362880
 main() = {
-    assert_eq(362880, product(range(1, 9))),
-    ()
+    assert_eq(362880, product(range(1, 9)))
 }

@@ -1,19 +1,19 @@
-# expect: 25
+# expect: ()
 # Spawn a child to compute a value and send result back
 
 # Simple computation without multi-clause pattern matching
 compute(n) = n * n
 
 worker(parent, n) = {
-    result = compute(n),
-    parent <- result,
-    ()
+    result = compute(n)
+    parent <- result
 }
 
 main() = {
     me = self()
     spawn(() => worker(me, 5))
-    receive
-        result -> result
+    result = receive
+        r -> r
     end
+    assert_eq(25, result)
 }

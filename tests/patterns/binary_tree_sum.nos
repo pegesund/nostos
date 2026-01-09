@@ -19,8 +19,7 @@ main() = {
     tree = Node(4,
         Node(2, Node(1, Leaf, Leaf), Node(3, Leaf, Leaf)),
         Node(6, Node(5, Leaf, Leaf), Node(7, Leaf, Leaf))
-    ),
-    result = sum_tree(tree),
-    assert_eq(28, result),
-    ()
+    )
+    result = sum_tree(tree)
+    assert_eq(28, result)
 }

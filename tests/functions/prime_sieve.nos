@@ -16,6 +16,5 @@ sieve([p | rest]) = [p | sieve(filter(x => x % p != 0, rest))]
 primes(n) = sieve(range(2, n + 1))
 
 main() = {
-    assert_eq([2, 3, 5, 7, 11, 13, 17, 19], primes(20)),
-    ()
+    assert_eq([2, 3, 5, 7, 11, 13, 17, 19], primes(20))
 }

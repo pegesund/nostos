@@ -22,10 +22,9 @@ mul(m, n) = (f, x) => m(y => n(f, y), x)
 
 # 2 * 4 = 8
 main() = {
-    one = succ(zero),
-    two = succ(one),
-    four = add(two, two),
-    result = to_int(mul(two, four)),
-    assert_eq(8, result),
-    ()
+    one = succ(zero)
+    two = succ(one)
+    four = add(two, two)
+    result = to_int(mul(two, four))
+    assert_eq(8, result)
 }
