@@ -1,0 +1,66 @@
+# expect: 0
+# Test passing maps with complex values between processes
+
+type Person = { name: String, age: Int }
+type Status = Active | Inactive | Pending(String)
+
+worker(parent) = {
+    receive map -> {
+        # Verify the received map has correct values
+        person = Map.get(map, "person")
+        assert_eq("Bob", person.name)
+        assert_eq(25, person.age)
+
+        status = match Map.get(map, "status")
+            Active -> "active"
+            _ -> "other"
+        end
+        assert_eq("active", status)
+
+        (x, y) = Map.get(map, "point")
+        assert_eq(5, x)
+        assert_eq(10, y)
+
+        # Add more data and send back
+        updated = Map.insert(map, "new_person", Person("Eve", 35))
+        updated2 = Map.insert(updated, "new_status", Pending("done"))
+        parent <- updated2
+    } end
+}
+
+main() = {
+    me = self()
+    child = spawn { worker(me) }
+
+    # Create map with complex values
+    map = %{
+        "person": Person("Bob", 25),
+        "status": Active,
+        "point": (5, 10)
+    }
+
+    # Send to worker
+    child <- map
+
+    # Receive updated map
+    result = receive m -> m end
+
+    # Verify original values still present
+    person = Map.get(result, "person")
+    assert_eq("Bob", person.name)
+
+    # Verify new values added by worker
+    new_person = Map.get(result, "new_person")
+    assert_eq("Eve", new_person.name)
+    assert_eq(35, new_person.age)
+
+    new_status = match Map.get(result, "new_status")
+        Pending(msg) -> msg
+        _ -> "none"
+    end
+    assert_eq("done", new_status)
+
+    assert_eq(5, Map.size(result))
+
+    0
+}

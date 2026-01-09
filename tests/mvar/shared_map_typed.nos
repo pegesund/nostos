@@ -1,0 +1,30 @@
+# expect: 0
+# Test typed shared map (mvar) declarations
+
+type Person = { name: String, age: Int }
+
+mvar people: Map[String, Person] = %{}
+mvar counts: Map[String, Int] = %{ "initial": 0 }
+
+main() = {
+    # Insert into typed mvar map
+    people = Map.insert(people, "alice", Person("Alice", 30))
+    people = Map.insert(people, "bob", Person("Bob", 25))
+
+    # Verify
+    alice = Map.get(people, "alice")
+    assert_eq("Alice", alice.name)
+    assert_eq(30, alice.age)
+
+    bob = Map.get(people, "bob")
+    assert_eq(25, bob.age)
+
+    assert_eq(2, Map.size(people))
+
+    # Test pre-initialized typed mvar map
+    assert_eq(0, Map.get(counts, "initial"))
+    counts = Map.insert(counts, "updated", 42)
+    assert_eq(42, Map.get(counts, "updated"))
+
+    0
+}
