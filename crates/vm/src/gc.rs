@@ -157,6 +157,35 @@ pub struct GcString {
     pub data: String,
 }
 
+/// A GC-managed mutable string buffer for efficient string building.
+/// Unlike GcString, this is mutable and designed for appending.
+#[derive(Clone, Debug)]
+pub struct GcBuffer {
+    pub data: std::cell::RefCell<String>,
+}
+
+impl GcBuffer {
+    pub fn new() -> Self {
+        GcBuffer {
+            data: std::cell::RefCell::new(String::new()),
+        }
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        GcBuffer {
+            data: std::cell::RefCell::new(String::with_capacity(capacity)),
+        }
+    }
+
+    pub fn append(&self, s: &str) {
+        self.data.borrow_mut().push_str(s);
+    }
+
+    pub fn to_string(&self) -> String {
+        self.data.borrow().clone()
+    }
+}
+
 /// A GC-managed list (immutable, persistent).
 /// Uses imbl::Vector (RRB tree) for O(log n) cons operations.
 /// Tail operations use offset tracking for O(1) performance.
@@ -694,6 +723,8 @@ pub enum GcValue {
 
     // Heap-allocated values (GC-managed)
     String(GcPtr<GcString>),
+    /// Mutable string buffer for efficient string building (e.g., HTML rendering)
+    Buffer(GcPtr<GcBuffer>),
     /// Lists are stored inline (not heap-allocated) for O(1) tail without allocation.
     /// The underlying data is in an Arc<Vec>, so cloning is cheap (reference count bump).
     /// GC tracing goes through the Arc to find referenced heap objects.
@@ -861,6 +892,7 @@ impl fmt::Debug for GcValue {
             GcValue::Type(t) => write!(f, "Type({})", t.name),
             GcValue::Pointer(p) => write!(f, "Pointer(0x{:x})", p),
             GcValue::Int64List(list) => write!(f, "Int64List[{}]", list.len()),
+            GcValue::Buffer(_) => write!(f, "Buffer"),
         }
     }
 }
@@ -901,6 +933,7 @@ impl GcValue {
             GcValue::Float32Array(ptr) => vec![ptr.as_raw()],
 
             GcValue::String(ptr) => vec![ptr.as_raw()],
+            GcValue::Buffer(ptr) => vec![ptr.as_raw()],
             // Lists are inline, so we trace through all contained values
             GcValue::List(list) => list.items().iter().flat_map(|v| v.gc_pointers()).collect(),
             GcValue::Array(ptr) => vec![ptr.as_raw()],
@@ -1003,6 +1036,7 @@ impl GcValue {
             GcValue::Type(_) => "Type",
             GcValue::Pointer(_) => "Pointer",
             GcValue::Int64List(_) => "Int64List",
+            GcValue::Buffer(_) => "Buffer",
         }
     }
 
@@ -1081,6 +1115,7 @@ impl GcValue {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ObjectType {
     String,
+    Buffer,
     List,
     Array,
     Int64Array,
@@ -1110,6 +1145,7 @@ pub struct GcObject {
 #[derive(Clone, Debug)]
 pub enum HeapData {
     String(GcString),
+    Buffer(GcBuffer),
     // Note: List is NOT here - lists are stored inline in GcValue for O(1) tail without allocation
     Array(GcArray),
     Int64Array(GcInt64Array),
@@ -1129,6 +1165,7 @@ impl HeapData {
     pub fn object_type(&self) -> ObjectType {
         match self {
             HeapData::String(_) => ObjectType::String,
+            HeapData::Buffer(_) => ObjectType::Buffer,
             // Note: List is not in HeapData - lists are inline in GcValue
             HeapData::Array(_) => ObjectType::Array,
             HeapData::Int64Array(_) => ObjectType::Int64Array,
@@ -1148,6 +1185,7 @@ impl HeapData {
     pub fn gc_pointers(&self) -> Vec<RawGcPtr> {
         match self {
             HeapData::String(_) => vec![],
+            HeapData::Buffer(_) => vec![], // Buffers contain no GC pointers
             // Note: List is not in HeapData - lists are inline in GcValue
             HeapData::Array(arr) => arr
                 .items
@@ -1242,6 +1280,9 @@ impl HeapData {
             HeapData::Closure(c) => {
                 std::mem::size_of::<GcClosure>()
                     + c.captures.len() * std::mem::size_of::<GcValue>()
+            }
+            HeapData::Buffer(b) => {
+                std::mem::size_of::<GcBuffer>() + b.data.borrow().len()
             }
         }
     }
@@ -1425,6 +1466,18 @@ impl Heap {
         GcPtr::from_raw(self.alloc(data))
     }
 
+    /// Allocate a mutable string buffer.
+    pub fn alloc_buffer(&mut self) -> GcPtr<GcBuffer> {
+        let data = HeapData::Buffer(GcBuffer::new());
+        GcPtr::from_raw(self.alloc(data))
+    }
+
+    /// Allocate a mutable string buffer with initial capacity.
+    pub fn alloc_buffer_with_capacity(&mut self, capacity: usize) -> GcPtr<GcBuffer> {
+        let data = HeapData::Buffer(GcBuffer::with_capacity(capacity));
+        GcPtr::from_raw(self.alloc(data))
+    }
+
     /// Create a list (no heap allocation - lists are inline in GcValue).
     #[inline]
     pub fn make_list(&self, items: Vec<GcValue>) -> GcList {
@@ -1542,6 +1595,14 @@ impl Heap {
     pub fn get_string(&self, ptr: GcPtr<GcString>) -> Option<&GcString> {
         match self.get(ptr.as_raw())?.data {
             HeapData::String(ref s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Get a typed reference to buffer data.
+    pub fn get_buffer(&self, ptr: GcPtr<GcBuffer>) -> Option<&GcBuffer> {
+        match self.get(ptr.as_raw())?.data {
+            HeapData::Buffer(ref b) => Some(b),
             _ => None,
         }
     }
@@ -2054,6 +2115,11 @@ impl Heap {
                     format!("[{}]", items.join(", "))
                 }
             }
+            GcValue::Buffer(buf_ptr) => {
+                self.get_buffer(buf_ptr.clone())
+                    .map(|b| b.to_string())
+                    .unwrap_or_else(|| "<buffer>".to_string())
+            }
         }
     }
 
@@ -2148,7 +2214,7 @@ impl Heap {
             GcValue::Decimal(_) | GcValue::BigInt(_) | GcValue::Array(_) |
             GcValue::Closure(_, _) | GcValue::Function(_) | GcValue::NativeFunction(_) |
             GcValue::Ref(_) | GcValue::Type(_) | GcValue::Pointer(_) |
-            GcValue::Int64List(_) => {
+            GcValue::Int64List(_) | GcValue::Buffer(_) => {
                 return None;
             }
         })
@@ -2523,6 +2589,18 @@ impl Heap {
             GcValue::Pointer(p) => GcValue::Pointer(*p),
             // Int64List - clone (Arc-based, so cheap)
             GcValue::Int64List(list) => GcValue::Int64List(list.clone()),
+            // Buffer - deep copy the contents
+            GcValue::Buffer(ptr) => {
+                if let Some(b) = source.get_buffer(*ptr) {
+                    let buf_ptr = self.alloc_buffer();
+                    if let Some(new_buf) = self.get_buffer(buf_ptr.clone()) {
+                        new_buf.append(&b.to_string());
+                    }
+                    GcValue::Buffer(buf_ptr)
+                } else {
+                    GcValue::Unit
+                }
+            }
         }
     }
 
@@ -2723,6 +2801,19 @@ impl Heap {
             GcValue::Pointer(p) => GcValue::Pointer(*p),
             // Int64List - clone (Arc-based, so cheap)
             GcValue::Int64List(list) => GcValue::Int64List(list.clone()),
+            // Buffer - create new buffer with same contents
+            GcValue::Buffer(ptr) => {
+                if let Some(b) = self.get_buffer(*ptr) {
+                    let s = b.to_string();
+                    let buf_ptr = self.alloc_buffer();
+                    if let Some(new_buf) = self.get_buffer(buf_ptr.clone()) {
+                        new_buf.append(&s);
+                    }
+                    GcValue::Buffer(buf_ptr)
+                } else {
+                    GcValue::Unit
+                }
+            }
         }
     }
 
@@ -3119,6 +3210,13 @@ impl Heap {
             GcValue::Pid(p) => Value::Pid(ValuePid(*p)),
             GcValue::Ref(r) => Value::Ref(ValueRefId(*r)),
             GcValue::Pointer(p) => Value::Pointer(*p),
+            // Buffer - convert to string
+            GcValue::Buffer(ptr) => {
+                let s = self.get_buffer(*ptr)
+                    .map(|b| b.to_string())
+                    .unwrap_or_default();
+                Value::String(Arc::new(s))
+            }
         }
     }
 

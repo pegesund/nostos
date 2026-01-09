@@ -799,7 +799,7 @@ impl Compiler {
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
-            "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array",
+            "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array", "Buffer",
         ].iter().map(|s| s.to_string()).collect();
 
         let mut this = Self {
@@ -1253,7 +1253,7 @@ impl Compiler {
             "Bool", "Bytes", "Map", "Set", "IO", "Math", "Debug", "Time", "Thread",
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
-            "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array",
+            "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array", "Buffer",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -3991,6 +3991,24 @@ impl Compiler {
                             self.chunk.emit(Instruction::Utf8Decode(dst, bytes_reg), line);
                             return Ok(dst);
                         }
+                        // === Buffer operations (for efficient HTML rendering) ===
+                        "Buffer.new" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::BufferNew(dst), line);
+                            return Ok(dst);
+                        }
+                        "Buffer.append" if args.len() == 2 => {
+                            let buf_reg = self.compile_expr_tail(&args[0], false)?;
+                            let str_reg = self.compile_expr_tail(&args[1], false)?;
+                            self.chunk.emit(Instruction::BufferAppend(buf_reg, str_reg), line);
+                            return Ok(buf_reg); // Return the buffer
+                        }
+                        "Buffer.toString" if args.len() == 1 => {
+                            let buf_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::BufferToString(dst, buf_reg), line);
+                            return Ok(dst);
+                        }
                         // String functions (1 arg)
                         "String.length" | "String.chars" | "String.from_chars" | "String.toInt" | "String.to_int"
                         | "String.toFloat" | "String.trim" | "String.trimStart" | "String.trimEnd"
@@ -4407,6 +4425,24 @@ impl Compiler {
                             let bytes_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::Utf8Decode(dst, bytes_reg), line);
+                            return Ok(dst);
+                        }
+                        // === Buffer operations (for efficient HTML rendering) ===
+                        "Buffer.new" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::BufferNew(dst), line);
+                            return Ok(dst);
+                        }
+                        "Buffer.append" if args.len() == 2 => {
+                            let buf_reg = self.compile_expr_tail(&args[0], false)?;
+                            let str_reg = self.compile_expr_tail(&args[1], false)?;
+                            self.chunk.emit(Instruction::BufferAppend(buf_reg, str_reg), line);
+                            return Ok(buf_reg); // Return the buffer
+                        }
+                        "Buffer.toString" if args.len() == 1 => {
+                            let buf_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::BufferToString(dst, buf_reg), line);
                             return Ok(dst);
                         }
                         // === HTTP Server operations ===

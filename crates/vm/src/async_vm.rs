@@ -6100,6 +6100,7 @@ impl AsyncProcess {
                     GcValue::Pointer(_) => "Pointer",
                     GcValue::Int64List(_) => "Int64List",
                     GcValue::Float32Array(_) => "Float32Array",
+                    GcValue::Buffer(_) => "Buffer",
                 }.to_string();
                 let str_ptr = self.heap.alloc_string(type_name);
                 set_reg!(dst, GcValue::String(str_ptr));
@@ -6245,6 +6246,55 @@ impl AsyncProcess {
                         } else {
                             return Err(RuntimeError::Panic(format!("Uncaught exception: {}", error_msg)));
                         }
+                    }
+                }
+            }
+
+            // === String Buffer (for efficient HTML rendering) ===
+            BufferNew(dst) => {
+                let buf_ptr = self.heap.alloc_buffer();
+                set_reg!(dst, GcValue::Buffer(buf_ptr));
+            }
+
+            BufferAppend(buf_reg, str_reg) => {
+                let buf = reg!(buf_reg);
+                let str_val = reg!(str_reg);
+                match &buf {
+                    GcValue::Buffer(buf_ptr) => {
+                        let s = self.heap.display_value(&str_val);
+                        if let Some(gc_buf) = self.heap.get_buffer(buf_ptr.clone()) {
+                            gc_buf.append(&s);
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Buffer".to_string(),
+                            found: buf.type_name(&self.heap).to_string(),
+                        });
+                    }
+                }
+            }
+
+            BufferToString(dst, buf_reg) => {
+                let buf = reg!(buf_reg);
+                match &buf {
+                    GcValue::Buffer(buf_ptr) => {
+                        if let Some(gc_buf) = self.heap.get_buffer(buf_ptr.clone()) {
+                            let s = gc_buf.to_string();
+                            let str_ptr = self.heap.alloc_string(s);
+                            set_reg!(dst, GcValue::String(str_ptr));
+                        } else {
+                            return Err(RuntimeError::TypeError {
+                                expected: "Buffer".to_string(),
+                                found: "invalid buffer".to_string(),
+                            });
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Buffer".to_string(),
+                            found: buf.type_name(&self.heap).to_string(),
+                        });
                     }
                 }
             }
@@ -6943,6 +6993,13 @@ impl AsyncProcess {
                 }
                 let list = GcList::from_vec(json_items);
                 let ptr = self.heap.alloc_variant(json_type, Arc::new("Array".to_string()), vec![GcValue::List(list)]);
+                Ok(GcValue::Variant(ptr))
+            }
+            GcValue::Buffer(buf_ptr) => {
+                // Convert buffer contents to JSON string
+                let s = self.heap.get_buffer(buf_ptr).map(|b| b.to_string()).unwrap_or_default();
+                let str_ptr = self.heap.alloc_string(s);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("String".to_string()), vec![GcValue::String(str_ptr)]);
                 Ok(GcValue::Variant(ptr))
             }
         }
