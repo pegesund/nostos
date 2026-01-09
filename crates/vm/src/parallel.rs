@@ -2453,6 +2453,17 @@ impl ThreadWorker {
                     fast_set!(*dst, result);
                     return Ok(StepResult::Continue);
                 }
+                IntToFloat(dst, src) => {
+                    let result = match fast_reg!(*src) {
+                        GcValue::Int64(v) => GcValue::Float64(*v as f64),
+                        GcValue::Int32(v) => GcValue::Float64(*v as f64),
+                        GcValue::Float64(v) => GcValue::Float64(*v),
+                        GcValue::Float32(v) => GcValue::Float64(*v as f64),
+                        _ => return Err(RuntimeError::TypeError { expected: "numeric".into(), found: "other".into() }),
+                    };
+                    fast_set!(*dst, result);
+                    return Ok(StepResult::Continue);
+                }
                 LtInt(dst, l, r) => {
                     let result = match (fast_reg!(*l), fast_reg!(*r)) {
                         (GcValue::Int64(a), GcValue::Int64(b)) => a < b,
