@@ -16,7 +16,7 @@ main() = {
     lst = range(1000)
     total = 0
     i = 0
-    while i < 10 {
+    while i < 1000 {
         total = total + sum(lst)
         i = i + 1
     }

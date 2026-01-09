@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam::channel::{self, Sender, Receiver, TryRecvError};
 
-use crate::gc::{GcConfig, GcNativeFn, GcValue, Heap};
+use crate::gc::{GcConfig, GcNativeFn, GcValue, Heap, InlineOp};
 use crate::process::{CallFrame, Process, ProcessState};
 use crate::runtime::{JitIntFn, JitIntFn0, JitIntFn2, JitIntFn3, JitIntFn4, JitLoopArrayFn};
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, TypeValue, Value};
@@ -117,7 +117,7 @@ impl ThreadSafeValue {
                     mutable_fields: rec.mutable_fields.clone(),
                 }
             }
-            GcValue::Closure(ptr) => {
+            GcValue::Closure(ptr, _) => {
                 let closure = heap.get_closure(*ptr)?;
                 // Recursively convert captures to thread-safe values
                 let captures: Option<Vec<_>> = closure.captures.iter()
@@ -180,12 +180,13 @@ impl ThreadSafeValue {
                 let gc_captures: Vec<GcValue> = captures.iter()
                     .map(|v| v.to_gc_value(heap))
                     .collect();
+                let inline_op = InlineOp::from_function(function);
                 let ptr = heap.alloc_closure(
                     function.clone(),
                     gc_captures,
                     capture_names.clone(),
                 );
-                GcValue::Closure(ptr)
+                GcValue::Closure(ptr, inline_op)
             }
             ThreadSafeValue::Function(func) => GcValue::Function(func.clone()),
         }
@@ -1161,13 +1162,11 @@ impl ThreadWorker {
                             );
                         }
 
-                        // Clear remaining registers
-                        let arg_count = args.len();
-                        for i in arg_count..proc.frames[frame_idx].registers.len() {
-                            proc.frames[frame_idx].registers[i] = GcValue::Unit;
-                        }
+                        // Note: We don't clear remaining registers - they're either
+                        // overwritten or unused. GC handles cleanup.
 
                         // Write args to positions 0, 1, 2, ...
+                        let arg_count = args.len();
                         for i in 0..arg_count {
                             proc.frames[frame_idx].registers[i] =
                                 unsafe { saved_args[i].assume_init_read() };
@@ -1462,54 +1461,30 @@ impl ThreadWorker {
                     }
                 }
                 // Fast path for Call with simple binary function inlining
+                // Uses cached InlineOp to avoid pattern matching on every call
                 Call(dst, func_reg, args) => {
                     proc.frames[frame_idx].ip += 1;
-                    // Only try fast path for 2-arg calls
+                    // Only try fast path for 2-arg calls with cached InlineOp
                     if args.len() == 2 {
                         let func_val = &proc.frames[frame_idx].registers[*func_reg as usize];
-                        // Get the function code - works for both Function and Closure
-                        // Use unchecked access for closures since we know the ptr is valid
-                        let func_code = match func_val {
-                            GcValue::Function(func) => Some(&func.code),
-                            GcValue::Closure(ptr) => {
-                                // SAFETY: Closure ptr came from a register which was set from a valid allocation
-                                Some(unsafe { &proc.heap.get_closure_unchecked(*ptr).function.code })
-                            }
-                            _ => None,
+                        // Check cached InlineOp - no heap lookup or pattern matching needed!
+                        let inline_op = match func_val {
+                            GcValue::Closure(_, op) => *op,
+                            GcValue::Function(func) => InlineOp::from_function(func),
+                            _ => InlineOp::None,
                         };
-                        if let Some(code) = func_code {
-                            let instrs = &code.code;
-                            // Check for pattern: BinaryOp(dst, 0, 1); Return(dst)
-                            if instrs.len() == 2 {
-                                if let Instruction::Return(ret_reg) = &instrs[1] {
-                                    let arg0 = &proc.frames[frame_idx].registers[args[0] as usize];
-                                    let arg1 = &proc.frames[frame_idx].registers[args[1] as usize];
-                                    let result = match &instrs[0] {
-                                        Instruction::AddInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
-                                            match (arg0, arg1) {
-                                                (GcValue::Int64(x), GcValue::Int64(y)) => Some(GcValue::Int64(x + y)),
-                                                _ => None,
-                                            }
-                                        }
-                                        Instruction::SubInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
-                                            match (arg0, arg1) {
-                                                (GcValue::Int64(x), GcValue::Int64(y)) => Some(GcValue::Int64(x - y)),
-                                                _ => None,
-                                            }
-                                        }
-                                        Instruction::MulInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
-                                            match (arg0, arg1) {
-                                                (GcValue::Int64(x), GcValue::Int64(y)) => Some(GcValue::Int64(x * y)),
-                                                _ => None,
-                                            }
-                                        }
-                                        _ => None,
-                                    };
-                                    if let Some(r) = result {
-                                        proc.frames[frame_idx].registers[*dst as usize] = r;
-                                        continue; // Stay in fast loop!
-                                    }
-                                }
+                        if inline_op != InlineOp::None {
+                            let arg0 = &proc.frames[frame_idx].registers[args[0] as usize];
+                            let arg1 = &proc.frames[frame_idx].registers[args[1] as usize];
+                            if let (GcValue::Int64(x), GcValue::Int64(y)) = (arg0, arg1) {
+                                let result = match inline_op {
+                                    InlineOp::AddInt => x + y,
+                                    InlineOp::SubInt => x - y,
+                                    InlineOp::MulInt => x * y,
+                                    InlineOp::None => unreachable!(),
+                                };
+                                proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(result);
+                                continue; // Stay in fast loop!
                             }
                         }
                     }
@@ -1540,13 +1515,11 @@ impl ThreadWorker {
                             );
                         }
 
-                        // Clear remaining registers
-                        let arg_count = args.len();
-                        for i in arg_count..proc.frames[frame_idx].registers.len() {
-                            proc.frames[frame_idx].registers[i] = GcValue::Unit;
-                        }
+                        // Note: We don't clear remaining registers - they're either
+                        // overwritten or unused. GC handles cleanup.
 
                         // Write args to positions 0, 1, 2, ...
+                        let arg_count = args.len();
                         for i in 0..arg_count {
                             proc.frames[frame_idx].registers[i] =
                                 unsafe { saved_args[i].assume_init_read() };
@@ -2628,18 +2601,32 @@ impl ThreadWorker {
                         // Normal function call
                         self.call_function(local_id, func, arg_values, Some(*dst))?;
                     }
-                    GcValue::Closure(ptr) => {
+                    GcValue::Closure(ptr, inline_op) => {
                         let proc = self.get_process(local_id).unwrap();
                         let closure = proc.heap.get_closure(ptr).unwrap();
                         let func = closure.function.clone();
                         let captures = closure.captures.clone();
                         drop(proc);
 
-                        // Fast path: inline simple binary closures like (a, b) => a + b
-                        if arg_values.len() == 2 && captures.is_empty() {
+                        // Fast path: use cached InlineOp for simple binary closures
+                        if arg_values.len() == 2 && captures.is_empty() && inline_op != InlineOp::None {
+                            if let (GcValue::Int64(x), GcValue::Int64(y)) = (&arg_values[0], &arg_values[1]) {
+                                let result = match inline_op {
+                                    InlineOp::AddInt => x + y,
+                                    InlineOp::SubInt => x - y,
+                                    InlineOp::MulInt => x * y,
+                                    InlineOp::None => unreachable!(),
+                                };
+                                let proc = self.get_process_mut(local_id).unwrap();
+                                proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::Int64(result);
+                                return Ok(StepResult::Continue);
+                            }
+                        }
+                        // Fall back to slow path for other closures
+                        {
                             let instrs = &func.code.code;
                             // Check for pattern: BinaryOp(dst, 0, 1); Return(dst)
-                            if instrs.len() == 2 {
+                            if arg_values.len() == 2 && instrs.len() == 2 {
                                 if let Instruction::Return(ret_reg) = &instrs[1] {
                                     let result = match &instrs[0] {
                                         Instruction::AddInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
@@ -2827,7 +2814,7 @@ impl ThreadWorker {
                     GcValue::Function(func) => {
                         self.tail_call_function(local_id, func, arg_values)?;
                     }
-                    GcValue::Closure(ptr) => {
+                    GcValue::Closure(ptr, _) => {
                         let proc = self.get_process(local_id).unwrap();
                         let closure = proc.heap.get_closure(ptr).unwrap();
                         let func = closure.function.clone();
@@ -2882,10 +2869,11 @@ impl ThreadWorker {
                 };
                 let captures: Vec<GcValue> = capture_regs.iter().map(|r| reg!(*r).clone()).collect();
                 let capture_names = func_val.param_names.clone();
+                let inline_op = InlineOp::from_function(&func_val);
 
                 let proc = self.get_process_mut(local_id).unwrap();
                 let ptr = proc.heap.alloc_closure(func_val, captures, capture_names);
-                set_reg!(*dst, GcValue::Closure(ptr));
+                set_reg!(*dst, GcValue::Closure(ptr, inline_op));
             }
 
             GetCapture(dst, idx) => {
@@ -2909,7 +2897,7 @@ impl ThreadWorker {
 
                 let (func, captures) = match func_val {
                     GcValue::Function(f) => (f, vec![]),
-                    GcValue::Closure(ptr) => {
+                    GcValue::Closure(ptr, _) => {
                         let proc = self.get_process(local_id).unwrap();
                         let closure = proc.heap.get_closure(ptr).unwrap();
                         (closure.function.clone(), closure.captures.clone())

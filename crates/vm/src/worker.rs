@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use crossbeam::deque::{Injector, Stealer, Worker as WorkQueue};
 use parking_lot::Mutex;
 
-use crate::gc::GcValue;
+use crate::gc::{GcValue, InlineOp};
 use crate::process::{CallFrame, ExceptionHandler, ExitReason, ProcessState};
 use crate::scheduler::Scheduler;
 use crate::value::{FunctionValue, Pid, RuntimeError};
@@ -1691,7 +1691,7 @@ impl Worker {
                     .with_process(pid, |proc| {
                         match &func_val {
                             GcValue::Function(f) => Ok((f.clone(), Vec::new())),
-                            GcValue::Closure(ptr) => {
+                            GcValue::Closure(ptr, _) => {
                                 let closure = proc.heap.get_closure(*ptr).ok_or_else(|| {
                                     RuntimeError::TypeError {
                                         expected: "Closure".to_string(),
@@ -1739,7 +1739,7 @@ impl Worker {
                     .with_process(pid, |proc| {
                         match &func_val {
                             GcValue::Function(f) => Ok((f.clone(), Vec::new())),
-                            GcValue::Closure(ptr) => {
+                            GcValue::Closure(ptr, _) => {
                                 let closure = proc.heap.get_closure(*ptr).ok_or_else(|| {
                                     RuntimeError::TypeError {
                                         expected: "Closure".to_string(),
@@ -1887,7 +1887,7 @@ impl Worker {
                     .with_process(pid, |proc| {
                         match &func_val {
                             GcValue::Function(f) => Ok((f.clone(), Vec::new())),
-                            GcValue::Closure(ptr) => proc
+                            GcValue::Closure(ptr, _) => proc
                                 .heap
                                 .get_closure(*ptr)
                                 .map(|c| (c.function.clone(), c.captures.clone()))
@@ -1968,7 +1968,7 @@ impl Worker {
                     .with_process(pid, |proc| {
                         match &func_val {
                             GcValue::Function(f) => Ok((f.clone(), Vec::new())),
-                            GcValue::Closure(ptr) => proc
+                            GcValue::Closure(ptr, _) => proc
                                 .heap
                                 .get_closure(*ptr)
                                 .map(|c| (c.function.clone(), c.captures.clone()))
@@ -2022,7 +2022,7 @@ impl Worker {
                     .with_process(pid, |proc| {
                         match &func_val {
                             GcValue::Function(f) => Ok((f.clone(), Vec::new())),
-                            GcValue::Closure(ptr) => proc
+                            GcValue::Closure(ptr, _) => proc
                                 .heap
                                 .get_closure(*ptr)
                                 .map(|c| (c.function.clone(), c.captures.clone()))
@@ -2592,6 +2592,7 @@ impl Worker {
                         found: "non-function".to_string(),
                     }),
                 };
+                let inline_op = InlineOp::from_function(&func);
                 let captures: Vec<GcValue> = capture_regs.iter().map(|&r| get_reg!(r)).collect();
                 let capture_names: Vec<String> = (0..captures.len())
                     .map(|i| format!("capture_{}", i))
@@ -2599,7 +2600,7 @@ impl Worker {
                 let ptr = self.scheduler.with_process_mut(pid, |proc| {
                     proc.heap.alloc_closure(func, captures, capture_names)
                 }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
-                set_reg!(dst, GcValue::Closure(ptr));
+                set_reg!(dst, GcValue::Closure(ptr, inline_op));
             }
 
             // === Type Conversions ===
