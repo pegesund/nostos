@@ -1337,6 +1337,14 @@ impl<'a> InferCtx<'a> {
 
             // Continue: returns Never (doesn't produce a value normally)
             Expr::Continue(_) => Ok(Type::Unit),
+
+            // Return: optional value, returns Never (doesn't produce a value normally)
+            Expr::Return(value, _) => {
+                if let Some(val) = value {
+                    let _ = self.infer_expr(val)?;
+                }
+                Ok(Type::Unit) // Return doesn't continue execution normally
+            }
         }
     }
 

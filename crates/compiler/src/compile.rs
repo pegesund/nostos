@@ -2412,6 +2412,12 @@ impl Compiler {
                     self.collect_mvar_access(val, reads, writes);
                 }
             }
+            // Return with optional value
+            Expr::Return(value, _) => {
+                if let Some(val) = value {
+                    self.collect_mvar_access(val, reads, writes);
+                }
+            }
             // Map literal
             Expr::Map(pairs, _) => {
                 for (key, value) in pairs {
@@ -5977,6 +5983,11 @@ impl Compiler {
                 self.compile_continue(*span)
             }
 
+            // Return
+            Expr::Return(value, span) => {
+                self.compile_return(value.as_ref().map(|v| v.as_ref()), *span)
+            }
+
             _ => Err(CompileError::NotImplemented {
                 feature: format!("expr: {:?}", expr),
                 span: expr.span(),
@@ -6150,6 +6161,28 @@ impl Compiler {
 
         let dst = self.alloc_reg();
         self.chunk.emit(Instruction::LoadUnit(dst), 0);
+        Ok(dst)
+    }
+
+    /// Compile a return statement.
+    fn compile_return(&mut self, value: Option<&Expr>, span: Span) -> Result<Reg, CompileError> {
+        let line = self.span_line(span);
+
+        // Compile the return value (or unit if none)
+        let val_reg = if let Some(val) = value {
+            self.compile_expr_tail(val, false)?
+        } else {
+            let r = self.alloc_reg();
+            self.chunk.emit(Instruction::LoadUnit(r), line);
+            r
+        };
+
+        // Emit Return instruction
+        self.chunk.emit(Instruction::Return(val_reg), line);
+
+        // Return a unit register (execution won't continue past Return)
+        let dst = self.alloc_reg();
+        self.chunk.emit(Instruction::LoadUnit(dst), line);
         Ok(dst)
     }
 
@@ -12013,6 +12046,11 @@ impl Compiler {
             // Transform break with value
             Expr::Break(val, span) => {
                 Expr::Break(val.as_ref().map(|v| Box::new(self.transform_html_expr(v))), *span)
+            }
+
+            // Transform return with value
+            Expr::Return(val, span) => {
+                Expr::Return(val.as_ref().map(|v| Box::new(self.transform_html_expr(v))), *span)
             }
 
             // Transform try? expressions

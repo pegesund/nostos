@@ -74,6 +74,8 @@ pub enum Token {
     Break,
     #[token("continue")]
     Continue,
+    #[token("return")]
+    Return,
 
     // === Concurrency keywords ===
     #[token("spawn")]
@@ -455,6 +457,7 @@ impl fmt::Display for Token {
             Token::To => write!(f, "to"),
             Token::Break => write!(f, "break"),
             Token::Continue => write!(f, "continue"),
+            Token::Return => write!(f, "return"),
             Token::Spawn => write!(f, "spawn"),
             Token::SpawnLink => write!(f, "spawn_link"),
             Token::SpawnMonitor => write!(f, "spawn_monitor"),

@@ -58,7 +58,7 @@ impl Highlighter for NostosHighlighter {
                 Token::Match | Token::When | Token::Trait | Token::Module | Token::End |
                 Token::Use | Token::Import | Token::Private | Token::Pub | Token::SelfKw | Token::SelfType |
                 Token::Try | Token::Catch | Token::Finally | Token::Do |
-                Token::While | Token::For | Token::To | Token::Break | Token::Continue |
+                Token::While | Token::For | Token::To | Token::Break | Token::Continue | Token::Return |
                 Token::Spawn | Token::SpawnLink | Token::SpawnMonitor | Token::Receive | Token::After |
                 Token::Panic | Token::Extern | Token::From | Token::Test | Token::Quote =>
                     Style::new().fg(Color::Magenta).bold(),

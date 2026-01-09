@@ -1,0 +1,16 @@
+# expect: 7
+# Test early return from inside a while loop
+
+findFirst(n: Int) -> Int = {
+    var i: Int = 0
+    while i < 10 {
+        if i == n then
+            return i
+        else
+            ()
+        i = i + 1
+    }
+    -1
+}
+
+main() = findFirst(7)

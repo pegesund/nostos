@@ -1,0 +1,12 @@
+# expect: 10
+# Test simple early return
+
+checkValue(x: Int) -> Int = {
+    if x > 5 then
+        return x
+    else
+        ()
+    0
+}
+
+main() = checkValue(10)

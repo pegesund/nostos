@@ -454,6 +454,8 @@ pub enum Expr {
     Break(Option<Box<Expr>>, Span),
     /// Continue to next iteration
     Continue(Span),
+    /// Early return from function with optional value
+    Return(Option<Box<Expr>>, Span),
     /// Receive expression
     Receive(Vec<MatchArm>, Option<(Box<Expr>, Box<Expr>)>, Span),
     /// Spawn expression
@@ -512,6 +514,7 @@ impl Expr {
             Expr::For(_, _, _, _, s) => *s,
             Expr::Break(_, s) => *s,
             Expr::Continue(s) => *s,
+            Expr::Return(_, s) => *s,
             Expr::Receive(_, _, s) => *s,
             Expr::Spawn(_, _, _, s) => *s,
             Expr::Send(_, _, s) => *s,

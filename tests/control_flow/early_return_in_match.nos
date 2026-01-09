@@ -1,0 +1,26 @@
+# expect: 100
+# Test early return from inside match expression
+
+type MyValue =
+    | Small(Int)
+    | Medium(Int)
+    | Large(Int)
+
+getValue(v: MyValue) -> Int = {
+    match v {
+        Small(n) -> {
+            if n < 0 then return 0 else ()
+            n
+        }
+        Medium(n) -> {
+            if n < 10 then return 10 else ()
+            n
+        }
+        Large(n) -> {
+            if n > 50 then return 100 else ()
+            n
+        }
+    }
+}
+
+main() = getValue(Large(75))
