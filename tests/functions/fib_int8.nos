@@ -1,0 +1,8 @@
+# Fibonacci with Int8 (small values to avoid overflow)
+# expect: 8i8
+
+fib(0i8) = 0i8
+fib(1i8) = 1i8
+fib(n) = fib(n - 1i8) + fib(n - 2i8)
+
+main() = fib(6i8)

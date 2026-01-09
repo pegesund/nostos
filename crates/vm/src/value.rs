@@ -14,6 +14,9 @@ use std::fmt;
 use std::rc::Rc;
 use std::cell::{Cell, RefCell};
 
+use num_bigint::BigInt;
+use rust_decimal::Decimal;
+
 /// Shared register list - makes instruction cloning O(1) instead of O(n).
 /// Used for function arguments, list/tuple construction, etc.
 pub type RegList = Rc<[Reg]>;
@@ -24,9 +27,29 @@ pub enum Value {
     // === Immediate values (unboxed in JIT) ===
     Unit,
     Bool(bool),
-    Int(i64),
-    Float(f64),
     Char(char),
+
+    // === Signed integers ===
+    Int8(i8),
+    Int16(i16),
+    Int32(i32),
+    Int64(i64),
+
+    // === Unsigned integers ===
+    UInt8(u8),
+    UInt16(u16),
+    UInt32(u32),
+    UInt64(u64),
+
+    // === Floating point ===
+    Float32(f32),
+    Float64(f64),
+
+    // === Arbitrary precision ===
+    BigInt(Rc<BigInt>),
+
+    // === Decimal (fixed-point) ===
+    Decimal(Decimal),
 
     // === Heap-allocated values ===
     String(Rc<String>),
@@ -61,8 +84,18 @@ pub enum Value {
 pub enum MapKey {
     Unit,
     Bool(bool),
-    Int(i64),
     Char(char),
+    // Signed integers
+    Int8(i8),
+    Int16(i16),
+    Int32(i32),
+    Int64(i64),
+    // Unsigned integers
+    UInt8(u8),
+    UInt16(u16),
+    UInt32(u32),
+    UInt64(u64),
+    // String
     String(Rc<String>),
 }
 
@@ -538,6 +571,24 @@ pub enum Instruction {
     IntToFloat(Reg, Reg),
     /// Float to Int: dst = toInt(src)
     FloatToInt(Reg, Reg),
+    /// Convert to Int8: dst = toInt8(src)
+    ToInt8(Reg, Reg),
+    /// Convert to Int16: dst = toInt16(src)
+    ToInt16(Reg, Reg),
+    /// Convert to Int32: dst = toInt32(src)
+    ToInt32(Reg, Reg),
+    /// Convert to UInt8: dst = toUInt8(src)
+    ToUInt8(Reg, Reg),
+    /// Convert to UInt16: dst = toUInt16(src)
+    ToUInt16(Reg, Reg),
+    /// Convert to UInt32: dst = toUInt32(src)
+    ToUInt32(Reg, Reg),
+    /// Convert to UInt64: dst = toUInt64(src)
+    ToUInt64(Reg, Reg),
+    /// Convert to Float32: dst = toFloat32(src)
+    ToFloat32(Reg, Reg),
+    /// Convert to BigInt: dst = toBigInt(src)
+    ToBigInt(Reg, Reg),
 
     // === List operations (compile-time resolved) ===
     /// Head of list: dst = head(list)
@@ -609,9 +660,25 @@ impl Value {
         match self {
             Value::Unit => "()",
             Value::Bool(_) => "Bool",
-            Value::Int(_) => "Int",
-            Value::Float(_) => "Float",
             Value::Char(_) => "Char",
+            // Signed integers
+            Value::Int8(_) => "Int8",
+            Value::Int16(_) => "Int16",
+            Value::Int32(_) => "Int32",
+            Value::Int64(_) => "Int64",
+            // Unsigned integers
+            Value::UInt8(_) => "UInt8",
+            Value::UInt16(_) => "UInt16",
+            Value::UInt32(_) => "UInt32",
+            Value::UInt64(_) => "UInt64",
+            // Floats
+            Value::Float32(_) => "Float32",
+            Value::Float64(_) => "Float64",
+            // BigInt
+            Value::BigInt(_) => "BigInt",
+            // Decimal
+            Value::Decimal(_) => "Decimal",
+            // Collections
             Value::String(_) => "String",
             Value::List(_) => "List",
             Value::Array(_) => "Array",
@@ -644,8 +711,18 @@ impl Value {
         match self {
             Value::Unit => Some(MapKey::Unit),
             Value::Bool(b) => Some(MapKey::Bool(*b)),
-            Value::Int(i) => Some(MapKey::Int(*i)),
             Value::Char(c) => Some(MapKey::Char(*c)),
+            // Signed integers
+            Value::Int8(i) => Some(MapKey::Int8(*i)),
+            Value::Int16(i) => Some(MapKey::Int16(*i)),
+            Value::Int32(i) => Some(MapKey::Int32(*i)),
+            Value::Int64(i) => Some(MapKey::Int64(*i)),
+            // Unsigned integers
+            Value::UInt8(i) => Some(MapKey::UInt8(*i)),
+            Value::UInt16(i) => Some(MapKey::UInt16(*i)),
+            Value::UInt32(i) => Some(MapKey::UInt32(*i)),
+            Value::UInt64(i) => Some(MapKey::UInt64(*i)),
+            // String
             Value::String(s) => Some(MapKey::String(s.clone())),
             _ => None,
         }
@@ -657,9 +734,24 @@ impl fmt::Debug for Value {
         match self {
             Value::Unit => write!(f, "()"),
             Value::Bool(b) => write!(f, "{}", b),
-            Value::Int(i) => write!(f, "{}", i),
-            Value::Float(fl) => write!(f, "{}", fl),
             Value::Char(c) => write!(f, "'{}'", c),
+            // Signed integers
+            Value::Int8(i) => write!(f, "{}i8", i),
+            Value::Int16(i) => write!(f, "{}i16", i),
+            Value::Int32(i) => write!(f, "{}i32", i),
+            Value::Int64(i) => write!(f, "{}", i),
+            // Unsigned integers
+            Value::UInt8(i) => write!(f, "{}u8", i),
+            Value::UInt16(i) => write!(f, "{}u16", i),
+            Value::UInt32(i) => write!(f, "{}u32", i),
+            Value::UInt64(i) => write!(f, "{}u64", i),
+            // Floats
+            Value::Float32(fl) => write!(f, "{}f32", fl),
+            Value::Float64(fl) => write!(f, "{}", fl),
+            // BigInt
+            Value::BigInt(n) => write!(f, "{}n", n),
+            // Decimal
+            Value::Decimal(d) => write!(f, "{}d", d),
             Value::String(s) => write!(f, "\"{}\"", s),
             Value::List(items) => {
                 write!(f, "[")?;
@@ -716,9 +808,23 @@ impl fmt::Display for Value {
         match self {
             Value::Unit => write!(f, "()"),
             Value::Bool(b) => write!(f, "{}", b),
-            Value::Int(i) => write!(f, "{}", i),
-            Value::Float(fl) => write!(f, "{}", fl),
             Value::Char(c) => write!(f, "{}", c),
+            // Integers (no suffix in display for Int64, it's the default)
+            Value::Int8(i) => write!(f, "{}", i),
+            Value::Int16(i) => write!(f, "{}", i),
+            Value::Int32(i) => write!(f, "{}", i),
+            Value::Int64(i) => write!(f, "{}", i),
+            Value::UInt8(i) => write!(f, "{}", i),
+            Value::UInt16(i) => write!(f, "{}", i),
+            Value::UInt32(i) => write!(f, "{}", i),
+            Value::UInt64(i) => write!(f, "{}", i),
+            // Floats
+            Value::Float32(fl) => write!(f, "{}", fl),
+            Value::Float64(fl) => write!(f, "{}", fl),
+            // BigInt
+            Value::BigInt(n) => write!(f, "{}", n),
+            // Decimal
+            Value::Decimal(d) => write!(f, "{}", d),
             Value::String(s) => write!(f, "{}", s),
             Value::List(items) => {
                 write!(f, "[")?;
@@ -747,9 +853,25 @@ impl PartialEq for Value {
         match (self, other) {
             (Value::Unit, Value::Unit) => true,
             (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Int(a), Value::Int(b)) => a == b,
-            (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Char(a), Value::Char(b)) => a == b,
+            // Signed integers
+            (Value::Int8(a), Value::Int8(b)) => a == b,
+            (Value::Int16(a), Value::Int16(b)) => a == b,
+            (Value::Int32(a), Value::Int32(b)) => a == b,
+            (Value::Int64(a), Value::Int64(b)) => a == b,
+            // Unsigned integers
+            (Value::UInt8(a), Value::UInt8(b)) => a == b,
+            (Value::UInt16(a), Value::UInt16(b)) => a == b,
+            (Value::UInt32(a), Value::UInt32(b)) => a == b,
+            (Value::UInt64(a), Value::UInt64(b)) => a == b,
+            // Floats
+            (Value::Float32(a), Value::Float32(b)) => a == b,
+            (Value::Float64(a), Value::Float64(b)) => a == b,
+            // BigInt
+            (Value::BigInt(a), Value::BigInt(b)) => a == b,
+            // Decimal
+            (Value::Decimal(a), Value::Decimal(b)) => a == b,
+            // Collections
             (Value::String(a), Value::String(b)) => a == b,
             (Value::List(a), Value::List(b)) => a == b,
             (Value::Tuple(a), Value::Tuple(b)) => a == b,
@@ -780,14 +902,17 @@ mod tests {
 
     #[test]
     fn test_value_type_name() {
-        assert_eq!(Value::Int(42).type_name(), "Int");
+        assert_eq!(Value::Int64(42).type_name(), "Int64");
+        assert_eq!(Value::Int32(42).type_name(), "Int32");
+        assert_eq!(Value::UInt8(42).type_name(), "UInt8");
+        assert_eq!(Value::Float64(3.14).type_name(), "Float64");
         assert_eq!(Value::Bool(true).type_name(), "Bool");
         assert_eq!(Value::Unit.type_name(), "()");
     }
 
     #[test]
     fn test_value_display() {
-        assert_eq!(format!("{}", Value::Int(42)), "42");
+        assert_eq!(format!("{}", Value::Int64(42)), "42");
         assert_eq!(format!("{}", Value::Bool(true)), "true");
         assert_eq!(format!("{}", Value::String(Rc::new("hello".to_string()))), "hello");
     }
@@ -795,7 +920,7 @@ mod tests {
     #[test]
     fn test_chunk_constants() {
         let mut chunk = Chunk::new();
-        let idx = chunk.add_constant(Value::Int(42));
+        let idx = chunk.add_constant(Value::Int64(42));
         assert_eq!(idx, 0);
         assert_eq!(chunk.constants.len(), 1);
     }

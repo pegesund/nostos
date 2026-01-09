@@ -1,0 +1,8 @@
+# Fibonacci with Decimal
+# expect: 55d
+
+fib(0d) = 0d
+fib(1d) = 1d
+fib(n) = fib(n - 1d) + fib(n - 2d)
+
+main() = fib(10d)

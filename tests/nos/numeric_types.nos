@@ -1,0 +1,4 @@
+# Test new numeric type literals
+# expect: 42i32
+
+main() = 42i32

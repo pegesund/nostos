@@ -1,0 +1,8 @@
+# Fibonacci with UInt64
+# expect: 55u64
+
+fib(0u64) = 0u64
+fib(1u64) = 1u64
+fib(n) = fib(n - 1u64) + fib(n - 2u64)
+
+main() = fib(10u64)

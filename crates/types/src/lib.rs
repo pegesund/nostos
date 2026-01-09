@@ -20,8 +20,25 @@ pub type TypeVarId = u32;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     // === Primitives ===
-    Int,
-    Float,
+    // Signed integers
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    Int, // Alias for Int64
+    // Unsigned integers
+    UInt8,
+    UInt16,
+    UInt32,
+    UInt64,
+    // Floating point
+    Float32,
+    Float64,
+    Float, // Alias for Float64
+    // Arbitrary precision
+    BigInt,
+    Decimal,
+    // Other primitives
     Bool,
     Char,
     String,
@@ -391,8 +408,25 @@ impl Type {
     /// Pretty print a type.
     pub fn display(&self) -> String {
         match self {
+            // Signed integers
+            Type::Int8 => "Int8".to_string(),
+            Type::Int16 => "Int16".to_string(),
+            Type::Int32 => "Int32".to_string(),
+            Type::Int64 => "Int64".to_string(),
             Type::Int => "Int".to_string(),
+            // Unsigned integers
+            Type::UInt8 => "UInt8".to_string(),
+            Type::UInt16 => "UInt16".to_string(),
+            Type::UInt32 => "UInt32".to_string(),
+            Type::UInt64 => "UInt64".to_string(),
+            // Floating point
+            Type::Float32 => "Float32".to_string(),
+            Type::Float64 => "Float64".to_string(),
             Type::Float => "Float".to_string(),
+            // Arbitrary precision
+            Type::BigInt => "BigInt".to_string(),
+            Type::Decimal => "Decimal".to_string(),
+            // Other primitives
             Type::Bool => "Bool".to_string(),
             Type::Char => "Char".to_string(),
             Type::String => "String".to_string(),

@@ -1,0 +1,8 @@
+# Fibonacci with Float32
+# expect: 55f32
+
+fib(0.0f32) = 0.0f32
+fib(1.0f32) = 1.0f32
+fib(n) = fib(n - 1.0f32) + fib(n - 2.0f32)
+
+main() = fib(10.0f32)

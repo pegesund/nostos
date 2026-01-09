@@ -647,7 +647,7 @@ impl Scheduler {
             self.with_process_mut(watcher_pid, |watcher| {
                 // Create DOWN message: (ref, pid)
                 let down_msg = GcValue::Tuple(watcher.heap.alloc_tuple(vec![
-                    GcValue::Int(ref_id.0 as i64),
+                    GcValue::Int64(ref_id.0 as i64),
                     GcValue::Pid(pid.0),
                 ]));
                 watcher.mailbox.push_back(down_msg);
@@ -756,14 +756,14 @@ mod tests {
         let pid2 = sched.spawn();
 
         // Send message from pid1 to pid2
-        let msg = GcValue::Int(42);
+        let msg = GcValue::Int64(42);
         sched.send(pid1, pid2, msg).unwrap();
 
         // Check pid2 received it
         sched.with_process_mut(pid2, |proc| {
             assert!(proc.has_messages());
             let received = proc.try_receive().unwrap();
-            assert_eq!(received, GcValue::Int(42));
+            assert_eq!(received, GcValue::Int64(42));
         });
     }
 
@@ -831,7 +831,7 @@ mod tests {
         });
 
         // Send message should wake it up
-        sched.send(pid1, pid2, GcValue::Int(1)).unwrap();
+        sched.send(pid1, pid2, GcValue::Int64(1)).unwrap();
         sched.with_process(pid2, |proc| {
             assert_eq!(proc.state, ProcessState::Running);
         });
@@ -877,7 +877,7 @@ mod tests {
             let sender = sched.spawn();
             handles.push(thread::spawn(move || {
                 for j in 0..100 {
-                    let msg = GcValue::Int((i * 100 + j) as i64);
+                    let msg = GcValue::Int64((i * 100 + j) as i64);
                     sched_clone.send(sender, receiver, msg).unwrap();
                 }
             }));

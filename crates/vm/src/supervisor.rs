@@ -486,7 +486,7 @@ mod tests {
                     Instruction::LoadConst(0, 0),
                     Instruction::Return(0),
                 ],
-                constants: vec![Value::Int(42)],
+                constants: vec![Value::Int64(42)],
                 lines: Vec::new(),
                 locals: Vec::new(),
                 register_count: 256,
@@ -520,7 +520,7 @@ mod tests {
         let spec = ChildSpec::new("worker1", func)
             .with_restart(RestartType::Transient)
             .with_shutdown(10000)
-            .with_args(vec![GcValue::Int(1), GcValue::Int(2)]);
+            .with_args(vec![GcValue::Int64(1), GcValue::Int64(2)]);
 
         assert_eq!(spec.id, "worker1");
         assert_eq!(spec.restart, RestartType::Transient);

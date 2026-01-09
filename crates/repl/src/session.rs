@@ -542,7 +542,17 @@ fn extract_dependencies_from_expr(expr: &Expr, deps: &mut HashSet<String>) {
         }
         // Literals don't have dependencies
         Expr::Int(_, _)
+        | Expr::Int8(_, _)
+        | Expr::Int16(_, _)
+        | Expr::Int32(_, _)
+        | Expr::UInt8(_, _)
+        | Expr::UInt16(_, _)
+        | Expr::UInt32(_, _)
+        | Expr::UInt64(_, _)
+        | Expr::BigInt(_, _)
         | Expr::Float(_, _)
+        | Expr::Float32(_, _)
+        | Expr::Decimal(_, _)
         | Expr::Bool(_, _)
         | Expr::Char(_, _)
         | Expr::Unit(_) => {}

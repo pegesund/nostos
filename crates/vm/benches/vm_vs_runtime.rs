@@ -36,7 +36,7 @@ fn bench_vm() -> (i64, std::time::Duration) {
     let elapsed = start.elapsed();
 
     let value = match result {
-        Value::Int(v) => v,
+        Value::Int64(v) => v,
         _ => panic!("Expected Int"),
     };
 
@@ -69,7 +69,7 @@ fn bench_runtime() -> (i64, std::time::Duration) {
 
     let result = result.expect("Runtime error");
     let value = match result {
-        Some(GcValue::Int(v)) => v,
+        Some(GcValue::Int64(v)) => v,
         other => {
             eprintln!("Expected Int, got {:?}", other);
             eprintln!("Compiler functions: {:?}", compiler.get_all_functions().keys().collect::<Vec<_>>());

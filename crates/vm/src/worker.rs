@@ -44,8 +44,8 @@ impl MainResult {
     /// Convert GcValue to transferable MainResult
     fn from_gc_value(value: &GcValue) -> Self {
         match value {
-            GcValue::Int(i) => MainResult::Int(*i),
-            GcValue::Float(f) => MainResult::Float(*f),
+            GcValue::Int64(i) => MainResult::Int(*i),
+            GcValue::Float64(f) => MainResult::Float(*f),
             GcValue::Bool(b) => MainResult::Bool(*b),
             GcValue::Unit => MainResult::Unit,
             GcValue::Pid(p) => MainResult::Pid(*p),
@@ -59,8 +59,8 @@ impl MainResult {
     pub fn to_gc_value(&self) -> Option<GcValue> {
         match self {
             MainResult::Running => None,
-            MainResult::Int(i) => Some(GcValue::Int(*i)),
-            MainResult::Float(f) => Some(GcValue::Float(*f)),
+            MainResult::Int(i) => Some(GcValue::Int64(*i)),
+            MainResult::Float(f) => Some(GcValue::Float64(*f)),
             MainResult::Bool(b) => Some(GcValue::Bool(*b)),
             MainResult::Unit => Some(GcValue::Unit),
             MainResult::Pid(p) => Some(GcValue::Pid(*p)),
@@ -483,7 +483,7 @@ impl Worker {
                 Instruction::AddInt(dst, a, b) => {
                     let frame = proc.frames.last_mut().unwrap();
                     let result = match (&frame.registers[*a as usize], &frame.registers[*b as usize]) {
-                        (GcValue::Int(x), GcValue::Int(y)) => GcValue::Int(x + y),
+                        (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Int64(x + y),
                         _ => {
                             return Err(RuntimeError::TypeError {
                                 expected: "Int".to_string(),
@@ -497,7 +497,7 @@ impl Worker {
                 Instruction::SubInt(dst, a, b) => {
                     let frame = proc.frames.last_mut().unwrap();
                     let result = match (&frame.registers[*a as usize], &frame.registers[*b as usize]) {
-                        (GcValue::Int(x), GcValue::Int(y)) => GcValue::Int(x - y),
+                        (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Int64(x - y),
                         _ => {
                             return Err(RuntimeError::TypeError {
                                 expected: "Int".to_string(),
@@ -511,7 +511,7 @@ impl Worker {
                 Instruction::MulInt(dst, a, b) => {
                     let frame = proc.frames.last_mut().unwrap();
                     let result = match (&frame.registers[*a as usize], &frame.registers[*b as usize]) {
-                        (GcValue::Int(x), GcValue::Int(y)) => GcValue::Int(x * y),
+                        (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Int64(x * y),
                         _ => {
                             return Err(RuntimeError::TypeError {
                                 expected: "Int".to_string(),
@@ -526,7 +526,7 @@ impl Worker {
                 Instruction::LtInt(dst, a, b) => {
                     let frame = proc.frames.last_mut().unwrap();
                     let result = match (&frame.registers[*a as usize], &frame.registers[*b as usize]) {
-                        (GcValue::Int(x), GcValue::Int(y)) => GcValue::Bool(*x < *y),
+                        (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Bool(*x < *y),
                         _ => {
                             return Err(RuntimeError::TypeError {
                                 expected: "Int".to_string(),
@@ -540,7 +540,7 @@ impl Worker {
                 Instruction::LeInt(dst, a, b) => {
                     let frame = proc.frames.last_mut().unwrap();
                     let result = match (&frame.registers[*a as usize], &frame.registers[*b as usize]) {
-                        (GcValue::Int(x), GcValue::Int(y)) => GcValue::Bool(*x <= *y),
+                        (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Bool(*x <= *y),
                         _ => {
                             return Err(RuntimeError::TypeError {
                                 expected: "Int".to_string(),
@@ -554,7 +554,7 @@ impl Worker {
                 Instruction::GtInt(dst, a, b) => {
                     let frame = proc.frames.last_mut().unwrap();
                     let result = match (&frame.registers[*a as usize], &frame.registers[*b as usize]) {
-                        (GcValue::Int(x), GcValue::Int(y)) => GcValue::Bool(*x > *y),
+                        (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Bool(*x > *y),
                         _ => {
                             return Err(RuntimeError::TypeError {
                                 expected: "Int".to_string(),
@@ -930,7 +930,7 @@ impl Worker {
                 let va = get_reg!(a);
                 let vb = get_reg!(b);
                 match (va, vb) {
-                    (GcValue::Int(x), GcValue::Int(y)) => set_reg!(dst, GcValue::Int(x + y)),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => set_reg!(dst, GcValue::Int64(x + y)),
                     _ => {
                         return Err(RuntimeError::TypeError {
                             expected: "Int".to_string(),
@@ -944,7 +944,7 @@ impl Worker {
                 let va = get_reg!(a);
                 let vb = get_reg!(b);
                 match (va, vb) {
-                    (GcValue::Int(x), GcValue::Int(y)) => set_reg!(dst, GcValue::Int(x - y)),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => set_reg!(dst, GcValue::Int64(x - y)),
                     _ => {
                         return Err(RuntimeError::TypeError {
                             expected: "Int".to_string(),
@@ -958,7 +958,7 @@ impl Worker {
                 let va = get_reg!(a);
                 let vb = get_reg!(b);
                 match (va, vb) {
-                    (GcValue::Int(x), GcValue::Int(y)) => set_reg!(dst, GcValue::Int(x * y)),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => set_reg!(dst, GcValue::Int64(x * y)),
                     _ => {
                         return Err(RuntimeError::TypeError {
                             expected: "Int".to_string(),
@@ -973,7 +973,7 @@ impl Worker {
                 let va = get_reg!(a);
                 let vb = get_reg!(b);
                 match (va, vb) {
-                    (GcValue::Int(x), GcValue::Int(y)) => set_reg!(dst, GcValue::Bool(x < y)),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => set_reg!(dst, GcValue::Bool(x < y)),
                     _ => {
                         return Err(RuntimeError::TypeError {
                             expected: "Int".to_string(),
@@ -987,7 +987,7 @@ impl Worker {
                 let va = get_reg!(a);
                 let vb = get_reg!(b);
                 match (va, vb) {
-                    (GcValue::Int(x), GcValue::Int(y)) => set_reg!(dst, GcValue::Bool(x <= y)),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => set_reg!(dst, GcValue::Bool(x <= y)),
                     _ => {
                         return Err(RuntimeError::TypeError {
                             expected: "Int".to_string(),
@@ -1001,7 +1001,7 @@ impl Worker {
                 let va = get_reg!(a);
                 let vb = get_reg!(b);
                 match (va, vb) {
-                    (GcValue::Int(x), GcValue::Int(y)) => set_reg!(dst, GcValue::Bool(x > y)),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => set_reg!(dst, GcValue::Bool(x > y)),
                     _ => {
                         return Err(RuntimeError::TypeError {
                             expected: "Int".to_string(),
@@ -1684,13 +1684,13 @@ mod tests {
                 Instruction::LoadConst(0, 0),
                 Instruction::Return(0),
             ],
-            vec![Value::Int(42)],
+            vec![Value::Int64(42)],
         );
 
         pool.spawn_initial(func);
         let result = pool.run().unwrap();
 
-        assert_eq!(result, Some(GcValue::Int(42)));
+        assert_eq!(result, Some(GcValue::Int64(42)));
         pool.shutdown();
     }
 
@@ -1715,8 +1715,8 @@ mod tests {
                 Instruction::Return(3),
             ],
             vec![
-                Value::Int(0),
-                Value::Int(1),
+                Value::Int64(0),
+                Value::Int64(1),
                 Value::String(Rc::new("sum".to_string())),
             ],
         );
@@ -1733,7 +1733,7 @@ mod tests {
                 Instruction::Return(1),
             ],
             vec![
-                Value::Int(10),
+                Value::Int64(10),
                 Value::String(Rc::new("sum".to_string())),
             ],
         );
@@ -1743,7 +1743,7 @@ mod tests {
 
         let result = pool.run().unwrap();
         // sum(10) = 10 + 9 + 8 + 7 + 6 + 5 + 4 + 3 + 2 + 1 + 0 = 55
-        assert_eq!(result, Some(GcValue::Int(55)));
+        assert_eq!(result, Some(GcValue::Int64(55)));
         pool.shutdown();
     }
 
@@ -1764,13 +1764,13 @@ mod tests {
                 Instruction::LoadConst(0, 0),
                 Instruction::Return(0),
             ],
-            vec![Value::Int(123)],
+            vec![Value::Int64(123)],
         );
 
         pool.spawn_initial(func);
         let result = pool.run().unwrap();
 
-        assert_eq!(result, Some(GcValue::Int(123)));
+        assert_eq!(result, Some(GcValue::Int64(123)));
         assert_eq!(pool.num_workers(), 2);
         pool.shutdown();
     }
@@ -1794,7 +1794,7 @@ mod tests {
                 Instruction::AddInt(2, 0, 1), // r2 = r0 + 1
                 Instruction::Return(2),
             ],
-            vec![Value::Int(1)],
+            vec![Value::Int64(1)],
         );
         let child_func = Rc::new(FunctionValue {
             arity: 1,
@@ -1813,8 +1813,8 @@ mod tests {
             ],
             vec![
                 Value::Function(child_func),
-                Value::Int(10),
-                Value::Int(42),
+                Value::Int64(10),
+                Value::Int64(42),
             ],
         );
 
@@ -1822,7 +1822,7 @@ mod tests {
         let result = pool.run().unwrap();
 
         // Main process returns 42
-        assert_eq!(result, Some(GcValue::Int(42)));
+        assert_eq!(result, Some(GcValue::Int64(42)));
         pool.shutdown();
     }
 
@@ -1846,8 +1846,8 @@ mod tests {
                 Instruction::TailCallByName(2, vec![5].into()),  // tail call countdown(n-1)
             ],
             vec![
-                Value::Int(0),
-                Value::Int(1),
+                Value::Int64(0),
+                Value::Int64(1),
                 Value::String(Rc::new("countdown".to_string())),
             ],
         );
@@ -1865,7 +1865,7 @@ mod tests {
                 Instruction::Return(1),
             ],
             vec![
-                Value::Int(1000),
+                Value::Int64(1000),
                 Value::String(Rc::new("countdown".to_string())),
             ],
         );
@@ -1874,7 +1874,7 @@ mod tests {
         pool.spawn_initial(main_func);
 
         let result = pool.run().unwrap();
-        assert_eq!(result, Some(GcValue::Int(0)));
+        assert_eq!(result, Some(GcValue::Int64(0)));
         pool.shutdown();
     }
 
@@ -1899,7 +1899,7 @@ mod tests {
                 Instruction::LoadUnit(2),
                 Instruction::Return(2),
             ],
-            vec![Value::Int(42)],
+            vec![Value::Int64(42)],
         );
 
         // Main: spawn child with self pid, receive message
@@ -1918,7 +1918,7 @@ mod tests {
         pool.spawn_initial(main_func);
         let result = pool.run().unwrap();
 
-        assert_eq!(result, Some(GcValue::Int(42)));
+        assert_eq!(result, Some(GcValue::Int64(42)));
         pool.shutdown();
     }
 
@@ -1967,9 +1967,9 @@ mod tests {
                 Instruction::Return(3),
             ],
             vec![
-                Value::Int(2),
-                Value::Int(1),
-                Value::Int(2),
+                Value::Int64(2),
+                Value::Int64(1),
+                Value::Int64(2),
                 Value::String(Rc::new("fib".to_string())),
             ],
         );
@@ -1987,7 +1987,7 @@ mod tests {
                 Instruction::Return(1),
             ],
             vec![
-                Value::Int(15),
+                Value::Int64(15),
                 Value::String(Rc::new("fib".to_string())),
             ],
         );
@@ -1997,7 +1997,7 @@ mod tests {
 
         let result = pool.run().unwrap();
         // fib(15) = 610
-        assert_eq!(result, Some(GcValue::Int(610)));
+        assert_eq!(result, Some(GcValue::Int64(610)));
         pool.shutdown();
     }
 }

@@ -321,9 +321,23 @@ impl<'a> InferCtx<'a> {
     /// Infer the type of an expression.
     pub fn infer_expr(&mut self, expr: &Expr) -> Result<Type, TypeError> {
         match expr {
-            // Literals
+            // Literals - integers
             Expr::Int(_, _) => Ok(Type::Int),
+            Expr::Int8(_, _) => Ok(Type::Int8),
+            Expr::Int16(_, _) => Ok(Type::Int16),
+            Expr::Int32(_, _) => Ok(Type::Int32),
+            // Unsigned integers
+            Expr::UInt8(_, _) => Ok(Type::UInt8),
+            Expr::UInt16(_, _) => Ok(Type::UInt16),
+            Expr::UInt32(_, _) => Ok(Type::UInt32),
+            Expr::UInt64(_, _) => Ok(Type::UInt64),
+            // Floats
             Expr::Float(_, _) => Ok(Type::Float),
+            Expr::Float32(_, _) => Ok(Type::Float32),
+            // Arbitrary precision
+            Expr::BigInt(_, _) => Ok(Type::BigInt),
+            Expr::Decimal(_, _) => Ok(Type::Decimal),
+            // Other literals
             Expr::Bool(_, _) => Ok(Type::Bool),
             Expr::Char(_, _) => Ok(Type::Char),
             Expr::String(_, _) => Ok(Type::String),
@@ -860,8 +874,58 @@ impl<'a> InferCtx<'a> {
                 Ok(())
             }
 
+            Pattern::Int8(_, _) => {
+                self.unify(expected.clone(), Type::Int8);
+                Ok(())
+            }
+
+            Pattern::Int16(_, _) => {
+                self.unify(expected.clone(), Type::Int16);
+                Ok(())
+            }
+
+            Pattern::Int32(_, _) => {
+                self.unify(expected.clone(), Type::Int32);
+                Ok(())
+            }
+
+            Pattern::UInt8(_, _) => {
+                self.unify(expected.clone(), Type::UInt8);
+                Ok(())
+            }
+
+            Pattern::UInt16(_, _) => {
+                self.unify(expected.clone(), Type::UInt16);
+                Ok(())
+            }
+
+            Pattern::UInt32(_, _) => {
+                self.unify(expected.clone(), Type::UInt32);
+                Ok(())
+            }
+
+            Pattern::UInt64(_, _) => {
+                self.unify(expected.clone(), Type::UInt64);
+                Ok(())
+            }
+
+            Pattern::BigInt(_, _) => {
+                self.unify(expected.clone(), Type::BigInt);
+                Ok(())
+            }
+
             Pattern::Float(_, _) => {
                 self.unify(expected.clone(), Type::Float);
+                Ok(())
+            }
+
+            Pattern::Float32(_, _) => {
+                self.unify(expected.clone(), Type::Float32);
+                Ok(())
+            }
+
+            Pattern::Decimal(_, _) => {
+                self.unify(expected.clone(), Type::Decimal);
                 Ok(())
             }
 

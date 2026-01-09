@@ -1,0 +1,8 @@
+# Fibonacci with UInt32
+# expect: 55u32
+
+fib(0u32) = 0u32
+fib(1u32) = 1u32
+fib(n) = fib(n - 1u32) + fib(n - 2u32)
+
+main() = fib(10u32)
