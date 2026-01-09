@@ -75,28 +75,53 @@ pub type MailboxSender = mpsc::UnboundedSender<ThreadSafeValue>;
 /// Type for process mailbox receiver.
 pub type MailboxReceiver = mpsc::UnboundedReceiver<ThreadSafeValue>;
 
+/// Handle for a threaded evaluation, allowing independent cancellation.
+pub struct ThreadedEvalHandle {
+    /// Channel receiver for the result.
+    pub result_rx: std::sync::mpsc::Receiver<Result<SendableValue, String>>,
+    /// Interrupt flag for this specific evaluation.
+    pub interrupt: Arc<AtomicBool>,
+}
+
+impl ThreadedEvalHandle {
+    /// Interrupt this evaluation.
+    pub fn cancel(&self) {
+        self.interrupt.store(true, Ordering::SeqCst);
+    }
+
+    /// Check if this evaluation was interrupted.
+    pub fn is_cancelled(&self) -> bool {
+        self.interrupt.load(Ordering::SeqCst)
+    }
+
+    /// Poll for result (non-blocking).
+    pub fn try_recv(&self) -> Result<Result<SendableValue, String>, std::sync::mpsc::TryRecvError> {
+        self.result_rx.try_recv()
+    }
+}
+
 /// Shared state across all async processes.
 pub struct AsyncSharedState {
-    /// Global functions (read-only after startup).
-    pub functions: HashMap<String, Arc<FunctionValue>>,
-    /// Function list for indexed calls.
-    pub function_list: Vec<Arc<FunctionValue>>,
+    /// Global functions - uses RwLock for concurrent eval support.
+    pub functions: RwLock<HashMap<String, Arc<FunctionValue>>>,
+    /// Function list for indexed calls - uses RwLock for concurrent eval support.
+    pub function_list: RwLock<Vec<Arc<FunctionValue>>>,
     /// Native functions.
     pub natives: HashMap<String, Arc<GcNativeFn>>,
-    /// Type definitions.
-    pub types: HashMap<String, Arc<TypeValue>>,
+    /// Type definitions - uses RwLock for concurrent eval support.
+    pub types: RwLock<HashMap<String, Arc<TypeValue>>>,
 
-    /// JIT-compiled functions (by arity).
-    pub jit_int_functions: HashMap<u16, crate::parallel::JitIntFn>,
-    pub jit_int_functions_0: HashMap<u16, crate::parallel::JitIntFn0>,
-    pub jit_int_functions_2: HashMap<u16, crate::parallel::JitIntFn2>,
-    pub jit_int_functions_3: HashMap<u16, crate::parallel::JitIntFn3>,
-    pub jit_int_functions_4: HashMap<u16, crate::parallel::JitIntFn4>,
-    pub jit_loop_array_functions: HashMap<u16, crate::parallel::JitLoopArrayFn>,
+    /// JIT-compiled functions (by arity) - uses RwLock for concurrent eval support.
+    pub jit_int_functions: RwLock<HashMap<u16, crate::parallel::JitIntFn>>,
+    pub jit_int_functions_0: RwLock<HashMap<u16, crate::parallel::JitIntFn0>>,
+    pub jit_int_functions_2: RwLock<HashMap<u16, crate::parallel::JitIntFn2>>,
+    pub jit_int_functions_3: RwLock<HashMap<u16, crate::parallel::JitIntFn3>>,
+    pub jit_int_functions_4: RwLock<HashMap<u16, crate::parallel::JitIntFn4>>,
+    pub jit_loop_array_functions: RwLock<HashMap<u16, crate::parallel::JitLoopArrayFn>>,
     /// JIT recursive array fill functions (arity 2: arr, idx)
-    pub jit_array_fill_functions: HashMap<u16, crate::parallel::JitArrayFillFn>,
+    pub jit_array_fill_functions: RwLock<HashMap<u16, crate::parallel::JitArrayFillFn>>,
     /// JIT recursive array sum functions (arity 3: arr, idx, acc)
-    pub jit_array_sum_functions: HashMap<u16, crate::parallel::JitArraySumFn>,
+    pub jit_array_sum_functions: RwLock<HashMap<u16, crate::parallel::JitArraySumFn>>,
 
     /// Shutdown signal (permanent).
     pub shutdown: AtomicBool,
@@ -243,6 +268,10 @@ pub struct AsyncProcess {
 
     /// Profiling data (only populated when profiling is enabled).
     pub profile: Option<ProfileData>,
+
+    /// Local interrupt flag for this process (used for independent eval cancellation).
+    /// If Some, this takes precedence over the shared interrupt flag.
+    pub local_interrupt: Option<Arc<AtomicBool>>,
 }
 
 /// Helper trait to convert register/constant indices (u8, u16, etc.) to usize.
@@ -299,6 +328,7 @@ impl AsyncProcess {
             held_mvar_locks: HashMap::new(),
             mvar_lock_depths: HashMap::new(),
             profile: if profiling_enabled { Some(ProfileData::new()) } else { None },
+            local_interrupt: None,
         }
     }
 
@@ -327,6 +357,7 @@ impl AsyncProcess {
             held_mvar_locks: HashMap::new(),
             mvar_lock_depths: HashMap::new(),
             profile: if profiling_enabled { Some(ProfileData::new()) } else { None },
+            local_interrupt: None,
         }
     }
 
@@ -573,8 +604,12 @@ impl AsyncProcess {
                     return Ok(GcValue::Unit);
                 }
 
-                // Check interrupt (Ctrl+C)
-                if self.shared.interrupt.load(Ordering::SeqCst) {
+                // Check interrupt (Ctrl+C) - local flag takes precedence
+                let interrupted = self.local_interrupt
+                    .as_ref()
+                    .map(|i| i.load(Ordering::SeqCst))
+                    .unwrap_or_else(|| self.shared.interrupt.load(Ordering::SeqCst));
+                if interrupted {
                     return Err(RuntimeError::Interrupted);
                 }
 
@@ -617,8 +652,12 @@ impl AsyncProcess {
         if self.instructions_since_yield >= REDUCTIONS_PER_YIELD {
             self.instructions_since_yield = 0;
 
-            // Check interrupt (Ctrl+C)
-            if self.shared.interrupt.load(Ordering::SeqCst) {
+            // Check interrupt (Ctrl+C) - local flag takes precedence
+            let interrupted = self.local_interrupt
+                .as_ref()
+                .map(|i| i.load(Ordering::SeqCst))
+                .unwrap_or_else(|| self.shared.interrupt.load(Ordering::SeqCst));
+            if interrupted {
                 return Err(RuntimeError::Interrupted);
             }
 
@@ -1159,7 +1198,8 @@ impl AsyncProcess {
                 let profiling = self.is_profiling();
                 match args.len() {
                     0 => {
-                        if let Some(jit_fn) = self.shared.jit_int_functions_0.get(&func_idx_u16) {
+                        let jit_fn_opt = self.shared.jit_int_functions_0.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
                             let (result, duration) = if profiling {
                                 let start = Instant::now();
                                 let r = jit_fn();
@@ -1169,7 +1209,7 @@ impl AsyncProcess {
                             };
                             set_reg!(dst, GcValue::Int64(result));
                             if let Some(d) = duration {
-                                let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                 self.profile_jit_call(&name, d);
                             }
                             return Ok(StepResult::Continue);
@@ -1177,7 +1217,8 @@ impl AsyncProcess {
                     }
                     1 => {
                         // Pure numeric JIT
-                        if let Some(jit_fn) = self.shared.jit_int_functions.get(&func_idx_u16) {
+                        let jit_fn_opt = self.shared.jit_int_functions.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
                             if let GcValue::Int64(n) = reg!(args[0]) {
                                 let (result, duration) = if profiling {
                                     let start = Instant::now();
@@ -1188,14 +1229,15 @@ impl AsyncProcess {
                                 };
                                 set_reg!(dst, GcValue::Int64(result));
                                 if let Some(d) = duration {
-                                    let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                     self.profile_jit_call(&name, d);
                                 }
                                 return Ok(StepResult::Continue);
                             }
                         }
                         // Loop array JIT
-                        if let Some(&jit_fn) = self.shared.jit_loop_array_functions.get(&func_idx_u16) {
+                        let jit_fn_opt = self.shared.jit_loop_array_functions.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
                             if let GcValue::Int64Array(arr_ptr) = reg!(args[0]) {
                                 if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
                                     let ptr = arr.items.as_mut_ptr();
@@ -1209,7 +1251,7 @@ impl AsyncProcess {
                                     };
                                     set_reg!(dst, GcValue::Int64(result));
                                     if let Some(d) = duration {
-                                        let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                        let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                         self.profile_jit_call(&name, d);
                                     }
                                     return Ok(StepResult::Continue);
@@ -1219,7 +1261,8 @@ impl AsyncProcess {
                     }
                     2 => {
                         // Try numeric JIT first
-                        if let Some(jit_fn) = self.shared.jit_int_functions_2.get(&func_idx_u16) {
+                        let jit_fn_opt = self.shared.jit_int_functions_2.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
                             if let (GcValue::Int64(a), GcValue::Int64(b)) = (reg!(args[0]), reg!(args[1])) {
                                 let (result, duration) = if profiling {
                                     let start = Instant::now();
@@ -1230,14 +1273,15 @@ impl AsyncProcess {
                                 };
                                 set_reg!(dst, GcValue::Int64(result));
                                 if let Some(d) = duration {
-                                    let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                     self.profile_jit_call(&name, d);
                                 }
                                 return Ok(StepResult::Continue);
                             }
                         }
                         // Recursive array fill JIT: (arr, idx)
-                        if let Some(&jit_fn) = self.shared.jit_array_fill_functions.get(&func_idx_u16) {
+                        let jit_fn_opt = self.shared.jit_array_fill_functions.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
                             if let GcValue::Int64(idx) = reg!(args[1]) {
                                 if let GcValue::Int64Array(arr_ptr) = reg!(args[0]) {
                                     if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
@@ -1254,7 +1298,7 @@ impl AsyncProcess {
                                         let _ = result;
                                         set_reg!(dst, GcValue::Unit);
                                         if let Some(d) = duration {
-                                            let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                            let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                             self.profile_jit_call(&name, d);
                                         }
                                         return Ok(StepResult::Continue);
@@ -1265,7 +1309,8 @@ impl AsyncProcess {
                     }
                     3 => {
                         // Try numeric JIT first
-                        if let Some(jit_fn) = self.shared.jit_int_functions_3.get(&func_idx_u16) {
+                        let jit_fn_opt = self.shared.jit_int_functions_3.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
                             if let (GcValue::Int64(a), GcValue::Int64(b), GcValue::Int64(c)) =
                                 (reg!(args[0]), reg!(args[1]), reg!(args[2])) {
                                 let (result, duration) = if profiling {
@@ -1277,14 +1322,15 @@ impl AsyncProcess {
                                 };
                                 set_reg!(dst, GcValue::Int64(result));
                                 if let Some(d) = duration {
-                                    let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                     self.profile_jit_call(&name, d);
                                 }
                                 return Ok(StepResult::Continue);
                             }
                         }
                         // Recursive array sum JIT: (arr, idx, acc)
-                        if let Some(&jit_fn) = self.shared.jit_array_sum_functions.get(&func_idx_u16) {
+                        let jit_fn_opt = self.shared.jit_array_sum_functions.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
                             if let (GcValue::Int64(idx), GcValue::Int64(acc)) = (reg!(args[1]), reg!(args[2])) {
                                 if let GcValue::Int64Array(arr_ptr) = reg!(args[0]) {
                                     if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
@@ -1299,7 +1345,7 @@ impl AsyncProcess {
                                         };
                                         set_reg!(dst, GcValue::Int64(result));
                                         if let Some(d) = duration {
-                                            let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                            let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                             self.profile_jit_call(&name, d);
                                         }
                                         return Ok(StepResult::Continue);
@@ -1309,7 +1355,8 @@ impl AsyncProcess {
                         }
                     }
                     4 => {
-                        if let Some(jit_fn) = self.shared.jit_int_functions_4.get(&func_idx_u16) {
+                        let jit_fn_opt = self.shared.jit_int_functions_4.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
                             if let (GcValue::Int64(a), GcValue::Int64(b), GcValue::Int64(c), GcValue::Int64(d)) =
                                 (reg!(args[0]), reg!(args[1]), reg!(args[2]), reg!(args[3])) {
                                 let (result, duration) = if profiling {
@@ -1321,7 +1368,7 @@ impl AsyncProcess {
                                 };
                                 set_reg!(dst, GcValue::Int64(result));
                                 if let Some(dur) = duration {
-                                    let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                     self.profile_jit_call(&name, dur);
                                 }
                                 return Ok(StepResult::Continue);
@@ -1332,9 +1379,11 @@ impl AsyncProcess {
                 }
 
                 // Fall back to interpreter
-                let function = self.shared.function_list.get(*func_idx as usize)
-                    .ok_or_else(|| RuntimeError::Panic(format!("Unknown function index: {}", func_idx)))?
-                    .clone();
+                let function = {
+                    self.shared.function_list.read().unwrap().get(*func_idx as usize)
+                        .ok_or_else(|| RuntimeError::Panic(format!("Unknown function index: {}", func_idx)))?
+                        .clone()
+                };
 
                 // Get registers from pool or allocate new
                 let mut registers = self.alloc_registers(function.code.register_count as usize);
@@ -1636,7 +1685,8 @@ impl AsyncProcess {
                 let profiling = self.is_profiling();
                 match args.len() {
                     0 => {
-                        if let Some(jit_fn) = self.shared.jit_int_functions_0.get(&func_idx_u16) {
+                        let jit_fn_opt = self.shared.jit_int_functions_0.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
                             let (res, duration) = if profiling {
                                 let start = Instant::now();
                                 let r = jit_fn();
@@ -1645,7 +1695,7 @@ impl AsyncProcess {
                                 (jit_fn(), None)
                             };
                             if let Some(d) = duration {
-                                let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                 self.profile_jit_call(&name, d);
                             }
                             let result = GcValue::Int64(res);
@@ -1663,7 +1713,8 @@ impl AsyncProcess {
                     }
                     1 => {
                         // Pure numeric JIT
-                        if let Some(jit_fn) = self.shared.jit_int_functions.get(&func_idx_u16) {
+                        let jit_fn_opt = self.shared.jit_int_functions.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
                             if let GcValue::Int64(n) = reg!(args[0]) {
                                 let (res, duration) = if profiling {
                                     let start = Instant::now();
@@ -1673,7 +1724,7 @@ impl AsyncProcess {
                                     (jit_fn(n), None)
                                 };
                                 if let Some(d) = duration {
-                                    let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                     self.profile_jit_call(&name, d);
                                 }
                                 let result = GcValue::Int64(res);
@@ -1689,7 +1740,8 @@ impl AsyncProcess {
                             }
                         }
                         // Loop array JIT
-                        if let Some(&jit_fn) = self.shared.jit_loop_array_functions.get(&func_idx_u16) {
+                        let jit_fn_opt = self.shared.jit_loop_array_functions.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
                             if let GcValue::Int64Array(arr_ptr) = reg!(args[0]) {
                                 if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
                                     let ptr = arr.items.as_mut_ptr();
@@ -1702,7 +1754,7 @@ impl AsyncProcess {
                                         (jit_fn(ptr as *const i64, len), None)
                                     };
                                     if let Some(d) = duration {
-                                        let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                        let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                         self.profile_jit_call(&name, d);
                                     }
                                     let result = GcValue::Int64(res);
@@ -1721,7 +1773,8 @@ impl AsyncProcess {
                     }
                     2 => {
                         // Try numeric JIT first
-                        if let Some(jit_fn) = self.shared.jit_int_functions_2.get(&func_idx_u16) {
+                        let jit_fn_opt = self.shared.jit_int_functions_2.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
                             if let (GcValue::Int64(a), GcValue::Int64(b)) = (reg!(args[0]), reg!(args[1])) {
                                 let (res, duration) = if profiling {
                                     let start = Instant::now();
@@ -1731,7 +1784,7 @@ impl AsyncProcess {
                                     (jit_fn(a, b), None)
                                 };
                                 if let Some(d) = duration {
-                                    let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                     self.profile_jit_call(&name, d);
                                 }
                                 let result = GcValue::Int64(res);
@@ -1747,7 +1800,8 @@ impl AsyncProcess {
                             }
                         }
                         // Recursive array fill JIT: (arr, idx)
-                        if let Some(&jit_fn) = self.shared.jit_array_fill_functions.get(&func_idx_u16) {
+                        let jit_fn_opt = self.shared.jit_array_fill_functions.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
                             if let GcValue::Int64(idx) = reg!(args[1]) {
                                 if let GcValue::Int64Array(arr_ptr) = reg!(args[0]) {
                                     if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
@@ -1762,7 +1816,7 @@ impl AsyncProcess {
                                         };
                                         let _ = res;
                                         if let Some(d) = duration {
-                                            let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                            let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                             self.profile_jit_call(&name, d);
                                         }
                                         let result = GcValue::Unit;
@@ -1782,7 +1836,8 @@ impl AsyncProcess {
                     }
                     3 => {
                         // Try numeric JIT first
-                        if let Some(jit_fn) = self.shared.jit_int_functions_3.get(&func_idx_u16) {
+                        let jit_fn_opt = self.shared.jit_int_functions_3.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
                             if let (GcValue::Int64(a), GcValue::Int64(b), GcValue::Int64(c)) =
                                 (reg!(args[0]), reg!(args[1]), reg!(args[2])) {
                                 let (res, duration) = if profiling {
@@ -1793,7 +1848,7 @@ impl AsyncProcess {
                                     (jit_fn(a, b, c), None)
                                 };
                                 if let Some(d) = duration {
-                                    let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                     self.profile_jit_call(&name, d);
                                 }
                                 let result = GcValue::Int64(res);
@@ -1809,7 +1864,8 @@ impl AsyncProcess {
                             }
                         }
                         // Recursive array sum JIT: (arr, idx, acc)
-                        if let Some(&jit_fn) = self.shared.jit_array_sum_functions.get(&func_idx_u16) {
+                        let jit_fn_opt = self.shared.jit_array_sum_functions.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
                             if let (GcValue::Int64(idx), GcValue::Int64(acc)) = (reg!(args[1]), reg!(args[2])) {
                                 if let GcValue::Int64Array(arr_ptr) = reg!(args[0]) {
                                     if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
@@ -1823,7 +1879,7 @@ impl AsyncProcess {
                                             (jit_fn(ptr as *const i64, len, idx, acc), None)
                                         };
                                         if let Some(d) = duration {
-                                            let name = self.shared.function_list.get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                            let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                             self.profile_jit_call(&name, d);
                                         }
                                         let result = GcValue::Int64(res);
@@ -1845,13 +1901,16 @@ impl AsyncProcess {
                 }
 
                 // Fall back to interpreter
-                let function = self.shared.function_list.get(*func_idx as usize)
-                    .ok_or_else(|| RuntimeError::Panic(format!("Unknown function index: {}", func_idx)))?;
+                let function = {
+                    self.shared.function_list.read().unwrap().get(*func_idx as usize)
+                        .ok_or_else(|| RuntimeError::Panic(format!("Unknown function index: {}", func_idx)))?
+                        .clone()
+                };
 
                 // OPTIMIZATION: If calling same function, reuse registers (no heap allocation!)
                 // This is critical for recursive functions like fold
                 let current_func = &self.frames.last().unwrap().function;
-                if std::sync::Arc::ptr_eq(function, current_func) && args.len() <= 8 {
+                if std::sync::Arc::ptr_eq(&function, current_func) && args.len() <= 8 {
                     // Same function - reuse registers, no allocation!
                     let mut saved_args: [std::mem::MaybeUninit<GcValue>; 8] =
                         unsafe { std::mem::MaybeUninit::uninit().assume_init() };
@@ -2761,7 +2820,7 @@ impl AsyncProcess {
                 };
                 let fields: Vec<GcValue> = field_regs.iter().map(|&r| reg!(r)).collect();
                 // Look up type in static types first, then dynamic_types (eval-defined)
-                let type_info = self.shared.types.get(&type_name).cloned()
+                let type_info = self.shared.types.read().unwrap().get(&type_name).cloned()
                     .or_else(|| self.shared.dynamic_types.read().unwrap().get(&type_name).cloned());
                 let field_names: Vec<String> = type_info
                     .as_ref()
@@ -4688,18 +4747,18 @@ impl AsyncVM {
         let io_sender = io_runtime.request_sender();
 
         let shared = Arc::new(AsyncSharedState {
-            functions: HashMap::new(),
-            function_list: Vec::new(),
+            functions: RwLock::new(HashMap::new()),
+            function_list: RwLock::new(Vec::new()),
             natives: HashMap::new(),
-            types: HashMap::new(),
-            jit_int_functions: HashMap::new(),
-            jit_int_functions_0: HashMap::new(),
-            jit_int_functions_2: HashMap::new(),
-            jit_int_functions_3: HashMap::new(),
-            jit_int_functions_4: HashMap::new(),
-            jit_loop_array_functions: HashMap::new(),
-            jit_array_fill_functions: HashMap::new(),
-            jit_array_sum_functions: HashMap::new(),
+            types: RwLock::new(HashMap::new()),
+            jit_int_functions: RwLock::new(HashMap::new()),
+            jit_int_functions_0: RwLock::new(HashMap::new()),
+            jit_int_functions_2: RwLock::new(HashMap::new()),
+            jit_int_functions_3: RwLock::new(HashMap::new()),
+            jit_int_functions_4: RwLock::new(HashMap::new()),
+            jit_loop_array_functions: RwLock::new(HashMap::new()),
+            jit_array_fill_functions: RwLock::new(HashMap::new()),
+            jit_array_sum_functions: RwLock::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
             interrupt: AtomicBool::new(false),
             process_registry: TokioRwLock::new(HashMap::new()),
@@ -4727,19 +4786,15 @@ impl AsyncVM {
         }
     }
 
-    /// Register a function (must be called before run).
+    /// Register a function - safe to call during concurrent evals.
     pub fn register_function(&mut self, name: &str, func: Arc<FunctionValue>) {
-        Arc::get_mut(&mut self.shared)
-            .expect("Cannot register after execution started")
-            .functions
+        self.shared.functions.write().unwrap()
             .insert(name.to_string(), func);
     }
 
-    /// Set the function list for indexed calls.
+    /// Set the function list for indexed calls - safe during concurrent evals.
     pub fn set_function_list(&mut self, functions: Vec<Arc<FunctionValue>>) {
-        Arc::get_mut(&mut self.shared)
-            .expect("Cannot set function list after execution started")
-            .function_list = functions;
+        *self.shared.function_list.write().unwrap() = functions;
     }
 
     /// Register a native function.
@@ -4750,11 +4805,9 @@ impl AsyncVM {
             .insert(name.to_string(), native);
     }
 
-    /// Register a type.
+    /// Register a type - safe during concurrent evals.
     pub fn register_type(&mut self, name: &str, type_val: Arc<TypeValue>) {
-        Arc::get_mut(&mut self.shared)
-            .expect("Cannot register after execution started")
-            .types
+        self.shared.types.write().unwrap()
             .insert(name.to_string(), type_val);
     }
 
@@ -4766,67 +4819,51 @@ impl AsyncVM {
             .insert(name.to_string(), Arc::new(TokioRwLock::new(initial_value)));
     }
 
-    /// Register a JIT-compiled function (arity 0).
+    /// Register a JIT-compiled function (arity 0) - safe during concurrent evals.
     pub fn register_jit_int_function_0(&mut self, func_index: u16, jit_fn: crate::parallel::JitIntFn0) {
-        Arc::get_mut(&mut self.shared)
-            .expect("Cannot register after execution started")
-            .jit_int_functions_0
+        self.shared.jit_int_functions_0.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
-    /// Register a JIT-compiled function (arity 1).
+    /// Register a JIT-compiled function (arity 1) - safe during concurrent evals.
     pub fn register_jit_int_function(&mut self, func_index: u16, jit_fn: crate::parallel::JitIntFn) {
-        Arc::get_mut(&mut self.shared)
-            .expect("Cannot register after execution started")
-            .jit_int_functions
+        self.shared.jit_int_functions.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
-    /// Register a JIT-compiled function (arity 2).
+    /// Register a JIT-compiled function (arity 2) - safe during concurrent evals.
     pub fn register_jit_int_function_2(&mut self, func_index: u16, jit_fn: crate::parallel::JitIntFn2) {
-        Arc::get_mut(&mut self.shared)
-            .expect("Cannot register after execution started")
-            .jit_int_functions_2
+        self.shared.jit_int_functions_2.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
-    /// Register a JIT-compiled function (arity 3).
+    /// Register a JIT-compiled function (arity 3) - safe during concurrent evals.
     pub fn register_jit_int_function_3(&mut self, func_index: u16, jit_fn: crate::parallel::JitIntFn3) {
-        Arc::get_mut(&mut self.shared)
-            .expect("Cannot register after execution started")
-            .jit_int_functions_3
+        self.shared.jit_int_functions_3.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
-    /// Register a JIT-compiled function (arity 4).
+    /// Register a JIT-compiled function (arity 4) - safe during concurrent evals.
     pub fn register_jit_int_function_4(&mut self, func_index: u16, jit_fn: crate::parallel::JitIntFn4) {
-        Arc::get_mut(&mut self.shared)
-            .expect("Cannot register after execution started")
-            .jit_int_functions_4
+        self.shared.jit_int_functions_4.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
-    /// Register a JIT loop array function.
+    /// Register a JIT loop array function - safe during concurrent evals.
     pub fn register_jit_loop_array_function(&mut self, func_index: u16, jit_fn: crate::parallel::JitLoopArrayFn) {
-        Arc::get_mut(&mut self.shared)
-            .expect("Cannot register after execution started")
-            .jit_loop_array_functions
+        self.shared.jit_loop_array_functions.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
-    /// Register a JIT recursive array fill function (arity 2).
+    /// Register a JIT recursive array fill function (arity 2) - safe during concurrent evals.
     pub fn register_jit_array_fill_function(&mut self, func_index: u16, jit_fn: crate::parallel::JitArrayFillFn) {
-        Arc::get_mut(&mut self.shared)
-            .expect("Cannot register after execution started")
-            .jit_array_fill_functions
+        self.shared.jit_array_fill_functions.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
-    /// Register a JIT recursive array sum function (arity 3).
+    /// Register a JIT recursive array sum function (arity 3) - safe during concurrent evals.
     pub fn register_jit_array_sum_function(&mut self, func_index: u16, jit_fn: crate::parallel::JitArraySumFn) {
-        Arc::get_mut(&mut self.shared)
-            .expect("Cannot register after execution started")
-            .jit_array_sum_functions
+        self.shared.jit_array_sum_functions.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
@@ -5075,7 +5112,7 @@ impl AsyncVM {
 
     /// Get a function by name.
     pub fn get_function(&self, name: &str) -> Option<Arc<FunctionValue>> {
-        self.shared.functions.get(name).cloned()
+        self.shared.functions.read().unwrap().get(name).cloned()
     }
 
     /// Setup eval callback for REPL.
@@ -7245,41 +7282,49 @@ impl AsyncVM {
         self.run(main_fn_name)
     }
 
-    /// Run in a background thread, returning a channel receiver for the result.
+    /// Run in a background thread, returning a handle for the result and cancellation.
     /// This allows the caller to poll for completion while remaining responsive.
-    pub fn run_threaded(&self, main_fn_name: &str) -> std::sync::mpsc::Receiver<Result<SendableValue, String>> {
+    /// Each call gets its own interrupt flag, enabling independent cancellation.
+    pub fn run_threaded(&self, main_fn_name: &str) -> ThreadedEvalHandle {
         let shared = Arc::clone(&self.shared);
         let fn_name = main_fn_name.to_string();
         let (tx, rx) = std::sync::mpsc::channel();
+        let interrupt = Arc::new(AtomicBool::new(false));
+        let interrupt_clone = Arc::clone(&interrupt);
 
         std::thread::spawn(move || {
-            let result = Self::run_in_thread(shared, &fn_name);
+            let result = Self::run_in_thread(shared, &fn_name, interrupt_clone);
             let _ = tx.send(result);
         });
 
-        rx
+        ThreadedEvalHandle {
+            result_rx: rx,
+            interrupt,
+        }
     }
 
-    /// Internal: run execution in the current thread with given shared state.
-    fn run_in_thread(shared: Arc<AsyncSharedState>, main_fn_name: &str) -> Result<SendableValue, String> {
+    /// Internal: run execution in the current thread with given shared state and interrupt.
+    fn run_in_thread(shared: Arc<AsyncSharedState>, main_fn_name: &str, interrupt: Arc<AtomicBool>) -> Result<SendableValue, String> {
+        // Each eval thread gets its own runtime - this is safe because TokioRwLock
+        // is runtime-agnostic and works across different runtime instances
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
-
-        rt.block_on(Self::run_async_inner(shared, main_fn_name))
+            .expect("Failed to create tokio runtime");
+        rt.block_on(Self::run_async_inner(shared, main_fn_name, interrupt))
     }
 
-    /// Internal: async execution with shared state only.
-    async fn run_async_inner(shared: Arc<AsyncSharedState>, main_fn_name: &str) -> Result<SendableValue, String> {
+    /// Internal: async execution with shared state and local interrupt.
+    async fn run_async_inner(shared: Arc<AsyncSharedState>, main_fn_name: &str, interrupt: Arc<AtomicBool>) -> Result<SendableValue, String> {
         // Find main function
-        let main_fn = shared.functions.get(main_fn_name)
+        let main_fn = shared.functions.read().unwrap().get(main_fn_name)
             .ok_or_else(|| format!("Main function '{}' not found", main_fn_name))?
             .clone();
 
-        // Create main process
+        // Create main process with local interrupt
         let pid = shared.alloc_pid();
         let mut process = AsyncProcess::new(pid, Arc::clone(&shared));
+        process.local_interrupt = Some(interrupt);
         let sender = process.mailbox_sender.clone();
         shared.register_process(pid, sender).await;
 
@@ -7308,7 +7353,7 @@ impl AsyncVM {
     /// Async entry point for running main with profile data.
     async fn run_async_with_profile(&self, main_fn_name: &str) -> Result<(SendableValue, Option<String>), String> {
         // Find main function
-        let main_fn = self.shared.functions.get(main_fn_name)
+        let main_fn = self.shared.functions.read().unwrap().get(main_fn_name)
             .ok_or_else(|| format!("Main function '{}' not found", main_fn_name))?
             .clone();
 
