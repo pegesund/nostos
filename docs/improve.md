@@ -4,19 +4,6 @@ Ideas and potential improvements for the language.
 
 ## Language Features
 
-### Trait Bounds on Generics
-Constrain generic type parameters.
-
-```nostos
-# Current: no constraints
-sort(xs: List[a]) -> List[a]  # How do we compare elements?
-
-# Desired: require Ord trait
-sort[a: Ord](xs: List[a]) -> List[a]
-```
-
-**Priority**: Medium - enables safer generic code
-
 ### Multiline Type Definitions
 Allow record/variant types to span multiple lines.
 
@@ -127,3 +114,4 @@ Some callback patterns in the VM may have stale frame references.
 - ✅ String.drop and String.take
 - ✅ Mutual recursion (two-phase compilation - no forward declarations needed)
 - ✅ Auto-derived traits (Show, Eq, Hash, Copy work automatically for all types)
+- ✅ Trait bounds on generics (`[T: Eq]`, `[T: Hash + Eq]`, etc.)
