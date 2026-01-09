@@ -401,7 +401,7 @@ impl Autocomplete {
     /// Extract the expression being completed from text before cursor
     fn extract_expression<'a>(&self, text: &'a str) -> (usize, &'a str) {
         // Walk backwards to find expression start
-        // Handle: identifiers, dots, and literal expressions ([...], "...", %{...}, #{...})
+        // Handle: identifiers, dots, method calls (...), and literal expressions ([...], "...", %{...}, #{...})
         let chars: Vec<char> = text.chars().collect();
         let mut start = chars.len();
         let mut i = chars.len();
@@ -412,6 +412,14 @@ impl Autocomplete {
 
             if c.is_alphanumeric() || c == '_' || c == '.' {
                 start = i;
+            } else if c == ')' {
+                // Method call arguments - find matching ( and continue
+                if let Some(open) = self.find_matching_bracket(&chars, i, '(', ')') {
+                    start = open;
+                    i = open;
+                } else {
+                    break;
+                }
             } else if c == ']' {
                 // List literal - find matching [
                 if let Some(open) = self.find_matching_bracket(&chars, i, '[', ']') {
@@ -2600,6 +2608,123 @@ mod tests {
 
         let items = ac.get_completions(&ctx, &source);
         assert!(items.iter().any(|i| i.text == "get"), "Complex map should suggest get");
+    }
+
+    #[test]
+    fn test_chained_method_completions() {
+        // After a method call, should still suggest methods
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        // [1,2,3].map(x => x). should suggest List methods
+        let line = "[1,2,3].map(x => x).";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "[1,2,3].map(x => x)".to_string(),
+            prefix: "".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+
+        // Should still get List methods because [1,2,3].map(...) returns a List
+        assert!(items.iter().any(|i| i.text == "filter"),
+            "Chained list expression should suggest filter");
+    }
+
+    #[test]
+    fn test_multiple_chained_methods() {
+        // Multiple chained method calls
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "[1,2,3].map(x => x * 2).filter(x => x > 2).";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "[1,2,3].map(x => x * 2).filter(x => x > 2)".to_string(),
+            prefix: "".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert!(items.iter().any(|i| i.text == "fold"),
+            "Multiple chained methods should still suggest List methods");
+    }
+
+    #[test]
+    fn test_chained_string_methods() {
+        // Chained string methods
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "\"hello\".trim().toUpper().";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "\"hello\".trim().toUpper()".to_string(),
+            prefix: "".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert!(items.iter().any(|i| i.text == "toLower"),
+            "Chained string methods should suggest String methods");
+    }
+
+    #[test]
+    fn test_chained_map_methods() {
+        // Chained map methods
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "%{\"a\": 1}.insert(\"b\", 2).";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "%{\"a\": 1}.insert(\"b\", 2)".to_string(),
+            prefix: "".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert!(items.iter().any(|i| i.text == "get"),
+            "Chained map methods should suggest Map methods");
+    }
+
+    #[test]
+    fn test_chained_set_methods() {
+        // Chained set methods
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "#{1,2}.insert(3).union(#{4}).";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "#{1,2}.insert(3).union(#{4})".to_string(),
+            prefix: "".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert!(items.iter().any(|i| i.text == "contains"),
+            "Chained set methods should suggest Set methods");
+    }
+
+    #[test]
+    fn test_chained_with_prefix() {
+        // Chained methods with partial method name
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let line = "[1,2,3].map(x => x).fil";
+        let ctx = ac.parse_context(line, line.len());
+
+        assert_eq!(ctx, CompletionContext::FieldAccess {
+            receiver: "[1,2,3].map(x => x)".to_string(),
+            prefix: "fil".to_string()
+        });
+
+        let items = ac.get_completions(&ctx, &source);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].text, "filter");
     }
 
 }
