@@ -1,0 +1,23 @@
+# expect: error
+# Indirect call chain: A calls B which calls C, both A and C access same mvar
+
+mvar data: Int = 0
+
+leaf_write() = {
+    data = data + 1
+    data
+}
+
+middle() = {
+    leaf_write()
+}
+
+outer() = {
+    # UNSAFE: outer reads data, calls middle which eventually calls leaf_write
+    middle()
+    data
+}
+
+main() = {
+    outer()
+}

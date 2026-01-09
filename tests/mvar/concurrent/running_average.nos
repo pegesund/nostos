@@ -1,0 +1,48 @@
+# expect: ()
+# Track running sum and count to compute average
+
+mvar total: Int = 0
+mvar count: Int = 0
+
+add_value(v) = {
+    total = total + v
+    count = count + 1
+    total
+}
+
+get_total() = total
+get_count() = count
+
+add_values(vals) = match vals
+    [] -> ()
+    [v | rest] -> {
+        add_value(v)
+        add_values(rest)
+    }
+end
+
+worker(parent, vals) = {
+    add_values(vals)
+    parent <- true
+}
+
+main() = {
+    me = self()
+
+    # Each worker adds values
+    spawn { worker(me, [10, 20, 30]) }
+    spawn { worker(me, [40, 50, 60]) }
+    spawn { worker(me, [70, 80, 90]) }
+    spawn { worker(me, [100, 110, 120]) }
+
+    # Wait for all
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+
+    # Total: 10+20+30+40+50+60+70+80+90+100+110+120 = 780
+    # Count: 12
+    assert_eq(780, get_total())
+    assert_eq(12, get_count())
+}

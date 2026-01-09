@@ -1,0 +1,49 @@
+# expect: ()
+# Stress test: many workers incrementing a counter many times
+# Tests atomicity under high contention
+
+mvar counter: Int = 0
+
+increment() = {
+    counter = counter + 1
+    counter
+}
+
+do_increments(n) = if n <= 0 then () else {
+    increment()
+    do_increments(n - 1)
+}
+
+worker(parent, n) = {
+    do_increments(n)
+    parent <- true
+}
+
+get_counter() = counter
+
+main() = {
+    me = self()
+
+    # Spawn 8 workers, each incrementing 50 times = 400 total
+    spawn { worker(me, 50) }
+    spawn { worker(me, 50) }
+    spawn { worker(me, 50) }
+    spawn { worker(me, 50) }
+    spawn { worker(me, 50) }
+    spawn { worker(me, 50) }
+    spawn { worker(me, 50) }
+    spawn { worker(me, 50) }
+
+    # Wait for all workers
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+
+    # Counter should be exactly 400
+    assert_eq(400, get_counter())
+}

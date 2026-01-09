@@ -1,0 +1,40 @@
+# expect: ()
+# Various counter operations
+
+mvar counter: Int = 0
+
+increment() = {
+    counter = counter + 1
+    counter
+}
+
+decrement() = {
+    counter = counter - 1
+    counter
+}
+
+add(n) = {
+    counter = counter + n
+    counter
+}
+
+multiply(n) = {
+    counter = counter * n
+    counter
+}
+
+reset() = {
+    counter = 0
+    counter
+}
+
+get() = counter
+
+main() = {
+    assert_eq(1, increment())
+    assert_eq(2, increment())
+    assert_eq(1, decrement())
+    assert_eq(11, add(10))
+    assert_eq(22, multiply(2))
+    assert_eq(0, reset())
+}

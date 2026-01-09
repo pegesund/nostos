@@ -19,12 +19,13 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam::channel::{self, Sender, Receiver, TryRecvError};
+use parking_lot::RwLock;
 
 use tokio::sync::mpsc as tokio_mpsc;
 
 use crate::gc::{GcConfig, GcList, GcMapKey, GcNativeFn, GcValue, Heap, InlineOp};
 use crate::io_runtime::{IoRequest, IoRuntime};
-use crate::process::{CallFrame, ExitReason, IoResponseValue, Process, ProcessState, ThreadSafeValue};
+use crate::process::{CallFrame, ExitReason, IoResponseValue, Process, ProcessState, ThreadSafeMapKey, ThreadSafeValue};
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, TypeValue, Value};
 
 /// An entry for the inspect queue - a named value to display in the inspector
@@ -145,6 +146,9 @@ pub struct SharedState {
     pub inspect_sender: Option<InspectSender>,
     /// Output sender (for println from any process to TUI console)
     pub output_sender: Option<OutputSender>,
+    /// Module-level mutable variables (mvars) - shared across threads with RwLock.
+    /// Key is "module_name.var_name", value is ThreadSafeValue protected by RwLock.
+    pub mvars: HashMap<String, Arc<RwLock<ThreadSafeValue>>>,
 }
 
 /// Configuration for the parallel VM.
@@ -615,6 +619,7 @@ impl ParallelVM {
             io_sender: Some(io_sender),
             inspect_sender: None,
             output_sender: None,
+            mvars: HashMap::new(),
         });
 
         Self {
@@ -697,6 +702,55 @@ impl ParallelVM {
             .expect("Cannot register after threads started")
             .jit_loop_array_functions
             .insert(func_index, jit_fn);
+    }
+
+    /// Register a module-level mutable variable with its initial value.
+    /// Called during compilation to set up mvars before threads start.
+    ///
+    /// # Arguments
+    /// * `name` - Fully qualified name (e.g., "MyModule.counter")
+    /// * `initial_value` - Initial value as ThreadSafeValue
+    pub fn register_mvar(&mut self, name: &str, initial_value: ThreadSafeValue) {
+        Arc::get_mut(&mut self.shared)
+            .expect("Cannot register mvars after threads started")
+            .mvars
+            .insert(name.to_string(), Arc::new(RwLock::new(initial_value)));
+    }
+
+    /// Read a module-level mutable variable (mvar).
+    /// Acquires a read lock, converts ThreadSafeValue to GcValue for the given heap.
+    ///
+    /// # Arguments
+    /// * `name` - Fully qualified variable name
+    /// * `heap` - The process's heap to allocate the value on
+    pub fn read_mvar(&self, name: &str, heap: &mut Heap) -> Option<GcValue> {
+        let var = self.shared.mvars.get(name)?;
+        let guard = var.read();
+        Some(guard.to_gc_value(heap))
+    }
+
+    /// Write to a module-level mutable variable (mvar).
+    /// Converts GcValue to ThreadSafeValue, acquires write lock, stores the value.
+    ///
+    /// # Arguments
+    /// * `name` - Fully qualified variable name
+    /// * `value` - The new value (will be deep-copied)
+    /// * `heap` - The process's heap (for reading complex values)
+    pub fn write_mvar(&self, name: &str, value: &GcValue, heap: &Heap) -> Result<(), RuntimeError> {
+        let var = self.shared.mvars.get(name)
+            .ok_or_else(|| RuntimeError::Panic(format!("Unknown mvar: {}", name)))?;
+
+        let safe_value = ThreadSafeValue::from_gc_value(value, heap)
+            .ok_or_else(|| RuntimeError::Panic(format!("Cannot convert value for mvar: {}", name)))?;
+
+        let mut guard = var.write();
+        *guard = safe_value;
+        Ok(())
+    }
+
+    /// Check if an mvar exists.
+    pub fn has_mvar(&self, name: &str) -> bool {
+        self.shared.mvars.contains_key(name)
     }
 
     /// Register the default native functions (show, copy, print, println, etc.)
@@ -7245,6 +7299,76 @@ impl ThreadWorker {
                     let sb = proc.heap.display_value(&vb);
                     return Err(RuntimeError::Panic(format!("Assertion failed: {} != {}", sa, sb)));
                 }
+            }
+
+            // === Module-level mutable variables (mvars) ===
+            MvarLock(name_idx, is_write) => {
+                let name = match &constants[*name_idx as usize] {
+                    Value::String(s) => s.as_str(),
+                    _ => return Err(RuntimeError::Panic("MvarLock: name must be a string constant".to_string())),
+                };
+                let var = self.shared.mvars.get(name)
+                    .ok_or_else(|| RuntimeError::Panic(format!("Unknown mvar: {}", name)))?;
+                // Use raw lock for manual management (lock held until MvarUnlock)
+                use parking_lot::lock_api::RawRwLock as _;
+                unsafe {
+                    if *is_write {
+                        var.raw().lock_exclusive();
+                    } else {
+                        var.raw().lock_shared();
+                    }
+                }
+            }
+
+            MvarUnlock(name_idx, is_write) => {
+                let name = match &constants[*name_idx as usize] {
+                    Value::String(s) => s.as_str(),
+                    _ => return Err(RuntimeError::Panic("MvarUnlock: name must be a string constant".to_string())),
+                };
+                let var = self.shared.mvars.get(name)
+                    .ok_or_else(|| RuntimeError::Panic(format!("Unknown mvar: {}", name)))?;
+                // Release the lock acquired by MvarLock
+                use parking_lot::lock_api::RawRwLock as _;
+                unsafe {
+                    if *is_write {
+                        var.raw().unlock_exclusive();
+                    } else {
+                        var.raw().unlock_shared();
+                    }
+                }
+            }
+
+            MvarRead(dst, name_idx) => {
+                // Assumes lock is already held via MvarLock
+                let name = match &constants[*name_idx as usize] {
+                    Value::String(s) => s.as_str(),
+                    _ => return Err(RuntimeError::Panic("MvarRead: name must be a string constant".to_string())),
+                };
+                let var = self.shared.mvars.get(name)
+                    .ok_or_else(|| RuntimeError::Panic(format!("Unknown mvar: {}", name)))?
+                    .clone();  // Clone Arc to release borrow on self.shared
+                // Access data directly (lock is held by MvarLock)
+                let value = unsafe { &*var.data_ptr() };
+                let proc = self.get_process_mut(local_id).unwrap();
+                let gc_value = value.to_gc_value(&mut proc.heap);
+                proc.frames.last_mut().unwrap().registers[*dst as usize] = gc_value;
+            }
+
+            MvarWrite(name_idx, src) => {
+                // Assumes write lock is already held via MvarLock
+                let name = match &constants[*name_idx as usize] {
+                    Value::String(s) => s.as_str(),
+                    _ => return Err(RuntimeError::Panic("MvarWrite: name must be a string constant".to_string())),
+                };
+                let value = reg!(*src).clone();
+                let var = self.shared.mvars.get(name)
+                    .ok_or_else(|| RuntimeError::Panic(format!("Unknown mvar: {}", name)))?
+                    .clone();  // Clone Arc to release borrow on self.shared
+                let proc = self.get_process(local_id).unwrap();
+                let safe_value = ThreadSafeValue::from_gc_value(&value, &proc.heap)
+                    .ok_or_else(|| RuntimeError::Panic(format!("Cannot convert value for mvar: {}", name)))?;
+                // Write data directly (write lock is held by MvarLock)
+                unsafe { *var.data_ptr() = safe_value; }
             }
 
             Panic(msg_reg) => {

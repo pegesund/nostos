@@ -1,0 +1,22 @@
+# expect: ()
+# Float mvar
+
+mvar balance: Float = 100.0
+
+get_balance() = balance
+
+deposit(amount) = {
+    balance = balance + amount
+    balance
+}
+
+withdraw(amount) = {
+    balance = balance - amount
+    balance
+}
+
+main() = {
+    assert_eq(100.0, get_balance())
+    assert_eq(150.0, deposit(50.0))
+    assert_eq(125.0, withdraw(25.0))
+}

@@ -88,7 +88,7 @@ pub enum Item {
     /// Top-level binding
     Binding(Binding),
     /// Module-level mutable variable (thread-safe with RwLock)
-    ModVarDef(ModVarDef),
+    MvarDef(MvarDef),
     /// Test definition
     Test(TestDef),
     /// Extern declaration (FFI)
@@ -106,7 +106,7 @@ impl Item {
             Item::ModuleDef(def) => def.span,
             Item::Use(stmt) => stmt.span,
             Item::Binding(binding) => binding.span,
-            Item::ModVarDef(def) => def.span,
+            Item::MvarDef(def) => def.span,
             Item::Test(test) => test.span,
             Item::Extern(ext) => ext.span,
         }
@@ -655,11 +655,11 @@ pub struct Binding {
     pub span: Span,
 }
 
-/// A module-level mutable variable definition.
+/// A module-level mutable variable definition (mvar).
 /// These are shared across threads with automatic RwLock synchronization.
-/// Syntax: `mod name: Type = expr` (type annotation required)
+/// Syntax: `mvar name: Type = expr` (type annotation required)
 #[derive(Debug, Clone, PartialEq)]
-pub struct ModVarDef {
+pub struct MvarDef {
     pub visibility: Visibility,
     pub name: Ident,
     pub ty: TypeExpr,  // Required for thread-safe shared state

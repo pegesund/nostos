@@ -504,6 +504,47 @@ pub struct Compiler {
     known_modules: HashSet<String>,
     /// REPL mode: bypass visibility checks for interactive exploration
     repl_mode: bool,
+    /// Module-level mutable variables (mvars): qualified name -> MvarInfo
+    /// These are thread-safe shared state with automatic RwLock
+    mvars: HashMap<String, MvarInfo>,
+
+    // === Mvar deadlock detection ===
+    /// Function mvar access: function name -> (reads, writes)
+    fn_mvar_access: HashMap<String, FnMvarAccess>,
+    /// Function calls: function name -> set of called functions
+    fn_calls: HashMap<String, HashSet<String>>,
+    /// Current function's mvar reads (during compilation)
+    current_fn_mvar_reads: HashSet<String>,
+    /// Current function's mvar writes (during compilation)
+    current_fn_mvar_writes: HashSet<String>,
+    /// Current function's calls (during compilation)
+    current_fn_calls: HashSet<String>,
+}
+
+/// Information about a module-level mutable variable (mvar).
+#[derive(Clone, Debug)]
+pub struct MvarInfo {
+    pub type_name: String,
+    pub initial_value: MvarInitValue,
+}
+
+/// Initial value for an mvar (must be a compile-time constant).
+#[derive(Clone, Debug)]
+pub enum MvarInitValue {
+    Unit,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(String),
+    Char(char),
+    EmptyList,
+}
+
+/// Mvar access information for a function (for deadlock detection).
+#[derive(Clone, Debug, Default)]
+pub struct FnMvarAccess {
+    pub reads: HashSet<String>,
+    pub writes: HashSet<String>,
 }
 
 /// Context for a loop being compiled (for break/continue).
@@ -601,6 +642,12 @@ impl Compiler {
             type_defs: HashMap::new(),
             known_modules: builtin_modules,
             repl_mode: false,
+            mvars: HashMap::new(),
+            fn_mvar_access: HashMap::new(),
+            fn_calls: HashMap::new(),
+            current_fn_mvar_reads: HashSet::new(),
+            current_fn_mvar_writes: HashSet::new(),
+            current_fn_calls: HashSet::new(),
         }
     }
 
@@ -783,6 +830,12 @@ impl Compiler {
             type_defs: HashMap::new(),
             known_modules: builtin_modules,
             repl_mode: false,
+            mvars: HashMap::new(),
+            fn_mvar_access: HashMap::new(),
+            fn_calls: HashMap::new(),
+            current_fn_mvar_reads: HashSet::new(),
+            current_fn_mvar_writes: HashSet::new(),
+            current_fn_calls: HashSet::new(),
         }
     }
 
@@ -1121,6 +1174,9 @@ impl Compiler {
             Item::TraitImpl(trait_impl) => {
                 self.compile_trait_impl(trait_impl)?;
             }
+            Item::MvarDef(mvar_def) => {
+                self.compile_mvar_def(mvar_def)?;
+            }
             _ => {
                 return Err(CompileError::NotImplemented {
                     feature: format!("item: {:?}", item),
@@ -1155,6 +1211,310 @@ impl Compiler {
             nostos_syntax::TypeExpr::Tuple(_) => "Tuple".to_string(),
             nostos_syntax::TypeExpr::Unit => "Unit".to_string(),
         }
+    }
+
+    /// Compile a module-level mutable variable (mvar) definition.
+    /// This registers the mvar with the compiler and will set up the VM storage.
+    fn compile_mvar_def(&mut self, def: &MvarDef) -> Result<(), CompileError> {
+        let qualified_name = self.qualify_name(&def.name.node);
+        let type_name = self.type_expr_name(&def.ty);
+
+        // Evaluate the initial value (must be a compile-time constant)
+        let initial_value = self.eval_const_expr(&def.value)
+            .ok_or_else(|| CompileError::NotImplemented {
+                feature: format!("mvar initial value must be a constant literal, got: {:?}", def.value),
+                span: def.span,
+            })?;
+
+        // Register the mvar in our tracking map
+        self.mvars.insert(qualified_name.clone(), MvarInfo {
+            type_name,
+            initial_value,
+        });
+
+        Ok(())
+    }
+
+    /// Evaluate a constant expression to an MvarInitValue.
+    /// Returns None if the expression is not a compile-time constant.
+    fn eval_const_expr(&self, expr: &Expr) -> Option<MvarInitValue> {
+        match expr {
+            Expr::Unit(_) => Some(MvarInitValue::Unit),
+            Expr::Bool(b, _) => Some(MvarInitValue::Bool(*b)),
+            Expr::Int(n, _) => Some(MvarInitValue::Int(*n)),
+            Expr::Float(f, _) => Some(MvarInitValue::Float(*f)),
+            Expr::String(StringLit::Plain(s), _) => Some(MvarInitValue::String(s.clone())),
+            Expr::Char(c, _) => Some(MvarInitValue::Char(*c)),
+            Expr::List(items, None, _) if items.is_empty() => Some(MvarInitValue::EmptyList),
+            _ => None,
+        }
+    }
+
+    /// Analyze an expression to find all mvar accesses (reads and writes).
+    /// This is used for function-level locking - we need to know which mvars
+    /// a function accesses BEFORE compiling it so we can emit lock instructions.
+    /// Returns (reads, writes) as sets of mvar names.
+    fn analyze_mvar_access(&self, expr: &Expr) -> (HashSet<String>, HashSet<String>) {
+        let mut reads = HashSet::new();
+        let mut writes = HashSet::new();
+        self.collect_mvar_access(expr, &mut reads, &mut writes);
+        (reads, writes)
+    }
+
+    /// Recursively collect mvar accesses from an expression.
+    fn collect_mvar_access(&self, expr: &Expr, reads: &mut HashSet<String>, writes: &mut HashSet<String>) {
+        match expr {
+            Expr::Var(ident) => {
+                let name = self.resolve_name(&ident.node);
+                if self.mvars.contains_key(&name) {
+                    reads.insert(name);
+                }
+            }
+            // Binary operations
+            Expr::BinOp(left, _, right, _) => {
+                self.collect_mvar_access(left, reads, writes);
+                self.collect_mvar_access(right, reads, writes);
+            }
+            // Unary operations
+            Expr::UnaryOp(_, operand, _) => {
+                self.collect_mvar_access(operand, reads, writes);
+            }
+            // If expression (else branch is not optional in this AST)
+            Expr::If(cond, then_branch, else_branch, _) => {
+                self.collect_mvar_access(cond, reads, writes);
+                self.collect_mvar_access(then_branch, reads, writes);
+                self.collect_mvar_access(else_branch, reads, writes);
+            }
+            // Block expression
+            Expr::Block(stmts, _) => {
+                for stmt in stmts {
+                    self.collect_mvar_access_stmt(stmt, reads, writes);
+                }
+            }
+            // Do block
+            Expr::Do(do_stmts, _) => {
+                for do_stmt in do_stmts {
+                    match do_stmt {
+                        DoStmt::Bind(_, expr) => self.collect_mvar_access(expr, reads, writes),
+                        DoStmt::Expr(expr) => self.collect_mvar_access(expr, reads, writes),
+                    }
+                }
+            }
+            // Function call
+            Expr::Call(func, args, _) => {
+                self.collect_mvar_access(func, reads, writes);
+                for arg in args {
+                    self.collect_mvar_access(arg, reads, writes);
+                }
+            }
+            // Method call
+            Expr::MethodCall(receiver, _, args, _) => {
+                self.collect_mvar_access(receiver, reads, writes);
+                for arg in args {
+                    self.collect_mvar_access(arg, reads, writes);
+                }
+            }
+            // Field access
+            Expr::FieldAccess(obj, _, _) => {
+                self.collect_mvar_access(obj, reads, writes);
+            }
+            // Index access
+            Expr::Index(obj, idx, _) => {
+                self.collect_mvar_access(obj, reads, writes);
+                self.collect_mvar_access(idx, reads, writes);
+            }
+            // List literal
+            Expr::List(items, spread, _) => {
+                for item in items {
+                    self.collect_mvar_access(item, reads, writes);
+                }
+                if let Some(spread_expr) = spread {
+                    self.collect_mvar_access(spread_expr, reads, writes);
+                }
+            }
+            // Tuple
+            Expr::Tuple(items, _) => {
+                for item in items {
+                    self.collect_mvar_access(item, reads, writes);
+                }
+            }
+            // Record literal
+            Expr::Record(_, fields, _) => {
+                for field in fields {
+                    match field {
+                        RecordField::Positional(expr) => self.collect_mvar_access(expr, reads, writes),
+                        RecordField::Named(_, expr) => self.collect_mvar_access(expr, reads, writes),
+                    }
+                }
+            }
+            // Record update
+            Expr::RecordUpdate(_, base, fields, _) => {
+                self.collect_mvar_access(base, reads, writes);
+                for field in fields {
+                    match field {
+                        RecordField::Positional(expr) => self.collect_mvar_access(expr, reads, writes),
+                        RecordField::Named(_, expr) => self.collect_mvar_access(expr, reads, writes),
+                    }
+                }
+            }
+            // Match expression
+            Expr::Match(scrutinee, arms, _) => {
+                self.collect_mvar_access(scrutinee, reads, writes);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.collect_mvar_access(guard, reads, writes);
+                    }
+                    self.collect_mvar_access(&arm.body, reads, writes);
+                }
+            }
+            // Lambda
+            Expr::Lambda(_, body, _) => {
+                self.collect_mvar_access(body, reads, writes);
+            }
+            // Try-catch
+            Expr::Try(try_expr, catch_arms, finally_expr, _) => {
+                self.collect_mvar_access(try_expr, reads, writes);
+                for arm in catch_arms {
+                    if let Some(guard) = &arm.guard {
+                        self.collect_mvar_access(guard, reads, writes);
+                    }
+                    self.collect_mvar_access(&arm.body, reads, writes);
+                }
+                if let Some(finally) = finally_expr {
+                    self.collect_mvar_access(finally, reads, writes);
+                }
+            }
+            // Spawn
+            Expr::Spawn(_, func, args, _) => {
+                self.collect_mvar_access(func, reads, writes);
+                for arg in args {
+                    self.collect_mvar_access(arg, reads, writes);
+                }
+            }
+            // While loop
+            Expr::While(cond, body, _) => {
+                self.collect_mvar_access(cond, reads, writes);
+                self.collect_mvar_access(body, reads, writes);
+            }
+            // For loop
+            Expr::For(_, start, end, body, _) => {
+                self.collect_mvar_access(start, reads, writes);
+                self.collect_mvar_access(end, reads, writes);
+                self.collect_mvar_access(body, reads, writes);
+            }
+            // Send
+            Expr::Send(target, msg, _) => {
+                self.collect_mvar_access(target, reads, writes);
+                self.collect_mvar_access(msg, reads, writes);
+            }
+            // Receive
+            Expr::Receive(arms, timeout, _) => {
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.collect_mvar_access(guard, reads, writes);
+                    }
+                    self.collect_mvar_access(&arm.body, reads, writes);
+                }
+                if let Some((timeout_expr, timeout_body)) = timeout {
+                    self.collect_mvar_access(timeout_expr, reads, writes);
+                    self.collect_mvar_access(timeout_body, reads, writes);
+                }
+            }
+            // Break with optional value
+            Expr::Break(value, _) => {
+                if let Some(val) = value {
+                    self.collect_mvar_access(val, reads, writes);
+                }
+            }
+            // Map literal
+            Expr::Map(pairs, _) => {
+                for (key, value) in pairs {
+                    self.collect_mvar_access(key, reads, writes);
+                    self.collect_mvar_access(value, reads, writes);
+                }
+            }
+            // Set literal
+            Expr::Set(items, _) => {
+                for item in items {
+                    self.collect_mvar_access(item, reads, writes);
+                }
+            }
+            // Try_ (simple try without catch)
+            Expr::Try_(try_expr, _) => {
+                self.collect_mvar_access(try_expr, reads, writes);
+            }
+            // Quote/Splice (macro-like)
+            Expr::Quote(expr, _) => {
+                self.collect_mvar_access(expr, reads, writes);
+            }
+            Expr::Splice(expr, _) => {
+                self.collect_mvar_access(expr, reads, writes);
+            }
+            // Literals and other expressions that don't contain mvar access
+            Expr::Unit(_) | Expr::Bool(_, _) | Expr::Int(_, _) | Expr::Float(_, _)
+            | Expr::String(_, _) | Expr::Char(_, _) | Expr::Wildcard(_) | Expr::Continue(_)
+            | Expr::Int8(_, _) | Expr::Int16(_, _) | Expr::Int32(_, _)
+            | Expr::UInt8(_, _) | Expr::UInt16(_, _) | Expr::UInt32(_, _) | Expr::UInt64(_, _)
+            | Expr::Float32(_, _) | Expr::BigInt(_, _) | Expr::Decimal(_, _) => {}
+        }
+    }
+
+    /// Collect mvar accesses from a statement.
+    fn collect_mvar_access_stmt(&self, stmt: &Stmt, reads: &mut HashSet<String>, writes: &mut HashSet<String>) {
+        match stmt {
+            Stmt::Expr(expr) => {
+                self.collect_mvar_access(expr, reads, writes);
+            }
+            Stmt::Let(binding) => {
+                // Check if binding target is an mvar (for reassignment)
+                if let Pattern::Var(ident) = &binding.pattern {
+                    let name = self.resolve_name(&ident.node);
+                    if self.mvars.contains_key(&name) {
+                        writes.insert(name);
+                    }
+                }
+                self.collect_mvar_access(&binding.value, reads, writes);
+            }
+            Stmt::Assign(target, value, _) => {
+                if let AssignTarget::Var(ident) = target {
+                    let name = self.resolve_name(&ident.node);
+                    if self.mvars.contains_key(&name) {
+                        writes.insert(name);
+                    }
+                }
+                self.collect_mvar_access(value, reads, writes);
+            }
+        }
+    }
+
+    /// Analyze a function clause to find all mvar accesses.
+    fn analyze_fn_clause_mvar_access(&self, clause: &FnClause) -> (HashSet<String>, HashSet<String>) {
+        let mut reads = HashSet::new();
+        let mut writes = HashSet::new();
+
+        // Analyze guard if present
+        if let Some(guard) = &clause.guard {
+            self.collect_mvar_access(guard, &mut reads, &mut writes);
+        }
+
+        // Analyze body
+        self.collect_mvar_access(&clause.body, &mut reads, &mut writes);
+
+        (reads, writes)
+    }
+
+    /// Analyze all clauses of a function definition to find mvar accesses.
+    fn analyze_fn_def_mvar_access(&self, def: &FnDef) -> (HashSet<String>, HashSet<String>) {
+        let mut reads = HashSet::new();
+        let mut writes = HashSet::new();
+
+        for clause in &def.clauses {
+            let (clause_reads, clause_writes) = self.analyze_fn_clause_mvar_access(clause);
+            reads.extend(clause_reads);
+            writes.extend(clause_writes);
+        }
+
+        (reads, writes)
     }
 
     /// Compile a type definition.
@@ -2402,6 +2762,11 @@ impl Compiler {
         // Track current function name for self-recursion optimization
         self.current_function_name = Some(name.clone());
 
+        // Save and clear mvar tracking for this function (for deadlock detection)
+        let saved_mvar_reads = std::mem::take(&mut self.current_fn_mvar_reads);
+        let saved_mvar_writes = std::mem::take(&mut self.current_fn_mvar_writes);
+        let saved_fn_calls = std::mem::take(&mut self.current_fn_calls);
+
         // Store the function's visibility
         self.function_visibility.insert(name.clone(), def.visibility);
 
@@ -2484,6 +2849,31 @@ impl Compiler {
         // Allocate registers for parameters (0..arity)
         self.next_reg = arity as Reg;
 
+        // === Function-level mvar locking ===
+        // Analyze which mvars this function accesses (pre-analysis before compiling)
+        let (fn_mvar_reads, fn_mvar_writes) = self.analyze_fn_def_mvar_access(def);
+
+        // Determine lock types: write lock if mvar is written, read lock otherwise
+        // Collect all accessed mvars with their lock types
+        let mut mvar_locks: Vec<(String, bool)> = Vec::new(); // (name, is_write)
+        for mvar_name in &fn_mvar_writes {
+            mvar_locks.push((mvar_name.clone(), true)); // write lock
+        }
+        for mvar_name in &fn_mvar_reads {
+            if !fn_mvar_writes.contains(mvar_name) {
+                mvar_locks.push((mvar_name.clone(), false)); // read lock
+            }
+        }
+
+        // Sort by name to ensure consistent lock ordering (prevents deadlocks)
+        mvar_locks.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Emit MvarLock instructions at function entry
+        for (mvar_name, is_write) in &mvar_locks {
+            let name_idx = self.chunk.add_constant(Value::String(Arc::new(mvar_name.clone())));
+            self.chunk.emit(Instruction::MvarLock(name_idx, *is_write), 0);
+        }
+
         if needs_dispatch {
             // Multi-clause dispatch: try each clause in order
             let mut clause_jumps: Vec<usize> = Vec::new();
@@ -2536,6 +2926,11 @@ impl Compiler {
                     }
                     Err(e) => return Err(e),
                 };
+                // Emit MvarUnlock instructions before Return (reverse order)
+                for (mvar_name, is_write) in mvar_locks.iter().rev() {
+                    let name_idx = self.chunk.add_constant(Value::String(Arc::new(mvar_name.clone())));
+                    self.chunk.emit(Instruction::MvarUnlock(name_idx, *is_write), 0);
+                }
                 self.chunk.emit(Instruction::Return(result_reg), 0);
 
                 // Record where we need to patch for "matched" jumps
@@ -2590,10 +2985,18 @@ impl Compiler {
                     self.current_function_name = saved_function_name;
                     self.param_types = saved_param_types;
                     self.current_fn_type_params = saved_fn_type_params;
+                    self.current_fn_mvar_reads = saved_mvar_reads;
+                    self.current_fn_mvar_writes = saved_mvar_writes;
+                    self.current_fn_calls = saved_fn_calls;
                     return Ok(());
                 }
                 Err(e) => return Err(e),
             };
+            // Emit MvarUnlock instructions before Return (reverse order)
+            for (mvar_name, is_write) in mvar_locks.iter().rev() {
+                let name_idx = self.chunk.add_constant(Value::String(Arc::new(mvar_name.clone())));
+                self.chunk.emit(Instruction::MvarUnlock(name_idx, *is_write), 0);
+            }
             self.chunk.emit(Instruction::Return(result_reg), 0);
         }
 
@@ -2651,6 +3054,19 @@ impl Compiler {
             self.function_list.push(name.clone());
         }
 
+        // Save mvar access info for this function (for deadlock detection)
+        let fn_access = FnMvarAccess {
+            reads: std::mem::take(&mut self.current_fn_mvar_reads),
+            writes: std::mem::take(&mut self.current_fn_mvar_writes),
+        };
+        if !fn_access.reads.is_empty() || !fn_access.writes.is_empty() {
+            self.fn_mvar_access.insert(name.clone(), fn_access);
+        }
+        let fn_calls_for_this_fn = std::mem::take(&mut self.current_fn_calls);
+        if !fn_calls_for_this_fn.is_empty() {
+            self.fn_calls.insert(name.clone(), fn_calls_for_this_fn);
+        }
+
         self.functions.insert(name, Arc::new(func));
 
         // Restore compiler state
@@ -2660,6 +3076,9 @@ impl Compiler {
         self.current_function_name = saved_function_name;
         self.param_types = saved_param_types;
         self.current_fn_type_params = saved_fn_type_params;
+        self.current_fn_mvar_reads = saved_mvar_reads;
+        self.current_fn_mvar_writes = saved_mvar_writes;
+        self.current_fn_calls = saved_fn_calls;
 
         Ok(())
     }
@@ -2839,6 +3258,16 @@ impl Compiler {
                         // But this shouldn't happen - recursive calls should go through compile_call
                         // If we reach here, it's a first-class reference to a function not yet compiled
                         // Return an error for now - this case needs special handling
+                    }
+                    // Check if it's a module-level mutable variable (mvar)
+                    let mvar_name = self.resolve_name(name);
+                    if self.mvars.contains_key(&mvar_name) {
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new(mvar_name.clone())));
+                        self.chunk.emit(Instruction::MvarRead(dst, name_idx), line);
+                        // Track mvar read for deadlock detection
+                        self.current_fn_mvar_reads.insert(mvar_name);
+                        return Ok(dst);
                     }
                     Err(CompileError::UnknownVariable {
                         name: name.clone(),
@@ -3571,6 +4000,8 @@ impl Compiler {
                         let dst = self.alloc_reg();
                         // Direct function call by index (no HashMap lookup at runtime!)
                         if let Some(&func_idx) = self.function_indices.get(&call_name) {
+                            // Track function call for deadlock detection
+                            self.current_fn_calls.insert(call_name.clone());
                             if is_tail {
                                 self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
                                 return Ok(0);
@@ -3629,6 +4060,8 @@ impl Compiler {
                         let dst = self.alloc_reg();
                         // Direct function call by index (no HashMap lookup at runtime!)
                         if let Some(&func_idx) = self.function_indices.get(&call_name) {
+                            // Track function call for deadlock detection
+                            self.current_fn_calls.insert(call_name.clone());
                             if is_tail {
                                 self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
                                 return Ok(0);
@@ -4519,6 +4952,8 @@ impl Compiler {
                                         let dst = self.alloc_reg();
                                         let func_idx = *self.function_indices.get(&resolved_method)
                                             .expect("Function should have been assigned an index");
+                                        // Track function call for deadlock detection
+                                        self.current_fn_calls.insert(resolved_method.clone());
                                         if is_tail {
                                             self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
                                             return Ok(0);
@@ -4776,6 +5211,10 @@ impl Compiler {
 
                 if is_self_call {
                     // Direct self-call - no lookup needed!
+                    // Track self-call for deadlock detection
+                    if let Some(ref fn_name) = self.current_function_name {
+                        self.current_fn_calls.insert(fn_name.clone());
+                    }
                     if is_tail {
                         self.chunk.emit(Instruction::TailCallSelf(arg_regs.into()), line);
                         return Ok(0);
@@ -4785,6 +5224,8 @@ impl Compiler {
                     }
                 } else if let Some(&func_idx) = self.function_indices.get(&final_call_name) {
                     // Direct function call by index (no HashMap lookup at runtime!)
+                    // Track function call for deadlock detection
+                    self.current_fn_calls.insert(final_call_name.clone());
                     if is_tail {
                         self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
                         return Ok(0);
@@ -6189,12 +6630,22 @@ impl Compiler {
                     self.chunk.emit(Instruction::AssertEq(existing_info.reg, value_reg), binding.span.start);
                 }
             } else {
-                // New binding - determine if float from explicit type or value expression
-                let is_float = self.is_float_type(&value_type) || self.is_float_expr(&binding.value);
-                self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: binding.mutable });
-                // Record the type (explicit takes precedence over inferred)
-                if let Some(ty) = value_type {
-                    self.local_types.insert(ident.node.clone(), ty);
+                // Check if this is an mvar (module-level mutable variable) assignment
+                let mvar_name = self.resolve_name(&ident.node);
+                if self.mvars.contains_key(&mvar_name) {
+                    // This is an mvar assignment, not a new binding
+                    let name_idx = self.chunk.add_constant(Value::String(Arc::new(mvar_name.clone())));
+                    self.chunk.emit(Instruction::MvarWrite(name_idx, value_reg), 0);
+                    // Track mvar write for deadlock detection
+                    self.current_fn_mvar_writes.insert(mvar_name);
+                } else {
+                    // New binding - determine if float from explicit type or value expression
+                    let is_float = self.is_float_type(&value_type) || self.is_float_expr(&binding.value);
+                    self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: binding.mutable });
+                    // Record the type (explicit takes precedence over inferred)
+                    if let Some(ty) = value_type {
+                        self.local_types.insert(ident.node.clone(), ty);
+                    }
                 }
             }
         } else {
@@ -6228,10 +6679,19 @@ impl Compiler {
                     let var_reg = info.reg;
                     self.chunk.emit(Instruction::Move(var_reg, value_reg), 0);
                 } else {
-                    return Err(CompileError::UnknownVariable {
-                        name: ident.node.clone(),
-                        span: ident.span,
-                    });
+                    // Check if it's a module-level mutable variable (mvar)
+                    let mvar_name = self.resolve_name(&ident.node);
+                    if self.mvars.contains_key(&mvar_name) {
+                        let name_idx = self.chunk.add_constant(Value::String(Arc::new(mvar_name.clone())));
+                        self.chunk.emit(Instruction::MvarWrite(name_idx, value_reg), 0);
+                        // Track mvar write for deadlock detection
+                        self.current_fn_mvar_writes.insert(mvar_name);
+                    } else {
+                        return Err(CompileError::UnknownVariable {
+                            name: ident.node.clone(),
+                            span: ident.span,
+                        });
+                    }
                 }
             }
             AssignTarget::Field(obj, field) => {
@@ -6595,6 +7055,109 @@ impl Compiler {
         self.function_list.iter()
             .filter_map(|name| self.functions.get(name).cloned())
             .collect()
+    }
+
+    /// Get the module-level mutable variables (mvars).
+    /// Returns a HashMap of qualified name -> MvarInfo.
+    pub fn get_mvars(&self) -> &HashMap<String, MvarInfo> {
+        &self.mvars
+    }
+
+    /// Check for potential mvar concurrency issues.
+    /// Returns a list of warning messages if issues are detected.
+    ///
+    /// With per-instruction locking, these are race conditions (not deadlocks):
+    /// - Function A accesses mvar X, then calls function B which also accesses X
+    ///   (the locks are released between accesses, so no deadlock, but potential race)
+    /// - Recursive function that accesses the same mvar
+    ///
+    /// With function-level locking (future), these would be actual deadlocks.
+    pub fn check_mvar_deadlocks(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        // For each function that accesses mvars
+        for (fn_name, fn_access) in &self.fn_mvar_access {
+            // Check all mvars this function accesses
+            let all_mvars: HashSet<&String> = fn_access.reads.iter()
+                .chain(fn_access.writes.iter())
+                .collect();
+
+            for mvar in all_mvars {
+                // Check if this function calls itself (recursive) and accesses the mvar
+                if let Some(calls) = self.fn_calls.get(fn_name) {
+                    if calls.contains(fn_name) {
+                        // Self-recursive and accesses mvar
+                        let access_type = if fn_access.writes.contains(mvar) {
+                            "writes to"
+                        } else {
+                            "reads"
+                        };
+                        errors.push(format!(
+                            "Potential deadlock: recursive function `{}` {} mvar `{}`",
+                            fn_name.split('/').next().unwrap_or(fn_name),
+                            access_type,
+                            mvar
+                        ));
+                    }
+                }
+
+                // Check transitively called functions
+                let mut visited = HashSet::new();
+                let mut stack = Vec::new();
+                if let Some(calls) = self.fn_calls.get(fn_name) {
+                    for callee in calls {
+                        if callee != fn_name {
+                            stack.push(callee.clone());
+                        }
+                    }
+                }
+
+                while let Some(callee) = stack.pop() {
+                    if visited.contains(&callee) {
+                        continue;
+                    }
+                    visited.insert(callee.clone());
+
+                    // Check if callee accesses the same mvar
+                    if let Some(callee_access) = self.fn_mvar_access.get(&callee) {
+                        let callee_accesses_mvar = callee_access.reads.contains(mvar)
+                            || callee_access.writes.contains(mvar);
+
+                        if callee_accesses_mvar {
+                            let caller_access = if fn_access.writes.contains(mvar) {
+                                "writes to"
+                            } else {
+                                "reads"
+                            };
+                            let callee_access_type = if callee_access.writes.contains(mvar) {
+                                "writes to"
+                            } else {
+                                "reads"
+                            };
+                            errors.push(format!(
+                                "Potential deadlock: `{}` {} mvar `{}` and calls `{}` which {} the same mvar",
+                                fn_name.split('/').next().unwrap_or(fn_name),
+                                caller_access,
+                                mvar,
+                                callee.split('/').next().unwrap_or(&callee),
+                                callee_access_type
+                            ));
+                        }
+                    }
+
+                    // Add callee's callees to the stack
+                    if let Some(callee_calls) = self.fn_calls.get(&callee) {
+                        for next_callee in callee_calls {
+                            if !visited.contains(next_callee) {
+                                stack.push(next_callee.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        errors
     }
 
     /// Get all types for the VM.
@@ -7713,6 +8276,13 @@ impl Compiler {
         for item in items {
             if let Item::ModuleDef(module_def) = item {
                 self.compile_module_def(module_def)?;
+            }
+        }
+
+        // Sixth pass: process mvar definitions (before functions so they're available)
+        for item in items {
+            if let Item::MvarDef(mvar_def) = item {
+                self.compile_mvar_def(mvar_def)?;
             }
         }
 

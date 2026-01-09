@@ -89,7 +89,7 @@ fn ident() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
     filter_map(|span, tok| match tok {
         Token::LowerIdent(s) => Ok(make_ident(s, to_span(span))),
         Token::SelfKw => Ok(make_ident("self".to_string(), to_span(span))),
-        Token::Test | Token::Type | Token::Var | Token::Mod | Token::If | Token::Then | Token::Else |
+        Token::Test | Token::Type | Token::Var | Token::Mvar | Token::If | Token::Then | Token::Else |
         Token::Match | Token::When | Token::Trait | Token::Module | Token::End |
         Token::Use | Token::Private | Token::Pub | Token::Try | Token::Catch |
         Token::Finally | Token::Do | Token::While | Token::For | Token::To |
@@ -1434,22 +1434,22 @@ fn binding() -> impl Parser<Token, Binding, Error = Simple<Token>> + Clone {
     typed_binding.or(untyped_binding)
 }
 
-/// Parser for module-level mutable variable definition.
-/// Syntax: `mod name: Type = expr` or `pub mod name: Type = expr`
+/// Parser for module-level mutable variable definition (mvar).
+/// Syntax: `mvar name: Type = expr` or `pub mvar name: Type = expr`
 /// Type annotation is required for thread-safe shared state.
-fn mod_var_def() -> impl Parser<Token, ModVarDef, Error = Simple<Token>> + Clone {
+fn mvar_def() -> impl Parser<Token, MvarDef, Error = Simple<Token>> + Clone {
     let visibility = just(Token::Pub).or_not().map(|v| {
         if v.is_some() { Visibility::Public } else { Visibility::Private }
     });
 
     visibility
-        .then_ignore(just(Token::Mod))
+        .then_ignore(just(Token::Mvar))
         .then(ident())
         .then_ignore(just(Token::Colon))
         .then(type_expr())
         .then_ignore(just(Token::Eq))
         .then(expr())
-        .map_with_span(|(((vis, name), ty), value), span| ModVarDef {
+        .map_with_span(|(((vis, name), ty), value), span| MvarDef {
             visibility: vis,
             name,
             ty,
@@ -1681,7 +1681,7 @@ fn item() -> impl Parser<Token, Item, Error = Simple<Token>> + Clone {
             extern_decl().map(Item::Extern),
             use_stmt().map(Item::Use),
             fn_def().map(Item::FnDef),
-            mod_var_def().map(Item::ModVarDef),  // Must be before binding() to parse 'mod x = ...'
+            mvar_def().map(Item::MvarDef),  // Must be before binding() to parse 'mvar x = ...'
             binding().map(Item::Binding),
         ))
     })

@@ -1,0 +1,15 @@
+# expect: ()
+# Read and write in same function (atomic operation)
+
+mvar counter: Int = 0
+
+increment() = {
+    counter = counter + 1
+    counter
+}
+
+main() = {
+    assert_eq(1, increment())
+    assert_eq(2, increment())
+    assert_eq(3, increment())
+}

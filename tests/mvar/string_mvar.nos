@@ -1,0 +1,17 @@
+# expect: ()
+# String mvar
+
+mvar name: String = "initial"
+
+get_name() = name
+
+set_name(n) = {
+    name = n
+    name
+}
+
+main() = {
+    assert_eq("initial", get_name())
+    assert_eq("updated", set_name("updated"))
+    assert_eq("updated", get_name())
+}

@@ -1,0 +1,41 @@
+# expect: ()
+# Multiple workers adding different amounts to accumulator
+
+mvar sum: Int = 0
+
+add(n) = {
+    sum = sum + n
+    sum
+}
+
+get_sum() = sum
+
+add_range(lo, hi) = if lo > hi then () else {
+    add(lo)
+    add_range(lo + 1, hi)
+}
+
+worker(parent, lo, hi) = {
+    add_range(lo, hi)
+    parent <- true
+}
+
+main() = {
+    me = self()
+
+    # Each worker adds numbers from start to end
+    # Worker 1: 1-10, Worker 2: 11-20, Worker 3: 21-30, Worker 4: 31-40
+    spawn { worker(me, 1, 10) }
+    spawn { worker(me, 11, 20) }
+    spawn { worker(me, 21, 30) }
+    spawn { worker(me, 31, 40) }
+
+    # Wait for all
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+
+    # Sum of 1 to 40 = 40 * 41 / 2 = 820
+    assert_eq(820, get_sum())
+}

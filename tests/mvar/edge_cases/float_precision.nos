@@ -1,0 +1,16 @@
+# expect: ()
+# Float mvar precision test
+
+mvar pi: Float = 3.14159
+
+get_pi() = pi
+
+area(r) = get_pi() * r * r
+
+main() = {
+    # Circle with radius 1
+    a = area(1.0)
+    # Should be approximately pi
+    assert_eq(true, a > 3.14)
+    assert_eq(true, a < 3.15)
+}

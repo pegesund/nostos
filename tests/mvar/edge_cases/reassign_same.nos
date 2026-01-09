@@ -1,0 +1,18 @@
+# expect: ()
+# Reassign mvar to same value
+
+mvar value: Int = 42
+
+get() = value
+
+set_same() = {
+    value = value
+    value
+}
+
+main() = {
+    assert_eq(42, get())
+    assert_eq(42, set_same())
+    assert_eq(42, set_same())
+    assert_eq(42, get())
+}

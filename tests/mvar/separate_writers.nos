@@ -1,0 +1,25 @@
+# expect: ()
+# Separate writer functions
+
+mvar state: Int = 0
+
+set_to_one() = {
+    state = 1
+    state
+}
+
+set_to_two() = {
+    state = 2
+    state
+}
+
+set_to_three() = {
+    state = 3
+    state
+}
+
+main() = {
+    assert_eq(1, set_to_one())
+    assert_eq(2, set_to_two())
+    assert_eq(3, set_to_three())
+}

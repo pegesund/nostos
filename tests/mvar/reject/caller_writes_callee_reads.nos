@@ -1,0 +1,16 @@
+# expect: error
+# Caller writes mvar, callee reads same mvar - UNSAFE
+
+mvar value: Int = 0
+
+get_value() = value
+
+update() = {
+    # UNSAFE: update writes value, but calls get_value which reads value
+    value = get_value() + 1
+    value
+}
+
+main() = {
+    update()
+}

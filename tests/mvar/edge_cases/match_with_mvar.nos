@@ -1,0 +1,26 @@
+# expect: ()
+# Using mvar in match expression (safe pattern)
+
+mvar state: Int = 1
+
+get_state() = state
+
+# Safe: reads state and computes next value without calling other mvar functions
+next_state() = {
+    s = state
+    state = match s
+        1 -> 2
+        2 -> 3
+        3 -> 1
+        _ -> 0
+    end
+    state
+}
+
+main() = {
+    assert_eq(1, get_state())
+    assert_eq(2, next_state())
+    assert_eq(3, next_state())
+    assert_eq(1, next_state())
+    assert_eq(2, next_state())
+}

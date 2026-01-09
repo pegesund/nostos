@@ -1,0 +1,27 @@
+# expect: ()
+# Calling multiple mvar leaf functions in sequence
+
+mvar a: Int = 0
+mvar b: Int = 0
+
+set_a(n) = {
+    a = n
+    a
+}
+
+set_b(n) = {
+    b = n
+    b
+}
+
+get_a() = a
+
+get_b() = b
+
+main() = {
+    set_a(10)
+    set_b(20)
+    assert_eq(10, get_a())
+    assert_eq(20, get_b())
+    assert_eq(30, get_a() + get_b())
+}

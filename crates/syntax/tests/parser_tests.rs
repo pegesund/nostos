@@ -801,70 +801,70 @@ mod signatures {
 }
 
 // =============================================================================
-// Module-level Mutable Variable Tests
+// Module-level Mutable Variable (mvar) Tests
 // =============================================================================
 
-mod mod_vars {
+mod mvars {
     use super::*;
     use nostos_syntax::ast::{Item, Visibility};
 
     #[test]
-    fn test_mod_var_basic() {
-        let module = parse_ok("mod counter: Int = 0");
+    fn test_mvar_basic() {
+        let module = parse_ok("mvar counter: Int = 0");
         assert_eq!(module.items.len(), 1);
         match &module.items[0] {
-            Item::ModVarDef(def) => {
+            Item::MvarDef(def) => {
                 assert_eq!(def.name.node, "counter");
                 assert_eq!(def.visibility, Visibility::Private);
             }
-            _ => panic!("Expected ModVarDef"),
+            _ => panic!("Expected MvarDef"),
         }
     }
 
     #[test]
-    fn test_mod_var_public() {
-        let module = parse_ok("pub mod counter: Int = 0");
+    fn test_mvar_public() {
+        let module = parse_ok("pub mvar counter: Int = 0");
         match &module.items[0] {
-            Item::ModVarDef(def) => {
+            Item::MvarDef(def) => {
                 assert_eq!(def.name.node, "counter");
                 assert_eq!(def.visibility, Visibility::Public);
             }
-            _ => panic!("Expected ModVarDef"),
+            _ => panic!("Expected MvarDef"),
         }
     }
 
     #[test]
-    fn test_mod_var_with_expr() {
-        let module = parse_ok("mod total: Int = 1 + 2 + 3");
+    fn test_mvar_with_expr() {
+        let module = parse_ok("mvar total: Int = 1 + 2 + 3");
         match &module.items[0] {
-            Item::ModVarDef(def) => {
+            Item::MvarDef(def) => {
                 assert_eq!(def.name.node, "total");
             }
-            _ => panic!("Expected ModVarDef"),
+            _ => panic!("Expected MvarDef"),
         }
     }
 
     #[test]
-    fn test_mod_var_list_type() {
-        let module = parse_ok("mod items: List[String] = []");
+    fn test_mvar_list_type() {
+        let module = parse_ok("mvar items: List[String] = []");
         match &module.items[0] {
-            Item::ModVarDef(def) => {
+            Item::MvarDef(def) => {
                 assert_eq!(def.name.node, "items");
             }
-            _ => panic!("Expected ModVarDef"),
+            _ => panic!("Expected MvarDef"),
         }
     }
 
     #[test]
-    fn test_multiple_mod_vars() {
-        let module = parse_ok("mod a: Int = 0\nmod b: String = \"hello\"");
+    fn test_multiple_mvars() {
+        let module = parse_ok("mvar a: Int = 0\nmvar b: String = \"hello\"");
         assert_eq!(module.items.len(), 2);
         match (&module.items[0], &module.items[1]) {
-            (Item::ModVarDef(a), Item::ModVarDef(b)) => {
+            (Item::MvarDef(a), Item::MvarDef(b)) => {
                 assert_eq!(a.name.node, "a");
                 assert_eq!(b.name.node, "b");
             }
-            _ => panic!("Expected two ModVarDefs"),
+            _ => panic!("Expected two MvarDefs"),
         }
     }
 }

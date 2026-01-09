@@ -1,0 +1,18 @@
+# expect: error
+# Direct recursion with mvar access - UNSAFE
+
+mvar counter: Int = 0
+
+recursive_count(n) = {
+    # UNSAFE: recursive function that accesses mvar
+    if n <= 0 then {
+        counter
+    } else {
+        counter = counter + 1
+        recursive_count(n - 1)
+    }
+}
+
+main() = {
+    recursive_count(10)
+}

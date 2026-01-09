@@ -1,0 +1,19 @@
+# expect: ()
+# Boolean mvar
+
+mvar flag: Bool = false
+
+is_set() = flag
+
+toggle() = {
+    flag = !flag
+    flag
+}
+
+main() = {
+    assert_eq(false, is_set())
+    assert_eq(true, toggle())
+    assert_eq(true, is_set())
+    assert_eq(false, toggle())
+    assert_eq(false, is_set())
+}

@@ -1,0 +1,17 @@
+# expect: ()
+# Mvar initialized to empty string
+
+mvar text: String = ""
+
+get_text() = text
+
+append(s) = {
+    text = text ++ s
+    text
+}
+
+main() = {
+    assert_eq("", get_text())
+    assert_eq("hello", append("hello"))
+    assert_eq("hello world", append(" world"))
+}

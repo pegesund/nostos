@@ -1,0 +1,17 @@
+# expect: ()
+# Multiple mvars in same function
+
+mvar x: Int = 10
+mvar y: Int = 20
+
+swap_and_sum() = {
+    temp = x
+    x = y
+    y = temp
+    x + y
+}
+
+main() = {
+    assert_eq(30, swap_and_sum())
+    # After swap: x=20, y=10, sum is still 30
+}

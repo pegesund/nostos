@@ -1,0 +1,12 @@
+# expect: ()
+# Multiple reads of same mvar in one expression
+
+mvar x: Int = 10
+
+get_x() = x
+
+compute() = get_x() + get_x() + get_x()
+
+main() = {
+    assert_eq(30, compute())
+}

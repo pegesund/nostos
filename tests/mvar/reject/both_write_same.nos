@@ -1,0 +1,15 @@
+# expect: error
+# Both caller and callee write same mvar - UNSAFE
+
+mvar state: Int = 0
+
+helper() = {
+    state = state + 1
+    state
+}
+
+main() = {
+    # UNSAFE: main writes state, calls helper which also writes state
+    state = 10
+    helper()
+}

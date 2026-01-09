@@ -9,10 +9,11 @@ mod autocomplete;
 mod inspector_panel;
 mod nostos_panel;
 
-use nostos_compiler::compile::{compile_module, Compiler};
+use nostos_compiler::compile::{compile_module, Compiler, MvarInitValue};
 use nostos_jit::{JitCompiler, JitConfig};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::parallel::{ParallelVM, ParallelConfig};
+use nostos_vm::process::ThreadSafeValue;
 use nostos_vm::value::RuntimeError;
 use std::env;
 use std::fs;
@@ -486,6 +487,22 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // Check for potential mvar deadlocks (compile-time enforcement of safe pattern)
+    let deadlock_errors = compiler.check_mvar_deadlocks();
+    if !deadlock_errors.is_empty() {
+        eprintln!("\x1b[31mError:\x1b[0m Mvar safety violation detected:");
+        for error in &deadlock_errors {
+            eprintln!("  - {}", error);
+        }
+        eprintln!();
+        eprintln!("Functions that access an mvar cannot call other functions that access");
+        eprintln!("the same mvar. This prevents deadlocks with function-level locking.");
+        eprintln!();
+        eprintln!("To fix: Restructure your code so that mvar-accessing functions are");
+        eprintln!("'leaf' functions that don't call other mvar-accessing functions.");
+        return ExitCode::FAILURE;
+    }
+
     // Resolve entry point (function names now include signature, main has no params so it's "main/")
     let entry_point_name = if input_path.is_dir() {
         // Check for main.main/ or main/ (with signature suffix)
@@ -544,6 +561,20 @@ fn main() -> ExitCode {
     // Register types
     for (name, type_val) in compiler.get_vm_types() {
         vm.register_type(&name, type_val);
+    }
+
+    // Register mvars (module-level mutable variables)
+    for (name, info) in compiler.get_mvars() {
+        let initial_value = match &info.initial_value {
+            MvarInitValue::Unit => ThreadSafeValue::Unit,
+            MvarInitValue::Bool(b) => ThreadSafeValue::Bool(*b),
+            MvarInitValue::Int(n) => ThreadSafeValue::Int64(*n),
+            MvarInitValue::Float(f) => ThreadSafeValue::Float64(*f),
+            MvarInitValue::String(s) => ThreadSafeValue::String(s.clone()),
+            MvarInitValue::Char(c) => ThreadSafeValue::Char(*c),
+            MvarInitValue::EmptyList => ThreadSafeValue::List(vec![]),
+        };
+        vm.register_mvar(name, initial_value);
     }
 
     // JIT compile suitable functions (unless --no-jit was specified)

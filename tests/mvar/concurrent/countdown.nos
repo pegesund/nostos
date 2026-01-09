@@ -1,0 +1,44 @@
+# expect: ()
+# Multiple workers decrementing a shared countdown
+
+mvar countdown: Int = 100
+
+decrement() = {
+    if countdown > 0 then {
+        countdown = countdown - 1
+        true
+    } else {
+        false
+    }
+}
+
+get_countdown() = countdown
+
+do_decrements(n) = if n <= 0 then () else {
+    decrement()
+    do_decrements(n - 1)
+}
+
+worker(parent, n) = {
+    do_decrements(n)
+    parent <- true
+}
+
+main() = {
+    me = self()
+
+    # Spawn 4 workers, each decrementing 25 times = 100 total
+    spawn { worker(me, 25) }
+    spawn { worker(me, 25) }
+    spawn { worker(me, 25) }
+    spawn { worker(me, 25) }
+
+    # Wait for all
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+
+    # Countdown should reach 0
+    assert_eq(0, get_countdown())
+}

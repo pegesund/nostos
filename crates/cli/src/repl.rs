@@ -51,13 +51,13 @@ impl Highlighter for NostosHighlighter {
 
             let style = match token {
                 // Keywords
-                Token::Type | Token::Var | Token::If | Token::Then | Token::Else |
+                Token::Type | Token::Var | Token::Mvar | Token::If | Token::Then | Token::Else |
                 Token::Match | Token::When | Token::Trait | Token::Module | Token::End |
                 Token::Use | Token::Private | Token::Pub | Token::SelfKw | Token::SelfType |
                 Token::Try | Token::Catch | Token::Finally | Token::Do |
                 Token::While | Token::For | Token::To | Token::Break | Token::Continue |
                 Token::Spawn | Token::SpawnLink | Token::SpawnMonitor | Token::Receive | Token::After |
-                Token::Panic | Token::Extern | Token::From | Token::Test | Token::Deriving | Token::Quote => 
+                Token::Panic | Token::Extern | Token::From | Token::Test | Token::Deriving | Token::Quote =>
                     Style::new().fg(Color::Magenta).bold(),
 
                 // Boolean literals

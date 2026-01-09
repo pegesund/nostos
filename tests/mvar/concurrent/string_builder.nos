@@ -1,0 +1,48 @@
+# expect: ()
+# Multiple workers appending to a shared string
+
+mvar result: String = ""
+mvar append_count: Int = 0
+
+append_char(c) = {
+    result = result ++ c
+    append_count = append_count + 1
+    result
+}
+
+get_result() = result
+get_count() = append_count
+
+do_appends(chars) = match chars
+    [] -> ()
+    [c | rest] -> {
+        append_char(c)
+        do_appends(rest)
+    }
+end
+
+worker(parent, chars) = {
+    do_appends(chars)
+    parent <- true
+}
+
+main() = {
+    me = self()
+
+    # Each worker appends some characters
+    spawn { worker(me, ["a", "b"]) }
+    spawn { worker(me, ["c", "d"]) }
+    spawn { worker(me, ["e", "f"]) }
+    spawn { worker(me, ["g", "h"]) }
+
+    # Wait for all
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+
+    # Total appends should be 8
+    assert_eq(8, get_count())
+    # Result length should be 8 characters
+    # (order may vary due to concurrent access)
+}

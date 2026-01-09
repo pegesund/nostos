@@ -1,0 +1,81 @@
+# expect: ()
+# Multiple independent mvars being updated concurrently
+# Tests that sorted lock ordering prevents deadlocks
+
+mvar counter_a: Int = 0
+mvar counter_b: Int = 0
+mvar counter_c: Int = 0
+
+inc_a() = {
+    counter_a = counter_a + 1
+    counter_a
+}
+
+inc_b() = {
+    counter_b = counter_b + 1
+    counter_b
+}
+
+inc_c() = {
+    counter_c = counter_c + 1
+    counter_c
+}
+
+get_a() = counter_a
+get_b() = counter_b
+get_c() = counter_c
+
+do_inc_a(n) = if n <= 0 then () else {
+    inc_a()
+    do_inc_a(n - 1)
+}
+
+do_inc_b(n) = if n <= 0 then () else {
+    inc_b()
+    do_inc_b(n - 1)
+}
+
+do_inc_c(n) = if n <= 0 then () else {
+    inc_c()
+    do_inc_c(n - 1)
+}
+
+worker_a(parent, n) = {
+    do_inc_a(n)
+    parent <- "a_done"
+}
+
+worker_b(parent, n) = {
+    do_inc_b(n)
+    parent <- "b_done"
+}
+
+worker_c(parent, n) = {
+    do_inc_c(n)
+    parent <- "c_done"
+}
+
+main() = {
+    me = self()
+
+    # Spawn workers for each counter
+    spawn { worker_a(me, 20) }
+    spawn { worker_b(me, 20) }
+    spawn { worker_c(me, 20) }
+    spawn { worker_a(me, 20) }
+    spawn { worker_b(me, 20) }
+    spawn { worker_c(me, 20) }
+
+    # Wait for all
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+
+    # Each counter should be 40
+    assert_eq(40, get_a())
+    assert_eq(40, get_b())
+    assert_eq(40, get_c())
+}

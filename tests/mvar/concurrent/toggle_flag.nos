@@ -1,0 +1,42 @@
+# expect: ()
+# Toggle a boolean flag from multiple workers
+
+mvar flag: Bool = false
+mvar toggle_count: Int = 0
+
+toggle() = {
+    flag = !flag
+    toggle_count = toggle_count + 1
+    flag
+}
+
+get_count() = toggle_count
+
+do_toggles(n) = if n <= 0 then () else {
+    toggle()
+    do_toggles(n - 1)
+}
+
+worker(parent, n) = {
+    do_toggles(n)
+    parent <- true
+}
+
+main() = {
+    me = self()
+
+    # Spawn 4 workers, each toggling 25 times = 100 total toggles
+    spawn { worker(me, 25) }
+    spawn { worker(me, 25) }
+    spawn { worker(me, 25) }
+    spawn { worker(me, 25) }
+
+    # Wait for all
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+
+    # Total toggles should be 100
+    assert_eq(100, get_count())
+}

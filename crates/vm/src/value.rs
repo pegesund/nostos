@@ -882,6 +882,17 @@ pub enum Instruction {
     /// Assert two values are equal
     AssertEq(Reg, Reg),
 
+    // === Module-level mutable variables (mvars) ===
+    /// Acquire lock on mvar at function entry: name_idx, is_write
+    /// Must be released with MvarUnlock before function returns
+    MvarLock(ConstIdx, bool),
+    /// Release lock on mvar at function exit: name_idx, is_write
+    MvarUnlock(ConstIdx, bool),
+    /// Read mvar: dst = mvar[name_idx] (assumes lock is already held)
+    MvarRead(Reg, ConstIdx),
+    /// Write mvar: mvar[name_idx] = src (assumes lock is already held)
+    MvarWrite(ConstIdx, Reg),
+
     // === Debug ===
     /// No operation (for alignment/debugging)
     Nop,

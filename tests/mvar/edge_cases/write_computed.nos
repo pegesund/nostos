@@ -1,0 +1,19 @@
+# expect: ()
+# Write computed value to mvar
+
+mvar result: Int = 0
+
+square(n) = n * n
+
+set_squared(n) = {
+    result = square(n)
+    result
+}
+
+get() = result
+
+main() = {
+    assert_eq(0, get())
+    assert_eq(25, set_squared(5))
+    assert_eq(100, set_squared(10))
+}
