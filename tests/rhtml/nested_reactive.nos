@@ -1,0 +1,18 @@
+# expect: <div><div id="card" data-component="true"><div><div id="card-title" data-component="true"><h2>Alice</h2></div><div id="card-status" data-component="true"><span>online</span></div></div></div></div>
+# Nested components with reactive data
+
+reactive User = { name: String, status: String }
+
+cardTitle(user: User) = RHtml(h2(user.name))
+cardStatus(user: User) = RHtml(span(user.status))
+
+card(user: User) = RHtml(div([
+    component("card-title", () => cardTitle(user)),
+    component("card-status", () => cardStatus(user))
+]))
+
+main() = {
+    user = User("Alice", "online")
+    result = RHtml(div([component("card", () => card(user))]))
+    renderRHtml(result)
+}

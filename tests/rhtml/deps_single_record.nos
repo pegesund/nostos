@@ -1,0 +1,12 @@
+# expect: 1
+# Deps tracking: single reactive record should have 1 entry
+
+reactive User = { name: String }
+
+greeting(user: User) = RHtml(h1(user.name))
+
+main() = {
+    user = User("Alice")
+    result = RHtml(div([component("greeting", () => greeting(user))]))
+    Map.size(result.deps)
+}

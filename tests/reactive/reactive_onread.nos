@@ -1,0 +1,20 @@
+# expect: x:42
+# Test onRead callback on reactive records
+
+reactive Point = { x: Int, y: Int }
+
+mvar result: String = ""
+
+main() = {
+    p = Point(x: 42, y: 10)
+
+    # Register a callback that fires when a field is read
+    p.onRead((fieldName, value) => {
+        result = fieldName ++ ":" ++ show(value)
+    })
+
+    # Read the field - callback should fire
+    _ = p.x
+
+    result
+}

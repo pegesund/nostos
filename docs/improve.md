@@ -55,3 +55,36 @@ type ReactiveApp = { renderPage: (RenderState) -> (Html, RenderState), handleEve
 ```
 
 **Priority**: Low - easy workaround exists
+
+## HTMX Integration Notes
+
+**Idiomorph Extension Issues**: The idiomorph extension (`hx-ext="morph"` with `hx-swap="morph:outerHTML"`) did not work correctly in our setup. Forms would only submit once, then subsequent clicks wouldn't trigger HTMX.
+
+**Working Configuration**:
+```nostos
+# Forms use standard HTMX swap (no idiomorph)
+Element("form", [
+    ("action", "/increment"),
+    ("method", "post"),
+    ("hx-post", "/increment"),
+    ("hx-target", "body"),
+    ("hx-swap", "outerHTML")  # NOT morph:outerHTML
+], [...])
+```
+
+**Partial Updates**: For HTMX to work properly with body swaps:
+1. Check for `HX-Request` header in server
+2. Return just the `<body>` element for HTMX requests
+3. Return full HTML page for initial/navigation requests
+
+**Example pattern**:
+```nostos
+isHtmxRequest(req) = getParam(req.headers, "HX-Request") == "true"
+
+handleRequest(req) = {
+    html = if isHtmxRequest(req) then renderBody() else renderFullPage()
+    respondHtml(req, render(html))
+}
+```
+
+**Discovered**: While building Selenium tests for reactive web framework

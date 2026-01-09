@@ -1327,8 +1327,10 @@ pub enum Instruction {
     GetComponentTree(Reg),
     /// Start a new render context (clears deps and component tree)
     RenderContextStart,
-    /// Finish render context and get result: dst = (deps_map, component_tree)
+    /// Finish render context and get result: dst = (deps_map, component_tree, renderers_map)
     RenderContextFinish(Reg),
+    /// Register a renderer function: RegisterRenderer(name_reg, func_reg)
+    RegisterRenderer(Reg, Reg),
 
     // === Debug ===
     /// No operation (for alignment/debugging)

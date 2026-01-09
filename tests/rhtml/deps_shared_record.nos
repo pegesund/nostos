@@ -1,0 +1,19 @@
+# expect: true
+# Deps tracking: two components reading same reactive record
+
+reactive User = { name: String }
+
+greeting(user: User) = RHtml(h1(user.name))
+userInfo(user: User) = RHtml(p(user.name))
+
+main() = {
+    user = User("Alice")
+    result = RHtml(div([
+        component("greeting", () => greeting(user)),
+        component("info", () => userInfo(user))
+    ]))
+    # Should have 1 entry in deps (the user record)
+    # That entry should list both component names
+    deps = result.deps
+    Map.size(deps) == 1
+}
