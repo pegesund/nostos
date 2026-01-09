@@ -139,6 +139,42 @@ first((a, _)) = a
 second((_, b)) = b
 ```
 
+### Sets
+Sets are unordered collections of unique elements. Use the `#{}` syntax:
+```nos
+# Empty set
+empty = #{}
+
+# Set with elements - duplicates are automatically removed
+numbers = #{1, 2, 3, 2, 1}   # Results in #{1, 2, 3}
+
+# Set of strings
+tags = #{"urgent", "review", "bug"}
+
+# Boolean set
+bools = #{true, false}
+```
+
+Sets are useful for representing unique collections and removing duplicates.
+
+### Maps
+Maps (dictionaries) provide key-value storage with O(1) lookup. Use the `%{key: value}` syntax:
+```nos
+# Empty map
+empty = %{}
+
+# Map with string keys
+person = %{"name": "Alice", "age": 30, "city": "Paris"}
+
+# Map with integer keys
+squares = %{1: 1, 2: 4, 3: 9, 4: 16}
+
+# Map with mixed value types
+config = %{"debug": true, "port": 8080, "host": "localhost"}
+```
+
+Keys must be hashable (strings, numbers, booleans).
+
 ### Typed Arrays
 Typed arrays are contiguous arrays of a single numeric type. They are optimized for efficient numeric computation and JIT compilation.
 
@@ -303,6 +339,79 @@ sumPositive(arr) = {
     }
     total
 }
+```
+
+## Exception Handling
+
+Nostos provides try/catch for exception handling. Exceptions can be any value type.
+
+### Throw
+```nos
+# Throw an exception with any value
+throw("error message")
+throw(42)
+throw(ErrorRecord { code: 404, msg: "not found" })
+```
+
+### Try/Catch
+```nos
+# Basic try/catch
+result = try
+    risky_operation()
+catch
+    e -> handle_error(e)
+end
+
+# The caught value becomes the result if an exception occurs
+safe_divide(a, b) =
+    if b == 0 then throw("division by zero")
+    else a / b
+
+result = try safe_divide(10, 0) catch e -> e end
+# result = "division by zero"
+```
+
+### Pattern Matching in Catch
+```nos
+# Handle different exception types differently
+classify_error(code) =
+    try
+        if code == 1 then throw("not_found")
+        else if code == 2 then throw("forbidden")
+        else "ok"
+    catch
+        "not_found" -> "Error: Not found"
+        "forbidden" -> "Error: Access denied"
+        other -> "Error: Unknown"
+    end
+```
+
+### Nested Try/Catch
+```nos
+# Inner exceptions can be caught by outer handlers
+nested_example() =
+    try
+        try
+            throw("inner error")
+        catch
+            "other" -> "handled other"
+        end
+        # "inner error" doesn't match, propagates up
+    catch
+        e -> "outer caught: " ++ e
+    end
+```
+
+### Safe Wrapper Pattern
+```nos
+# Use a thunk (zero-arg function) to delay evaluation
+safe_call(risky_fn, default) =
+    try risky_fn()
+    catch _ -> default
+    end
+
+# Usage
+result = safe_call(() => dangerous_operation(), -1)
 ```
 
 ## Higher-Order Functions

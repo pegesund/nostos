@@ -1,0 +1,46 @@
+# Map Literals
+#
+# Demonstrates map (dictionary/hash table) literal creation:
+# - Map literals with %{key: value} syntax
+# - Maps can have string or integer keys
+# - Values can be any type
+#
+# Maps provide O(1) average-case lookup by key.
+# Keys must be hashable (strings, numbers, booleans).
+
+main() = {
+    # === Creating maps ===
+
+    # Empty map
+    empty = %{}
+
+    # Map with string keys
+    person = %{"name": "Alice", "age": 30, "city": "Paris"}
+
+    # Map with integer keys
+    squares = %{1: 1, 2: 4, 3: 9, 4: 16, 5: 25}
+
+    # Map with mixed value types
+    config = %{"debug": true, "port": 8080, "host": "localhost"}
+
+    # === Practical examples ===
+
+    # HTTP status codes to messages
+    status_messages = %{200: "OK", 404: "Not Found", 500: "Server Error"}
+
+    # User preferences
+    prefs = %{"theme": "dark", "fontSize": 14, "showLineNumbers": true}
+
+    # Word counts (frequency map)
+    word_counts = %{"hello": 5, "world": 3, "nostos": 10}
+
+    # Configuration settings
+    metadata = %{"version": "1.0", "author": "Team", "stable": true}
+
+    println("Map literals created successfully!")
+    println("person: " ++ show(person))
+    println("squares: " ++ show(squares))
+    println("status_messages: " ++ show(status_messages))
+
+    0
+}

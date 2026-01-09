@@ -1,0 +1,105 @@
+# Exception Handling with Try/Catch
+#
+# Demonstrates exception handling capabilities:
+# - throw: raise an exception with any value
+# - try/catch: catch and handle exceptions
+# - Pattern matching in catch clauses
+# - Nested try/catch blocks
+#
+# Exceptions can be any value type - strings, integers, records, etc.
+# This provides a powerful mechanism for error handling without
+# cluttering code with error checks at every step.
+
+# Safe division - throws on division by zero instead of crashing
+safe_divide(a, b) =
+    if b == 0 then throw("division by zero")
+    else a / b
+
+# Factorial with input validation - throws for negative numbers
+factorial(n) when n < 0 = throw("negative number not allowed")
+factorial(0) = 1
+factorial(n) = n * factorial(n - 1)
+
+# Basic try/catch - the caught value becomes the result
+basic_example() =
+    try throw("caught me!")
+    catch e -> e
+    end
+
+# Using try/catch for safe operations with defaults
+# Takes a thunk (zero-arg function) to delay evaluation
+safe_with_default(risky_fn, default) =
+    try risky_fn()
+    catch _ -> default
+    end
+
+# Pattern matching in catch - handle different error types differently
+classify_error(code) =
+    try
+        if code == 1 then throw("not_found")
+        else if code == 2 then throw("forbidden")
+        else if code == 3 then throw(500)
+        else "ok"
+    catch
+        "not_found" -> "Error: Resource not found"
+        "forbidden" -> "Error: Access denied"
+        n -> "Error: Server error"
+    end
+
+# Nested try/catch - inner exceptions can be caught by outer handlers
+nested_handlers() =
+    try
+        try
+            throw("deep error")
+        catch
+            "deep error" -> "handled deep"
+        end
+    catch
+        e -> "outer handler got: " ++ e
+    end
+
+main() = {
+    # === Basic throw and catch ===
+    # The simplest form: throw a value, catch it
+    result = basic_example()
+    assert_eq("caught me!", result)
+
+    # === Safe division ===
+    # Normal case works as expected
+    assert_eq(5, safe_divide(10, 2))
+    assert_eq(3, safe_divide(9, 3))
+
+    # Division by zero is caught gracefully
+    div_result = try safe_divide(10, 0) catch e -> e end
+    assert_eq("division by zero", div_result)
+
+    # === Factorial with validation ===
+    assert_eq(1, factorial(0))
+    assert_eq(1, factorial(1))
+    assert_eq(120, factorial(5))
+
+    # Negative input throws an exception
+    neg_result = try factorial(-5) catch e -> e end
+    assert_eq("negative number not allowed", neg_result)
+
+    # === Safe operations with defaults ===
+    # When no exception, returns the value
+    assert_eq(42, safe_with_default(() => 42, 0))
+
+    # When exception occurs, returns the default
+    assert_eq(-1, safe_with_default(() => throw("fail"), -1))
+
+    # === Pattern matching in catch ===
+    # Different error codes produce different messages
+    assert_eq("Error: Resource not found", classify_error(1))
+    assert_eq("Error: Access denied", classify_error(2))
+    assert_eq("Error: Server error", classify_error(3))
+    assert_eq("ok", classify_error(99))
+
+    # === Nested exception handling ===
+    # Inner handler catches "deep error"
+    assert_eq("handled deep", nested_handlers())
+
+    println("Exception handling tests passed!")
+    0
+}
