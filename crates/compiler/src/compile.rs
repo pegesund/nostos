@@ -1169,6 +1169,7 @@ pub struct TraitMethodInfo {
     pub name: String,
     pub param_count: usize,
     pub has_default: bool,
+    pub return_type: String,
 }
 
 /// Trait implementation information.
@@ -3113,6 +3114,9 @@ impl Compiler {
                 name: m.name.node.clone(),
                 param_count: m.params.len(),
                 has_default: m.default_impl.is_some(),
+                return_type: m.return_type.as_ref()
+                    .map(|ty| self.type_expr_to_string(ty))
+                    .unwrap_or_else(|| "()".to_string()),
             })
             .collect();
 
@@ -9445,6 +9449,29 @@ impl Compiler {
                     "asFloat64" | "asFloat" | "toFloat" | "toFloat64" => return Some("Float".to_string()),
                     "asBigInt" | "toBigInt" => return Some("BigInt".to_string()),
                     _ => {}
+                }
+
+                // Check for trait method - if the object type is known and this is a trait method,
+                // we can determine the return type from the trait definition
+                if let Some(obj_type) = self.expr_type_name(obj) {
+                    // Check if this type implements any traits
+                    if let Some(impl_traits) = self.type_traits.get(&obj_type) {
+                        for trait_name in impl_traits {
+                            if let Some(trait_info) = self.trait_defs.get(trait_name) {
+                                for m in &trait_info.methods {
+                                    if m.name == method.node {
+                                        // Found a trait method! The return type is in the trait definition.
+                                        // If return type is "Self", substitute the actual type.
+                                        if m.return_type == "Self" {
+                                            return Some(obj_type);
+                                        } else {
+                                            return Some(m.return_type.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Try to find a user-defined function that matches this method call
