@@ -1,0 +1,237 @@
+# Concurrent Timeout Test - Many processes using timeouts simultaneously
+# Tests timer heap under heavy load across multiple threads
+# Run with: nostos --parallel-affinity 4 examples/concurrent_timeout.nos
+
+# Process that does N receives with timeout, counts how many timed out
+timeout_counter(parent, id, count, timeout_ms) = {
+    timeouts = count_timeouts(count, timeout_ms, 0)
+    parent <- (id, timeouts)
+    ()
+}
+
+count_timeouts(remaining, timeout_ms, acc) = {
+    if remaining > 0 then {
+        result = receive x -> 0 after timeout_ms -> 1 end
+        count_timeouts(remaining - 1, timeout_ms, acc + result)
+    } else {
+        acc
+    }
+}
+
+# Process that receives, optionally gets a message
+message_receiver(parent, id, timeout_ms) = {
+    result = receive
+        msg -> msg
+    after timeout_ms ->
+        "timeout"
+    end
+    parent <- (id, result)
+    ()
+}
+
+# Collect N results
+collect_n(remaining) = {
+    if remaining > 0 then {
+        result = receive r -> r after 10000 -> ("error", -1) end
+        results = collect_n(remaining - 1)
+        [result | results]
+    } else {
+        []
+    }
+}
+
+# Sum timeouts from collected results
+sum_timeouts([]) = 0
+sum_timeouts([(id, count) | rest]) = count + sum_timeouts(rest)
+
+# Count specific result in list
+count_matching([], target) = 0
+count_matching([(id, result) | rest], target) = {
+    if result == target then
+        1 + count_matching(rest, target)
+    else
+        count_matching(rest, target)
+}
+
+# Test 1: Many concurrent timeout counters
+test_concurrent_counters() = {
+    println("Test 1: 20 concurrent timeout counters (10 timeouts each)")
+    me = self()
+
+    # Spawn 20 processes, each doing 10 receives with 20ms timeout
+    spawn(() => timeout_counter(me, 1, 10, 20))
+    spawn(() => timeout_counter(me, 2, 10, 20))
+    spawn(() => timeout_counter(me, 3, 10, 20))
+    spawn(() => timeout_counter(me, 4, 10, 20))
+    spawn(() => timeout_counter(me, 5, 10, 20))
+    spawn(() => timeout_counter(me, 6, 10, 20))
+    spawn(() => timeout_counter(me, 7, 10, 20))
+    spawn(() => timeout_counter(me, 8, 10, 20))
+    spawn(() => timeout_counter(me, 9, 10, 20))
+    spawn(() => timeout_counter(me, 10, 10, 20))
+    spawn(() => timeout_counter(me, 11, 10, 20))
+    spawn(() => timeout_counter(me, 12, 10, 20))
+    spawn(() => timeout_counter(me, 13, 10, 20))
+    spawn(() => timeout_counter(me, 14, 10, 20))
+    spawn(() => timeout_counter(me, 15, 10, 20))
+    spawn(() => timeout_counter(me, 16, 10, 20))
+    spawn(() => timeout_counter(me, 17, 10, 20))
+    spawn(() => timeout_counter(me, 18, 10, 20))
+    spawn(() => timeout_counter(me, 19, 10, 20))
+    spawn(() => timeout_counter(me, 20, 10, 20))
+
+    # Collect all results
+    results = collect_n(20)
+    total = sum_timeouts(results)
+
+    # All should have timed out 10 times each = 200 total
+    println("Total timeouts (expect 200):")
+    println(total)
+    assert(total == 200)
+    println("Test 1 PASSED")
+    ()
+}
+
+# Test 2: Some processes get messages, some timeout
+test_mixed_results() = {
+    println("")
+    println("Test 2: Mixed - some get messages, some timeout")
+    me = self()
+
+    # Spawn 10 receivers with 100ms timeout
+    p1 = spawn(() => message_receiver(me, 1, 100))
+    p2 = spawn(() => message_receiver(me, 2, 100))
+    p3 = spawn(() => message_receiver(me, 3, 100))
+    p4 = spawn(() => message_receiver(me, 4, 100))
+    p5 = spawn(() => message_receiver(me, 5, 100))
+    p6 = spawn(() => message_receiver(me, 6, 100))
+    p7 = spawn(() => message_receiver(me, 7, 100))
+    p8 = spawn(() => message_receiver(me, 8, 100))
+    p9 = spawn(() => message_receiver(me, 9, 100))
+    p10 = spawn(() => message_receiver(me, 10, 100))
+
+    # Send messages to only odd-numbered ones
+    p1 <- "got_it"
+    p3 <- "got_it"
+    p5 <- "got_it"
+    p7 <- "got_it"
+    p9 <- "got_it"
+
+    # Collect results
+    results = collect_n(10)
+    timeouts = count_matching(results, "timeout")
+    got_it = count_matching(results, "got_it")
+
+    println("Timeouts (expect 5):")
+    println(timeouts)
+    println("Got messages (expect 5):")
+    println(got_it)
+
+    assert(timeouts == 5)
+    assert(got_it == 5)
+    println("Test 2 PASSED")
+    ()
+}
+
+# Test 3: Staggered timeouts with different durations
+test_staggered_timeouts() = {
+    println("")
+    println("Test 3: Staggered timeout durations")
+    me = self()
+
+    # Spawn processes with different timeout durations
+    spawn(() => message_receiver(me, 1, 50))   # 50ms
+    spawn(() => message_receiver(me, 2, 100))  # 100ms
+    spawn(() => message_receiver(me, 3, 150))  # 150ms
+    spawn(() => message_receiver(me, 4, 200))  # 200ms
+    spawn(() => message_receiver(me, 5, 250))  # 250ms
+
+    # Collect results - should arrive in order of timeout (shortest first)
+    results = collect_n(5)
+
+    # All should timeout since we sent no messages
+    timeouts = count_matching(results, "timeout")
+    println("All timed out (expect 5):")
+    println(timeouts)
+    assert(timeouts == 5)
+    println("Test 3 PASSED")
+    ()
+}
+
+# Test 4: Rapid timeout cancellation - messages arrive just in time
+test_timeout_cancellation() = {
+    println("")
+    println("Test 4: Timeout cancellation - messages arrive before timeout")
+    me = self()
+
+    # Spawn receivers with long timeout
+    p1 = spawn(() => message_receiver(me, 1, 500))
+    p2 = spawn(() => message_receiver(me, 2, 500))
+    p3 = spawn(() => message_receiver(me, 3, 500))
+    p4 = spawn(() => message_receiver(me, 4, 500))
+    p5 = spawn(() => message_receiver(me, 5, 500))
+
+    # Wait a bit then send messages (should cancel timeouts)
+    sleep(50)
+    p1 <- "cancelled"
+    p2 <- "cancelled"
+    p3 <- "cancelled"
+    p4 <- "cancelled"
+    p5 <- "cancelled"
+
+    # Collect results - all should have received messages
+    results = collect_n(5)
+    cancelled = count_matching(results, "cancelled")
+
+    println("Messages received (expect 5):")
+    println(cancelled)
+    assert(cancelled == 5)
+    println("Test 4 PASSED")
+    ()
+}
+
+# Spawner for stress test
+spawn_counters(parent, n, count, timeout_ms) = {
+    if n > 0 then {
+        spawn(() => timeout_counter(parent, n, count, timeout_ms))
+        spawn_counters(parent, n - 1, count, timeout_ms)
+    } else {
+        ()
+    }
+}
+
+# Test 5: High volume - 50 concurrent timeout processes
+test_high_volume() = {
+    println("")
+    println("Test 5: High volume - 50 concurrent processes, 5 timeouts each")
+    me = self()
+
+    # Spawn 50 processes
+    spawn_counters(me, 50, 5, 15)
+
+    # Collect all 50 results
+    results = collect_n(50)
+    total = sum_timeouts(results)
+
+    # All should timeout 5 times each = 250 total
+    println("Total timeouts (expect 250):")
+    println(total)
+    assert(total == 250)
+    println("Test 5 PASSED")
+    ()
+}
+
+main() = {
+    println("=== Concurrent Timeout Test Suite ===")
+    println("")
+
+    test_concurrent_counters()
+    test_mixed_results()
+    test_staggered_timeouts()
+    test_timeout_cancellation()
+    test_high_volume()
+
+    println("")
+    println("=== All Concurrent Timeout Tests PASSED ===")
+    ()
+}

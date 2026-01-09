@@ -826,7 +826,7 @@ impl Worker {
 
                 // === Instructions that need scheduler access ===
                 Instruction::Send(..)
-                | Instruction::Receive
+                | Instruction::Receive(..)
                 | Instruction::Spawn(..)
                 | Instruction::SpawnLink(..)
                 | Instruction::SpawnMonitor(..)
@@ -1525,14 +1525,14 @@ impl Worker {
                 });
             }
 
-            Instruction::Receive => {
+            Instruction::Receive(dst) => {
                 let received = self
                     .scheduler
                     .with_process_mut(pid, |proc| proc.try_receive())
                     .ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
 
                 if let Some(msg) = received {
-                    set_reg!(0, msg);
+                    set_reg!(dst, msg);
                 } else {
                     self.scheduler.with_process_mut(pid, |proc| {
                         proc.wait_for_message();
@@ -1629,7 +1629,7 @@ impl Worker {
                 set_reg!(ref_dst, GcValue::Ref(ref_id.0));
             }
 
-            Instruction::ReceiveTimeout(_timeout_reg) => {
+            Instruction::ReceiveTimeout(_dst, _timeout_reg) => {
                 return Err(RuntimeError::Panic(
                     "ReceiveTimeout not yet implemented".to_string(),
                 ));
@@ -2033,8 +2033,8 @@ mod tests {
                 Instruction::SelfPid(0),           // r0 = self()
                 Instruction::LoadConst(1, 0),      // r1 = child_func
                 Instruction::Spawn(2, 1, vec![0].into()), // r2 = spawn(child, [self()])
-                Instruction::Receive,              // r0 = receive()
-                Instruction::Return(0),
+                Instruction::Receive(3),           // r3 = receive()
+                Instruction::Return(3),
             ],
             vec![Value::Function(child_func)],
         );

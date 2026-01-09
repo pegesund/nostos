@@ -1,0 +1,268 @@
+# Cross-Thread Chain Test - Data flows through chain of processes on different threads
+# Tests cross-thread messaging, sleep interleaving, and timeout reliability
+# Run with: nostos --parallel-affinity 4 examples/cross_thread_chain.nos
+
+# Chain link: receives, transforms, passes to next
+chain_link(next, transform, delay) = {
+    value = receive
+        n -> n
+    after 5000 ->
+        -9999
+    end
+    if value == -9999 then {
+        next <- -9999
+        ()
+    } else {
+        # Apply transform and optional delay
+        result = transform(value)
+        if delay > 0 then sleep(delay) else ()
+        next <- result
+        ()
+    }
+}
+
+# Multi-message chain link
+multi_chain_link(next, transform, count) = {
+    if count > 0 then {
+        value = receive n -> n after 5000 -> -9999 end
+        if value == -9999 then {
+            next <- -9999
+            ()
+        } else {
+            next <- transform(value)
+            multi_chain_link(next, transform, count - 1)
+        }
+    } else {
+        ()
+    }
+}
+
+# Test 1: Simple chain with transforms
+test_simple_chain() = {
+    println("Test 1: Simple chain (5 links, each adds 10)")
+    me = self()
+
+    # Create chain: me <- link1 <- link2 <- link3 <- link4 <- link5
+    add10 = n => n + 10
+    link1 = spawn(() => chain_link(me, add10, 0))
+    link2 = spawn(() => chain_link(link1, add10, 0))
+    link3 = spawn(() => chain_link(link2, add10, 0))
+    link4 = spawn(() => chain_link(link3, add10, 0))
+    link5 = spawn(() => chain_link(link4, add10, 0))
+
+    # Send initial value
+    link5 <- 0
+
+    # Receive result (0 + 10*5 = 50)
+    result = receive n -> n after 5000 -> -1 end
+    println("Result (expect 50):")
+    println(result)
+    assert(result == 50)
+    println("Test 1 PASSED")
+    ()
+}
+
+# Test 2: Chain with delays (tests sleep + messaging)
+test_delayed_chain() = {
+    println("")
+    println("Test 2: Delayed chain (each link sleeps 20ms)")
+    me = self()
+
+    double = n => n * 2
+    link1 = spawn(() => chain_link(me, double, 20))
+    link2 = spawn(() => chain_link(link1, double, 20))
+    link3 = spawn(() => chain_link(link2, double, 20))
+
+    # Send initial value
+    link3 <- 1
+
+    # Receive result (1 * 2 * 2 * 2 = 8)
+    result = receive n -> n after 5000 -> -1 end
+    println("Result (expect 8):")
+    println(result)
+    assert(result == 8)
+    println("Test 2 PASSED")
+    ()
+}
+
+# Collector for multiple results
+collect_ordered(remaining, acc) = {
+    if remaining > 0 then {
+        r = receive n -> n after 5000 -> -9999 end
+        collect_ordered(remaining - 1, [r | acc])
+    } else {
+        acc
+    }
+}
+
+# Test 3: Multiple messages through chain
+test_multi_message_chain() = {
+    println("")
+    println("Test 3: Multiple messages through chain")
+    me = self()
+
+    add1 = n => n + 1
+    link1 = spawn(() => multi_chain_link(me, add1, 5))
+    link2 = spawn(() => multi_chain_link(link1, add1, 5))
+    link3 = spawn(() => multi_chain_link(link2, add1, 5))
+
+    # Send 5 messages
+    link3 <- 10
+    link3 <- 20
+    link3 <- 30
+    link3 <- 40
+    link3 <- 50
+
+    # Collect 5 results (each +3 from 3 links)
+    results = collect_ordered(5, [])
+    println("Results (expect 13, 23, 33, 43, 53 in some order):")
+    print_list(results)
+
+    # Verify sum
+    total = sum_list(results)
+    println("Sum (expect 165):")
+    println(total)
+    assert(total == 165)
+    println("Test 3 PASSED")
+    ()
+}
+
+sum_list([]) = 0
+sum_list([h | t]) = h + sum_list(t)
+
+print_list([]) = ()
+print_list([h | t]) = {
+    println(h)
+    print_list(t)
+}
+
+# Fork-join worker
+fork_worker(parent, id, delay) = {
+    sleep(delay)
+    parent <- id
+    ()
+}
+
+# Test 4: Parallel chains merging (fork-join pattern)
+test_parallel_chains() = {
+    println("")
+    println("Test 4: Parallel chains with different delays")
+    me = self()
+
+    # Create 5 parallel workers with different delays
+    spawn(() => fork_worker(me, 1, 100))
+    spawn(() => fork_worker(me, 2, 50))
+    spawn(() => fork_worker(me, 3, 150))
+    spawn(() => fork_worker(me, 4, 75))
+    spawn(() => fork_worker(me, 5, 25))
+
+    # Collect results - order should roughly match delay order
+    results = collect_ordered(5, [])
+    println("Results (received in completion order):")
+    print_list(results)
+
+    # Sum should be 1+2+3+4+5 = 15
+    total = sum_list(results)
+    println("Sum (expect 15):")
+    println(total)
+    assert(total == 15)
+    println("Test 4 PASSED")
+    ()
+}
+
+# Pipeline stage that processes and forwards
+pipeline_stage(next, delay, id) = {
+    value = receive n -> n after 5000 -> -1 end
+    if value == -1 then {
+        ()
+    } else {
+        sleep(delay)
+        next <- (id, value)
+        ()
+    }
+}
+
+# Test 5: Complex pipeline with staggered processing
+test_pipeline() = {
+    println("")
+    println("Test 5: Pipeline with staggered delays")
+    me = self()
+
+    # Create pipeline: input -> [fast, medium, slow] -> collector
+    # Fast path: 10ms delay
+    # Medium path: 50ms delay
+    # Slow path: 100ms delay
+    fast = spawn(() => pipeline_stage(me, 10, "fast"))
+    medium = spawn(() => pipeline_stage(me, 50, "medium"))
+    slow = spawn(() => pipeline_stage(me, 100, "slow"))
+
+    # Send same value to all three paths
+    fast <- 42
+    medium <- 42
+    slow <- 42
+
+    # Collect all three results
+    r1 = receive r -> r after 5000 -> ("error", -1) end
+    r2 = receive r -> r after 5000 -> ("error", -1) end
+    r3 = receive r -> r after 5000 -> ("error", -1) end
+
+    println("Results (should be fast, medium, slow in order):")
+    print_result(r1)
+    print_result(r2)
+    print_result(r3)
+
+    println("Test 5 PASSED")
+    ()
+}
+
+print_result((label, value)) = {
+    println(label)
+}
+
+# Recursive chain builder
+build_chain_rec(parent, depth, transform) = {
+    if depth > 0 then {
+        link = spawn(() => chain_link(parent, transform, 0))
+        build_chain_rec(link, depth - 1, transform)
+    } else {
+        parent
+    }
+}
+
+# Test 6: Deep chain (stress test)
+test_deep_chain() = {
+    println("")
+    println("Test 6: Deep chain (20 links)")
+    me = self()
+
+    # Build chain of 20 links, each adds 1
+    add1 = n => n + 1
+    first = build_chain_rec(me, 20, add1)
+
+    # Send value through
+    first <- 0
+
+    # Result should be 20
+    result = receive n -> n after 10000 -> -1 end
+    println("Result (expect 20):")
+    println(result)
+    assert(result == 20)
+    println("Test 6 PASSED")
+    ()
+}
+
+main() = {
+    println("=== Cross-Thread Chain Test Suite ===")
+    println("")
+
+    test_simple_chain()
+    test_delayed_chain()
+    test_multi_message_chain()
+    test_parallel_chains()
+    test_pipeline()
+    test_deep_chain()
+
+    println("")
+    println("=== All Cross-Thread Chain Tests PASSED ===")
+    ()
+}

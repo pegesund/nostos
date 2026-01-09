@@ -1,0 +1,53 @@
+# Simple chain test to debug messaging
+
+forwarder(next) = {
+    println("Forwarder waiting...")
+    msg = receive n -> n after 5000 -> -1 end
+    println("Forwarder got:")
+    println(msg)
+    if msg == -1 then {
+        println("Forwarder timed out!")
+        ()
+    } else {
+        println("Forwarding...")
+        next <- msg + 1
+        println("Forwarded!")
+        ()
+    }
+}
+
+main() = {
+    println("Starting simple chain test")
+    me = self()
+    println("My PID:")
+    println(me)
+
+    println("Creating node1 (sends to me)")
+    node1 = spawn(() => forwarder(me))
+    println("node1 pid:")
+    println(node1)
+
+    println("Creating node2 (sends to node1)")
+    node2 = spawn(() => forwarder(node1))
+    println("node2 pid:")
+    println(node2)
+
+    # Give processes time to start
+    sleep(50)
+
+    println("Sending 10 to node2 pid:")
+    println(node2)
+    node2 <- 10
+
+    println("Waiting for result...")
+    result = receive n -> n after 5000 -> -999 end
+    println("Got result:")
+    println(result)
+
+    if result == 12 then {
+        println("SUCCESS!")
+    } else {
+        println("FAILED - expected 12")
+    }
+    ()
+}

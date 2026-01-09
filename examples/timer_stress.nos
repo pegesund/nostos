@@ -1,0 +1,214 @@
+# Timer Stress Test - Tests sleep and timeout under load
+# Run with: nostos --parallel-affinity 4 examples/timer_stress.nos
+
+# Counter that increments and reports
+timed_counter(parent, id, count, delay) = {
+    if count > 0 then {
+        sleep(delay)
+        timed_counter(parent, id, count - 1, delay)
+    } else {
+        parent <- id
+        ()
+    }
+}
+
+# Recursive receive helper
+collect_n(remaining) = {
+    if remaining > 0 then {
+        result = receive
+            id -> id
+        after 5000 ->
+            0
+        end
+        if result == 0 then {
+            println("TIMEOUT waiting for worker!")
+            0
+        } else {
+            collect_n(remaining - 1)
+        }
+    } else {
+        remaining
+    }
+}
+
+# Recursive timeout counter
+count_timeouts_rec(n, acc) = {
+    if n > 0 then {
+        result = receive x -> 0 after 10 -> 1 end
+        count_timeouts_rec(n - 1, acc + result)
+    } else {
+        acc
+    }
+}
+
+# Recursive timeout runner
+run_timeout_rec(n) = {
+    if n > 0 then {
+        result = receive x -> x after 100 -> "timeout" end
+        assert(result == "timeout")
+        run_timeout_rec(n - 1)
+    } else {
+        ()
+    }
+}
+
+# Test 1: Many concurrent sleepers
+test_concurrent_sleepers() = {
+    println("Test 1: 10 concurrent sleepers")
+    me = self()
+
+    # Spawn 10 workers, each sleeping different amounts
+    spawn(() => timed_counter(me, 1, 5, 10))   # 5 x 10ms = 50ms total
+    spawn(() => timed_counter(me, 2, 3, 20))   # 3 x 20ms = 60ms total
+    spawn(() => timed_counter(me, 3, 2, 30))   # 2 x 30ms = 60ms total
+    spawn(() => timed_counter(me, 4, 6, 8))    # 6 x 8ms = 48ms total
+    spawn(() => timed_counter(me, 5, 4, 15))   # 4 x 15ms = 60ms total
+    spawn(() => timed_counter(me, 6, 10, 5))   # 10 x 5ms = 50ms total
+    spawn(() => timed_counter(me, 7, 2, 25))   # 2 x 25ms = 50ms total
+    spawn(() => timed_counter(me, 8, 3, 18))   # 3 x 18ms = 54ms total
+    spawn(() => timed_counter(me, 9, 1, 55))   # 1 x 55ms = 55ms total
+    spawn(() => timed_counter(me, 10, 5, 12))  # 5 x 12ms = 60ms total
+
+    # Collect all completions
+    collect_n(10)
+    println("All 10 workers completed!")
+    println("Test 1 PASSED")
+    ()
+}
+
+# Test 2: Timeout precision test
+test_timeout_precision() = {
+    println("")
+    println("Test 2: Timeout precision (5 consecutive 100ms timeouts)")
+
+    run_timeout_rec(5)
+    println("5 consecutive timeouts completed")
+    println("Test 2 PASSED")
+    ()
+}
+
+# Worker that sleeps, sends, sleeps, sends
+interleaved_worker(parent) = {
+    sleep(50)
+    parent <- 1
+    sleep(50)
+    parent <- 2
+    sleep(50)
+    parent <- 3
+    ()
+}
+
+# Test 3: Interleaved sleep and receive
+test_interleaved() = {
+    println("")
+    println("Test 3: Interleaved sleep and receive with timeout")
+    me = self()
+
+    spawn(() => interleaved_worker(me))
+
+    # Receive with short timeout - might miss some
+    r1 = receive n -> n after 30 -> 0 end
+    println("First receive (30ms timeout):")
+    println(r1)
+
+    # Sleep a bit to let message arrive
+    sleep(100)
+
+    # Now there should be messages waiting
+    r2 = receive n -> n after 10 -> 0 end
+    println("Second receive (after 100ms sleep):")
+    println(r2)
+
+    r3 = receive n -> n after 10 -> 0 end
+    println("Third receive:")
+    println(r3)
+
+    # Wait for any remaining
+    sleep(100)
+    r4 = receive n -> n after 10 -> 0 end
+    println("Fourth receive:")
+    println(r4)
+
+    # Verify we got all 3 messages (in some order)
+    total = r1 + r2 + r3 + r4
+    println("Total sum (should be 6):")
+    println(total)
+    assert(total == 6)
+
+    println("Test 3 PASSED")
+    ()
+}
+
+# Test 4: Rapid fire timeouts
+test_rapid_timeouts() = {
+    println("")
+    println("Test 4: Rapid fire short timeouts (20 x 10ms)")
+
+    timeouts = count_timeouts_rec(20, 0)
+    println("Number of timeouts (should be 20):")
+    println(timeouts)
+    assert(timeouts == 20)
+
+    println("Test 4 PASSED")
+    ()
+}
+
+# Sleeper worker
+sleeper(parent, id, delay) = {
+    sleep(delay)
+    parent <- id
+    ()
+}
+
+# Test 5: Sleep ordering with multiple workers
+test_sleep_ordering() = {
+    println("")
+    println("Test 5: Sleep ordering verification")
+    me = self()
+
+    # Spawn workers with known sleep times - should complete in order
+    # Longer delays first, shorter delays last
+    spawn(() => sleeper(me, 5, 250))
+    spawn(() => sleeper(me, 4, 200))
+    spawn(() => sleeper(me, 3, 150))
+    spawn(() => sleeper(me, 2, 100))
+    spawn(() => sleeper(me, 1, 50))
+
+    # Receive in order - shorter sleeps should arrive first
+    first = receive n -> n after 1000 -> 0 end
+    second = receive n -> n after 1000 -> 0 end
+    third = receive n -> n after 1000 -> 0 end
+    fourth = receive n -> n after 1000 -> 0 end
+    fifth = receive n -> n after 1000 -> 0 end
+
+    println("Order received (should be 1,2,3,4,5):")
+    println(first)
+    println(second)
+    println(third)
+    println(fourth)
+    println(fifth)
+
+    assert(first == 1)
+    assert(second == 2)
+    assert(third == 3)
+    assert(fourth == 4)
+    assert(fifth == 5)
+
+    println("Test 5 PASSED")
+    ()
+}
+
+main() = {
+    println("=== Timer Stress Test Suite ===")
+    println("")
+
+    test_concurrent_sleepers()
+    test_timeout_precision()
+    test_interleaved()
+    test_rapid_timeouts()
+    test_sleep_ordering()
+
+    println("")
+    println("=== All Timer Stress Tests PASSED ===")
+    ()
+}

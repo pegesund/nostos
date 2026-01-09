@@ -1248,9 +1248,9 @@ impl Runtime {
                 return Err(RuntimeError::Panic("IPC instruction in local handler".to_string()));
             }
 
-            Instruction::Receive => {
+            Instruction::Receive(dst) => {
                 if let Some(msg) = proc.try_receive() {
-                    proc.frames[frame_idx].registers[0] = msg;
+                    proc.frames[frame_idx].registers[*dst as usize] = msg;
                 } else {
                     proc.wait_for_message();
                     if let Some(frame) = proc.frames.last_mut() {
@@ -1260,7 +1260,7 @@ impl Runtime {
                 }
             }
 
-            Instruction::ReceiveTimeout(_timeout_reg) => {
+            Instruction::ReceiveTimeout(_dst, _timeout_reg) => {
                 return Err(RuntimeError::Panic("ReceiveTimeout not yet implemented in single-threaded runtime".to_string()));
             }
 
