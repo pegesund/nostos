@@ -37,7 +37,8 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "inspect", signature: "a -> String -> ()", doc: "Send a value to the inspector panel with a label" },
     BuiltinInfo { name: "assert", signature: "Bool -> ()", doc: "Assert condition is true, panic if false" },
     BuiltinInfo { name: "assert_eq", signature: "a -> a -> ()", doc: "Assert two values are equal, panic if not" },
-    BuiltinInfo { name: "panic", signature: "a -> ()", doc: "Panic with a message (terminates execution)" },
+    // panic is handled early in compile_call, not via BUILTINS dispatch
+    // BuiltinInfo { name: "panic", signature: "a -> ()", doc: "Panic with a message (terminates execution)" },
     BuiltinInfo { name: "sleep", signature: "Int -> ()", doc: "Sleep for N milliseconds" },
     BuiltinInfo { name: "vmStats", signature: "() -> (Int, Int, Int)", doc: "Get VM stats: (spawned, exited, active) process counts" },
     BuiltinInfo { name: "self", signature: "() -> Pid", doc: "Get the current process ID" },
@@ -7814,6 +7815,15 @@ impl Compiler {
                 self.chunk.emit(Instruction::LoadUnit(dst), line);
                 return Ok(dst);
             }
+            // Handle special built-in `panic` (similar to throw but uses Panic instruction)
+            if name == "panic" && args.len() == 1 {
+                let arg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                self.chunk.emit(Instruction::Panic(arg_reg), line);
+                // Panic doesn't return, but we need to return a register
+                let dst = self.alloc_reg();
+                self.chunk.emit(Instruction::LoadUnit(dst), line);
+                return Ok(dst);
+            }
             // Handle __native__ - call extension function by name
             // Syntax: __native__("FunctionName", arg1, arg2, ...)
             if name == "__native__" && !args.is_empty() {
@@ -8209,12 +8219,7 @@ impl Compiler {
                         self.emit_call_native(dst, "sumInt64Array", vec![arg_regs[0]].into(), line);
                         return Ok(dst);
                     }
-                    "panic" if arg_regs.len() == 1 => {
-                        self.chunk.emit(Instruction::Panic(arg_regs[0]), line);
-                        let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::LoadUnit(dst), line);
-                        return Ok(dst);
-                    }
+                    // panic is now handled early in compile_call (before function resolution)
                     "assert" if arg_regs.len() == 1 => {
                         self.chunk.emit(Instruction::Assert(arg_regs[0]), line);
                         let dst = self.alloc_reg();

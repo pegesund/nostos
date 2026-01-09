@@ -17,8 +17,9 @@ optMap(None(), _) = None()
 optFlatMap(Some(x), f) = f(x)
 optFlatMap(None(), _) = None()
 
-# Get the value - crashes if None (don't use on None!)
+# Get the value or throw error if None
 optUnwrap(Some(x)) = x
+optUnwrap(None()) = throw("optUnwrap called on None")
 
 # Get the value or return default
 optUnwrapOr(Some(x), _) = x

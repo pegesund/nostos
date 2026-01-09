@@ -89,12 +89,14 @@ fn ident() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
     filter_map(|span, tok| match tok {
         Token::LowerIdent(s) => Ok(make_ident(s, to_span(span))),
         Token::SelfKw => Ok(make_ident("self".to_string(), to_span(span))),
+        // panic is a builtin function, not a reserved keyword
+        Token::Panic => Ok(make_ident("panic".to_string(), to_span(span))),
         Token::Test | Token::Type | Token::Var | Token::Mvar | Token::If | Token::Then | Token::Else |
         Token::Match | Token::When | Token::Trait | Token::Module | Token::End |
         Token::Use | Token::Private | Token::Pub | Token::Try | Token::Catch |
         Token::Finally | Token::Do | Token::While | Token::For | Token::To |
         Token::Break | Token::Continue | Token::Return | Token::Spawn | Token::SpawnLink |
-        Token::SpawnMonitor | Token::Receive | Token::After | Token::Panic |
+        Token::SpawnMonitor | Token::Receive | Token::After |
         Token::Extern | Token::From | Token::Quote =>
             Err(Simple::custom(span, format!("'{}' is a reserved keyword", tok))),
         _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
