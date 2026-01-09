@@ -1,9 +1,10 @@
 # expect: <ul><li>A</li><li>B</li></ul>
 # Nested HTML elements work correctly
 
-use stdlib.html.{Html, render, ul, li_}
+use stdlib.html.{Html, render}
 
 main() = {
-    page = Html(ul([li_("A"), li_("B")]))
+    # li("A") uses the overloaded li(str: String) variant
+    page = Html(ul([li("A"), li("B")]))
     render(page)
 }

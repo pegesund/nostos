@@ -12,82 +12,101 @@ type Html =
 empty() = Empty
 
 # Text node helper
-text(str) = Text(str)
+text(str: String) = Text(str)
 
 # Raw HTML (unescaped) - use with caution!
-raw(str) = Raw(str)
+raw(str: String) = Raw(str)
 
 # Generic element constructor
-el(tag, attrs, children) = Element(tag, attrs, children)
+el(tag: String, attrs: List[(String, String)], children: List[Html]) = Element(tag, attrs, children)
 
-# === Simple tag functions (children only) ===
+# === Tag functions with overloading ===
+# Each tag has two variants:
+#   tag(children: List[Html]) - for nested elements
+#   tag(str: String) - for text content
 
-div(children) = Element("div", [], children)
-span(children) = Element("span", [], children)
-p(children) = Element("p", [], children)
-h1(children) = Element("h1", [], children)
-h2(children) = Element("h2", [], children)
-h3(children) = Element("h3", [], children)
-h4(children) = Element("h4", [], children)
-h5(children) = Element("h5", [], children)
-h6(children) = Element("h6", [], children)
-ul(children) = Element("ul", [], children)
-ol(children) = Element("ol", [], children)
-li(children) = Element("li", [], children)
-table(children) = Element("table", [], children)
-thead(children) = Element("thead", [], children)
-tbody(children) = Element("tbody", [], children)
-tr(children) = Element("tr", [], children)
-th(children) = Element("th", [], children)
-td(children) = Element("td", [], children)
-form(children) = Element("form", [], children)
-nav(children) = Element("nav", [], children)
-header(children) = Element("header", [], children)
-footer(children) = Element("footer", [], children)
-section(children) = Element("section", [], children)
-article(children) = Element("article", [], children)
-aside(children) = Element("aside", [], children)
-head(children) = Element("head", [], children)
-body(children) = Element("body", [], children)
-button(children) = Element("button", [], children)
+div(children: List[Html]) = Element("div", [], children)
+div(str: String) = Element("div", [], [Text(str)])
 
-# Text content variants
-div_(str) = Element("div", [], [Text(str)])
-span_(str) = Element("span", [], [Text(str)])
-p_(str) = Element("p", [], [Text(str)])
-h1_(str) = Element("h1", [], [Text(str)])
-h2_(str) = Element("h2", [], [Text(str)])
-h3_(str) = Element("h3", [], [Text(str)])
-h4_(str) = Element("h4", [], [Text(str)])
-h5_(str) = Element("h5", [], [Text(str)])
-h6_(str) = Element("h6", [], [Text(str)])
-li_(str) = Element("li", [], [Text(str)])
-th_(str) = Element("th", [], [Text(str)])
-td_(str) = Element("td", [], [Text(str)])
-title_(str) = Element("title", [], [Text(str)])
-button_(str) = Element("button", [], [Text(str)])
-label_(str) = Element("label", [], [Text(str)])
-strong(str) = Element("strong", [], [Text(str)])
-em(str) = Element("em", [], [Text(str)])
-code_(str) = Element("code", [], [Text(str)])
-pre_(str) = Element("pre", [], [Text(str)])
-small_(str) = Element("small", [], [Text(str)])
+span(children: List[Html]) = Element("span", [], children)
+span(str: String) = Element("span", [], [Text(str)])
+
+p(children: List[Html]) = Element("p", [], children)
+p(str: String) = Element("p", [], [Text(str)])
+
+h1(children: List[Html]) = Element("h1", [], children)
+h1(str: String) = Element("h1", [], [Text(str)])
+
+h2(children: List[Html]) = Element("h2", [], children)
+h2(str: String) = Element("h2", [], [Text(str)])
+
+h3(children: List[Html]) = Element("h3", [], children)
+h3(str: String) = Element("h3", [], [Text(str)])
+
+h4(children: List[Html]) = Element("h4", [], children)
+h4(str: String) = Element("h4", [], [Text(str)])
+
+h5(children: List[Html]) = Element("h5", [], children)
+h5(str: String) = Element("h5", [], [Text(str)])
+
+h6(children: List[Html]) = Element("h6", [], children)
+h6(str: String) = Element("h6", [], [Text(str)])
+
+ul(children: List[Html]) = Element("ul", [], children)
+ol(children: List[Html]) = Element("ol", [], children)
+
+li(children: List[Html]) = Element("li", [], children)
+li(str: String) = Element("li", [], [Text(str)])
+
+table(children: List[Html]) = Element("table", [], children)
+thead(children: List[Html]) = Element("thead", [], children)
+tbody(children: List[Html]) = Element("tbody", [], children)
+tr(children: List[Html]) = Element("tr", [], children)
+
+th(children: List[Html]) = Element("th", [], children)
+th(str: String) = Element("th", [], [Text(str)])
+
+td(children: List[Html]) = Element("td", [], children)
+td(str: String) = Element("td", [], [Text(str)])
+
+form(children: List[Html]) = Element("form", [], children)
+nav(children: List[Html]) = Element("nav", [], children)
+header(children: List[Html]) = Element("header", [], children)
+footer(children: List[Html]) = Element("footer", [], children)
+section(children: List[Html]) = Element("section", [], children)
+article(children: List[Html]) = Element("article", [], children)
+aside(children: List[Html]) = Element("aside", [], children)
+head(children: List[Html]) = Element("head", [], children)
+body(children: List[Html]) = Element("body", [], children)
+
+button(children: List[Html]) = Element("button", [], children)
+button(str: String) = Element("button", [], [Text(str)])
+
+label(children: List[Html]) = Element("label", [], children)
+label(str: String) = Element("label", [], [Text(str)])
+
+title(str: String) = Element("title", [], [Text(str)])
+strong(str: String) = Element("strong", [], [Text(str)])
+em(str: String) = Element("em", [], [Text(str)])
+code(str: String) = Element("code", [], [Text(str)])
+pre(str: String) = Element("pre", [], [Text(str)])
+small(str: String) = Element("small", [], [Text(str)])
 
 # Self-closing tags
 br() = Element("br", [], [])
 hr() = Element("hr", [], [])
-img(attrs) = Element("img", attrs, [])
-input(attrs) = Element("input", attrs, [])
-meta(attrs) = Element("meta", attrs, [])
-linkTag(attrs) = Element("link", attrs, [])
+img(attrs: List[(String, String)]) = Element("img", attrs, [])
+input(attrs: List[(String, String)]) = Element("input", attrs, [])
+meta(attrs: List[(String, String)]) = Element("meta", attrs, [])
+linkTag(attrs: List[(String, String)]) = Element("link", attrs, [])
 
 # Elements with required attrs
-a(attrs, children) = Element("a", attrs, children)
-a_(attrs, str) = Element("a", attrs, [Text(str)])
+a(attrs: List[(String, String)], children: List[Html]) = Element("a", attrs, children)
+a(attrs: List[(String, String)], str: String) = Element("a", attrs, [Text(str)])
 
 # === Rendering ===
 
-escapeChar(c) = match c {
+escapeChar(c: Char) = match c {
     '<' -> "&lt;"
     '>' -> "&gt;"
     '&' -> "&amp;"
@@ -97,17 +116,20 @@ escapeChar(c) = match c {
 }
 
 # Escape HTML using recursion (avoid method calls for stdlib compatibility)
-escapeHtmlChars([]) = ""
-escapeHtmlChars([c | rest]) = escapeChar(c) ++ escapeHtmlChars(rest)
+escapeHtmlChars([]: List[Char]) = ""
+escapeHtmlChars([c | rest]: List[Char]) = escapeChar(c) ++ escapeHtmlChars(rest)
 
-escapeHtml(str) = escapeHtmlChars(String.chars(str))
+escapeHtml(str: String) = escapeHtmlChars(String.chars(str))
 
-renderAttr((name, value)) = " " ++ name ++ "=\"" ++ escapeHtml(value) ++ "\""
+renderAttr(attr) = {
+    (name, value) = attr
+    " " ++ name ++ "=\"" ++ escapeHtml(value) ++ "\""
+}
 
 renderAttrs([]) = ""
 renderAttrs([attr | rest]) = renderAttr(attr) ++ renderAttrs(rest)
 
-isSelfClosing(tag) = match tag {
+isSelfClosing(tag: String) = match tag {
     "area" -> true
     "base" -> true
     "br" -> true
@@ -167,12 +189,8 @@ renderToBuffer(node, buf) = match node {
     Empty -> ()
 }
 
-render(node) = {
+render(node: Html) = {
     buf = Buffer.new()
     renderToBuffer(node, buf)
     Buffer.toString(buf)
 }
-
-# Legacy non-buffered functions for backwards compatibility
-renderChildren([]) = ""
-renderChildren([child | rest]) = render(child) ++ renderChildren(rest)

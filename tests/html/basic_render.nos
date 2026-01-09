@@ -1,9 +1,10 @@
 # expect: <div><h1>Hello</h1></div>
 # Basic HTML rendering with Html(...) scoped names
 
-use stdlib.html.{Html, render, div, h1_}
+use stdlib.html.{Html, render}
 
 main() = {
-    page = Html(div([h1_("Hello")]))
+    # h1("Hello") uses the overloaded h1(str: String) variant
+    page = Html(div([h1("Hello")]))
     render(page)
 }

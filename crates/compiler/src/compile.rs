@@ -2495,7 +2495,7 @@ impl Compiler {
         // Check compiled functions
         for key in self.functions.keys() {
             if let Some(suffix) = key.strip_prefix(&prefix) {
-                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
                 if param_count == arity {
                     candidates.push(key.clone());
                 }
@@ -2505,7 +2505,7 @@ impl Compiler {
         // Check fn_asts (for functions being compiled or not yet compiled)
         for key in self.fn_asts.keys() {
             if let Some(suffix) = key.strip_prefix(&prefix) {
-                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
                 if param_count == arity && !candidates.contains(key) {
                     candidates.push(key.clone());
                 }
@@ -2515,7 +2515,7 @@ impl Compiler {
         // Also check if current function matches (for self-recursion during compilation)
         if let Some(current) = &self.current_function_name {
             if let Some(suffix) = current.strip_prefix(&prefix) {
-                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
                 if param_count == arity && !candidates.contains(current) {
                     candidates.push(current.clone());
                 }
@@ -2531,10 +2531,10 @@ impl Compiler {
 
         for candidate in &candidates {
             let suffix = candidate.strip_prefix(&prefix).unwrap();
-            let candidate_types: Vec<&str> = if suffix.is_empty() {
+            let candidate_types: Vec<String> = if suffix.is_empty() {
                 vec![]
             } else {
-                suffix.split(',').collect()
+                Self::split_signature_types(suffix)
             };
 
             let mut score = 0;
@@ -2556,6 +2556,10 @@ impl Compiler {
                     if cand_type == arg_type {
                         // Exact type match
                         score += 2;
+                    } else if cand_type.starts_with(arg_type) && cand_type[arg_type.len()..].starts_with('[') {
+                        // Parameterized type match: arg_type="List", cand_type="List[Html]"
+                        // This is a compatible match but less specific than exact
+                        score += 1;
                     } else {
                         // Type mismatch
                         valid = false;
@@ -2577,6 +2581,56 @@ impl Compiler {
         best_match.map(|(name, _)| name)
     }
 
+    /// Count parameters in a signature, handling nested brackets correctly.
+    /// E.g., "List[(String,String)],String" -> 2 (not 3)
+    fn count_signature_params(signature: &str) -> usize {
+        if signature.is_empty() {
+            return 0;
+        }
+        let mut count = 1;
+        let mut depth = 0;
+        for c in signature.chars() {
+            match c {
+                '[' | '(' => depth += 1,
+                ']' | ')' => depth -= 1,
+                ',' if depth == 0 => count += 1,
+                _ => {}
+            }
+        }
+        count
+    }
+
+    /// Split a signature into parameter types, handling nested brackets correctly.
+    /// E.g., "List[(String,String)],String" -> ["List[(String,String)]", "String"]
+    fn split_signature_types(signature: &str) -> Vec<String> {
+        if signature.is_empty() {
+            return vec![];
+        }
+        let mut result = Vec::new();
+        let mut current = String::new();
+        let mut depth = 0;
+        for c in signature.chars() {
+            match c {
+                '[' | '(' => {
+                    depth += 1;
+                    current.push(c);
+                }
+                ']' | ')' => {
+                    depth -= 1;
+                    current.push(c);
+                }
+                ',' if depth == 0 => {
+                    result.push(std::mem::take(&mut current));
+                }
+                _ => current.push(c),
+            }
+        }
+        if !current.is_empty() {
+            result.push(current);
+        }
+        result
+    }
+
     /// Check if a function with the given base name exists (with any arity).
     /// Returns Some(set of arities) if found, None if no such function exists.
     fn find_all_function_arities(&self, base_name: &str) -> Option<std::collections::HashSet<usize>> {
@@ -2586,7 +2640,7 @@ impl Compiler {
         // Check compiled functions
         for key in self.functions.keys() {
             if let Some(suffix) = key.strip_prefix(&prefix) {
-                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
                 arities.insert(param_count);
             }
         }
@@ -2594,7 +2648,7 @@ impl Compiler {
         // Check fn_asts (for functions being compiled or not yet compiled)
         for key in self.fn_asts.keys() {
             if let Some(suffix) = key.strip_prefix(&prefix) {
-                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
                 arities.insert(param_count);
             }
         }
@@ -2602,7 +2656,7 @@ impl Compiler {
         // Check if current function matches
         if let Some(current) = &self.current_function_name {
             if let Some(suffix) = current.strip_prefix(&prefix) {
-                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
                 arities.insert(param_count);
             }
         }
@@ -5869,6 +5923,10 @@ impl Compiler {
             // Handle Html(...) - transforms bare HTML tag names to stdlib.html.* calls
             // Returns an Html tree. Use render(Html(...)) to get a String.
             if name == "Html" && args.len() == 1 {
+                // Ensure stdlib.html is registered as a known module for name resolution
+                self.known_modules.insert("stdlib".to_string());
+                self.known_modules.insert("stdlib.html".to_string());
+
                 // Transform the argument expression to use stdlib.html.* functions
                 let transformed_arg = self.transform_html_expr(&args[0]);
 
@@ -10928,19 +10986,17 @@ impl Compiler {
         "text", "raw", "el", "empty", "render",
         // Type constructors
         "Element", "Text", "Raw", "Empty",
-        // Container tags
+        // Container tags (overloaded: tag(List[Html]) and tag(String))
         "div", "span", "p", "h1", "h2", "h3", "h4", "h5", "h6",
         "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td",
         "form", "nav", "header", "footer", "section", "article", "aside",
-        "head", "body", "button",
-        // Text variants (underscore suffix)
-        "div_", "span_", "p_", "h1_", "h2_", "h3_", "h4_", "h5_", "h6_",
-        "li_", "th_", "td_", "title_", "button_", "label_",
-        "strong", "em", "code_", "pre_", "small_",
+        "head", "body", "button", "label",
+        // Text-only tags
+        "title", "strong", "em", "code", "pre", "small",
         // Self-closing tags
         "br", "hr", "img", "input", "meta", "linkTag",
-        // Elements with required attrs
-        "a", "a_",
+        // Elements with required attrs (overloaded)
+        "a",
     ];
 
     /// Transform an expression inside Html(...) to resolve bare HTML tag names
