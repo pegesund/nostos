@@ -1789,26 +1789,26 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
             }
             BrowserItem::Variable { name, .. } => {
                 // Try REPL binding first, then mvar with qualified name
-                let value_opt = {
-                    let mut eng = engine.borrow_mut();
-                    if let Some(val) = eng.get_var_value_raw(name) {
-                        Some(val)
-                    } else {
-                        // Build qualified name for mvar
-                        let qualified = if current_path.is_empty() {
-                            name.clone()
-                        } else {
-                            format!("{}.{}", current_path.join("."), name)
-                        };
-                        eng.get_mvar_value_raw(&qualified)
-                    }
-                };
-                if let Some(value) = value_opt {
-                    // Highlight variable value as code
-                    let source = format!("{} = {}", name, value);
+                let mut eng = engine.borrow_mut();
+
+                // First try REPL variable binding
+                if let Some(val) = eng.get_var_value_raw(name) {
+                    let source = format!("{} = {}", name, val);
                     syntax_highlight_code(&source)
                 } else {
-                    StyledString::plain(format!("{} = <unavailable>", name))
+                    // Try as mvar - build qualified name
+                    let qualified = if current_path.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}.{}", current_path.join("."), name)
+                    };
+                    if let Some(val_str) = eng.get_mvar_value_string(&qualified) {
+                        let source = format!("{} = {}", name, val_str);
+                        syntax_highlight_code(&source)
+                    } else {
+                        // Mvar exists but value not available (not yet initialized?)
+                        StyledString::plain(format!("{} (mvar - run code to initialize)", name))
+                    }
                 }
             }
             BrowserItem::Metadata { module } => {

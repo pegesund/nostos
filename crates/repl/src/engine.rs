@@ -2321,6 +2321,21 @@ impl ReplEngine {
         None
     }
 
+    /// Get the value of an mvar as a formatted string
+    /// `qualified_name` should be the full path like "demo.panel.panelCursor"
+    pub fn get_mvar_value_string(&mut self, qualified_name: &str) -> Option<String> {
+        // Check if this mvar exists in the compiler
+        if !self.compiler.get_mvars().contains_key(qualified_name) {
+            return None;
+        }
+
+        // Evaluate the mvar name to get its current value
+        match self.eval(qualified_name) {
+            Ok(formatted) => Some(formatted),
+            Err(_) => None,
+        }
+    }
+
     /// Get the raw Value of an mvar for inspection
     /// `qualified_name` should be the full path like "demo.panel.panelCursor"
     pub fn get_mvar_value_raw(&mut self, qualified_name: &str) -> Option<nostos_vm::Value> {
@@ -2329,24 +2344,23 @@ impl ReplEngine {
             return None;
         }
 
-        // Evaluate the mvar name to get its current value
-        // This creates a simple expression that reads the mvar
-        match self.eval(qualified_name) {
-            Ok(_formatted) => {
-                // The eval returns a formatted string, but we need the raw value
-                // Re-run to get the actual Value
-                let source = format!("__mvar_read_temp() = {}", qualified_name);
-                let _ = self.eval(&source);
-                if let Some(func) = self.compiler.get_function("__mvar_read_temp") {
-                    match self.vm.run(func) {
-                        Ok(result) => result.value.map(|v| v.to_value()),
-                        Err(_) => None,
-                    }
-                } else {
-                    None
-                }
+        // Create a thunk function that returns the mvar value
+        let thunk_name = format!("__mvar_inspect_{}", qualified_name.replace('.', "_"));
+        let source = format!("{}() = {}", thunk_name, qualified_name);
+
+        // Compile the thunk
+        if self.eval(&source).is_err() {
+            return None;
+        }
+
+        // Run the thunk to get the raw value
+        if let Some(func) = self.compiler.get_function(&thunk_name) {
+            match self.vm.run(func) {
+                Ok(result) => result.value.map(|v| v.to_value()),
+                Err(_) => None,
             }
-            Err(_) => None,
+        } else {
+            None
         }
     }
 
