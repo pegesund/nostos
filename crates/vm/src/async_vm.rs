@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use smallvec::smallvec;
 use imbl::{HashMap as ImblHashMap, HashSet as ImblHashSet};
 
 use tokio::sync::{mpsc, RwLock as TokioRwLock, OwnedRwLockReadGuard, OwnedRwLockWriteGuard};

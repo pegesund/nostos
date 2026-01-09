@@ -1497,8 +1497,6 @@ impl IoRuntime {
         query: &str,
         params: &[PgParam],
     ) -> Result<Vec<Vec<PgValue>>, String> {
-        use tokio_postgres::types::Type;
-
         let rows = if params.is_empty() {
             client.query(query, &[]).await
         } else {
@@ -1630,7 +1628,7 @@ impl IoRuntime {
                     Box::new(s.clone()) as Box<dyn tokio_postgres::types::ToSql + Sync + Send>
                 }
                 PgParam::Timestamp(millis) => {
-                    use chrono::{DateTime, Utc, NaiveDateTime, NaiveDate, NaiveTime};
+                    use chrono::{DateTime, NaiveTime};
                     // Convert millis since epoch to appropriate chrono type based on expected type
                     match expected_type {
                         Some(t) if *t == Type::DATE => {

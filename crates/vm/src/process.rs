@@ -20,7 +20,7 @@ use crossbeam_channel; // Added
 
 use crate::gc::{GcConfig, GcValue, Heap, RawGcPtr, InlineOp, GcNativeFn, GcMapKey};
 use crate::io_runtime::IoResult;
-use crate::shared_types::{SharedMap, SharedMapKey, SharedMapValue};
+use crate::shared_types::{SharedMap, SharedMapValue};
 use crate::value::{FunctionValue, Pid, RefId, Reg};
 
 // ============================================================================
