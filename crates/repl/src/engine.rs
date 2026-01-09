@@ -1122,8 +1122,39 @@ impl ReplEngine {
 
         // Add to compiler with module name from filename
         let module_path = if module_name.is_empty() { vec![] } else { vec![module_name.clone()] };
-        self.compiler.add_module(&module, module_path, Arc::new(source.clone()), path_str.to_string())
+        self.compiler.add_module(&module, module_path.clone(), Arc::new(source.clone()), path_str.to_string())
             .map_err(|e| format!("Compilation error: {}", e))?;
+
+        // Build the call graph from function definitions
+        let prefix = if module_path.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", module_path.join("."))
+        };
+        for fn_def in Self::get_fn_defs(&module) {
+            let fn_name = fn_def.name.node.clone();
+            let qualified_name = format!("{}{}", prefix, fn_name);
+            let deps = extract_dependencies_from_fn(fn_def);
+            // Qualify the dependencies with the current module prefix
+            let qualified_deps: HashSet<String> = deps.into_iter()
+                .map(|dep| {
+                    // If the dependency doesn't have a module prefix and we're in a module,
+                    // assume it's in the same module
+                    if !dep.contains('.') && !prefix.is_empty() {
+                        format!("{}{}", prefix, dep)
+                    } else {
+                        dep
+                    }
+                })
+                .collect();
+            {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                    let _ = writeln!(f, "[load_file] call_graph.update({}, {:?})", qualified_name, qualified_deps);
+                }
+            }
+            self.call_graph.update(&qualified_name, qualified_deps);
+        }
 
         // Compile all bodies
         if let Err((e, filename, source)) = self.compiler.compile_all() {
@@ -1705,6 +1736,15 @@ impl ReplEngine {
     pub fn eval_in_module(&mut self, input: &str, module_name: Option<&str>) -> Result<String, String> {
         let input = input.trim();
 
+        // Log entry point with module_name to track who's calling
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                let first_line = input.lines().next().unwrap_or("");
+                let _ = writeln!(f, "[eval_in_module] ENTRY module_name={:?}, first_line={:?}", module_name, first_line);
+            }
+        }
+
         // Handle REPL commands
         if input.starts_with(':') {
             return self.handle_command(input);
@@ -1764,6 +1804,67 @@ impl ReplEngine {
         let module = module_opt.ok_or("Failed to parse input")?;
 
         if Self::has_definitions(&module) {
+            // Determine the module name for type prefixing
+            let actual_module_name = match module_name {
+                Some(name) if !name.is_empty() && name != "repl" => {
+                    // Extract module part from qualified name like "ptest.session"
+                    let parts: Vec<&str> = name.split('.').collect();
+                    if parts.len() > 1 {
+                        parts[..parts.len()-1].join(".")
+                    } else {
+                        String::new()
+                    }
+                }
+                _ => self.current_module.clone(),
+            };
+
+            // Prepend type definitions from the module to the input
+            // This ensures types like "Counter" are available when compiling functions
+            let input_with_types = if !actual_module_name.is_empty() && actual_module_name != "repl" {
+                let mut prefix = String::new();
+
+                // Add type definitions from the source manager if available
+                if let Some(ref sm) = self.source_manager {
+                    for def_name in sm.definitions_in_module(&actual_module_name) {
+                        if let Some(source) = sm.get_source(&def_name) {
+                            let trimmed = source.trim();
+                            if trimmed.starts_with("type ") || trimmed.starts_with("reactive ") {
+                                prefix.push_str(trimmed);
+                                prefix.push_str("\n\n");
+                            }
+                        }
+                    }
+                } else {
+                    // Fallback: get types from the compiler for this module
+                    let module_prefix_str = format!("{}.", actual_module_name);
+                    for (type_name, type_val) in self.compiler.get_all_types() {
+                        if type_name.starts_with(&module_prefix_str) {
+                            let type_source = self.reconstruct_type_source_for_check(&type_val);
+                            if !type_source.is_empty() {
+                                prefix.push_str(&type_source);
+                                prefix.push_str("\n\n");
+                            }
+                        }
+                    }
+                }
+
+                if prefix.is_empty() {
+                    input.to_string()
+                } else {
+                    format!("{}{}", prefix, input)
+                }
+            } else {
+                input.to_string()
+            };
+
+            // Re-parse with the type-prefixed input
+            let (reparsed_module, reparse_errors) = parse(&input_with_types);
+            if !reparse_errors.is_empty() {
+                // Fall back to original input if re-parsing fails
+                // (shouldn't happen, but be safe)
+            }
+            let module_to_compile = reparsed_module.unwrap_or_else(|| module.clone());
+
             let module_path = match module_name {
                 Some(name) if !name.is_empty() && name != "repl" => {
                     // Strip the definition name to get just the module path
@@ -1816,7 +1917,14 @@ impl ReplEngine {
                 }
             }
 
-            self.compiler.add_module(&module, module_path.clone(), Arc::new(input.to_string()), "<repl>".to_string())
+            // Use the module with type definitions for compilation
+            {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                    let _ = writeln!(f, "[eval_in_module] module_path={:?}, input_with_types:\n{}", module_path, input_with_types);
+                }
+            }
+            self.compiler.add_module(&module_to_compile, module_path.clone(), Arc::new(input_with_types.clone()), "<repl>".to_string())
                 .map_err(|e| format!("Error: {}", e))?;
 
             // Update call graph BEFORE compiling (so dependencies are tracked even if compile fails)
@@ -1841,6 +1949,14 @@ impl ReplEngine {
 
             // Compile and collect errors
             let errors = self.compiler.compile_all_collecting_errors();
+            {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                    let _ = writeln!(f, "[eval_in_module] compile_all errors: {:?}", errors.len());
+                    let _ = writeln!(f, "[eval_in_module] defined_fns: {:?}", defined_fns);
+                    let _ = writeln!(f, "[eval_in_module] prefix: {:?}", prefix);
+                }
+            }
 
             // Collect set of error function names for quick lookup
             let error_fn_names: HashSet<String> = errors.iter().map(|(n, _, _, _)| n.clone()).collect();
@@ -1905,6 +2021,148 @@ impl ReplEngine {
             }
 
             self.sync_vm();
+
+            // Recompile functions that CALL the edited functions (dependents)
+            // This fixes the issue where main() passes session as a value -
+            // without recompilation, main still has a reference to the old session
+            {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                    let _ = writeln!(f, "[recompile_deps] successful_fns={:?}, prefix={:?}", successful_fns, prefix);
+                }
+            }
+            if !successful_fns.is_empty() {
+                let mut dependents_to_recompile: HashSet<String> = HashSet::new();
+                for fn_name in &successful_fns {
+                    let deps = self.call_graph.direct_dependents(fn_name);
+                    {
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                            let _ = writeln!(f, "[recompile_deps] fn={}, deps={:?}", fn_name, deps);
+                        }
+                    }
+                    for dep in deps {
+                        // Only recompile if the dependent is in the same module
+                        // (to avoid recompiling unrelated code)
+                        if dep.starts_with(&prefix) && !successful_fns.contains(&dep) {
+                            dependents_to_recompile.insert(dep);
+                        }
+                    }
+                }
+
+                {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                        let _ = writeln!(f, "[recompile_deps] to_recompile={:?}", dependents_to_recompile);
+                    }
+                }
+                // Recompile each dependent using the same type-prefixing as eval_in_module
+                for dep_name in &dependents_to_recompile {
+                    // Get the source of the dependent function
+                    let source = self.get_source(dep_name);
+                    {
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                            let _ = writeln!(f, "[recompile_deps] recompiling {} source_len={}", dep_name, source.len());
+                        }
+                    }
+                    if !source.is_empty() {
+                        // Get module name for type prefixing (same logic as eval_in_module)
+                        let dep_parts: Vec<&str> = dep_name.split('.').collect();
+                        let dep_module_name = if dep_parts.len() > 1 {
+                            dep_parts[..dep_parts.len()-1].join(".")
+                        } else {
+                            String::new()
+                        };
+
+                        // Add type prefix (same as eval_in_module does)
+                        let source_with_types = if !dep_module_name.is_empty() {
+                            let mut type_prefix = String::new();
+                            let module_prefix_str = format!("{}.", dep_module_name);
+                            for (type_name, type_val) in self.compiler.get_all_types() {
+                                if type_name.starts_with(&module_prefix_str) {
+                                    let type_source = self.reconstruct_type_source_for_check(&type_val);
+                                    if !type_source.is_empty() {
+                                        type_prefix.push_str(&type_source);
+                                        type_prefix.push_str("\n\n");
+                                    }
+                                }
+                            }
+                            if type_prefix.is_empty() {
+                                source.clone()
+                            } else {
+                                format!("{}{}", type_prefix, source)
+                            }
+                        } else {
+                            source.clone()
+                        };
+
+                        // Parse and recompile with type-prefixed source
+                        let (module_opt, parse_errors) = parse(&source_with_types);
+                        if parse_errors.is_empty() {
+                            if let Some(dep_module) = module_opt {
+                                let dep_module_path: Vec<String> = if dep_parts.len() > 1 {
+                                    dep_parts[..dep_parts.len()-1].iter().map(|s| s.to_string()).collect()
+                                } else {
+                                    vec![]
+                                };
+                                // Recompile the dependent function
+                                let _ = self.compiler.add_module(
+                                    &dep_module,
+                                    dep_module_path,
+                                    Arc::new(source_with_types.clone()),
+                                    "<recompile>".to_string()
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Compile and sync again to pick up the recompiled dependents
+                if !dependents_to_recompile.is_empty() {
+                    let _ = self.compiler.compile_all_collecting_errors();
+
+                    // Debug: print function Arc addresses
+                    {
+                        use std::io::Write;
+                        use nostos_vm::value::Value;
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                            // Check if ptest.session/ and ptest.main/ exist and their Arc addresses
+                            for fn_name in ["ptest.session/", "ptest.main/"] {
+                                if let Some(func) = self.compiler.get_function(fn_name) {
+                                    let arc_ptr = Arc::as_ptr(&func);
+                                    let _ = writeln!(f, "[recompile_deps] {} Arc ptr: {:?}", fn_name, arc_ptr);
+                                    // Print function constants that are other functions or strings
+                                    for (i, constant) in func.code.constants.iter().enumerate() {
+                                        match constant {
+                                            Value::Function(inner_func) => {
+                                                let inner_ptr = Arc::as_ptr(inner_func);
+                                                let _ = writeln!(f, "[recompile_deps]   {} constants[{}] = Function({}, ptr: {:?})",
+                                                    fn_name, i, inner_func.name, inner_ptr);
+                                            }
+                                            Value::String(s) if s.contains("Counter") || s.contains("etter") => {
+                                                let _ = writeln!(f, "[recompile_deps]   {} constants[{}] = String({:?})",
+                                                    fn_name, i, s);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                } else {
+                                    let _ = writeln!(f, "[recompile_deps] {} NOT FOUND", fn_name);
+                                }
+                            }
+                        }
+                    }
+
+                    self.sync_vm();
+                    {
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                            let _ = writeln!(f, "[recompile_deps] DONE - dependents recompiled and synced");
+                        }
+                    }
+                }
+            }
 
             // If there were errors, return the first one with filename and line number
             if let Some((_fn_name, error, filename, source)) = errors.into_iter().next() {
@@ -2030,6 +2288,38 @@ impl ReplEngine {
 
         if let Err((e, _, _)) = self.compiler.compile_all() {
             return Err(format!("Compilation error: {}", e));
+        }
+
+        // Debug: log ptest.main/ Arc before sync_vm
+        {
+            use std::io::Write;
+            use nostos_vm::value::Value;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                if input.contains("ptest.main") || input.contains("main()") {
+                    let _ = writeln!(f, "[eval_expression] input={}", input);
+                    for fn_name in ["ptest.session/", "ptest.main/"] {
+                        if let Some(func) = self.compiler.get_function(fn_name) {
+                            let arc_ptr = Arc::as_ptr(&func);
+                            let _ = writeln!(f, "[eval_expression] {} Arc ptr: {:?}", fn_name, arc_ptr);
+                            // Print function constants that are other functions or strings
+                            for (i, constant) in func.code.constants.iter().enumerate() {
+                                match constant {
+                                    Value::Function(inner_func) => {
+                                        let inner_ptr = Arc::as_ptr(inner_func);
+                                        let _ = writeln!(f, "[eval_expression]   {} constants[{}] = Function({}, ptr: {:?})",
+                                            fn_name, i, inner_func.name, inner_ptr);
+                                    }
+                                    Value::String(s) if s.contains("Counter") || s.contains("etter") => {
+                                        let _ = writeln!(f, "[eval_expression]   {} constants[{}] = String({:?})",
+                                            fn_name, i, s);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         self.sync_vm();
@@ -3253,6 +3543,71 @@ impl ReplEngine {
         output
     }
 
+    /// Reconstruct type source for check_module_compiles - handles reactive types properly
+    fn reconstruct_type_source_for_check(&self, type_val: &nostos_vm::value::TypeValue) -> String {
+        use nostos_vm::value::TypeKind;
+
+        let mut output = String::new();
+
+        // Use "reactive" keyword for reactive types, "type" for others
+        match &type_val.kind {
+            TypeKind::Reactive => output.push_str("reactive "),
+            _ => output.push_str("type "),
+        }
+
+        // Use unqualified name (strip module prefix)
+        let name = if let Some(dot_pos) = type_val.name.rfind('.') {
+            &type_val.name[dot_pos + 1..]
+        } else {
+            &type_val.name
+        };
+        output.push_str(name);
+
+        // Add type parameters if any
+        if !type_val.type_params.is_empty() {
+            output.push('[');
+            output.push_str(&type_val.type_params.join(", "));
+            output.push(']');
+        }
+
+        output.push_str(" = ");
+
+        match &type_val.kind {
+            TypeKind::Record { .. } | TypeKind::Reactive => {
+                output.push_str("{ ");
+                let fields: Vec<String> = type_val.fields.iter()
+                    .map(|f| format!("{}: {}", f.name, f.type_name))
+                    .collect();
+                output.push_str(&fields.join(", "));
+                output.push_str(" }");
+            }
+            TypeKind::Variant => {
+                let variants: Vec<String> = type_val.constructors.iter()
+                    .map(|c| {
+                        if c.fields.is_empty() {
+                            c.name.clone()
+                        } else {
+                            let fields: Vec<String> = c.fields.iter()
+                                .map(|f| f.type_name.clone())
+                                .collect();
+                            format!("{}({})", c.name, fields.join(", "))
+                        }
+                    })
+                    .collect();
+                output.push_str(&variants.join(" | "));
+            }
+            TypeKind::Alias { target } => {
+                output.push_str(target);
+            }
+            TypeKind::Primitive => {
+                // Primitive types don't need to be reconstructed for check
+                output.clear();
+            }
+        }
+
+        output
+    }
+
     /// Reconstruct trait source from TraitInfo
     fn reconstruct_trait_source(&self, trait_info: &nostos_compiler::compile::TraitInfo) -> String {
         let mut output = String::new();
@@ -4002,9 +4357,19 @@ impl ReplEngine {
         use nostos_syntax::ast::{CallArg, Expr, Item, Stmt, DoStmt, TypeBody, Pattern};
         use nostos_compiler::Compiler;
 
-        // Prepend module-level imports and use statements if editing within a module context
-        // This ensures that when editing a function, the module's imports are visible
-        let full_content = if !module_name.is_empty() {
+        // DEBUG: Write to file since TUI takes over terminal
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                let _ = writeln!(f, "[check_module_compiles] module_name='{}', has_source_manager={}",
+                    module_name, self.source_manager.is_some());
+                let _ = writeln!(f, "[check_module_compiles] all types: {:?}", self.compiler.get_type_names());
+            }
+        }
+
+        // Prepend module-level imports, use statements, and type definitions if editing within a module context
+        // This ensures that when editing a function, the module's imports and types are visible
+        let (full_content, prefix_line_count) = if !module_name.is_empty() {
             let mut prefix = String::new();
             // Add imports from the module
             for imp in self.compiler.get_module_imports(module_name) {
@@ -4017,9 +4382,59 @@ impl ReplEngine {
             if !prefix.is_empty() {
                 prefix.push('\n');
             }
-            format!("{}{}", prefix, content)
+
+            // Add type definitions (including reactive types) from the module
+            // This ensures that when editing a function, it can reference types defined in the same module
+            if let Some(ref sm) = self.source_manager {
+                for def_name in sm.definitions_in_module(module_name) {
+                    if let Some(source) = sm.get_source(&def_name) {
+                        let trimmed = source.trim();
+                        // Include type definitions and reactive types
+                        if trimmed.starts_with("type ") || trimmed.starts_with("reactive ") {
+                            prefix.push_str(trimmed);
+                            prefix.push_str("\n\n");
+                        }
+                    }
+                }
+            } else {
+                // Fallback: get types from the compiler for this module
+                // This handles single-file loads where source_manager is None
+                let module_prefix = format!("{}.", module_name);
+                for (name, type_val) in self.compiler.get_all_types() {
+                    // Check if this type belongs to the current module
+                    if name.starts_with(&module_prefix) ||
+                       (name == module_name) ||
+                       // Also include types defined at module level (e.g., "Counter" in module "ptest")
+                       self.compiler.get_type_names().iter().any(|t| {
+                           t == &format!("{}.{}", module_name, name) ||
+                           (t == &name && !name.contains('.'))
+                       }) {
+                        // Reconstruct type source
+                        let type_source = self.reconstruct_type_source_for_check(&type_val);
+                        prefix.push_str(&type_source);
+                        prefix.push_str("\n\n");
+                    }
+                }
+            }
+
+            let line_count = prefix.matches('\n').count();
+            // DEBUG: Write to file
+            {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                    let _ = writeln!(f, "[check_module_compiles] prefix generated ({} lines):\n{}", line_count, prefix);
+                }
+            }
+            (format!("{}{}", prefix, content), line_count)
         } else {
-            content.to_string()
+            // DEBUG: Write to file
+            {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                    let _ = writeln!(f, "[check_module_compiles] module_name is empty, no prefix");
+                }
+            }
+            (content.to_string(), 0)
         };
 
         // First do a quick parse check
@@ -4029,17 +4444,9 @@ impl ReplEngine {
             // Convert raw parse errors to SourceErrors
             let source_errors = parse_errors_to_source_errors(&errors);
             if let Some(first) = source_errors.first() {
-                // Adjust line number for prepended imports
-                let prefix_lines = if !module_name.is_empty() {
-                    self.compiler.get_module_imports(module_name).len() +
-                    self.compiler.get_module_use_stmts(module_name).len() +
-                    if self.compiler.get_module_imports(module_name).is_empty() &&
-                       self.compiler.get_module_use_stmts(module_name).is_empty() { 0 } else { 1 }
-                } else {
-                    0
-                };
+                // Adjust line number for prepended prefix (imports, use statements, types)
                 let (line, _col) = offset_to_line_col(&full_content, first.span.start);
-                let adjusted_line = if line > prefix_lines { line - prefix_lines } else { line };
+                let adjusted_line = if line > prefix_line_count { line - prefix_line_count } else { line };
                 return Err(format!("line {}: {}", adjusted_line, first.message));
             }
             return Err("Parse error".to_string());
@@ -4127,6 +4534,11 @@ impl ReplEngine {
         // Add types as they can be used as constructors
         for type_name in self.compiler.get_type_names() {
             known_functions.insert(type_name.to_string());
+            // Also add unqualified name (e.g., "Counter" from "ptest.Counter")
+            // This is needed because constructor calls use unqualified names
+            if let Some(dot_pos) = type_name.rfind('.') {
+                known_functions.insert(type_name[dot_pos + 1..].to_string());
+            }
         }
 
         // Add variant constructors from external types (e.g., Json.Object, Maybe.Some)
@@ -4147,6 +4559,52 @@ impl ReplEngine {
             "Int64Array.set", "Int64Array.toList", "Int64Array.make",
         ] {
             known_functions.insert(name.to_string());
+        }
+
+        // Add compiler-handled macros (special syntax that looks like function calls)
+        for name in &["Html", "RHtml", "component"] {
+            known_functions.insert(name.to_string());
+        }
+
+        // Add stdlib.rhtml HTML tag functions - these are used inside RHtml/Html macros
+        // The compiler transforms e.g. h1(...) to stdlib.rhtml.h1(...) inside RHtml
+        let rhtml_tags = [
+            "div", "span", "p", "h1", "h2", "h3", "h4", "h5", "h6",
+            "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td",
+            "nav", "header", "footer", "section", "article", "aside", "main",
+            "html", "head", "body", "form", "button", "label", "textarea",
+            "select", "option", "title", "strong", "em", "code", "pre", "small",
+            "br", "hr", "img", "input", "meta", "a", "text", "raw", "empty",
+            "attr", "link", "script", "style", "iframe", "audio", "video",
+            "canvas", "svg", "path", "rect", "circle", "line", "polyline",
+            "polygon", "g", "defs", "use", "symbol", "clipPath", "mask", "filter",
+        ];
+        for tag in &rhtml_tags {
+            known_functions.insert(format!("stdlib.rhtml.{}", tag));
+            // Also add unqualified for direct use
+            known_functions.insert(tag.to_string());
+        }
+
+        // Add stdlib.rhtml utility functions
+        let rhtml_funcs = [
+            "renderRHtml", "affectedComponents", "affectedComponentsMulti",
+            "filterOutermost", "RenderStack", "RHtmlResult", "RNode",
+        ];
+        for func in &rhtml_funcs {
+            known_functions.insert(format!("stdlib.rhtml.{}", func));
+            known_functions.insert(func.to_string());
+        }
+
+        // Add stdlib.rweb functions
+        let rweb_funcs = [
+            "startRWeb", "startRWebWithRoutes", "startRWebBackground",
+            "startRWebWithRoutesBackground", "restartRWebBackground",
+            "restartRWebWithRoutesBackground", "session", "sessionLoop",
+            "rwebHandleRequest", "rwebHandleRequestWithRoutes",
+        ];
+        for func in &rweb_funcs {
+            known_functions.insert(format!("stdlib.rweb.{}", func));
+            known_functions.insert(func.to_string());
         }
 
         // Add functions defined in this module being checked
@@ -4525,7 +4983,13 @@ impl ReplEngine {
                 Expr::Call(callee, _, args, span) => {
                     if let Some(name) = get_call_name(callee) {
                         // Regular function calls are not qualified method calls
-                        calls.push((name, span.start, args.len(), false));
+                        calls.push((name.clone(), span.start, args.len(), false));
+
+                        // Skip recursing into RHtml/Html arguments - these are compiler macros
+                        // that transform their arguments (e.g., div -> stdlib.rhtml.div)
+                        if name == "RHtml" || name == "Html" {
+                            return;
+                        }
                     }
                     collect_calls(callee, calls, local_types, variant_constructors, known_modules);
                     for arg in args {
@@ -4758,6 +5222,13 @@ impl ReplEngine {
             // Check for constructor references (marked with "C:")
             if let Some(name) = call_name.strip_prefix("C:") {
                 // Uppercase name should be a known constructor or type
+                // DEBUG
+                {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                        let _ = writeln!(f, "[validate] checking constructor '{}', in known_functions={}", name, known_functions.contains(name));
+                    }
+                }
                 if !known_functions.contains(name) {
                     let (line, _col) = offset_to_line_col(content, offset);
                     return Err(format!(
@@ -4898,12 +5369,75 @@ impl ReplEngine {
         // Report TYPE errors and UNKNOWN VARIABLE errors
         // (Unknown function errors might be due to missing stdlib, but unknown variables are real errors
         //  unless the variable name is a known function - then it's just a missing stdlib issue)
-        if let Err(e) = check_compiler.add_module(&module, module_path, source.clone(), source_name) {
+        let add_result = check_compiler.add_module(&module, module_path, source.clone(), source_name);
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                let _ = writeln!(f, "[check_module_compiles] add_module result: {:?}", add_result);
+            }
+        }
+        if let Err(e) = add_result {
             let span = e.span();
             let (line, _col) = offset_to_line_col(content, span.start);
             match &e {
                 nostos_compiler::CompileError::TypeError { message, .. } => {
-                    return Err(format!("line {}: {}", line, message));
+                    // Filter out "Unknown type" and "Unknown constructor" errors
+                    // where the name is a known type - these occur because check_compiler doesn't have stdlib loaded
+                    // Handles multiple formats: "Unknown type: X", "unknown type `X`"
+                    let should_report = if message.starts_with("Unknown type: ") {
+                        let type_name = message.trim_start_matches("Unknown type: ");
+                        let is_known = known_functions.contains(type_name) ||
+                            known_functions.iter().any(|f| f.ends_with(&format!(".{}", type_name)));
+                        {
+                            use std::io::Write;
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                                let _ = writeln!(f, "[check_module_compiles] TypeError 'Unknown type: {}', is_known={}", type_name, is_known);
+                            }
+                        }
+                        !is_known
+                    } else if message.starts_with("unknown type `") {
+                        // Format: "unknown type `Counter`"
+                        let type_name = message.trim_start_matches("unknown type `").trim_end_matches('`');
+                        let is_known = known_functions.contains(type_name) ||
+                            known_functions.iter().any(|f| f.ends_with(&format!(".{}", type_name)));
+                        {
+                            use std::io::Write;
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                                let _ = writeln!(f, "[check_module_compiles] TypeError 'unknown type `{}`', is_known={}", type_name, is_known);
+                            }
+                        }
+                        !is_known
+                    } else if message.starts_with("Unknown constructor: ") {
+                        let ctor_name = message.trim_start_matches("Unknown constructor: ");
+                        let is_known = known_functions.contains(ctor_name) ||
+                            known_functions.iter().any(|f| f.ends_with(&format!(".{}", ctor_name)));
+                        {
+                            use std::io::Write;
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                                let _ = writeln!(f, "[check_module_compiles] TypeError 'Unknown constructor: {}', is_known={}", ctor_name, is_known);
+                            }
+                        }
+                        !is_known
+                    } else {
+                        true
+                    };
+                    if should_report {
+                        return Err(format!("line {}: {}", line, message));
+                    }
+                }
+                nostos_compiler::CompileError::UnknownType { name, .. } => {
+                    // Filter out unknown types that are in our known list
+                    let is_known = known_functions.contains(name) ||
+                        known_functions.iter().any(|f| f.ends_with(&format!(".{}", name)));
+                    {
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                            let _ = writeln!(f, "[check_module_compiles] CompileError::UnknownType '{}', is_known={}", name, is_known);
+                        }
+                    }
+                    if !is_known {
+                        return Err(format!("line {}: unknown type `{}`", line, name));
+                    }
                 }
                 nostos_compiler::CompileError::UnknownVariable { name, .. } => {
                     // Only report if this is not a known function name
@@ -4924,12 +5458,53 @@ impl ReplEngine {
 
         // Try to compile - this runs full type checking
         let errors = check_compiler.compile_all_collecting_errors();
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                let _ = writeln!(f, "[check_module_compiles] compile_all_collecting_errors returned {} errors:", errors.len());
+                for (i, (_, error, _, _)) in errors.iter().enumerate() {
+                    let _ = writeln!(f, "[check_module_compiles] error[{}]: {:?}", i, error);
+                }
+            }
+        }
         for (_, error, _, _) in &errors {
             let span = error.span();
             let (line, _col) = offset_to_line_col(content, span.start);
             match error {
                 nostos_compiler::CompileError::TypeError { message, .. } => {
-                    return Err(format!("line {}: {}", line, message));
+                    // Filter out "Unknown type" and "Unknown constructor" errors
+                    // where the name is a known type - these occur because check_compiler doesn't have stdlib loaded
+                    // Handles multiple formats: "Unknown type: X", "unknown type `X`"
+                    let should_report = if message.starts_with("Unknown type: ") {
+                        let type_name = message.trim_start_matches("Unknown type: ");
+                        let is_known = known_functions.contains(type_name) ||
+                            known_functions.iter().any(|f| f.ends_with(&format!(".{}", type_name)));
+                        !is_known
+                    } else if message.starts_with("unknown type `") {
+                        // Format: "unknown type `Counter`"
+                        let type_name = message.trim_start_matches("unknown type `").trim_end_matches('`');
+                        let is_known = known_functions.contains(type_name) ||
+                            known_functions.iter().any(|f| f.ends_with(&format!(".{}", type_name)));
+                        !is_known
+                    } else if message.starts_with("Unknown constructor: ") {
+                        let ctor_name = message.trim_start_matches("Unknown constructor: ");
+                        let is_known = known_functions.contains(ctor_name) ||
+                            known_functions.iter().any(|f| f.ends_with(&format!(".{}", ctor_name)));
+                        !is_known
+                    } else {
+                        true
+                    };
+                    if should_report {
+                        return Err(format!("line {}: {}", line, message));
+                    }
+                }
+                nostos_compiler::CompileError::UnknownType { name, .. } => {
+                    // Filter out unknown types that are in our known list
+                    let is_known = known_functions.contains(name) ||
+                        known_functions.iter().any(|f| f.ends_with(&format!(".{}", name)));
+                    if !is_known {
+                        return Err(format!("line {}: unknown type `{}`", line, name));
+                    }
                 }
                 nostos_compiler::CompileError::UnknownVariable { name, .. } => {
                     // Only report if this is not a known function name or method
@@ -6203,6 +6778,56 @@ impl ReplEngine {
             return Err(format!("Compilation error: {}", e));
         }
 
+        // Debug: log ptest.main/ Arc before sync_vm (for async eval path)
+        {
+            use std::io::Write;
+            use nostos_vm::value::Value;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                if input.contains("ptest.main") || input.contains("main()") {
+                    let _ = writeln!(f, "[start_eval_async] input={}", input);
+
+                    // Also print the wrapper function's contents
+                    let wrapper_name = format!("{}/", eval_name);
+                    if let Some(wrapper_func) = self.compiler.get_function(&wrapper_name) {
+                        let _ = writeln!(f, "[start_eval_async] wrapper {} bytecode: {:?}",
+                            wrapper_name, &wrapper_func.code.code[..std::cmp::min(10, wrapper_func.code.code.len())]);
+                        for (i, constant) in wrapper_func.code.constants.iter().enumerate() {
+                            match constant {
+                                Value::Function(inner_func) => {
+                                    let inner_ptr = Arc::as_ptr(inner_func);
+                                    let _ = writeln!(f, "[start_eval_async]   wrapper constants[{}] = Function({}, ptr: {:?})",
+                                        i, inner_func.name, inner_ptr);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    for fn_name in ["ptest.session/", "ptest.main/"] {
+                        if let Some(func) = self.compiler.get_function(fn_name) {
+                            let arc_ptr = Arc::as_ptr(&func);
+                            let _ = writeln!(f, "[start_eval_async] {} Arc ptr: {:?}", fn_name, arc_ptr);
+                            // Print function constants that are other functions or strings
+                            for (i, constant) in func.code.constants.iter().enumerate() {
+                                match constant {
+                                    Value::Function(inner_func) => {
+                                        let inner_ptr = Arc::as_ptr(inner_func);
+                                        let _ = writeln!(f, "[start_eval_async]   {} constants[{}] = Function({}, ptr: {:?})",
+                                            fn_name, i, inner_func.name, inner_ptr);
+                                    }
+                                    Value::String(s) if s.contains("Counter") || s.contains("etter") => {
+                                        let _ = writeln!(f, "[start_eval_async]   {} constants[{}] = String({:?})",
+                                            fn_name, i, s);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         self.sync_vm();
 
         // Start threaded evaluation and return the handle
@@ -6542,6 +7167,441 @@ mod tests {
 
         // Cleanup
         fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    /// Test that replicates the TUI Ctrl+E scenario:
+    /// 1. Load a file with reactive type + function
+    /// 2. Initial eval succeeds
+    /// 3. Re-compile just the function via eval_in_module (simulating edit + Ctrl+E)
+    /// 4. Should NOT get "Unknown type Counter" error
+    #[test]
+    fn test_tui_ctrl_e_with_reactive_type() {
+        let mut engine = ReplEngine::new(ReplConfig::default());
+
+        // Create a temp file with reactive type and function
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("ptest_ctrl_e_test.nos");
+        let full_file = r#"reactive Counter = { count: Int }
+
+session() = {
+    counter = Counter(count: 0)
+    counter.count
+}
+"#;
+        fs::write(&file_path, full_file).expect("Failed to write temp file");
+
+        // Load the file (like TUI does)
+        let load_result = engine.load_file(file_path.to_str().unwrap());
+        println!("Load result: {:?}", load_result);
+        assert!(load_result.is_ok(), "File should load: {:?}", load_result);
+
+        // Check types
+        let type_names: Vec<_> = engine.compiler.get_type_names();
+        println!("Type names: {:?}", type_names);
+        assert!(type_names.iter().any(|t| t.contains("Counter")), "Counter type should exist");
+
+        // Initial eval to verify it works
+        let result = engine.eval("ptest_ctrl_e_test.session()");
+        println!("Initial eval result: {:?}", result);
+        assert!(result.is_ok(), "Initial eval should work: {:?}", result);
+
+        // NOW the key test: simulate Ctrl+E after editing
+        // The TUI editor only has the function code, not the type definition
+        let function_only = r#"session() = {
+    counter = Counter(count: 0)
+    counter.count + 1
+}"#;
+
+        // This is what TUI calls when you press Ctrl+E
+        let result = engine.eval_in_module(function_only, Some("ptest_ctrl_e_test.session"));
+        println!("eval_in_module result (Ctrl+E simulation): {:?}", result);
+
+        // THIS SHOULD PASS - the type should be found from the module
+        assert!(result.is_ok(), "Ctrl+E re-compile should work: {:?}", result);
+
+        // Cleanup
+        fs::remove_file(&file_path).ok();
+    }
+
+    /// Test that function ACTUALLY updates after eval_in_module
+    /// This is the critical test - does the function return different values?
+    #[test]
+    fn test_function_actually_updates_after_edit() {
+        let mut engine = ReplEngine::new(ReplConfig::default());
+
+        // Create file with reactive type and function that returns 1
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("test_update.nos");
+        let initial_code = r#"reactive Counter = { count: Int }
+
+getValue() = {
+    counter = Counter(count: 0)
+    1
+}
+"#;
+        fs::write(&file_path, initial_code).expect("Failed to write temp file");
+
+        // Load the file
+        let result = engine.load_file(file_path.to_str().unwrap());
+        println!("load_file result: {:?}", result);
+        assert!(result.is_ok(), "load_file should work: {:?}", result);
+
+        // Call the function - should return 1
+        let result1 = engine.eval("test_update.getValue()");
+        println!("First call result: {:?}", result1);
+        assert!(result1.is_ok(), "First call should work: {:?}", result1);
+        let output1 = result1.unwrap();
+        assert!(output1.contains("1"), "First call should return 1, got: {}", output1);
+
+        // Now "edit" the function to return 2 (like TUI editor does)
+        // Note: editor only has the function, NOT the type definition
+        let edited_function = r#"getValue() = {
+    counter = Counter(count: 0)
+    2
+}"#;
+
+        // Compile via eval_in_module (exactly what TUI Ctrl+O does)
+        let compile_result = engine.eval_in_module(edited_function, Some("test_update.getValue"));
+        println!("eval_in_module result: {:?}", compile_result);
+        assert!(compile_result.is_ok(), "eval_in_module should work: {:?}", compile_result);
+
+        // Call the function AGAIN - should now return 2
+        let result2 = engine.eval("test_update.getValue()");
+        println!("Second call result: {:?}", result2);
+        assert!(result2.is_ok(), "Second call should work: {:?}", result2);
+        let output2 = result2.unwrap();
+
+        // THIS IS THE KEY ASSERTION
+        assert!(output2.contains("2"),
+            "Function should return 2 after edit, but got: {}. The function was NOT updated!",
+            output2);
+
+        // Cleanup
+        fs::remove_file(&file_path).ok();
+    }
+
+    /// Test if the issue is rweb-related: what if we capture the function BEFORE editing?
+    /// This simulates: 1. Start rweb (captures session), 2. Edit, 3. Expect changes
+    #[test]
+    fn test_function_update_with_capture_before_edit() {
+        let mut engine = ReplEngine::new(ReplConfig::default());
+
+        // Create file
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("test_capture.nos");
+        let initial_code = r#"reactive Counter = { count: Int }
+
+getValue() = {
+    counter = Counter(count: 0)
+    1
+}
+"#;
+        fs::write(&file_path, initial_code).expect("Failed to write temp file");
+        engine.load_file(file_path.to_str().unwrap()).unwrap();
+
+        // Simulate rweb: CAPTURE the function value BEFORE editing
+        // This is like: rweb.serve(test_capture.getValue)
+        let captured = engine.eval("test_capture.getValue");
+        println!("Captured function: {:?}", captured);
+
+        // Now edit the function (like TUI does)
+        let edited_function = r#"getValue() = {
+    counter = Counter(count: 0)
+    2
+}"#;
+        let compile_result = engine.eval_in_module(edited_function, Some("test_capture.getValue"));
+        println!("eval_in_module result: {:?}", compile_result);
+        assert!(compile_result.is_ok());
+
+        // Call by NAME - should return 2 (new version)
+        let by_name = engine.eval("test_capture.getValue()");
+        println!("Call by NAME after edit: {:?}", by_name);
+
+        // What if rweb calls the captured reference?
+        // This simulates calling the function that was captured before the edit
+        // In practice, rweb probably does something different, but let's see
+
+        // Check if calling by name works
+        assert!(by_name.is_ok());
+        let output = by_name.unwrap();
+        assert!(output.contains("2"), "Call by name should return 2, got: {}", output);
+
+        fs::remove_file(&file_path).ok();
+    }
+
+    /// Test Ctrl+E scenario with EXACT user code (RHtml, rweb)
+    /// This replicates: nostos tui /var/tmp/ptest.nos
+    #[test]
+    fn test_tui_ctrl_e_exact_user_code() {
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().ok(); // Need stdlib for RHtml
+
+        // EXACT content from user's /var/tmp/ptest.nos
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("ptest.nos");
+        let full_content = r#"use stdlib.{rweb}
+use stdlib.{rhtml}
+
+reactive Counter = { count: Int }
+
+session() = {
+    counter = Counter(count: 0)
+    (
+        () => RHtml(div([
+            h1("Counter Demo"),
+            component("display", () => RHtml(
+                div([
+                    span("Count: " ++ show(counter.count)),
+                    button("+1", dataAction: "inc")
+                ])
+            ))
+        ])),
+        (action, _) => match action {
+            "inc" -> { counter.count = counter.count + 1 }
+            _ -> ()
+        }
+    )
+}
+"#;
+        fs::write(&file_path, full_content).expect("Failed to write temp file");
+
+        // Load single file (this is what TUI does)
+        let result = engine.load_file(file_path.to_str().unwrap());
+        println!("load_file result: {:?}", result);
+        assert!(result.is_ok(), "load_file should work: {:?}", result);
+
+        // Check types
+        let type_names: Vec<_> = engine.compiler.get_type_names();
+        println!("Type names: {:?}", type_names);
+        println!("has_source_manager: {:?}", engine.source_manager.is_some());
+
+        // NOW simulate Ctrl+E after editing - function only, no type definition
+        // This is EXACTLY what the TUI editor shows (just the function)
+        let function_only = r#"session() = {
+    counter = Counter(count: 0)
+    (
+        () => RHtml(div([
+            h1("Counter Demo"),
+            component("display", () => RHtml(
+                div([
+                    span("Count: " ++ show(counter.count)),
+                    button("+1", dataAction: "inc")
+                ])
+            ))
+        ])),
+        (action, _) => match action {
+            "inc" -> { counter.count = counter.count + 1 }
+            _ -> ()
+        }
+    )
+}"#;
+
+        // This is what TUI calls on Ctrl+E
+        let result = engine.eval_in_module(function_only, Some("ptest.session"));
+        println!("eval_in_module result (Ctrl+E): {:?}", result);
+
+        if let Err(ref e) = result {
+            println!("ERROR: {:?}", e);
+        }
+        assert!(result.is_ok(), "Ctrl+E re-compile should work: {:?}", result);
+
+        // Cleanup
+        fs::remove_file(&file_path).ok();
+    }
+
+    /// Test the EXACT scenario: main() calls session(), edit session, call main()
+    /// This replicates: user edits session, compiles, then runs main.ptest() in REPL
+    #[test]
+    fn test_main_calls_edited_function() {
+        let mut engine = ReplEngine::new(ReplConfig::default());
+
+        // Create file with inner function and main that calls it
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("test_main_call.nos");
+        let initial_code = r#"reactive Counter = { count: Int }
+
+getValue() = {
+    counter = Counter(count: 0)
+    "original"
+}
+
+# main calls getValue - will it see edits?
+main() = getValue()
+"#;
+        fs::write(&file_path, initial_code).expect("Failed to write temp file");
+
+        // Load the file
+        let result = engine.load_file(file_path.to_str().unwrap());
+        println!("load_file result: {:?}", result);
+        assert!(result.is_ok(), "load_file should work: {:?}", result);
+
+        // Call main() - should return "original"
+        let result1 = engine.eval("test_main_call.main()");
+        println!("First main() call: {:?}", result1);
+        assert!(result1.is_ok());
+        let output1 = result1.unwrap();
+        assert!(output1.contains("original"), "First call should return 'original', got: {}", output1);
+
+        // Now "edit" ONLY getValue (like TUI does - user edits the function)
+        let edited_function = r#"getValue() = {
+    counter = Counter(count: 0)
+    "edited"
+}"#;
+
+        // Compile via eval_in_module (exactly what TUI Ctrl+O does)
+        let compile_result = engine.eval_in_module(edited_function, Some("test_main_call.getValue"));
+        println!("eval_in_module result: {:?}", compile_result);
+        assert!(compile_result.is_ok(), "eval_in_module should work: {:?}", compile_result);
+
+        // Direct call to getValue - should return "edited"
+        let direct = engine.eval("test_main_call.getValue()");
+        println!("Direct getValue() call after edit: {:?}", direct);
+        assert!(direct.is_ok());
+        assert!(direct.unwrap().contains("edited"), "Direct call should return 'edited'");
+
+        // NOW THE KEY TEST: Call main() again - does it see the edited getValue?
+        let result2 = engine.eval("test_main_call.main()");
+        println!("Second main() call after editing getValue: {:?}", result2);
+        assert!(result2.is_ok());
+        let output2 = result2.unwrap();
+
+        // THIS IS THE KEY - if main() still returns "original", the function reference is stale
+        println!("main() returned: {}", output2);
+        assert!(output2.contains("edited"),
+            "main() should call EDITED getValue and return 'edited', but got: {}. \
+             This means main() has a stale reference to the old getValue!",
+            output2);
+
+        // Cleanup
+        fs::remove_file(&file_path).ok();
+    }
+
+    /// Test the EXACT user scenario: main() passes session as a FUNCTION VALUE
+    /// main() = startRWeb(8080, "Counter", session)  <- session passed as value!
+    #[test]
+    fn test_function_passed_as_value() {
+        let mut engine = ReplEngine::new(ReplConfig::default());
+
+        // Create file where main passes getValue as a function value
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("test_fn_value.nos");
+        let initial_code = r#"reactive Counter = { count: Int }
+
+getValue() = {
+    counter = Counter(count: 0)
+    "original"
+}
+
+# callWith takes a function and calls it - simulates startRWeb storing session
+callWith(f: () -> String) = f()
+
+# main passes getValue as a value (not a direct call)
+main() = callWith(getValue)
+"#;
+        fs::write(&file_path, initial_code).expect("Failed to write temp file");
+
+        // Load the file
+        let result = engine.load_file(file_path.to_str().unwrap());
+        println!("load_file result: {:?}", result);
+        assert!(result.is_ok(), "load_file should work: {:?}", result);
+
+        // Call main() - should return "original"
+        let result1 = engine.eval("test_fn_value.main()");
+        println!("First main() call: {:?}", result1);
+        assert!(result1.is_ok());
+        let output1 = result1.unwrap();
+        assert!(output1.contains("original"), "First call should return 'original', got: {}", output1);
+
+        // Now "edit" ONLY getValue
+        let edited_function = r#"getValue() = {
+    counter = Counter(count: 0)
+    "edited"
+}"#;
+
+        // Compile via eval_in_module
+        let compile_result = engine.eval_in_module(edited_function, Some("test_fn_value.getValue"));
+        println!("eval_in_module result: {:?}", compile_result);
+        assert!(compile_result.is_ok(), "eval_in_module should work: {:?}", compile_result);
+
+        // Direct call to getValue - should return "edited"
+        let direct = engine.eval("test_fn_value.getValue()");
+        println!("Direct getValue() call after edit: {:?}", direct);
+        assert!(direct.is_ok());
+        assert!(direct.unwrap().contains("edited"), "Direct call should return 'edited'");
+
+        // NOW THE KEY TEST: Call main() which passes getValue as value to callWith
+        let result2 = engine.eval("test_fn_value.main()");
+        println!("Second main() call (passing function as value): {:?}", result2);
+        assert!(result2.is_ok());
+        let output2 = result2.unwrap();
+
+        // THIS IS THE KEY - when getValue is passed as a value, does it resolve dynamically?
+        println!("main() returned: {}", output2);
+        assert!(output2.contains("edited"),
+            "main() should pass EDITED getValue and return 'edited', but got: {}. \
+             This means passing function as value uses stale reference!",
+            output2);
+
+        // Cleanup
+        fs::remove_file(&file_path).ok();
+    }
+
+    /// Test MULTIPLE edits - the user's issue is that second edit doesn't work
+    #[test]
+    fn test_multiple_edits_function_passed_as_value() {
+        let mut engine = ReplEngine::new(ReplConfig::default());
+
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("test_multi_edit.nos");
+        let initial_code = r#"reactive Counter = { count: Int }
+
+getValue() = {
+    counter = Counter(count: 0)
+    "v0"
+}
+
+callWith(f: () -> String) = f()
+main() = callWith(getValue)
+"#;
+        fs::write(&file_path, initial_code).expect("Failed to write temp file");
+        engine.load_file(file_path.to_str().unwrap()).unwrap();
+
+        // Initial call
+        let result0 = engine.eval("test_multi_edit.main()");
+        println!("Initial main(): {:?}", result0);
+        assert!(result0.unwrap().contains("v0"));
+
+        // FIRST edit
+        let edit1 = r#"getValue() = {
+    counter = Counter(count: 0)
+    "v1"
+}"#;
+        engine.eval_in_module(edit1, Some("test_multi_edit.getValue")).unwrap();
+        let result1 = engine.eval("test_multi_edit.main()");
+        println!("After edit 1: {:?}", result1);
+        assert!(result1.unwrap().contains("v1"), "First edit should work");
+
+        // SECOND edit - this is what fails for the user
+        let edit2 = r#"getValue() = {
+    counter = Counter(count: 0)
+    "v2"
+}"#;
+        engine.eval_in_module(edit2, Some("test_multi_edit.getValue")).unwrap();
+        let result2 = engine.eval("test_multi_edit.main()");
+        println!("After edit 2: {:?}", result2);
+        assert!(result2.unwrap().contains("v2"), "Second edit should also work!");
+
+        // THIRD edit
+        let edit3 = r#"getValue() = {
+    counter = Counter(count: 0)
+    "v3"
+}"#;
+        engine.eval_in_module(edit3, Some("test_multi_edit.getValue")).unwrap();
+        let result3 = engine.eval("test_multi_edit.main()");
+        println!("After edit 3: {:?}", result3);
+        assert!(result3.unwrap().contains("v3"), "Third edit should also work!");
+
+        fs::remove_file(&file_path).ok();
     }
 
     #[test]
@@ -10889,6 +11949,265 @@ main() = { r = Ok(42); r.xxx() }
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for MyResult.xxx");
         assert!(result.unwrap_err().contains("MyResult.xxx"), "Error should mention MyResult.xxx");
+    }
+
+    #[test]
+    fn test_reactive_type_recognized() {
+        // Reactive type should be recognized as a valid constructor
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+reactive Counter = { count: Int }
+
+main() = {
+    counter = Counter(count: 0)
+    counter.count
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Reactive type should compile: {:?}", result);
+    }
+
+    #[test]
+    fn test_reactive_type_with_rhtml() {
+        // Reactive type with RHtml (simulates the user's actual code)
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+use stdlib.rweb
+use stdlib.rhtml
+
+reactive Counter = { count: Int }
+
+session() = {
+    counter = Counter(count: 0)
+    (
+        () => RHtml(div([
+            h1("Counter Demo")
+        ])),
+        (action, _) => ()
+    )
+}
+
+main() = startRWeb(8080, "Counter", session)
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Reactive type with RHtml should compile: {:?}", result);
+    }
+
+    #[test]
+    fn test_tui_edit_with_reactive_type() {
+        // This simulates the TUI scenario:
+        // 1. Load a file with a reactive type and functions
+        // 2. Edit just the function (without the type definition in the editor)
+        // 3. The function should still be able to reference the type
+
+        let mut engine = ReplEngine::new(ReplConfig::default());
+
+        // Create a temporary file with the full content (simpler version without RHtml)
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("ptest_tui_test.nos");
+        let full_file = r#"reactive Counter = { count: Int }
+
+increment(c: Counter) = {
+    c.count = c.count + 1
+    c.count
+}
+
+main() = {
+    counter = Counter(count: 0)
+    increment(counter)
+}
+"#;
+        std::fs::write(&file_path, full_file).expect("Failed to write temp file");
+
+        // Load the file (like TUI does when opening a .nos file)
+        let load_result = engine.load_file(file_path.to_str().unwrap());
+        println!("Load result: {:?}", load_result);
+        assert!(load_result.is_ok(), "File should load successfully: {:?}", load_result);
+
+        // Check what types are in the compiler
+        let type_names: Vec<_> = engine.compiler.get_type_names();
+        println!("Type names: {:?}", type_names);
+
+        // Now simulate editing just the increment function (like TUI editor does)
+        // The editor only shows the function, not the reactive type definition
+        let function_only = r#"
+increment(c: Counter) = {
+    c.count = c.count + 10
+    c.count
+}
+"#;
+        // When editing in TUI, the module name is "ptest_tui_test" (from file stem)
+        let result = engine.check_module_compiles("ptest_tui_test", function_only);
+        println!("Edit check result: {:?}", result);
+        assert!(result.is_ok(), "Editing function should work with reactive type from same module: {:?}", result);
+
+        // Clean up
+        std::fs::remove_file(&file_path).ok();
+    }
+
+    #[test]
+    fn test_tui_edit_ptest_session() {
+        // This simulates the EXACT user scenario:
+        // 1. TUI loads stdlib first (like the real TUI does)
+        // 2. Load /var/tmp/ptest.nos (with use stdlib.rweb, use stdlib.rhtml, reactive Counter)
+        // 3. Edit the session function
+        // 4. Should not get "Unknown type Counter" error
+
+        let mut engine = ReplEngine::new(ReplConfig::default());
+
+        // Load stdlib FIRST (this is what the TUI does before loading user files)
+        let stdlib_result = engine.load_stdlib();
+        println!("Stdlib load result: {:?}", stdlib_result);
+
+        // Create the exact ptest.nos content
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("ptest.nos");
+        let full_file = r#"use stdlib.rweb
+use stdlib.rhtml
+
+reactive Counter = { count: Int }
+
+session() = {
+    counter = Counter(count: 0)
+    (
+        () => RHtml(div([
+            h1("Counter Demo"),
+            component("display", () => RHtml(
+                div([
+                    span("Count: " ++ show(counter.count)),
+                    button("+1", dataAction: "inc")
+                ])
+            ))
+        ])),
+        (action, _) => match action {
+            "inc" -> { counter.count = counter.count + 1 }
+            _ -> ()
+        }
+    )
+}
+
+main() = startRWeb(8080, "Counter", session)
+"#;
+        std::fs::write(&file_path, full_file).expect("Failed to write temp file");
+
+        // Load the file (like TUI does)
+        let load_result = engine.load_file(file_path.to_str().unwrap());
+        println!("Load result: {:?}", load_result);
+
+        // Check what types are registered
+        let type_names: Vec<_> = engine.compiler.get_type_names();
+        println!("Type names after load: {:?}", type_names);
+
+        // Now simulate editing the session function
+        // In TUI, the editor only contains the function source, not the type definition
+        let session_only = r#"
+session() = {
+    counter = Counter(count: 0)
+    (
+        () => RHtml(div([
+            h1("Counter Demo - EDITED!"),
+            component("display", () => RHtml(
+                div([
+                    span("Count: " ++ show(counter.count)),
+                    button("+1", dataAction: "inc")
+                ])
+            ))
+        ])),
+        (action, _) => match action {
+            "inc" -> { counter.count = counter.count + 1 }
+            _ -> ()
+        }
+    )
+}
+"#;
+        // Module name is "ptest" (from filename stem)
+        let result = engine.check_module_compiles("ptest", session_only);
+        println!("Edit check result: {:?}", result);
+        assert!(result.is_ok(), "TUI edit should work: {:?}", result);
+
+        // Clean up
+        std::fs::remove_file(&file_path).ok();
+    }
+
+    #[test]
+    fn test_tui_exact_editor_flow() {
+        // This test replicates the EXACT TUI flow:
+        // 1. TUI creates engine and loads stdlib
+        // 2. TUI loads user file via load_file
+        // 3. User browses to "ptest" module
+        // 4. User clicks on "session" function
+        // 5. TUI calls get_full_name which returns "ptest.session"
+        // 6. TUI calls get_source("ptest.session")
+        // 7. Editor is created with with_function_name("ptest.session")
+        // 8. User makes a change
+        // 9. Editor calls check_module_compiles with module_name from extract_module_from_editor_name
+
+        let mut engine = ReplEngine::new(ReplConfig::default());
+
+        // Step 1: Load stdlib (TUI does this)
+        let _ = engine.load_stdlib();
+
+        // Step 2: Load the file (TUI does this for single file mode)
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("ptest.nos");
+        let full_file = r#"use stdlib.rweb
+use stdlib.rhtml
+
+reactive Counter = { count: Int }
+
+session() = {
+    counter = Counter(count: 0)
+    (
+        () => RHtml(div([
+            h1("Counter Demo")
+        ])),
+        (action, _) => ()
+    )
+}
+
+main() = startRWeb(8080, "Counter", session)
+"#;
+        std::fs::write(&file_path, full_file).expect("Failed to write temp file");
+        let load_result = engine.load_file(file_path.to_str().unwrap());
+        println!("Load result: {:?}", load_result);
+
+        // Step 3-5: Browser shows "session" under "ptest" module
+        // get_full_name returns "ptest.session"
+        let editor_name = "ptest.session";
+
+        // Step 6: TUI gets source for this function
+        let source = engine.get_source(editor_name);
+        println!("Source for '{}': {}", editor_name, source);
+
+        // Step 7: Editor is created with with_function_name
+        // This is what extract_module_from_editor_name does:
+        fn extract_module(name: &str) -> Option<String> {
+            if name.ends_with(".nos") {
+                name.rsplit(['/', '\\']).next()
+                    .and_then(|f| f.strip_suffix(".nos"))
+                    .filter(|m| !m.is_empty())
+                    .map(|s| s.to_string())
+            } else if let Some(dot_pos) = name.rfind('.') {
+                Some(name[..dot_pos].to_string())
+            } else {
+                None
+            }
+        }
+        let module_name = extract_module(editor_name).unwrap_or_default();
+        println!("Extracted module_name: '{}'", module_name);
+
+        // Step 8-9: User makes a change, editor validates
+        // The content is the source with a modification
+        let modified_source = source.replace("Counter Demo", "Counter Demo - EDITED");
+        println!("Modified source:\n{}", modified_source);
+
+        let result = engine.check_module_compiles(&module_name, &modified_source);
+        println!("Check result: {:?}", result);
+        assert!(result.is_ok(), "TUI exact flow should work: {:?}", result);
+
+        std::fs::remove_file(&file_path).ok();
     }
 
     #[test]

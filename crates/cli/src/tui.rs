@@ -3255,9 +3255,9 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                     }
                 }
             } else {
-                // No source manager - direct eval
+                // No source manager - use eval_in_module to get type prefixing
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    engine.eval(&eval_content)
+                    engine.eval_in_module(&eval_content, Some(&name_for_compile))
                 }));
 
                 let elapsed_ms = 0; // Not timing for non-source-manager mode

@@ -3,6 +3,27 @@
 - build release, not debug
 - remember that comments in nostos are with # and NOT with //
 
+## CRITICAL: Do NOT Run Full Test Suite Constantly
+
+**STOP running `cd tests && ./runall.sh` after every small change!**
+
+- Full test suite takes several minutes - this wastes enormous time
+- Only run full suite when: explicitly asked, or before final commit
+- For focused changes: just `cargo build --release` and let user test manually
+- For unit tests: run only the specific test (e.g., `cargo test --release -p nostos-repl test_name`)
+- The user will tell you when to run the full suite
+
+## CRITICAL: Debug Output Must Go To FILE, Not Console
+
+**TUI takes over the terminal - eprintln!/println! output DISAPPEARS!**
+
+- When debugging TUI issues, write to a file: `/tmp/nostos_debug.log`
+- Use: `use std::io::Write; let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log").unwrap(); writeln!(f, "debug: {}", value).unwrap();`
+- NEVER use eprintln! or println! for TUI debugging - it will not be visible
+- Console output only works for non-TUI (script mode) debugging
+- Before asking user to test: clear the log with `rm -f /tmp/nostos_debug.log`
+- After user tests: read the log yourself with `Read` tool - don't ask user to cat it
+
 ## CRITICAL: Never Hide Bugs - Fix The Code
 
 **THIS IS THE MOST IMPORTANT RULE. VIOLATING THIS IS UNACCEPTABLE.**
