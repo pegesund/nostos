@@ -5614,6 +5614,26 @@ mod tests {
     }
 
     #[test]
+    fn test_tuple_binding_literal() {
+        // Test case from user: (a, b) = (1, 2) then access a
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Use tuple destructuring with a literal tuple
+        let result = engine.eval("(a, b) = (1, 2)");
+        assert!(result.is_ok(), "Should bind tuple: {:?}", result);
+
+        // Verify the bound values
+        let result = engine.eval("a");
+        assert!(result.is_ok(), "Should evaluate a: {:?}", result);
+        assert_eq!(result.unwrap().trim(), "1");
+
+        let result = engine.eval("b");
+        assert!(result.is_ok(), "Should evaluate b: {:?}", result);
+        assert_eq!(result.unwrap().trim(), "2");
+    }
+
+    #[test]
     fn test_tuple_binding_with_wildcard() {
         let config = ReplConfig { enable_jit: false, num_threads: 1 };
         let mut engine = ReplEngine::new(config);
