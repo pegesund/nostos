@@ -55,7 +55,7 @@ run_benchmark() {
 }
 
 # Run Fibonacci benchmark
-echo -e "${GREEN}Fibonacci(35) - Recursive${NC}"
+echo -e "${GREEN}Fibonacci(40) - Recursive${NC}"
 echo "  Running 3 iterations each, showing best time..."
 echo ""
 
