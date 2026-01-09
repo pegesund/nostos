@@ -596,9 +596,11 @@ mod tests {
 
     #[test]
     fn test_single_line_comment() {
+        // Comments are now kept as tokens for syntax highlighting
         let tokens: Vec<_> = lex("foo # this is a comment\nbar").map(|(t, _)| t).collect();
         assert_eq!(tokens, vec![
             Token::LowerIdent("foo".to_string()),
+            Token::Comment,
             Token::Newline,
             Token::LowerIdent("bar".to_string()),
         ]);
@@ -606,9 +608,11 @@ mod tests {
 
     #[test]
     fn test_multi_line_comment() {
+        // Comments are now kept as tokens for syntax highlighting
         let tokens: Vec<_> = lex("foo #* multi\nline\ncomment *# bar").map(|(t, _)| t).collect();
         assert_eq!(tokens, vec![
             Token::LowerIdent("foo".to_string()),
+            Token::MultiLineComment,
             Token::LowerIdent("bar".to_string()),
         ]);
     }

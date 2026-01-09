@@ -116,8 +116,9 @@ fn run_nos_source(source: &str) -> Result<Value, String> {
         .ok_or_else(|| "No main function".to_string())?;
 
     // Run and convert result
-    vm.run(main_func)
-        .map_err(|e| format!("Runtime error: {:?}", e))?
+    let result = vm.run(main_func)
+        .map_err(|e| format!("Runtime error: {:?}", e))?;
+    result.value
         .map(|v| v.to_value())
         .ok_or_else(|| "No result returned".to_string())
 }
@@ -158,9 +159,16 @@ fn run_nos_source_gc(source: &str) -> Result<String, String> {
     let result = vm.run(main_func)
         .map_err(|e| format!("Runtime error: {:?}", e))?;
 
-    match result {
-        Some(value) => Ok(value.display()),
-        None => Ok("()".to_string()),
+    // Get output from println and return value
+    let mut output = String::new();
+    for line in &result.output {
+        output.push_str(line);
+        output.push('\n');
+    }
+
+    match result.value {
+        Some(value) => Ok(output + &value.display()),
+        None => Ok(output + "()"),
     }
 }
 

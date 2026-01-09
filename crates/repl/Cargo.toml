@@ -9,6 +9,7 @@ nostos-compiler.workspace = true
 nostos-vm.workspace = true
 nostos-types.workspace = true
 nostos-jit.workspace = true
+nostos-source = { path = "../source" }
 thiserror.workspace = true
 
 [dev-dependencies]

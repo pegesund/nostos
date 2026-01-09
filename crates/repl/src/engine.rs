@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use nostos_compiler::compile::Compiler;
 use nostos_jit::{JitCompiler, JitConfig};
+use nostos_source::SourceManager;
 use crate::CallGraph;
 use nostos_syntax::ast::{Item, Pattern};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
@@ -65,6 +66,8 @@ pub struct ReplEngine {
     var_bindings: HashMap<String, VarBinding>,
     /// Counter for unique variable thunk names
     var_counter: u64,
+    /// Source manager for directory-based projects
+    source_manager: Option<SourceManager>,
 }
 
 impl ReplEngine {
@@ -90,6 +93,7 @@ impl ReplEngine {
             module_sources: HashMap::new(),
             var_bindings: HashMap::new(),
             var_counter: 0,
+            source_manager: None,
         }
     }
 
@@ -678,8 +682,16 @@ impl ReplEngine {
     }
 
     pub fn get_source(&self, name: &str) -> String {
-        if let Some(source) = self.compiler.get_function_source(name) {
-            return source.to_string();
+        // Check SourceManager first (if available)
+        if let Some(ref sm) = self.source_manager {
+            if let Some(source) = sm.get_source(name) {
+                return source;
+            }
+        }
+
+        // Fall back to compiler
+        if let Some(source) = self.compiler.get_all_function_sources(name) {
+            return source;
         } else if let Some(type_def) = self.compiler.get_type_def(name) {
             // Reconstruct type definition
             let mut output = String::new();
@@ -704,6 +716,91 @@ impl ReplEngine {
             return output;
         }
         format!("Not found: {}", name)
+    }
+
+    /// Load a project directory with SourceManager
+    pub fn load_directory(&mut self, path: &str) -> Result<(), String> {
+        let path_buf = PathBuf::from(path);
+
+        if !path_buf.is_dir() {
+            return Err(format!("Not a directory: {}", path));
+        }
+
+        // Initialize SourceManager
+        let sm = SourceManager::new(path_buf.clone())?;
+
+        // Load all .nos files from the directory into the compiler
+        let mut source_files = Vec::new();
+        visit_dirs(&path_buf, &mut source_files)?;
+
+        for file_path in &source_files {
+            let source = fs::read_to_string(file_path)
+                .map_err(|e| format!("Failed to read {}: {}", file_path.display(), e))?;
+
+            let (module_opt, errors) = parse(&source);
+            if !errors.is_empty() {
+                continue; // Skip files with parse errors
+            }
+
+            if let Some(module) = module_opt {
+                let relative = file_path.strip_prefix(&path_buf).unwrap();
+                let mut components: Vec<String> = relative
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().to_string())
+                    .collect();
+
+                if let Some(last) = components.last_mut() {
+                    if last.ends_with(".nos") {
+                        *last = last.trim_end_matches(".nos").to_string();
+                    }
+                }
+
+                self.compiler.add_module(
+                    &module,
+                    components,
+                    Arc::new(source.clone()),
+                    file_path.to_str().unwrap().to_string(),
+                ).ok();
+            }
+        }
+
+        // Compile all bodies
+        if let Err((e, _, _)) = self.compiler.compile_all() {
+            return Err(format!("Compilation error: {}", e));
+        }
+
+        self.sync_vm();
+        self.source_manager = Some(sm);
+
+        Ok(())
+    }
+
+    /// Save definition source to SourceManager (auto-commits to .nostos/defs/)
+    pub fn save_definition(&mut self, name: &str, source: &str) -> Result<bool, String> {
+        if let Some(ref mut sm) = self.source_manager {
+            // Strip module prefix if present (e.g., "main.foo" -> "foo")
+            let simple_name = name.rsplit('.').next().unwrap_or(name);
+            sm.update_definition(simple_name, source)
+        } else {
+            // No SourceManager - just update compiler (for non-directory mode)
+            // This is the existing behavior through eval
+            Ok(false)
+        }
+    }
+
+    /// Check if SourceManager is active
+    pub fn has_source_manager(&self) -> bool {
+        self.source_manager.is_some()
+    }
+
+    /// Write dirty module files (for :w command)
+    /// Returns the number of files written
+    pub fn write_module_files(&mut self) -> Result<usize, String> {
+        if let Some(ref mut sm) = self.source_manager {
+            sm.write_module_files()
+        } else {
+            Err("No project loaded (use directory mode)".to_string())
+        }
     }
 
     pub fn get_deps(&self, name: &str) -> String {

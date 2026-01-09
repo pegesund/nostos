@@ -5384,6 +5384,29 @@ impl Compiler {
             .map(|s| s.to_string())
     }
 
+    /// Get source code for ALL overloads of a function by base name.
+    /// Returns None if no functions found.
+    pub fn get_all_function_sources(&self, name: &str) -> Option<String> {
+        let prefix = format!("{}/", name);
+        let mut sources: Vec<String> = Vec::new();
+
+        // Collect all functions matching this base name
+        for (key, func) in &self.functions {
+            let matches = key == name || key.starts_with(&prefix);
+            if matches {
+                if let Some(source) = &func.source_code {
+                    sources.push(source.to_string());
+                }
+            }
+        }
+
+        if sources.is_empty() {
+            None
+        } else {
+            Some(sources.join("\n\n"))
+        }
+    }
+
     /// Get a function's doc comment.
     pub fn get_function_doc(&self, name: &str) -> Option<String> {
         self.find_function(name).and_then(|f| f.doc.clone())
