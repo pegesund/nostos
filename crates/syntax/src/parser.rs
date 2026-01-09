@@ -799,11 +799,13 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         let nl = skip_newlines();
 
         // Match arm: pattern -> expr or pattern when guard -> expr
+        // Allows optional trailing comma after each arm for single-line style
         let match_arm = nl.clone()
             .ignore_then(pattern())
             .then(just(Token::When).ignore_then(expr.clone()).or_not())
             .then_ignore(just(Token::RightArrow))
             .then(expr.clone())
+            .then_ignore(just(Token::Comma).or_not())  // Allow comma separator
             .map_with_span(|((pat, guard), body), span| MatchArm {
                 pattern: pat,
                 guard,

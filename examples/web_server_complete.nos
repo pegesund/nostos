@@ -119,12 +119,8 @@ handleUsers(req) = {
 }
 
 handleUserDetail(req, userId: String) = {
-    userIdInt = match String.toInt(userId) {
-        Some(n) -> n
-        None -> 0
-    }
-
-    rows = query("SELECT id, name, email, credits FROM web_users WHERE id = $1", (userIdInt))
+    intOr = s => match String.toInt(s) { Some(n) -> n, None -> 0 }
+    rows = query("SELECT id, name, email, credits FROM web_users WHERE id = $1", (intOr(userId)))
 
     content = match rows {
         [] -> Html(div([
@@ -173,18 +169,10 @@ handleTransfer(req) = {
         else if toId == "" then respond400(req, "To user ID is required")
         else if amountStr == "" then respond400(req, "Amount is required")
         else {
-            amount = match String.toInt(amountStr) {
-                Some(n) -> n
-                None -> 0
-            }
-            fromIdInt = match String.toInt(fromId) {
-                Some(n) -> n
-                None -> 0
-            }
-            toIdInt = match String.toInt(toId) {
-                Some(n) -> n
-                None -> 0
-            }
+            intOr = s => match String.toInt(s) { Some(n) -> n, None -> 0 }
+            amount = intOr(amountStr)
+            fromIdInt = intOr(fromId)
+            toIdInt = intOr(toId)
 
             if amount <= 0 then respond400(req, "Amount must be positive")
             else {
