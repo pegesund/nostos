@@ -1147,12 +1147,6 @@ impl ReplEngine {
                     }
                 })
                 .collect();
-            {
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                    let _ = writeln!(f, "[load_file] call_graph.update({}, {:?})", qualified_name, qualified_deps);
-                }
-            }
             self.call_graph.update(&qualified_name, qualified_deps);
         }
 
@@ -1736,15 +1730,6 @@ impl ReplEngine {
     pub fn eval_in_module(&mut self, input: &str, module_name: Option<&str>) -> Result<String, String> {
         let input = input.trim();
 
-        // Log entry point with module_name to track who's calling
-        {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                let first_line = input.lines().next().unwrap_or("");
-                let _ = writeln!(f, "[eval_in_module] ENTRY module_name={:?}, first_line={:?}", module_name, first_line);
-            }
-        }
-
         // Handle REPL commands
         if input.starts_with(':') {
             return self.handle_command(input);
@@ -1918,12 +1903,6 @@ impl ReplEngine {
             }
 
             // Use the module with type definitions for compilation
-            {
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                    let _ = writeln!(f, "[eval_in_module] module_path={:?}, input_with_types:\n{}", module_path, input_with_types);
-                }
-            }
             self.compiler.add_module(&module_to_compile, module_path.clone(), Arc::new(input_with_types.clone()), "<repl>".to_string())
                 .map_err(|e| format!("Error: {}", e))?;
 
@@ -1949,14 +1928,6 @@ impl ReplEngine {
 
             // Compile and collect errors
             let errors = self.compiler.compile_all_collecting_errors();
-            {
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                    let _ = writeln!(f, "[eval_in_module] compile_all errors: {:?}", errors.len());
-                    let _ = writeln!(f, "[eval_in_module] defined_fns: {:?}", defined_fns);
-                    let _ = writeln!(f, "[eval_in_module] prefix: {:?}", prefix);
-                }
-            }
 
             // Collect set of error function names for quick lookup
             let error_fn_names: HashSet<String> = errors.iter().map(|(n, _, _, _)| n.clone()).collect();
@@ -2025,22 +1996,10 @@ impl ReplEngine {
             // Recompile functions that CALL the edited functions (dependents)
             // This fixes the issue where main() passes session as a value -
             // without recompilation, main still has a reference to the old session
-            {
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                    let _ = writeln!(f, "[recompile_deps] successful_fns={:?}, prefix={:?}", successful_fns, prefix);
-                }
-            }
             if !successful_fns.is_empty() {
                 let mut dependents_to_recompile: HashSet<String> = HashSet::new();
                 for fn_name in &successful_fns {
                     let deps = self.call_graph.direct_dependents(fn_name);
-                    {
-                        use std::io::Write;
-                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                            let _ = writeln!(f, "[recompile_deps] fn={}, deps={:?}", fn_name, deps);
-                        }
-                    }
                     for dep in deps {
                         // Only recompile if the dependent is in the same module
                         // (to avoid recompiling unrelated code)
@@ -2050,22 +2009,10 @@ impl ReplEngine {
                     }
                 }
 
-                {
-                    use std::io::Write;
-                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                        let _ = writeln!(f, "[recompile_deps] to_recompile={:?}", dependents_to_recompile);
-                    }
-                }
                 // Recompile each dependent using the same type-prefixing as eval_in_module
                 for dep_name in &dependents_to_recompile {
                     // Get the source of the dependent function
                     let source = self.get_source(dep_name);
-                    {
-                        use std::io::Write;
-                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                            let _ = writeln!(f, "[recompile_deps] recompiling {} source_len={}", dep_name, source.len());
-                        }
-                    }
                     if !source.is_empty() {
                         // Get module name for type prefixing (same logic as eval_in_module)
                         let dep_parts: Vec<&str> = dep_name.split('.').collect();
@@ -2122,45 +2069,7 @@ impl ReplEngine {
                 if !dependents_to_recompile.is_empty() {
                     let _ = self.compiler.compile_all_collecting_errors();
 
-                    // Debug: print function Arc addresses
-                    {
-                        use std::io::Write;
-                        use nostos_vm::value::Value;
-                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                            // Check if ptest.session/ and ptest.main/ exist and their Arc addresses
-                            for fn_name in ["ptest.session/", "ptest.main/"] {
-                                if let Some(func) = self.compiler.get_function(fn_name) {
-                                    let arc_ptr = Arc::as_ptr(&func);
-                                    let _ = writeln!(f, "[recompile_deps] {} Arc ptr: {:?}", fn_name, arc_ptr);
-                                    // Print function constants that are other functions or strings
-                                    for (i, constant) in func.code.constants.iter().enumerate() {
-                                        match constant {
-                                            Value::Function(inner_func) => {
-                                                let inner_ptr = Arc::as_ptr(inner_func);
-                                                let _ = writeln!(f, "[recompile_deps]   {} constants[{}] = Function({}, ptr: {:?})",
-                                                    fn_name, i, inner_func.name, inner_ptr);
-                                            }
-                                            Value::String(s) if s.contains("Counter") || s.contains("etter") => {
-                                                let _ = writeln!(f, "[recompile_deps]   {} constants[{}] = String({:?})",
-                                                    fn_name, i, s);
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                } else {
-                                    let _ = writeln!(f, "[recompile_deps] {} NOT FOUND", fn_name);
-                                }
-                            }
-                        }
-                    }
-
                     self.sync_vm();
-                    {
-                        use std::io::Write;
-                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                            let _ = writeln!(f, "[recompile_deps] DONE - dependents recompiled and synced");
-                        }
-                    }
                 }
             }
 
@@ -2288,38 +2197,6 @@ impl ReplEngine {
 
         if let Err((e, _, _)) = self.compiler.compile_all() {
             return Err(format!("Compilation error: {}", e));
-        }
-
-        // Debug: log ptest.main/ Arc before sync_vm
-        {
-            use std::io::Write;
-            use nostos_vm::value::Value;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                if input.contains("ptest.main") || input.contains("main()") {
-                    let _ = writeln!(f, "[eval_expression] input={}", input);
-                    for fn_name in ["ptest.session/", "ptest.main/"] {
-                        if let Some(func) = self.compiler.get_function(fn_name) {
-                            let arc_ptr = Arc::as_ptr(&func);
-                            let _ = writeln!(f, "[eval_expression] {} Arc ptr: {:?}", fn_name, arc_ptr);
-                            // Print function constants that are other functions or strings
-                            for (i, constant) in func.code.constants.iter().enumerate() {
-                                match constant {
-                                    Value::Function(inner_func) => {
-                                        let inner_ptr = Arc::as_ptr(inner_func);
-                                        let _ = writeln!(f, "[eval_expression]   {} constants[{}] = Function({}, ptr: {:?})",
-                                            fn_name, i, inner_func.name, inner_ptr);
-                                    }
-                                    Value::String(s) if s.contains("Counter") || s.contains("etter") => {
-                                        let _ = writeln!(f, "[eval_expression]   {} constants[{}] = String({:?})",
-                                            fn_name, i, s);
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
 
         self.sync_vm();
@@ -4357,16 +4234,6 @@ impl ReplEngine {
         use nostos_syntax::ast::{CallArg, Expr, Item, Stmt, DoStmt, TypeBody, Pattern};
         use nostos_compiler::Compiler;
 
-        // DEBUG: Write to file since TUI takes over terminal
-        {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                let _ = writeln!(f, "[check_module_compiles] module_name='{}', has_source_manager={}",
-                    module_name, self.source_manager.is_some());
-                let _ = writeln!(f, "[check_module_compiles] all types: {:?}", self.compiler.get_type_names());
-            }
-        }
-
         // Prepend module-level imports, use statements, and type definitions if editing within a module context
         // This ensures that when editing a function, the module's imports and types are visible
         let (full_content, prefix_line_count) = if !module_name.is_empty() {
@@ -4418,22 +4285,8 @@ impl ReplEngine {
             }
 
             let line_count = prefix.matches('\n').count();
-            // DEBUG: Write to file
-            {
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                    let _ = writeln!(f, "[check_module_compiles] prefix generated ({} lines):\n{}", line_count, prefix);
-                }
-            }
             (format!("{}{}", prefix, content), line_count)
         } else {
-            // DEBUG: Write to file
-            {
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                    let _ = writeln!(f, "[check_module_compiles] module_name is empty, no prefix");
-                }
-            }
             (content.to_string(), 0)
         };
 
@@ -5222,13 +5075,6 @@ impl ReplEngine {
             // Check for constructor references (marked with "C:")
             if let Some(name) = call_name.strip_prefix("C:") {
                 // Uppercase name should be a known constructor or type
-                // DEBUG
-                {
-                    use std::io::Write;
-                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                        let _ = writeln!(f, "[validate] checking constructor '{}', in known_functions={}", name, known_functions.contains(name));
-                    }
-                }
                 if !known_functions.contains(name) {
                     let (line, _col) = offset_to_line_col(content, offset);
                     return Err(format!(
@@ -5370,12 +5216,6 @@ impl ReplEngine {
         // (Unknown function errors might be due to missing stdlib, but unknown variables are real errors
         //  unless the variable name is a known function - then it's just a missing stdlib issue)
         let add_result = check_compiler.add_module(&module, module_path, source.clone(), source_name);
-        {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                let _ = writeln!(f, "[check_module_compiles] add_module result: {:?}", add_result);
-            }
-        }
         if let Err(e) = add_result {
             let span = e.span();
             let (line, _col) = offset_to_line_col(content, span.start);
@@ -5388,35 +5228,17 @@ impl ReplEngine {
                         let type_name = message.trim_start_matches("Unknown type: ");
                         let is_known = known_functions.contains(type_name) ||
                             known_functions.iter().any(|f| f.ends_with(&format!(".{}", type_name)));
-                        {
-                            use std::io::Write;
-                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                                let _ = writeln!(f, "[check_module_compiles] TypeError 'Unknown type: {}', is_known={}", type_name, is_known);
-                            }
-                        }
                         !is_known
                     } else if message.starts_with("unknown type `") {
                         // Format: "unknown type `Counter`"
                         let type_name = message.trim_start_matches("unknown type `").trim_end_matches('`');
                         let is_known = known_functions.contains(type_name) ||
                             known_functions.iter().any(|f| f.ends_with(&format!(".{}", type_name)));
-                        {
-                            use std::io::Write;
-                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                                let _ = writeln!(f, "[check_module_compiles] TypeError 'unknown type `{}`', is_known={}", type_name, is_known);
-                            }
-                        }
                         !is_known
                     } else if message.starts_with("Unknown constructor: ") {
                         let ctor_name = message.trim_start_matches("Unknown constructor: ");
                         let is_known = known_functions.contains(ctor_name) ||
                             known_functions.iter().any(|f| f.ends_with(&format!(".{}", ctor_name)));
-                        {
-                            use std::io::Write;
-                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                                let _ = writeln!(f, "[check_module_compiles] TypeError 'Unknown constructor: {}', is_known={}", ctor_name, is_known);
-                            }
-                        }
                         !is_known
                     } else {
                         true
@@ -5429,12 +5251,6 @@ impl ReplEngine {
                     // Filter out unknown types that are in our known list
                     let is_known = known_functions.contains(name) ||
                         known_functions.iter().any(|f| f.ends_with(&format!(".{}", name)));
-                    {
-                        use std::io::Write;
-                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                            let _ = writeln!(f, "[check_module_compiles] CompileError::UnknownType '{}', is_known={}", name, is_known);
-                        }
-                    }
                     if !is_known {
                         return Err(format!("line {}: unknown type `{}`", line, name));
                     }
@@ -5458,15 +5274,6 @@ impl ReplEngine {
 
         // Try to compile - this runs full type checking
         let errors = check_compiler.compile_all_collecting_errors();
-        {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                let _ = writeln!(f, "[check_module_compiles] compile_all_collecting_errors returned {} errors:", errors.len());
-                for (i, (_, error, _, _)) in errors.iter().enumerate() {
-                    let _ = writeln!(f, "[check_module_compiles] error[{}]: {:?}", i, error);
-                }
-            }
-        }
         for (_, error, _, _) in &errors {
             let span = error.span();
             let (line, _col) = offset_to_line_col(content, span.start);
@@ -6776,56 +6583,6 @@ impl ReplEngine {
 
         if let Err((e, _, _)) = self.compiler.compile_all() {
             return Err(format!("Compilation error: {}", e));
-        }
-
-        // Debug: log ptest.main/ Arc before sync_vm (for async eval path)
-        {
-            use std::io::Write;
-            use nostos_vm::value::Value;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                if input.contains("ptest.main") || input.contains("main()") {
-                    let _ = writeln!(f, "[start_eval_async] input={}", input);
-
-                    // Also print the wrapper function's contents
-                    let wrapper_name = format!("{}/", eval_name);
-                    if let Some(wrapper_func) = self.compiler.get_function(&wrapper_name) {
-                        let _ = writeln!(f, "[start_eval_async] wrapper {} bytecode: {:?}",
-                            wrapper_name, &wrapper_func.code.code[..std::cmp::min(10, wrapper_func.code.code.len())]);
-                        for (i, constant) in wrapper_func.code.constants.iter().enumerate() {
-                            match constant {
-                                Value::Function(inner_func) => {
-                                    let inner_ptr = Arc::as_ptr(inner_func);
-                                    let _ = writeln!(f, "[start_eval_async]   wrapper constants[{}] = Function({}, ptr: {:?})",
-                                        i, inner_func.name, inner_ptr);
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-
-                    for fn_name in ["ptest.session/", "ptest.main/"] {
-                        if let Some(func) = self.compiler.get_function(fn_name) {
-                            let arc_ptr = Arc::as_ptr(&func);
-                            let _ = writeln!(f, "[start_eval_async] {} Arc ptr: {:?}", fn_name, arc_ptr);
-                            // Print function constants that are other functions or strings
-                            for (i, constant) in func.code.constants.iter().enumerate() {
-                                match constant {
-                                    Value::Function(inner_func) => {
-                                        let inner_ptr = Arc::as_ptr(inner_func);
-                                        let _ = writeln!(f, "[start_eval_async]   {} constants[{}] = Function({}, ptr: {:?})",
-                                            fn_name, i, inner_func.name, inner_ptr);
-                                    }
-                                    Value::String(s) if s.contains("Counter") || s.contains("etter") => {
-                                        let _ = writeln!(f, "[start_eval_async]   {} constants[{}] = String({:?})",
-                                            fn_name, i, s);
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
 
         self.sync_vm();
