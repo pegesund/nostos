@@ -726,6 +726,26 @@ impl CompileError {
                 .with_note("method calls like `x.foo()` are transformed to `foo(x)` via UFCS");
         }
 
+        // Parse "Missing trait implementation: X does not implement Y" pattern
+        if let Some(rest) = message.strip_prefix("Missing trait implementation: ") {
+            // Pattern: "X does not implement Y"
+            if let Some(pos) = rest.find(" does not implement ") {
+                let ty = rest[..pos].trim();
+                let trait_name = rest[pos + " does not implement ".len()..].trim();
+
+                // Add helpful hints for common cases
+                if trait_name == "Num" && (ty == "String" || ty == "Bool") {
+                    return SourceError::compile(message.to_string(), span)
+                        .with_hint(format!("`{}` cannot be used with arithmetic operators like `+`, `-`, `*`, `/`", ty))
+                        .with_note("to concatenate strings, use `++`: show(42) ++ \" items\"");
+                }
+
+                // Generic trait error
+                return SourceError::compile(message.to_string(), span)
+                    .with_hint(format!("type `{}` must implement trait `{}`", ty, trait_name));
+            }
+        }
+
         // Parse "Cannot unify types: X and Y" pattern
         if let Some(types_part) = message.strip_prefix("Cannot unify types: ") {
             let parts: Vec<&str> = types_part.split(" and ").collect();
@@ -743,13 +763,13 @@ impl CompileError {
                 if type1 != type2 {
                     // Check for common patterns
 
-                    // Int vs String - common beginner mistake
+                    // Int vs String - common beginner mistake (often trying x + "string")
                     if (type1 == "Int" && type2 == "String") || (type1 == "String" && type2 == "Int") {
                         return SourceError::compile(
                             format!("type mismatch: expected `{}`, found `{}`", type1, type2),
                             span,
-                        ).with_hint("cannot mix `Int` and `String` types")
-                         .with_note("use `show(value)` to convert a number to a string");
+                        ).with_hint("cannot use `+` with mixed Int and String types")
+                         .with_note("to concatenate strings, use `++`: show(42) ++ \" items\"");
                     }
 
                     // Int vs Float - numeric type mismatch
@@ -759,6 +779,15 @@ impl CompileError {
                             span,
                         ).with_hint("cannot implicitly convert between `Int` and `Float`")
                          .with_note("use `toFloat(x)` to convert Int to Float, or `round(x)` for Float to Int");
+                    }
+
+                    // Float vs String - similar to Int vs String
+                    if (type1 == "Float" && type2 == "String") || (type1 == "String" && type2 == "Float") {
+                        return SourceError::compile(
+                            format!("type mismatch: expected `{}`, found `{}`", type1, type2),
+                            span,
+                        ).with_hint("cannot use `+` with mixed Float and String types")
+                         .with_note("to concatenate strings, use `++`: show(3.14) ++ \" value\"");
                     }
 
                     // Bool vs non-Bool in condition
@@ -831,10 +860,16 @@ impl CompileError {
                 SourceError::missing_trait_method(method, ty, trait_name, span)
             }
             CompileError::TraitNotImplemented { ty, trait_name, .. } => {
-                SourceError::compile(
+                let mut err = SourceError::compile(
                     format!("type `{}` does not implement trait `{}`", ty, trait_name),
                     span,
-                )
+                );
+                // Add hint for common case of String/Bool with Num trait (arithmetic operators)
+                if trait_name == "Num" && (ty == "String" || ty == "Bool") {
+                    err = err.with_hint(format!("`{}` cannot be used with arithmetic operators like `+`, `-`, `*`, `/`", ty))
+                            .with_note("to concatenate strings, use `++`: show(42) ++ \" items\"");
+                }
+                err
             }
             CompileError::ArityMismatch { name, expected, found, .. } => {
                 SourceError::arity_mismatch(name, *expected, *found, span)
@@ -846,10 +881,16 @@ impl CompileError {
                 )
             }
             CompileError::TraitBoundNotSatisfied { type_name, trait_name, .. } => {
-                SourceError::compile(
+                let mut err = SourceError::compile(
                     format!("type `{}` does not implement trait `{}`", type_name, trait_name),
                     span,
-                )
+                );
+                // Add hint for common case of String/Bool with Num trait (arithmetic operators)
+                if trait_name == "Num" && (type_name == "String" || type_name == "Bool") {
+                    err = err.with_hint(format!("`{}` cannot be used with arithmetic operators like `+`, `-`, `*`, `/`", type_name))
+                            .with_note("to concatenate strings, use `++`: show(42) ++ \" items\"");
+                }
+                err
             }
             CompileError::TypeError { message, .. } => {
                 Self::improve_type_error(message, span)

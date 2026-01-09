@@ -120,12 +120,13 @@ More helpful compile-time error messages with suggestions.
 - ✅ "Did you mean?" suggestions for method typos (e.g., `s.lenght()` suggests `length`)
 - ✅ Source code context with line numbers and highlights
 - ✅ UFCS explanation in method-not-found errors
+- ✅ Type mismatch hints (e.g., `show(42) ++ " items"` for Int+String)
+- ✅ Trait implementation hints for Num errors (String/Bool + arithmetic)
 
 **Still needed:**
-- Type mismatch hints (e.g., suggest `show(x) ++ "hello"` for Int+String)
 - Exhaustive pattern match warnings
 
-**Priority**: Medium - core features done, polish remaining
+**Priority**: Low - most features done
 
 ### LSP Go-to-Definition
 Jump to function/type definitions from usage.
