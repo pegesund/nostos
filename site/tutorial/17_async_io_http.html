@@ -142,6 +142,55 @@ handleSubmit(req) = {
 }</code></pre>
                 </div>
 
+                <!-- Type-Safe Request Parsing -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Type-Safe Request Parsing</h2>
+                <p class="text-slate-400 mb-4">Use <code>requestToType</code> to parse query and form parameters directly into typed records. Returns <code>Ok(record)</code> on success or <code>Err(message)</code> with details about missing or invalid fields.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.server.{serve, respondText, respond400}
+
+type Result[T, E] = Ok(T) | Err(E)
+type Option[T] = Some(T) | None
+
+# Define your parameter type
+type CreateUserParams = { name: String, age: Int, email: Option[String] }
+
+handleCreateUser(req) = {
+    # Sugar syntax: compiler infers "CreateUserParams" from type annotation
+    result: Result[CreateUserParams, String] = req.toType()
+
+    match result {
+        Ok(params) -> {
+            # params.name is String, params.age is Int
+            # params.email is Option[String] (None if not provided)
+            respondText(req, "Created user: " ++ params.name ++ ", age " ++ show(params.age))
+        }
+        Err(msg) -> respond400(req, msg)
+    }
+}
+
+main() = serve(8080, handleCreateUser)</code></pre>
+                </div>
+
+                <div class="bg-emerald-900/30 border border-emerald-500/30 rounded-lg p-4 mb-8">
+                    <p class="text-emerald-200"><strong>Supported field types:</strong></p>
+                    <ul class="list-disc list-inside text-emerald-200 mt-2 space-y-1">
+                        <li><code>String</code> - Used as-is from request</li>
+                        <li><code>Int</code>, <code>Int32</code>, <code>Int64</code> - Parsed from string</li>
+                        <li><code>Float</code>, <code>Float64</code> - Parsed from string</li>
+                        <li><code>Bool</code> - Accepts "true"/"false", "1"/"0", "yes"/"no"</li>
+                        <li><code>Option[T]</code> - Defaults to <code>None</code> if field is missing</li>
+                    </ul>
+                </div>
+
+                <p class="text-slate-400 mb-4">Error messages include the field name and what went wrong:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Missing required field:
+# Err("missing required field 'age'")
+
+# Invalid type:
+# Err("field 'age': expected Int, got 'not_a_number'")</code></pre>
+                </div>
+
                 <!-- Cookies -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Cookies</h2>
                 <p class="text-slate-400 mb-4">Read cookies with <code>getParam(req.cookies, name)</code>. Set cookies with helper functions.</p>
@@ -283,6 +332,7 @@ main() = serve(8080, route)</code></pre>
                     <ul class="list-disc list-inside text-blue-200 mt-2 space-y-1">
                         <li><code>serve(port, handler)</code> - Start server with spawn-per-request</li>
                         <li><code>getParam(params, key)</code> - Look up key in param list</li>
+                        <li><code>req.toType()</code> - Parse request params to typed record (with type annotation)</li>
                         <li><code>respondText(req, body)</code> - Send text response</li>
                         <li><code>respondHtml(req, body)</code> - Send HTML response</li>
                         <li><code>respondJson(req, body)</code> - Send JSON response</li>
