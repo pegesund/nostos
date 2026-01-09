@@ -773,6 +773,9 @@ impl IoRuntime {
         // Maps request_id -> receiver for connections that have been split
         let ws_receivers: Arc<TokioMutex<HashMap<u64, WsReceiver>>> = Arc::new(TokioMutex::new(HashMap::new()));
 
+        // Mapping from request_id to writer_id for cleanup (after split)
+        let ws_request_to_writer: Arc<TokioMutex<HashMap<u64, u64>>> = Arc::new(TokioMutex::new(HashMap::new()));
+
         // Pending WebSocket upgrades (stores the OnUpgrade handle until accept is called)
         use hyper::upgrade::OnUpgrade;
         let pending_ws_upgrades: Arc<TokioMutex<HashMap<u64, OnUpgrade>>> = Arc::new(TokioMutex::new(HashMap::new()));
@@ -1492,15 +1495,33 @@ impl IoRuntime {
 
                 IoRequest::WebSocketClose { request_id, response } => {
                     let ws_conns = ws_connections.clone();
+                    let ws_writers = ws_shared_writers.clone();
+                    let ws_recvs = ws_receivers.clone();
+                    let ws_req_to_writer = ws_request_to_writer.clone();
                     tokio::spawn(async move {
+                        // Try to close regular connection first
                         let mut conns = ws_conns.lock().await;
                         if let Some((mut sender, _)) = conns.remove(&request_id) {
                             let _ = sender.send(WsMessage::Close(None)).await;
                             let _ = sender.close().await;
-                            let _ = response.send(Ok(IoResponseValue::Unit));
-                        } else {
-                            let _ = response.send(Ok(IoResponseValue::Unit)); // Already closed, that's OK
                         }
+                        drop(conns);
+
+                        // Also clean up split connection resources
+                        // Remove receiver
+                        ws_recvs.lock().await.remove(&request_id);
+
+                        // Remove shared writer if this was a split connection
+                        if let Some(writer_id) = ws_req_to_writer.lock().await.remove(&request_id) {
+                            if let Some(shared_sender) = ws_writers.lock().await.remove(&writer_id) {
+                                // Try to close the shared sender
+                                let mut sender = shared_sender.lock().await;
+                                let _ = sender.send(WsMessage::Close(None)).await;
+                                let _ = sender.close().await;
+                            }
+                        }
+
+                        let _ = response.send(Ok(IoResponseValue::Unit));
                     });
                 }
 
@@ -1509,6 +1530,7 @@ impl IoRuntime {
                     let ws_conns = ws_connections.clone();
                     let ws_writers = ws_shared_writers.clone();
                     let ws_recvs = ws_receivers.clone();
+                    let ws_req_to_writer = ws_request_to_writer.clone();
                     let writer_id = next_ws_writer_id;
                     next_ws_writer_id += 1;
 
@@ -1521,6 +1543,9 @@ impl IoRuntime {
 
                             // Store receiver separately for WebSocketReceive to use
                             ws_recvs.lock().await.insert(request_id, receiver);
+
+                            // Record mapping for cleanup
+                            ws_req_to_writer.lock().await.insert(request_id, writer_id);
 
                             // Return both writer_id (for sending) and request_id (for receiving)
                             let _ = response.send(Ok(IoResponseValue::WebSocketSplit {
