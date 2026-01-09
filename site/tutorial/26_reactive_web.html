@@ -133,6 +133,119 @@ main() = {
                     Run this with <code class="bg-slate-800 px-2 py-1 rounded">./target/release/nostos counter.nos</code> and open <code class="bg-slate-800 px-2 py-1 rounded">http://localhost:8080</code> in your browser.
                 </p>
 
+                <!-- Running RWeb Apps -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Running RWeb Applications</h2>
+                <p class="text-slate-400 mb-4">
+                    RWeb provides several functions for starting servers, designed for different use cases:
+                </p>
+
+                <div class="overflow-x-auto mb-6">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="border-b border-slate-700">
+                                <th class="py-3 px-4 text-slate-300">Function</th>
+                                <th class="py-3 px-4 text-slate-300">Behavior</th>
+                                <th class="py-3 px-4 text-slate-300">Use Case</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-slate-400">
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4"><code>runRWeb</code></td>
+                                <td class="py-3 px-4">Auto-detects mode: background in TUI, foreground in scripts</td>
+                                <td class="py-3 px-4"><strong>Recommended</strong> - works everywhere</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4"><code>startRWeb</code></td>
+                                <td class="py-3 px-4">Blocks forever serving requests</td>
+                                <td class="py-3 px-4">Scripts that run as servers</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4"><code>restartRWebBackground</code></td>
+                                <td class="py-3 px-4">Runs in background, auto-kills previous server</td>
+                                <td class="py-3 px-4">TUI/REPL development with hot-reload</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4"><code>startRWebBackground</code></td>
+                                <td class="py-3 px-4">Runs in background, returns Pid</td>
+                                <td class="py-3 px-4">Manual process management</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Smart Mode with runRWeb</h3>
+                <p class="text-slate-400 mb-4">
+                    The <code>runRWeb</code> function automatically chooses the right behavior based on context:
+                </p>
+
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.rweb
+use stdlib.rhtml
+
+reactive Counter = { count: Int }
+
+session() = {
+    counter = Counter(count: 0)
+    (
+        () => RHtml(div([
+            h1("Counter: " ++ show(counter.count)),
+            button("+1", dataAction: "inc")
+        ])),
+        (action, _) => match action {
+            "inc" -> counter.count = counter.count + 1
+            _ -> ()
+        }
+    )
+}
+
+# This single line works in both script and TUI/REPL!
+main() = runRWeb(8080, "Counter", session)</code></pre>
+                </div>
+
+                <div class="bg-gradient-to-r from-blue-900/30 to-emerald-900/30 rounded-lg p-6 mb-6 border border-slate-700">
+                    <h4 class="text-lg font-semibold text-white mb-2">How runRWeb Works</h4>
+                    <ul class="text-slate-300 space-y-2">
+                        <li><strong>In TUI/REPL:</strong> Uses <code>restartRWebBackground</code> - runs in background, auto-kills previous server when you re-run</li>
+                        <li><strong>In scripts:</strong> Uses <code>startRWeb</code> - blocks and serves requests until killed</li>
+                        <li><strong>Detection:</strong> Uses <code>Env.isInteractive()</code> to check if running in TUI</li>
+                    </ul>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Hot-Reload Development Workflow</h3>
+                <p class="text-slate-400 mb-4">
+                    When developing in the TUI, you can modify your code and re-run to see changes instantly:
+                </p>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-6 border border-slate-700">
+                    <ol class="text-slate-400 text-sm space-y-2 list-decimal list-inside">
+                        <li>Open your RWeb file in the TUI editor</li>
+                        <li>Run with <kbd class="bg-slate-700 px-2 py-1 rounded">Ctrl+R</kbd></li>
+                        <li>Open <code>http://localhost:8080</code> in your browser</li>
+                        <li>Edit code, press <kbd class="bg-slate-700 px-2 py-1 rounded">Ctrl+R</kbd> again</li>
+                        <li>Refresh browser - previous server is auto-killed, new one starts</li>
+                    </ol>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Custom Mode Detection</h3>
+                <p class="text-slate-400 mb-4">
+                    You can use <code>Env.isInteractive()</code> for custom logic:
+                </p>
+
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Check if running in TUI/REPL
+main() = {
+    if Env.isInteractive() then {
+        println("Running in TUI - starting background server")
+        pid = restartRWebBackground(8080, "Dev Server", session)
+        println("Server running, pid stored for restart")
+        pid
+    } else {
+        println("Running as script - blocking mode")
+        startRWeb(8080, "Production Server", session)
+    }
+}</code></pre>
+                </div>
+
                 <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
                     <h4 class="text-white font-semibold mb-2">How It Works</h4>
                     <ol class="text-slate-400 text-sm space-y-2 list-decimal list-inside">

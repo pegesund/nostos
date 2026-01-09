@@ -300,6 +300,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Env.home", signature: "() -> Option String", doc: "Get user's home directory" },
     BuiltinInfo { name: "Env.args", signature: "() -> [String]", doc: "Get command-line arguments" },
     BuiltinInfo { name: "Env.platform", signature: "() -> String", doc: "Get platform name (linux, macos, windows)" },
+    BuiltinInfo { name: "Env.isInteractive", signature: "() -> Bool", doc: "Check if running in interactive TUI/REPL mode" },
 
     // === Path Functions ===
     BuiltinInfo { name: "Path.join", signature: "String -> String -> String", doc: "Join two path components" },
@@ -5102,7 +5103,7 @@ impl Compiler {
                             return Ok(dst);
                         }
                         // Env functions (0 args)
-                        "Env.all" | "Env.cwd" | "Env.home" | "Env.args" | "Env.platform" if args.is_empty() => {
+                        "Env.all" | "Env.cwd" | "Env.home" | "Env.args" | "Env.platform" | "Env.isInteractive" if args.is_empty() => {
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![].into(), line);
                             return Ok(dst);

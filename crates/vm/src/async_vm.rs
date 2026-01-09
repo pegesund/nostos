@@ -11519,6 +11519,16 @@ impl AsyncVM {
             }),
         }));
 
+        self.register_native("Env.isInteractive", Arc::new(GcNativeFn {
+            name: "Env.isInteractive".to_string(),
+            arity: 0,
+            func: Box::new(|_args, _heap| {
+                // Check if NOSTOS_INTERACTIVE env var is set (set by TUI on startup)
+                let is_interactive = std::env::var("NOSTOS_INTERACTIVE").is_ok();
+                Ok(GcValue::Bool(is_interactive))
+            }),
+        }));
+
         // === Path functions ===
 
         self.register_native("Path.join", Arc::new(GcNativeFn {
