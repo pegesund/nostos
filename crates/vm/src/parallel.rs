@@ -192,8 +192,9 @@ pub struct SharedState {
     pub output_sender: Option<OutputSender>,
     /// Panel command sender (for Panel.* calls from Nostos code)
     pub panel_command_sender: Option<PanelCommandSender>,
-    /// Eval command sender (for eval() calls from Nostos code)
-    pub eval_command_sender: Option<EvalCommandSender>,
+    /// Eval callback for synchronous code evaluation (set by engine)
+    /// Wrapped in RwLock so the native function can read it at call time
+    pub eval_callback: Arc<RwLock<Option<Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>>>>,
     /// Module-level mutable variables (mvars) - shared across threads with RwLock.
     /// Key is "module_name.var_name", value is ThreadSafeValue protected by RwLock.
     pub mvars: HashMap<String, Arc<RwLock<ThreadSafeValue>>>,
@@ -668,7 +669,7 @@ impl ParallelVM {
             inspect_sender: None,
             output_sender: None,
             panel_command_sender: None,
-            eval_command_sender: None,
+            eval_callback: Arc::new(RwLock::new(None)),
             mvars: HashMap::new(),
         });
 
@@ -2579,15 +2580,11 @@ impl ParallelVM {
         receiver
     }
 
-    /// Setup the eval command channel and register the eval native function.
-    /// Returns the receiver that the main thread should poll to process eval requests.
-    pub fn setup_eval(&mut self) -> EvalCommandReceiver {
-        let (sender, receiver) = channel::unbounded();
-
-        // Store sender in shared state
-        Arc::get_mut(&mut self.shared)
-            .expect("Cannot setup eval after threads started")
-            .eval_command_sender = Some(sender.clone());
+    /// Setup the eval native function.
+    /// Call set_eval_callback() to provide the evaluation implementation.
+    pub fn setup_eval(&mut self) {
+        // Get a clone of the eval_callback Arc to capture in the closure
+        let eval_callback = self.shared.eval_callback.clone();
 
         // Helper to extract string from GcValue
         fn get_string(val: &GcValue, heap: &Heap, name: &str) -> Result<String, RuntimeError> {
@@ -2607,51 +2604,35 @@ impl ParallelVM {
         }
 
         // eval(code: String) -> String
-        // Sends code to main thread for evaluation, blocks waiting for result
-        // NOTE: Due to synchronous VM execution, eval() can only work when called
-        // from a context where the main thread is not blocked (e.g., async callbacks).
-        // When called from synchronous Nostos code, this will timeout.
+        // Synchronously evaluates code using the registered callback
         self.register_native("eval", Arc::new(GcNativeFn {
             name: "eval".to_string(),
             arity: 1,
             func: Box::new(move |args, heap| {
                 let code = get_string(&args[0], heap, "code")?;
 
-                // Create a one-shot reply channel
-                let (reply_tx, reply_rx) = channel::bounded(1);
+                // Get the callback from shared state
+                let callback_guard = eval_callback.read();
+                let callback = callback_guard.as_ref().ok_or_else(|| {
+                    RuntimeError::Panic("eval() not available - no eval callback registered".to_string())
+                })?;
 
-                // Send the eval request
-                if sender.send(EvalCommand { code, reply: reply_tx }).is_err() {
-                    return Err(RuntimeError::Panic("Eval channel disconnected - eval() requires a running event loop".to_string()));
-                }
-
-                // Block waiting for the result with a short timeout
-                // If the main thread is blocked (synchronous execution), this will timeout
-                use std::time::Duration;
-                match reply_rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok(EvalResult::Ok(result)) => {
-                        // Return the result as a string
-                        Ok(GcValue::String(heap.alloc_string(result)))
-                    }
-                    Ok(EvalResult::Err(err)) => {
-                        // Return the error as a string (prefixed to distinguish)
-                        Ok(GcValue::String(heap.alloc_string(format!("Error: {}", err))))
-                    }
-                    Err(crossbeam::channel::RecvTimeoutError::Timeout) => {
-                        Err(RuntimeError::Panic(
-                            "eval() timeout - cannot eval from within synchronous code. \
-                            eval() only works in async contexts (e.g., panel key handlers with async event loop)."
-                            .to_string()
-                        ))
-                    }
-                    Err(crossbeam::channel::RecvTimeoutError::Disconnected) => {
-                        Err(RuntimeError::Panic("Eval reply channel disconnected".to_string()))
-                    }
+                // Call the callback synchronously
+                match callback(&code) {
+                    Ok(result) => Ok(GcValue::String(heap.alloc_string(result))),
+                    Err(err) => Ok(GcValue::String(heap.alloc_string(format!("Error: {}", err)))),
                 }
             }),
         }));
+    }
 
-        receiver
+    /// Set the eval callback function.
+    /// This should be called by the engine to provide the evaluation implementation.
+    pub fn set_eval_callback<F>(&mut self, callback: F)
+    where
+        F: Fn(&str) -> Result<String, String> + Send + Sync + 'static,
+    {
+        *self.shared.eval_callback.write() = Some(Arc::new(callback));
     }
 
     /// Register a type.

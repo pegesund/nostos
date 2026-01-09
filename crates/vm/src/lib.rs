@@ -27,7 +27,6 @@ pub use parallel::{
     InspectEntry, InspectSender, InspectReceiver,
     OutputSender, OutputReceiver,
     PanelCommand, PanelCommandSender, PanelCommandReceiver,
-    EvalCommand, EvalResult, EvalCommandSender, EvalCommandReceiver,
     JitIntFn, JitIntFn0, JitIntFn2, JitIntFn3, JitIntFn4, JitLoopArrayFn,
 };
 pub use process::*;

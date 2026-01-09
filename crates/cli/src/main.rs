@@ -610,9 +610,58 @@ fn main() -> ExitCode {
     // Setup panel native function (ignore receiver - CLI doesn't use panels)
     let _ = vm.setup_panel();
 
-    // Setup eval native function (ignore receiver - CLI doesn't process eval commands)
-    // Note: eval() won't work in CLI mode since there's no main thread to process commands
-    let _ = vm.setup_eval();
+    // Setup eval native function with callback
+    vm.setup_eval();
+    vm.set_eval_callback(|code: &str| {
+        use nostos_syntax::parse;
+
+        // Create a minimal compiler for expression evaluation
+        let mut eval_compiler = Compiler::new_empty();
+
+        // Wrap the expression in a function
+        let wrapper = format!("__eval_result__() = {}", code);
+
+        // Parse the wrapper
+        let (module_opt, errors) = parse(&wrapper);
+        if !errors.is_empty() {
+            return Err(format!("Parse error: {:?}", errors));
+        }
+        let module = module_opt.ok_or_else(|| "Failed to parse expression".to_string())?;
+
+        // Add module to compiler
+        eval_compiler.add_module(&module, vec![], std::sync::Arc::new(wrapper.clone()), "<eval>".to_string())
+            .map_err(|e| format!("{}", e))?;
+
+        // Compile all
+        if let Err((e, _, _)) = eval_compiler.compile_all() {
+            return Err(format!("Compilation error: {}", e));
+        }
+
+        // Get the compiled function
+        let func = eval_compiler.get_function("__eval_result__")
+            .ok_or_else(|| "Failed to compile expression".to_string())?;
+
+        // Create a minimal VM to run it
+        let mut eval_vm = ParallelVM::new(ParallelConfig::default());
+        eval_vm.register_default_natives();
+        eval_vm.setup_eval();
+        // Note: Nested eval callback not set - nested eval() calls will fail
+        // This is intentional to prevent deep recursion
+        eval_vm.register_function("__eval_result__", func.clone());
+        eval_vm.set_function_list(vec![func.clone()]);
+
+        // Run and get result
+        match eval_vm.run(func) {
+            Ok(result) => {
+                if let Some(val) = result.value {
+                    Ok(val.display())
+                } else {
+                    Ok("()".to_string())
+                }
+            }
+            Err(e) => Err(format!("{}", e)),
+        }
+    });
 
     // Register functions
     for (name, func) in compiler.get_all_functions() {
