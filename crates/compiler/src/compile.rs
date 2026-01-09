@@ -7210,7 +7210,30 @@ impl Compiler {
                             _ => None,
                         };
                     }
+
+                    // Fall through to user-defined function lookup below
                 }
+
+                // Try to find a user-defined function that matches this method call
+                // This handles UFCS calls like person.greet() -> greet(person)
+                let method_name = &method.node;
+                let resolved = self.resolve_name(method_name);
+
+                // Try different function name patterns
+                for fn_key in self.fn_asts.keys() {
+                    // Match "method/Type,..." or just "method/..."
+                    let base_name = fn_key.split('/').next().unwrap_or(fn_key);
+                    if base_name == resolved || base_name == method_name {
+                        if let Some(fn_def) = self.fn_asts.get(fn_key) {
+                            if !fn_def.clauses.is_empty() {
+                                if let Some(ref ret_type) = fn_def.clauses[0].return_type {
+                                    return Some(self.type_expr_to_string(ret_type));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 None
             }
             _ => None,
