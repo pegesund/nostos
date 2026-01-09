@@ -727,16 +727,9 @@ fn poll_repl_evals(s: &mut Cursive) {
 
     for repl_id in repl_ids {
         let panel_id = format!("repl_panel_{}", repl_id);
-        let found = s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
-            let in_progress = panel.is_eval_in_progress();
-            if in_progress {
-                debug_log(&format!("poll_repl_evals: REPL #{} has eval in progress", repl_id));
-            }
-            panel.poll_eval_result()
+        s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
+            panel.poll_eval_result();
         });
-        if found.is_none() {
-            debug_log(&format!("poll_repl_evals: could not find panel {}", panel_id));
-        }
     }
 }
 
@@ -775,37 +768,25 @@ fn rebuild_workspace(s: &mut Cursive) {
     // Get console content BEFORE clearing workspace
     let repl_log_content: String = s.call_on_name("repl_log", |view: &mut FocusableConsole| {
         view.get_content()
-    }).unwrap_or_else(|| {
-        debug_log("WARNING: Could not find repl_log view!");
-        String::new()
-    });
-
-    debug_log(&format!("rebuild_workspace: preserved {} chars of console content", repl_log_content.len()));
+    }).unwrap_or_default();
 
     // Preserve REPL panel state before clearing (histories and eval handles)
     let mut repl_histories: std::collections::HashMap<usize, (Vec<crate::repl_panel::ReplEntry>, Vec<Vec<String>>)> = std::collections::HashMap::new();
     let mut repl_eval_handles: std::collections::HashMap<usize, (nostos_vm::ThreadedEvalHandle, Vec<String>)> = std::collections::HashMap::new();
-    debug_log(&format!("rebuild_workspace: preserving state for {} REPLs: {:?}", repl_ids.len(), repl_ids));
     for &repl_id in &repl_ids {
         let panel_id = format!("repl_panel_{}", repl_id);
-        // Return values from closure instead of modifying captured variables
         if let Some((history, cmd_history, eval_state)) = s.call_on_name(&panel_id, |panel: &mut ReplPanel| {
             let h = panel.get_history();
             let ch = panel.get_command_history();
             let es = panel.take_eval_state();
             (h, ch, es)
         }) {
-            debug_log(&format!("rebuild_workspace: found panel {} with {} history entries", panel_id, history.len()));
             repl_histories.insert(repl_id, (history, cmd_history));
             if let Some((handle, input)) = eval_state {
-                debug_log(&format!("rebuild_workspace: preserving eval handle for REPL #{} with {} input lines", repl_id, input.len()));
                 repl_eval_handles.insert(repl_id, (handle, input));
             }
-        } else {
-            debug_log(&format!("rebuild_workspace: could not find panel {} (new REPL?)", panel_id));
         }
     }
-    debug_log(&format!("rebuild_workspace: preserved {} eval handles", repl_eval_handles.len()));
 
     // Remove old workspace content
     s.call_on_name("workspace", |ws: &mut LinearLayout| {
@@ -867,7 +848,6 @@ fn rebuild_workspace(s: &mut Cursive) {
 
     for &repl_id in &repl_ids {
         let eval_state = repl_eval_handles.remove(&repl_id);
-        debug_log(&format!("rebuild_workspace: creating REPL #{} with eval_state={}", repl_id, eval_state.is_some()));
         let repl_view = create_repl_panel_view(&engine, repl_id, repl_histories.remove(&repl_id), eval_state);
         windows.push(Box::new(repl_view));
     }
@@ -969,7 +949,6 @@ fn create_repl_panel_view(
         panel.set_command_history(command_history);
     }
     if let Some((handle, input)) = eval_state {
-        debug_log(&format!("create_repl_panel_view: restoring eval state for REPL #{} with {} input lines", repl_id, input.len()));
         panel.restore_eval_state(handle, input);
     }
     let panel_id = format!("repl_panel_{}", repl_id);
