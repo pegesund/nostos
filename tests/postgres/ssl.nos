@@ -1,0 +1,19 @@
+# expect: 0
+# Test PostgreSQL SSL/TLS connections
+
+main() = {
+    # Test connection with sslmode=require
+    conn = Pg.connect("host=localhost user=postgres password=postgres sslmode=require")
+
+    # Simple query to verify connection works
+    rows = Pg.query(conn, "SELECT 1 as test", [])
+    result = head(head(rows))
+
+    println("SSL connection test: " ++ show(result))
+    assert_eq(result, 1)
+
+    Pg.close(conn)
+
+    println("SSL test passed!")
+    0
+}

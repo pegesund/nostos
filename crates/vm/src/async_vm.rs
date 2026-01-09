@@ -6318,6 +6318,15 @@ impl AsyncProcess {
                 GcValue::List(GcList::from_vec(values))
             }
             PgValue::Timestamp(millis) => GcValue::Int64(millis),
+            PgValue::Json(s) => {
+                // Return JSON as a string - user can parse with jsonParse if needed
+                GcValue::String(self.heap.alloc_string(s))
+            }
+            PgValue::Vector(floats) => {
+                // Return vector as Float64Array
+                let ptr = self.heap.alloc_float64_array(floats.iter().map(|f| *f as f64).collect());
+                GcValue::Float64Array(ptr)
+            }
         }
     }
 
@@ -6340,9 +6349,151 @@ impl AsyncProcess {
                     Err(RuntimeError::IOError("Invalid string pointer".to_string()))
                 }
             }
+            GcValue::Float64Array(ptr) => {
+                // Convert Float64Array to vector (for pgvector)
+                if let Some(arr) = self.heap.get_float64_array(*ptr) {
+                    let floats: Vec<f32> = arr.items.iter().map(|f| *f as f32).collect();
+                    Ok(PgParam::Vector(floats))
+                } else {
+                    Err(RuntimeError::IOError("Invalid float64 array pointer".to_string()))
+                }
+            }
+            GcValue::Variant(ptr) => {
+                // Check if this is a Json variant (handle both "Json" and "stdlib.json.Json")
+                if let Some(var) = self.heap.get_variant(*ptr) {
+                    let type_name = var.type_name.as_ref();
+                    if type_name == "Json" || type_name.ends_with(".Json") {
+                        // Serialize Json variant to JSON string
+                        let json_str = self.json_variant_to_string(value)?;
+                        Ok(PgParam::Json(json_str))
+                    } else {
+                        Err(RuntimeError::TypeError {
+                            expected: "Json variant".to_string(),
+                            found: format!("{} variant", var.type_name),
+                        })
+                    }
+                } else {
+                    Err(RuntimeError::IOError("Invalid variant pointer".to_string()))
+                }
+            }
+            GcValue::List(list) => {
+                // Check if this is a list of floats (for pgvector)
+                let items = list.items();
+                if items.is_empty() {
+                    Ok(PgParam::Vector(vec![]))
+                } else if matches!(items.first(), Some(GcValue::Float64(_)) | Some(GcValue::Float32(_))) {
+                    let floats: Vec<f32> = items.iter().filter_map(|v| match v {
+                        GcValue::Float64(f) => Some(*f as f32),
+                        GcValue::Float32(f) => Some(*f),
+                        _ => None,
+                    }).collect();
+                    Ok(PgParam::Vector(floats))
+                } else {
+                    Err(RuntimeError::TypeError {
+                        expected: "list of floats for vector".to_string(),
+                        found: "list of other types".to_string(),
+                    })
+                }
+            }
             _ => Err(RuntimeError::TypeError {
-                expected: "Int, Float, String, Bool, or Unit".to_string(),
+                expected: "Int, Float, String, Bool, Unit, Float64Array, List[Float], or Json".to_string(),
                 found: "unsupported type for Pg param".to_string(),
+            }),
+        }
+    }
+
+    /// Convert a Json variant to a JSON string
+    fn json_variant_to_string(&self, value: &GcValue) -> Result<String, RuntimeError> {
+        match value {
+            GcValue::Variant(ptr) => {
+                let var = self.heap.get_variant(*ptr)
+                    .ok_or_else(|| RuntimeError::IOError("Invalid variant pointer".to_string()))?;
+
+                match var.constructor.as_str() {
+                    "Null" => Ok("null".to_string()),
+                    "Bool" => {
+                        if let Some(GcValue::Bool(b)) = var.fields.first() {
+                            Ok(if *b { "true" } else { "false" }.to_string())
+                        } else {
+                            Err(RuntimeError::IOError("Invalid Bool variant".to_string()))
+                        }
+                    }
+                    "Number" => {
+                        if let Some(GcValue::Float64(f)) = var.fields.first() {
+                            Ok(f.to_string())
+                        } else {
+                            Err(RuntimeError::IOError("Invalid Number variant".to_string()))
+                        }
+                    }
+                    "String" => {
+                        if let Some(GcValue::String(ptr)) = var.fields.first() {
+                            if let Some(s) = self.heap.get_string(*ptr) {
+                                // Escape JSON string
+                                let escaped = s.data
+                                    .replace('\\', "\\\\")
+                                    .replace('"', "\\\"")
+                                    .replace('\n', "\\n")
+                                    .replace('\r', "\\r")
+                                    .replace('\t', "\\t");
+                                Ok(format!("\"{}\"", escaped))
+                            } else {
+                                Err(RuntimeError::IOError("Invalid string pointer".to_string()))
+                            }
+                        } else {
+                            Err(RuntimeError::IOError("Invalid String variant".to_string()))
+                        }
+                    }
+                    "Array" => {
+                        if let Some(GcValue::List(list)) = var.fields.first() {
+                            let items: Result<Vec<String>, _> = list.items()
+                                .iter()
+                                .map(|item| self.json_variant_to_string(item))
+                                .collect();
+                            Ok(format!("[{}]", items?.join(",")))
+                        } else {
+                            Err(RuntimeError::IOError("Invalid Array variant".to_string()))
+                        }
+                    }
+                    "Object" => {
+                        if let Some(GcValue::List(list)) = var.fields.first() {
+                            let entries: Result<Vec<String>, _> = list.items()
+                                .iter()
+                                .map(|item| {
+                                    // Each item is a tuple (String, Json)
+                                    if let GcValue::Tuple(ptr) = item {
+                                        if let Some(tuple) = self.heap.get_tuple(*ptr) {
+                                            if tuple.items.len() == 2 {
+                                                let key = if let GcValue::String(sptr) = &tuple.items[0] {
+                                                    if let Some(s) = self.heap.get_string(*sptr) {
+                                                        s.data.clone()
+                                                    } else {
+                                                        return Err(RuntimeError::IOError("Invalid key".to_string()));
+                                                    }
+                                                } else {
+                                                    return Err(RuntimeError::IOError("Key must be string".to_string()));
+                                                };
+                                                let val = self.json_variant_to_string(&tuple.items[1])?;
+                                                let escaped_key = key
+                                                    .replace('\\', "\\\\")
+                                                    .replace('"', "\\\"");
+                                                return Ok(format!("\"{}\":{}", escaped_key, val));
+                                            }
+                                        }
+                                    }
+                                    Err(RuntimeError::IOError("Invalid Object entry".to_string()))
+                                })
+                                .collect();
+                            Ok(format!("{{{}}}", entries?.join(",")))
+                        } else {
+                            Err(RuntimeError::IOError("Invalid Object variant".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::IOError(format!("Unknown Json constructor: {}", var.constructor))),
+                }
+            }
+            _ => Err(RuntimeError::TypeError {
+                expected: "Json variant".to_string(),
+                found: "other type".to_string(),
             }),
         }
     }
@@ -9934,6 +10085,339 @@ impl AsyncVM {
                 let new_items = set1.items.clone().relative_complement(set2.items.clone());
                 let new_ptr = heap.alloc_set(new_items);
                 Ok(GcValue::Set(new_ptr))
+            }),
+        }));
+
+        // === Float64Array Functions ===
+
+        // Float64Array.fromList(list) -> Float64Array
+        self.register_native("Float64Array.fromList", Arc::new(GcNativeFn {
+            name: "Float64Array.fromList".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let floats: Vec<f64> = match &args[0] {
+                    GcValue::List(list) => {
+                        list.items().iter().map(|v| match v {
+                            GcValue::Float64(f) => Ok(*f),
+                            GcValue::Float32(f) => Ok(*f as f64),
+                            GcValue::Int64(i) => Ok(*i as f64),
+                            GcValue::Int32(i) => Ok(*i as f64),
+                            _ => Err(RuntimeError::TypeError {
+                                expected: "Float or Int".to_string(),
+                                found: v.type_name(heap).to_string(),
+                            }),
+                        }).collect::<Result<Vec<_>, _>>()?
+                    }
+                    GcValue::Int64List(int_list) => {
+                        int_list.iter().map(|i| i as f64).collect()
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "List".to_string(),
+                        found: args[0].type_name(heap).to_string(),
+                    }),
+                };
+                let ptr = heap.alloc_float64_array(floats);
+                Ok(GcValue::Float64Array(ptr))
+            }),
+        }));
+
+        // Float64Array.length(arr) -> Int
+        self.register_native("Float64Array.length", Arc::new(GcNativeFn {
+            name: "Float64Array.length".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::Float64Array(ptr) => {
+                        let arr = heap.get_float64_array(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid Float64Array pointer".to_string()))?;
+                        Ok(GcValue::Int64(arr.items.len() as i64))
+                    }
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "Float64Array".to_string(),
+                        found: args[0].type_name(heap).to_string(),
+                    }),
+                }
+            }),
+        }));
+
+        // Float64Array.get(arr, index) -> Float
+        self.register_native("Float64Array.get", Arc::new(GcNativeFn {
+            name: "Float64Array.get".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let ptr = match &args[0] {
+                    GcValue::Float64Array(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float64Array".to_string(),
+                        found: args[0].type_name(heap).to_string(),
+                    }),
+                };
+                let index = match &args[1] {
+                    GcValue::Int64(i) => *i as usize,
+                    GcValue::Int32(i) => *i as usize,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: args[1].type_name(heap).to_string(),
+                    }),
+                };
+                let arr = heap.get_float64_array(ptr)
+                    .ok_or_else(|| RuntimeError::Panic("Invalid Float64Array pointer".to_string()))?;
+                if index >= arr.items.len() {
+                    return Err(RuntimeError::Panic(format!("Index {} out of bounds for Float64Array of length {}", index, arr.items.len())));
+                }
+                Ok(GcValue::Float64(arr.items[index]))
+            }),
+        }));
+
+        // Float64Array.set(arr, index, value) -> Float64Array (new array with value at index)
+        self.register_native("Float64Array.set", Arc::new(GcNativeFn {
+            name: "Float64Array.set".to_string(),
+            arity: 3,
+            func: Box::new(|args, heap| {
+                let ptr = match &args[0] {
+                    GcValue::Float64Array(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float64Array".to_string(),
+                        found: args[0].type_name(heap).to_string(),
+                    }),
+                };
+                let index = match &args[1] {
+                    GcValue::Int64(i) => *i as usize,
+                    GcValue::Int32(i) => *i as usize,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: args[1].type_name(heap).to_string(),
+                    }),
+                };
+                let value = match &args[2] {
+                    GcValue::Float64(f) => *f,
+                    GcValue::Float32(f) => *f as f64,
+                    GcValue::Int64(i) => *i as f64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float or Int".to_string(),
+                        found: args[2].type_name(heap).to_string(),
+                    }),
+                };
+                let arr = heap.get_float64_array(ptr)
+                    .ok_or_else(|| RuntimeError::Panic("Invalid Float64Array pointer".to_string()))?;
+                if index >= arr.items.len() {
+                    return Err(RuntimeError::Panic(format!("Index {} out of bounds for Float64Array of length {}", index, arr.items.len())));
+                }
+                let mut new_items = arr.items.clone();
+                new_items[index] = value;
+                let new_ptr = heap.alloc_float64_array(new_items);
+                Ok(GcValue::Float64Array(new_ptr))
+            }),
+        }));
+
+        // Float64Array.toList(arr) -> List[Float]
+        self.register_native("Float64Array.toList", Arc::new(GcNativeFn {
+            name: "Float64Array.toList".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::Float64Array(ptr) => {
+                        let arr = heap.get_float64_array(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid Float64Array pointer".to_string()))?;
+                        let values: Vec<GcValue> = arr.items.iter().map(|f| GcValue::Float64(*f)).collect();
+                        Ok(GcValue::List(GcList::from_vec(values)))
+                    }
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "Float64Array".to_string(),
+                        found: args[0].type_name(heap).to_string(),
+                    }),
+                }
+            }),
+        }));
+
+        // Float64Array.make(size, initial_value) -> Float64Array
+        self.register_native("Float64Array.make", Arc::new(GcNativeFn {
+            name: "Float64Array.make".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let size = match &args[0] {
+                    GcValue::Int64(i) => *i as usize,
+                    GcValue::Int32(i) => *i as usize,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: args[0].type_name(heap).to_string(),
+                    }),
+                };
+                let value = match &args[1] {
+                    GcValue::Float64(f) => *f,
+                    GcValue::Float32(f) => *f as f64,
+                    GcValue::Int64(i) => *i as f64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float or Int".to_string(),
+                        found: args[1].type_name(heap).to_string(),
+                    }),
+                };
+                let items = vec![value; size];
+                let ptr = heap.alloc_float64_array(items);
+                Ok(GcValue::Float64Array(ptr))
+            }),
+        }));
+
+        // === Int64Array Functions ===
+
+        // Int64Array.fromList(list) -> Int64Array
+        self.register_native("Int64Array.fromList", Arc::new(GcNativeFn {
+            name: "Int64Array.fromList".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let ints: Vec<i64> = match &args[0] {
+                    GcValue::List(list) => {
+                        list.items().iter().map(|v| match v {
+                            GcValue::Int64(i) => Ok(*i),
+                            GcValue::Int32(i) => Ok(*i as i64),
+                            GcValue::Float64(f) => Ok(*f as i64),
+                            _ => Err(RuntimeError::TypeError {
+                                expected: "Int or Float".to_string(),
+                                found: v.type_name(heap).to_string(),
+                            }),
+                        }).collect::<Result<Vec<_>, _>>()?
+                    }
+                    GcValue::Float64Array(ptr) => {
+                        let arr = heap.get_float64_array(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid Float64Array pointer".to_string()))?;
+                        arr.items.iter().map(|f| *f as i64).collect()
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "List".to_string(),
+                        found: args[0].type_name(heap).to_string(),
+                    }),
+                };
+                Ok(GcValue::Int64List(GcInt64List::from_vec(ints)))
+            }),
+        }));
+
+        // Int64Array.length(arr) -> Int
+        self.register_native("Int64Array.length", Arc::new(GcNativeFn {
+            name: "Int64Array.length".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::Int64List(list) => {
+                        Ok(GcValue::Int64(list.len() as i64))
+                    }
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "Int64Array".to_string(),
+                        found: args[0].type_name(heap).to_string(),
+                    }),
+                }
+            }),
+        }));
+
+        // Int64Array.get(arr, index) -> Int
+        self.register_native("Int64Array.get", Arc::new(GcNativeFn {
+            name: "Int64Array.get".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let list = match &args[0] {
+                    GcValue::Int64List(list) => list.clone(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64Array".to_string(),
+                        found: args[0].type_name(heap).to_string(),
+                    }),
+                };
+                let index = match &args[1] {
+                    GcValue::Int64(i) => *i as usize,
+                    GcValue::Int32(i) => *i as usize,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: args[1].type_name(heap).to_string(),
+                    }),
+                };
+                if index >= list.len() {
+                    return Err(RuntimeError::Panic(format!("Index {} out of bounds for Int64Array of length {}", index, list.len())));
+                }
+                // Collect all values, then index
+                let items: Vec<i64> = list.iter().collect();
+                Ok(GcValue::Int64(items[index]))
+            }),
+        }));
+
+        // Int64Array.set(arr, index, value) -> Int64Array (new array with value at index)
+        self.register_native("Int64Array.set", Arc::new(GcNativeFn {
+            name: "Int64Array.set".to_string(),
+            arity: 3,
+            func: Box::new(|args, heap| {
+                let list = match &args[0] {
+                    GcValue::Int64List(list) => list.clone(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64Array".to_string(),
+                        found: args[0].type_name(heap).to_string(),
+                    }),
+                };
+                let index = match &args[1] {
+                    GcValue::Int64(i) => *i as usize,
+                    GcValue::Int32(i) => *i as usize,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: args[1].type_name(heap).to_string(),
+                    }),
+                };
+                let value = match &args[2] {
+                    GcValue::Int64(i) => *i,
+                    GcValue::Int32(i) => *i as i64,
+                    GcValue::Float64(f) => *f as i64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: args[2].type_name(heap).to_string(),
+                    }),
+                };
+                if index >= list.len() {
+                    return Err(RuntimeError::Panic(format!("Index {} out of bounds for Int64Array of length {}", index, list.len())));
+                }
+                // Collect to vec, modify, then create new list
+                let mut new_items: Vec<i64> = list.iter().collect();
+                new_items[index] = value;
+                Ok(GcValue::Int64List(GcInt64List::from_vec(new_items)))
+            }),
+        }));
+
+        // Int64Array.toList(arr) -> List[Int]
+        self.register_native("Int64Array.toList", Arc::new(GcNativeFn {
+            name: "Int64Array.toList".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::Int64List(list) => {
+                        let values: Vec<GcValue> = list.iter().map(|i| GcValue::Int64(i)).collect();
+                        Ok(GcValue::List(GcList::from_vec(values)))
+                    }
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "Int64Array".to_string(),
+                        found: args[0].type_name(heap).to_string(),
+                    }),
+                }
+            }),
+        }));
+
+        // Int64Array.make(size, initial_value) -> Int64Array
+        self.register_native("Int64Array.make", Arc::new(GcNativeFn {
+            name: "Int64Array.make".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let size = match &args[0] {
+                    GcValue::Int64(i) => *i as usize,
+                    GcValue::Int32(i) => *i as usize,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: args[0].type_name(heap).to_string(),
+                    }),
+                };
+                let value = match &args[1] {
+                    GcValue::Int64(i) => *i,
+                    GcValue::Int32(i) => *i as i64,
+                    GcValue::Float64(f) => *f as i64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: args[1].type_name(heap).to_string(),
+                    }),
+                };
+                let items = vec![value; size];
+                Ok(GcValue::Int64List(GcInt64List::from_vec(items)))
             }),
         }));
 

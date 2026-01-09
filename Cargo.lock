@@ -1903,6 +1903,7 @@ dependencies = [
  "hyper-util",
  "imbl",
  "md-5",
+ "native-tls",
  "nostos-compiler",
  "nostos-syntax",
  "nostos-types",
@@ -1910,10 +1911,12 @@ dependencies = [
  "num-traits",
  "parking_lot",
  "percent-encoding",
+ "postgres-native-tls",
  "rand 0.8.5",
  "regex",
  "reqwest",
  "rust_decimal",
+ "serde_json",
  "sha2",
  "smallvec",
  "thiserror 2.0.17",
@@ -2169,6 +2172,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
+name = "postgres-native-tls"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac73153d92e4bde922bd6f1dfba7f1ab8132266c031153b55e20a1521cd36d49"
+dependencies = [
+ "native-tls",
+ "tokio",
+ "tokio-native-tls",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "postgres-protocol"
 version = "0.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2196,6 +2211,8 @@ dependencies = [
  "chrono",
  "fallible-iterator 0.2.0",
  "postgres-protocol",
+ "serde_core",
+ "serde_json",
 ]
 
 [[package]]
