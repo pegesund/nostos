@@ -7673,8 +7673,23 @@ impl Compiler {
                     // New binding - determine if float from explicit type or value expression
                     let is_float = self.is_float_type(&value_type) || self.is_float_expr(&binding.value);
                     self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: binding.mutable });
-                    // Record the type (explicit takes precedence over inferred)
-                    if let Some(ty) = value_type {
+                    // Record the type (explicit takes precedence over inferred, and pre-set types take precedence over both)
+                    // Check if there's already a type set (e.g., from REPL variable type annotations)
+                    let existing_type = self.local_types.get(&ident.node).cloned();
+                    let final_type = if let Some(existing) = existing_type {
+                        // Prefer existing type unless it's a type parameter (single lowercase letter)
+                        // and we have a better inferred type
+                        if existing.len() == 1 && existing.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
+                            // Existing is a type parameter - prefer inferred if it's better
+                            value_type.or(Some(existing))
+                        } else {
+                            // Existing type looks good, keep it
+                            Some(existing)
+                        }
+                    } else {
+                        value_type
+                    };
+                    if let Some(ty) = final_type {
                         self.local_types.insert(ident.node.clone(), ty);
                     }
                 }

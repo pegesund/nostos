@@ -1093,14 +1093,28 @@ impl ReplEngine {
             var_bindings.insert(name.to_string(), thunk_name.clone());
         }
 
+        // Get the inferred type
+        let mut inferred_type = self.get_variable_type_from_thunk(&thunk_name);
+
+        // If the inferred type is a type parameter (single lowercase letter),
+        // try to get a better type from the expression structure
+        if let Some(ref ty) = inferred_type {
+            if ty.len() == 1 && ty.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
+                // Try to determine a better type from the expression
+                if let Some(better_type) = self.infer_expr_type_from_structure(expr) {
+                    inferred_type = Some(better_type);
+                }
+            }
+        }
+
         self.var_bindings.insert(name.to_string(), VarBinding {
             thunk_name,
             mutable,
-            type_annotation: None,
+            type_annotation: inferred_type.clone(),
         });
 
         // Update variable type for UFCS method dispatch
-        if let Some(var_type) = self.get_variable_type(name) {
+        if let Some(var_type) = inferred_type {
             let mut var_types = self.dynamic_var_types.write().expect("dynamic_var_types lock poisoned");
             var_types.insert(name.to_string(), var_type);
         }
@@ -1575,6 +1589,13 @@ impl ReplEngine {
         self.compiler.add_module(&wrapper_module, vec![], Arc::new(wrapper.clone()), "<repl>".to_string())
             .map_err(|e| format!("Error: {}", e))?;
 
+        // Set local types for variables with known types (for UFCS dispatch)
+        for (name, binding) in &self.var_bindings {
+            if let Some(ref type_ann) = binding.type_annotation {
+                self.compiler.set_local_type(name.clone(), type_ann.clone());
+            }
+        }
+
         if let Err((e, _, _)) = self.compiler.compile_all() {
             return Err(format!("Compilation error: {}", e));
         }
@@ -2033,6 +2054,127 @@ impl ReplEngine {
             // If no arrow, the whole signature is the type
             Some(sig)
         }
+    }
+
+    /// Get the type of a variable directly from its thunk signature
+    fn get_variable_type_from_thunk(&self, thunk_name: &str) -> Option<String> {
+        let sig = self.compiler.get_function_signature(thunk_name)?;
+
+        // Extract the return type (everything after "-> ")
+        let return_type = if let Some(arrow_pos) = sig.find("-> ") {
+            sig[arrow_pos + 3..].trim().to_string()
+        } else {
+            // If no arrow, the whole signature is the type
+            sig.trim().to_string()
+        };
+
+        // Strip trait bounds if present (e.g., "Eq a, Hash a => Map[a, b]" -> "Map[a, b]")
+        let stripped = if let Some(arrow_pos) = return_type.find("=>") {
+            return_type[arrow_pos + 2..].trim().to_string()
+        } else {
+            return_type
+        };
+
+        Some(stripped)
+    }
+
+    /// Try to infer a better type from the expression structure
+    /// This is used when HM inference returns a generic type parameter
+    fn infer_expr_type_from_structure(&self, expr: &str) -> Option<String> {
+        // Parse the expression to look for method calls
+        let trimmed = expr.trim();
+
+        // Look for method call patterns like "x.method(...)"
+        // We check if the method is a known Map, Set, List, or String method
+        if let Some(dot_pos) = trimmed.rfind('.') {
+            let method_part = &trimmed[dot_pos + 1..];
+            // Extract just the method name (before any parentheses)
+            let method_name = if let Some(paren_pos) = method_part.find('(') {
+                method_part[..paren_pos].trim()
+            } else {
+                method_part.trim()
+            };
+
+            // Get the receiver part
+            let receiver = trimmed[..dot_pos].trim();
+
+            // Try to get the receiver's type
+            if let Some(receiver_type) = self.get_expr_base_type(receiver) {
+                // Based on receiver type and method, determine return type
+                if receiver_type.starts_with("Map") || receiver_type == "Map" {
+                    return match method_name {
+                        "insert" | "remove" | "merge" => Some(receiver_type),
+                        "contains" | "isEmpty" => Some("Bool".to_string()),
+                        "size" => Some("Int".to_string()),
+                        "keys" | "values" => Some("List".to_string()),
+                        _ => None,
+                    };
+                } else if receiver_type.starts_with("Set") || receiver_type == "Set" {
+                    return match method_name {
+                        "insert" | "remove" | "union" | "intersection" | "difference" => Some(receiver_type),
+                        "contains" | "isEmpty" => Some("Bool".to_string()),
+                        "size" => Some("Int".to_string()),
+                        "toList" => Some("List".to_string()),
+                        _ => None,
+                    };
+                } else if receiver_type.starts_with("List") || receiver_type == "List" {
+                    return match method_name {
+                        "map" | "filter" | "take" | "drop" | "reverse" | "sort" | "append" => Some(receiver_type),
+                        "length" | "count" => Some("Int".to_string()),
+                        "isEmpty" => Some("Bool".to_string()),
+                        _ => None,
+                    };
+                } else if receiver_type == "String" {
+                    return match method_name {
+                        "toUpper" | "toLower" | "trim" | "replace" | "substring" => Some("String".to_string()),
+                        "length" => Some("Int".to_string()),
+                        "contains" | "startsWith" | "endsWith" | "isEmpty" => Some("Bool".to_string()),
+                        "split" | "chars" => Some("List".to_string()),
+                        _ => None,
+                    };
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Get the base type of an expression (variable lookup or literal)
+    fn get_expr_base_type(&self, expr: &str) -> Option<String> {
+        let trimmed = expr.trim();
+
+        // Check if it's a variable we know about
+        if let Some(binding) = self.var_bindings.get(trimmed) {
+            // First check type_annotation
+            if let Some(ref ty) = binding.type_annotation {
+                return Some(ty.clone());
+            }
+            // Fall back to thunk signature
+            return self.get_variable_type_from_thunk(&binding.thunk_name);
+        }
+
+        // Check for literals
+        if trimmed.starts_with("%{") {
+            return Some("Map".to_string());
+        }
+        if trimmed.starts_with("#{") {
+            return Some("Set".to_string());
+        }
+        if trimmed.starts_with('[') {
+            return Some("List".to_string());
+        }
+        if trimmed.starts_with('"') {
+            return Some("String".to_string());
+        }
+
+        // Check for nested method calls (recursive)
+        if let Some(dot_pos) = trimmed.rfind('.') {
+            let inner_expr = &trimmed[..dot_pos];
+            return self.infer_expr_type_from_structure(inner_expr)
+                .or_else(|| self.get_expr_base_type(inner_expr));
+        }
+
+        None
     }
 
     /// Get the signature for a function (for autocomplete display)
@@ -4308,6 +4450,31 @@ mod tests {
         let result = engine.eval("c");
         assert!(result.is_ok(), "Should evaluate c: {:?}", result);
         assert!(result.unwrap().contains("[1]"), "c should be [1]");
+    }
+
+    #[test]
+    fn test_map_ufcs_chain_get() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        // Define empty map
+        let result = engine.eval("a = %{}");
+        assert!(result.is_ok(), "Should define a: {:?}", result);
+
+        // Insert into map and store result
+        let result = engine.eval("b = a.insert(1, 1)");
+        assert!(result.is_ok(), "Should define b: {:?}", result);
+
+        // Check b's value
+        let result = engine.eval("b");
+        assert!(result.is_ok(), "Should get b: {:?}", result);
+        assert!(result.unwrap().contains("1 entries"), "b should have 1 entry");
+
+        // Get from b
+        let result = engine.eval("b.get(1)");
+        assert!(result.is_ok(), "Should call b.get(1): {:?}", result);
+        assert!(result.unwrap().contains("1"), "b.get(1) should be 1");
     }
 
     #[test]
