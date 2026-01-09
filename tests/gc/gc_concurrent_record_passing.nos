@@ -1,0 +1,38 @@
+# expect: ()
+# GC handles records passed between processes
+
+type Point = { x: Int, y: Int }
+
+worker(parent, p) = {
+    garbage = Point(999, 888)
+    result = p.x + p.y
+    parent <- result
+}
+
+main() = {
+    me = self()
+
+    # Create records and pass to workers
+    p1 = Point(10, 20)
+    p2 = Point(30, 40)
+    p3 = Point(50, 60)
+    p4 = Point(70, 80)
+    p5 = Point(90, 100)
+
+    spawn { worker(me, p1) }
+    spawn { worker(me, p2) }
+    spawn { worker(me, p3) }
+    spawn { worker(me, p4) }
+    spawn { worker(me, p5) }
+
+    # Collect results
+    var total = 0
+    for i = 0 to 5 {
+        total = receive
+            r -> total + r
+        end
+    }
+
+    # 30 + 70 + 110 + 150 + 190 = 550
+    assert_eq(550, total)
+}

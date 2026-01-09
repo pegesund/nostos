@@ -1,0 +1,59 @@
+# expect: ()
+# GC handles bidirectional message passing with garbage
+
+worker(parent) = {
+    # Receive work
+    n = receive x -> x end
+
+    # Create garbage while processing
+    garbage = [n, n * 2, n * 3]
+
+    # Send back result
+    result = n * 10
+    parent <- result
+
+    # Receive second work
+    m = receive y -> y end
+
+    # More garbage
+    garbage2 = (m, m + 1)
+
+    # Send back second result
+    parent <- m * 10
+}
+
+main() = {
+    me = self()
+
+    # Spawn workers
+    w1 = spawn { worker(me) }
+    w2 = spawn { worker(me) }
+    w3 = spawn { worker(me) }
+
+    # Send first batch of work
+    w1 <- 1
+    w2 <- 2
+    w3 <- 3
+
+    # Collect first results
+    var total1 = 0
+    for i = 0 to 3 {
+        total1 = receive r -> total1 + r end
+    }
+
+    # Send second batch of work
+    w1 <- 4
+    w2 <- 5
+    w3 <- 6
+
+    # Collect second results
+    var total2 = 0
+    for i = 0 to 3 {
+        total2 = receive r -> total2 + r end
+    }
+
+    # First: 10 + 20 + 30 = 60
+    # Second: 40 + 50 + 60 = 150
+    assert_eq(60, total1)
+    assert_eq(150, total2)
+}

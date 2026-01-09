@@ -1,0 +1,38 @@
+# expect: ()
+# GC handles producer-consumer pattern with garbage
+
+producer(consumer, count) = {
+    if count > 0 then {
+        garbage = [count, count * 2]
+        consumer <- count
+        producer(consumer, count - 1)
+    } else {
+        consumer <- 0  # Signal done
+    }
+}
+
+consumer(parent, acc) = {
+    n = receive x -> x end
+    if n == 0 then {
+        parent <- acc
+    } else {
+        garbage = (n, acc)
+        consumer(parent, acc + n)
+    }
+}
+
+main() = {
+    me = self()
+
+    # Start consumer
+    c = spawn { consumer(me, 0) }
+
+    # Start producer that sends 1..50 to consumer
+    spawn { producer(c, 50) }
+
+    # Wait for final sum
+    result = receive r -> r end
+
+    # Sum of 1..50 = 1275
+    assert_eq(1275, result)
+}

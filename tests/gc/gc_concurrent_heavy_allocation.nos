@@ -1,0 +1,38 @@
+# expect: ()
+# GC handles heavy allocation across multiple processes
+
+create_garbage(0) = ()
+create_garbage(n) = {
+    g1 = [n, n, n, n, n]
+    g2 = (n, n * 2)
+    g3 = "garbage string"
+    create_garbage(n - 1)
+}
+
+worker(parent, id) = {
+    # Heavy garbage creation
+    create_garbage(50)
+    result = id * 10
+    parent <- result
+}
+
+main() = {
+    me = self()
+    count = 20
+
+    # Spawn workers that create lots of garbage
+    for i = 1 to count + 1 {
+        spawn { worker(me, i) }
+    }
+
+    # Collect results
+    var total = 0
+    for i = 1 to count + 1 {
+        total = receive
+            r -> total + r
+        end
+    }
+
+    # 10 * (1 + 2 + ... + 20) = 10 * 210 = 2100
+    assert_eq(2100, total)
+}

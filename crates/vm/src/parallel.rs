@@ -788,7 +788,7 @@ impl ParallelVM {
 
                 // Thread 0 spawns the main process
                 if let Some(func) = main_func_for_thread {
-                    let pid = worker.spawn_process(func, vec![], vec![]);
+                    let pid = worker.spawn_main_process(func);
                     worker.main_pid = Some(pid);
                 }
 
@@ -881,13 +881,8 @@ impl ThreadWorker {
         }
     }
 
-    /// Spawn a new process on this thread.
-    fn spawn_process(
-        &mut self,
-        func: Arc<FunctionValue>,
-        args: Vec<GcValue>,
-        captures: Vec<GcValue>,
-    ) -> Pid {
+    /// Spawn the main process on this thread (no arguments).
+    fn spawn_main_process(&mut self, func: Arc<FunctionValue>) -> Pid {
         let local_id = self.next_local_id;
         self.next_local_id += 1;
         let pid = encode_pid(self.thread_id, local_id);
@@ -895,22 +890,15 @@ impl ThreadWorker {
         // Create process with lightweight heap
         let mut process = Process::with_gc_config(pid, GcConfig::lightweight());
 
-        // Set up initial call frame
+        // Set up initial call frame (no arguments for main)
         let reg_count = func.code.register_count;
-        let mut registers = vec![GcValue::Unit; reg_count];
-
-        // Copy arguments to registers
-        for (i, arg) in args.into_iter().enumerate() {
-            if i < reg_count {
-                registers[i] = arg;
-            }
-        }
+        let registers = vec![GcValue::Unit; reg_count];
 
         let frame = crate::process::CallFrame {
             function: func,
             ip: 0,
             registers,
-            captures,
+            captures: vec![],
             return_reg: None,
         };
         process.frames.push(frame);
@@ -3371,24 +3359,62 @@ impl ThreadWorker {
                     }),
                 };
 
+                // Convert args and captures to thread-safe values (deep copy)
+                // This ensures heap values are properly copied to the new process
+                let proc = self.get_process(local_id).unwrap();
+                let safe_args: Vec<ThreadSafeValue> = arg_values.iter()
+                    .filter_map(|v| ThreadSafeValue::from_gc_value(v, &proc.heap))
+                    .collect();
+                let safe_captures: Vec<ThreadSafeValue> = captures.iter()
+                    .filter_map(|v| ThreadSafeValue::from_gc_value(v, &proc.heap))
+                    .collect();
+
                 // Round-robin distribution across threads
                 let num_threads = self.shared.num_threads;
                 let spawn_idx = self.shared.spawn_counter.fetch_add(1, Ordering::Relaxed);
                 let target_thread = (spawn_idx as usize % num_threads) as u16;
 
                 let child_pid = if target_thread == self.thread_id {
-                    // Spawn on this thread
-                    self.spawn_process(func, arg_values, captures)
-                } else {
-                    // Spawn on another thread - convert args to thread-safe values
-                    let proc = self.get_process(local_id).unwrap();
-                    let safe_args: Vec<ThreadSafeValue> = arg_values.iter()
-                        .filter_map(|v| ThreadSafeValue::from_gc_value(v, &proc.heap))
+                    // Spawn on this thread - allocate a new local_id
+                    let child_local_id = self.next_local_id;
+                    self.next_local_id += 1;
+                    let child_pid = encode_pid(self.thread_id, child_local_id);
+
+                    // Create process with lightweight heap
+                    let mut process = Process::with_gc_config(child_pid, GcConfig::lightweight());
+
+                    // Convert thread-safe values back to GcValues in new heap
+                    let gc_args: Vec<GcValue> = safe_args.iter()
+                        .map(|v| v.to_gc_value(&mut process.heap))
                         .collect();
-                    let safe_captures: Vec<ThreadSafeValue> = captures.iter()
-                        .filter_map(|v| ThreadSafeValue::from_gc_value(v, &proc.heap))
+                    let gc_captures: Vec<GcValue> = safe_captures.iter()
+                        .map(|v| v.to_gc_value(&mut process.heap))
                         .collect();
 
+                    // Set up initial call frame
+                    let reg_count = func.code.register_count;
+                    let mut registers = vec![GcValue::Unit; reg_count];
+                    for (i, arg) in gc_args.into_iter().enumerate() {
+                        if i < reg_count {
+                            registers[i] = arg;
+                        }
+                    }
+
+                    let frame = crate::process::CallFrame {
+                        function: func,
+                        ip: 0,
+                        registers,
+                        captures: gc_captures,
+                        return_reg: None,
+                    };
+                    process.frames.push(frame);
+
+                    self.insert_process(child_local_id, process);
+                    self.run_queue.push_back(child_local_id);
+
+                    child_pid
+                } else {
+                    // Spawn on another thread
                     // Pre-allocate local_id for the target thread
                     let pre_allocated_local_id = self.shared.thread_local_ids[target_thread as usize]
                         .fetch_add(1, Ordering::Relaxed);
