@@ -3133,9 +3133,21 @@ impl ReplEngine {
                         collect_calls(arg, calls);
                     }
                 }
-                Expr::MethodCall(receiver, _method, args, _) => {
-                    // Method calls are UFCS, so Type.method(receiver) should work
-                    // We'll trust method calls as they depend on runtime type
+                Expr::MethodCall(receiver, method, args, span) => {
+                    // Check if receiver is a module/type name (capitalized identifier)
+                    // e.g., Server.close(x) -> validate Server.close exists
+                    // Note: Server parses as Record(name, [], _) not Var
+                    let module_name = match receiver.as_ref() {
+                        Expr::Var(ident) => Some(&ident.node),
+                        Expr::Record(ident, fields, _) if fields.is_empty() => Some(&ident.node),
+                        _ => None,
+                    };
+                    if let Some(name) = module_name {
+                        if name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                            let call_name = format!("{}.{}", name, method.node);
+                            calls.push((call_name, span.start));
+                        }
+                    }
                     collect_calls(receiver, calls);
                     for arg in args {
                         collect_calls(arg, calls);
