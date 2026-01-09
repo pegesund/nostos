@@ -3956,8 +3956,9 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
         .fixed_size((60, 20));
 
     // Create horizontal split: browser on left, preview on right
+    let items_title = if is_file_mode { "Files" } else { "Items" };
     let split_view = LinearLayout::horizontal()
-        .child(Panel::new(select_scroll).title("Items"))
+        .child(Panel::new(select_scroll).title(items_title))
         .child(Panel::new(preview_scroll).title("Preview"));
 
     // Create dialog with navigation hints
