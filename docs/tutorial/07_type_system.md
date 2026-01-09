@@ -52,12 +52,30 @@ main() = {
     p = Point(x: 10.0, y: 20.0) # Named field construction
     x_val = p.x                 # Field access
 
-    # Update creates a new record for immutable types
-    p2 = Point(p, x: 15.0)      # p2 is {x: 15.0, y: 20.0}, p remains {x: 10.0, y: 20.0}
-
     # For mutable records (var type)
     buf = Buffer(data: [1, 2], size: 2)
     buf.size = 3                # Direct mutation is allowed
+}
+```
+
+### Record Update (Functional Update)
+
+Create a new record with some fields updated while copying the rest from an existing record. The original record is not modified.
+
+```nostos
+type Point = {x: Int, y: Int, z: Int}
+
+main() = {
+    p = Point(1, 2, 3)
+
+    # Syntax: Type(base, field: newValue, ...)
+    p2 = Point(p, x: 10)        # {x: 10, y: 2, z: 3}
+    p3 = Point(p, x: 10, z: 30) # {x: 10, y: 2, z: 30}
+
+    # Works with qualified type names from modules
+    use stdlib.rhtml
+    result = RHtml(div([span("Hello")]))
+    updated = stdlib.rhtml.RHtmlResult(result, deps: newDeps)
 }
 ```
 

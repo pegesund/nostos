@@ -101,14 +101,36 @@ describe(RGB(r, g, b)) = "custom color"
 
 ### Using Records
 ```nos
-type Point = Point { x: Int, y: Int }
+type Point = { x: Int, y: Int }
 
-# Create record
-p = Point { x: 10, y: 20 }
+# Create record with positional arguments
+p = Point(10, 20)
+
+# Or with named arguments
+p = Point(x: 10, y: 20)
 
 # Access field
-get_x(Point { x, y }) = x
+p.x  # 10
 ```
+
+### Record Update (Functional Update)
+```nos
+type Point = { x: Int, y: Int, z: Int }
+
+p = Point(1, 2, 3)
+
+# Create a new record with updated fields
+# Syntax: Type(base, field: newValue, ...)
+p2 = Point(p, x: 10)        # Point with x=10, y=2, z=3
+p3 = Point(p, x: 10, z: 30) # Point with x=10, y=2, z=30
+
+# Works with qualified type names from modules
+use stdlib.rhtml
+result = RHtml(div([span("Hello")]))
+updated = stdlib.rhtml.RHtmlResult(result, deps: newDeps)
+```
+
+The record update syntax creates a new record, copying unchanged fields from the base record and applying the specified updates. The original record is not modified.
 
 ## Collections
 
