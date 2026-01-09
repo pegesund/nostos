@@ -250,10 +250,58 @@ impl JitCompiler {
         self.cache.contains_key(&(func_index, num_type))
     }
 
-    /// Get the native code pointer for a compiled Int64 function (for backward compatibility)
+    /// Get the native code pointer for a compiled Int64 function with 1 argument
     pub fn get_int_function(&self, func_index: u16) -> Option<fn(i64) -> i64> {
-        self.cache.get(&(func_index, NumericType::Int64)).map(|f| {
-            unsafe { std::mem::transmute::<*const u8, fn(i64) -> i64>(f.code_ptr) }
+        self.cache.get(&(func_index, NumericType::Int64)).and_then(|f| {
+            if f.arity == 1 {
+                Some(unsafe { std::mem::transmute::<*const u8, fn(i64) -> i64>(f.code_ptr) })
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get the native code pointer for a compiled Int64 function with 0 arguments
+    pub fn get_int_function_0(&self, func_index: u16) -> Option<fn() -> i64> {
+        self.cache.get(&(func_index, NumericType::Int64)).and_then(|f| {
+            if f.arity == 0 {
+                Some(unsafe { std::mem::transmute::<*const u8, fn() -> i64>(f.code_ptr) })
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get the native code pointer for a compiled Int64 function with 2 arguments
+    pub fn get_int_function_2(&self, func_index: u16) -> Option<fn(i64, i64) -> i64> {
+        self.cache.get(&(func_index, NumericType::Int64)).and_then(|f| {
+            if f.arity == 2 {
+                Some(unsafe { std::mem::transmute::<*const u8, fn(i64, i64) -> i64>(f.code_ptr) })
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get the native code pointer for a compiled Int64 function with 3 arguments
+    pub fn get_int_function_3(&self, func_index: u16) -> Option<fn(i64, i64, i64) -> i64> {
+        self.cache.get(&(func_index, NumericType::Int64)).and_then(|f| {
+            if f.arity == 3 {
+                Some(unsafe { std::mem::transmute::<*const u8, fn(i64, i64, i64) -> i64>(f.code_ptr) })
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get the native code pointer for a compiled Int64 function with 4 arguments
+    pub fn get_int_function_4(&self, func_index: u16) -> Option<fn(i64, i64, i64, i64) -> i64> {
+        self.cache.get(&(func_index, NumericType::Int64)).and_then(|f| {
+            if f.arity == 4 {
+                Some(unsafe { std::mem::transmute::<*const u8, fn(i64, i64, i64, i64) -> i64>(f.code_ptr) })
+            } else {
+                None
+            }
         })
     }
 
@@ -380,9 +428,9 @@ impl JitCompiler {
     /// Detect the numeric type of a pure numeric function.
     /// Returns the detected type if the function is suitable for JIT, or an error otherwise.
     fn detect_numeric_type(&self, func: &FunctionValue) -> Result<NumericType, JitError> {
-        // Must have exactly 1 argument for now (simplifies things)
-        if func.arity != 1 {
-            return Err(JitError::NotSuitable(format!("arity {} != 1", func.arity)));
+        // Support functions with 0-4 arguments
+        if func.arity > 4 {
+            return Err(JitError::NotSuitable(format!("arity {} > 4 (max supported)", func.arity)));
         }
 
         let mut detected_type: Option<NumericType> = None;
@@ -529,9 +577,12 @@ impl JitCompiler {
 
         let cl_type = num_type.cranelift_type();
 
-        // Create signature: fn(T) -> T where T is the detected numeric type
+        // Create signature: fn(T, T, ...) -> T where T is the detected numeric type
+        // Number of parameters matches function arity
         let mut sig = self.module.make_signature();
-        sig.params.push(AbiParam::new(cl_type));
+        for _ in 0..func.arity {
+            sig.params.push(AbiParam::new(cl_type));
+        }
         sig.returns.push(AbiParam::new(cl_type));
 
         // Declare function in module (needed for self-recursion)
@@ -563,9 +614,12 @@ impl JitCompiler {
                 regs.push(var);
             }
 
-            // Initialize first register with the argument
-            let arg = builder.block_params(entry_block)[0];
-            builder.def_var(regs[0], arg);
+            // Initialize registers with function arguments
+            // Copy block params first to avoid borrow conflict
+            let block_params: Vec<_> = builder.block_params(entry_block).to_vec();
+            for i in 0..func.arity {
+                builder.def_var(regs[i], block_params[i]);
+            }
 
             // Create blocks for jump targets
             let mut jump_targets: HashMap<usize, Block> = HashMap::new();

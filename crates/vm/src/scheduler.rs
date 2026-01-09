@@ -612,10 +612,13 @@ impl Scheduler {
                 let copied = target.heap.deep_copy(&message, &source.heap);
                 target.mailbox.push_back(copied);
 
-                // NOTE: We do NOT set state to Running here. That's done atomically
-                // by execute_process when a worker claims this process.
-                // This prevents race conditions where multiple workers try to execute
-                // the same process (e.g., when both timer and message wake it).
+                // Wake up the target if it was waiting for a message
+                if target.state == ProcessState::Waiting {
+                    target.state = ProcessState::Running;
+                } else if target.state == ProcessState::WaitingTimeout {
+                    target.state = ProcessState::Running;
+                    // Keep wake_time/timeout_dst - ReceiveTimeout will clear them when it gets the message
+                }
 
                 drop(first_lock);
                 drop(second_lock);
