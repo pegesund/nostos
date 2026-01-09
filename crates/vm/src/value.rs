@@ -523,6 +523,42 @@ pub enum Instruction {
     /// Get type of value: dst = typeof(value)
     TypeOf(Reg, Reg),
 
+    // === Builtin math (compile-time resolved, no runtime dispatch) ===
+    /// Absolute value: dst = abs(src) for Int
+    AbsInt(Reg, Reg),
+    /// Absolute value: dst = abs(src) for Float
+    AbsFloat(Reg, Reg),
+    /// Square root: dst = sqrt(src) for Float
+    SqrtFloat(Reg, Reg),
+
+    // === Type conversions (compile-time resolved) ===
+    /// Int to Float: dst = toFloat(src)
+    IntToFloat(Reg, Reg),
+    /// Float to Int: dst = toInt(src)
+    FloatToInt(Reg, Reg),
+
+    // === List operations (compile-time resolved) ===
+    /// Head of list: dst = head(list)
+    ListHead(Reg, Reg),
+    /// Tail of list: dst = tail(list)
+    ListTail(Reg, Reg),
+    /// Is list empty: dst = isEmpty(list)
+    ListIsEmpty(Reg, Reg),
+
+    // === IO/Debug builtins ===
+    /// Print value, return string representation: dst = print(value)
+    Print(Reg, Reg),
+    /// Print value with newline, return unit: println(value)
+    Println(Reg),
+    /// Panic with message
+    Panic(Reg),
+
+    // === Assertions ===
+    /// Assert value is true
+    Assert(Reg),
+    /// Assert two values are equal
+    AssertEq(Reg, Reg),
+
     // === Debug ===
     /// No operation (for alignment/debugging)
     Nop,

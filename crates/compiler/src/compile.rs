@@ -113,6 +113,14 @@ impl CompileError {
     }
 }
 
+/// Simple type inference for builtin dispatch.
+/// We infer types from literals and some expressions to emit typed instructions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum InferredType {
+    Int,
+    Float,
+}
+
 /// Compilation context.
 pub struct Compiler {
     /// Current function being compiled
@@ -1233,16 +1241,108 @@ impl Compiler {
         }
 
         if let Some(qualified_name) = maybe_qualified_name {
-            // Check for native functions (only simple names)
-            let native_names = ["println", "print", "length", "head", "tail", "isEmpty",
-                              "show", "copy", "toInt", "toFloat", "abs", "sqrt", "panic", "assert", "assert_eq", "typeOf",
-                              "readFile", "writeFile", "appendFile", "fileExists", "readLine", "getArgs", "getEnv"];
-
-            if !qualified_name.contains('.') && native_names.contains(&qualified_name.as_str()) {
-                let dst = self.alloc_reg();
-                let name_idx = self.chunk.add_constant(Value::String(Rc::new(qualified_name)));
-                self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
-                return Ok(dst);
+            // Compile-time resolved builtins - no string lookup, no HashMap, no runtime dispatch!
+            if !qualified_name.contains('.') {
+                match qualified_name.as_str() {
+                    // === Type-agnostic builtins (no runtime dispatch needed) ===
+                    "println" if arg_regs.len() == 1 => {
+                        self.chunk.emit(Instruction::Println(arg_regs[0]), 0);
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::LoadUnit(dst), 0);
+                        return Ok(dst);
+                    }
+                    "print" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::Print(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "head" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ListHead(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "tail" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ListTail(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "isEmpty" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::ListIsEmpty(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "length" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::Length(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "panic" if arg_regs.len() == 1 => {
+                        self.chunk.emit(Instruction::Panic(arg_regs[0]), 0);
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::LoadUnit(dst), 0);
+                        return Ok(dst);
+                    }
+                    "assert" if arg_regs.len() == 1 => {
+                        self.chunk.emit(Instruction::Assert(arg_regs[0]), 0);
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::LoadUnit(dst), 0);
+                        return Ok(dst);
+                    }
+                    "assert_eq" if arg_regs.len() == 2 => {
+                        self.chunk.emit(Instruction::AssertEq(arg_regs[0], arg_regs[1]), 0);
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::LoadUnit(dst), 0);
+                        return Ok(dst);
+                    }
+                    "typeOf" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::TypeOf(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    // === Math builtins (type-aware - use typed instruction if we can infer type) ===
+                    "abs" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        // Check if we can infer type from the argument expression
+                        let arg_type = self.infer_expr_type(&args[0]);
+                        match arg_type {
+                            Some(InferredType::Int) => {
+                                self.chunk.emit(Instruction::AbsInt(dst, arg_regs[0]), 0);
+                            }
+                            Some(InferredType::Float) => {
+                                self.chunk.emit(Instruction::AbsFloat(dst, arg_regs[0]), 0);
+                            }
+                            None => {
+                                // Fallback: emit AbsInt (type checker should have validated)
+                                // In practice, abs is usually called on Int
+                                self.chunk.emit(Instruction::AbsInt(dst, arg_regs[0]), 0);
+                            }
+                        }
+                        return Ok(dst);
+                    }
+                    "sqrt" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::SqrtFloat(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "toFloat" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::IntToFloat(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    "toInt" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::FloatToInt(dst, arg_regs[0]), 0);
+                        return Ok(dst);
+                    }
+                    // === Dynamic builtins (trait-based, keep CallNative for now) ===
+                    "show" | "copy" => {
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Rc::new(qualified_name)));
+                        self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs.into()), 0);
+                        return Ok(dst);
+                    }
+                    _ => {} // Fall through to normal function lookup
+                }
             }
 
             // Resolve the name (handles imports and module path)
@@ -2121,6 +2221,52 @@ impl Compiler {
         let type_idx = self.chunk.add_constant(Value::String(Rc::new(type_name.to_string())));
         self.chunk.emit(Instruction::UpdateRecord(dst, base_reg, type_idx, field_regs.into()), 0);
         Ok(dst)
+    }
+
+    /// Simple type inference from expression for builtin dispatch.
+    /// Returns Some(type) if we can determine the type from the expression,
+    /// None if we can't (would need full type system integration).
+    fn infer_expr_type(&self, expr: &Expr) -> Option<InferredType> {
+        match expr {
+            // Literals have known types
+            Expr::Int(_, _) => Some(InferredType::Int),
+            Expr::Float(_, _) => Some(InferredType::Float),
+
+            // Negation preserves type
+            Expr::UnaryOp(UnaryOp::Neg, inner, _) => self.infer_expr_type(inner),
+
+            // Binary arithmetic: both operands should have same type
+            Expr::BinOp(left, op, _, _) if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod) => {
+                self.infer_expr_type(left)
+            }
+
+            // Variable: check if we know its type
+            Expr::Var(ident) => {
+                self.local_types.get(&ident.node).and_then(|t| {
+                    match t.as_str() {
+                        "Int" => Some(InferredType::Int),
+                        "Float" => Some(InferredType::Float),
+                        _ => None,
+                    }
+                })
+            }
+
+            // Tuple with single element (parenthesized)
+            Expr::Tuple(items, _) if items.len() == 1 => self.infer_expr_type(&items[0]),
+
+            // Block: type of last statement if it's an expression
+            Expr::Block(stmts, _) => {
+                stmts.last().and_then(|stmt| {
+                    match stmt {
+                        Stmt::Expr(e) => self.infer_expr_type(e),
+                        _ => None,
+                    }
+                })
+            }
+
+            // Other cases: can't infer without full type system
+            _ => None,
+        }
     }
 
     /// Allocate a new register.
