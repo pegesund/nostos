@@ -1885,6 +1885,43 @@ impl Compiler {
         best_match.map(|(name, _)| name)
     }
 
+    /// Check if a function with the given base name exists (with any arity).
+    /// Returns Some(set of arities) if found, None if no such function exists.
+    fn find_all_function_arities(&self, base_name: &str) -> Option<std::collections::HashSet<usize>> {
+        let prefix = format!("{}/", base_name);
+        let mut arities = std::collections::HashSet::new();
+
+        // Check compiled functions
+        for key in self.functions.keys() {
+            if let Some(suffix) = key.strip_prefix(&prefix) {
+                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                arities.insert(param_count);
+            }
+        }
+
+        // Check fn_asts (for functions being compiled or not yet compiled)
+        for key in self.fn_asts.keys() {
+            if let Some(suffix) = key.strip_prefix(&prefix) {
+                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                arities.insert(param_count);
+            }
+        }
+
+        // Check if current function matches
+        if let Some(current) = &self.current_function_name {
+            if let Some(suffix) = current.strip_prefix(&prefix) {
+                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                arities.insert(param_count);
+            }
+        }
+
+        if arities.is_empty() {
+            None
+        } else {
+            Some(arities)
+        }
+    }
+
     /// Find the implementation of a trait method for a given type.
     pub fn find_trait_method(&self, type_name: &str, method_name: &str) -> Option<String> {
         // Look through all traits this type implements
@@ -4042,6 +4079,24 @@ impl Compiler {
             let call_name = if let Some(resolved) = self.resolve_function_call(&resolved_name, &arg_types) {
                 resolved
             } else {
+                // No matching function found for this arity/types.
+                // Check if the function exists with a different arity - if so, report arity mismatch.
+                // Only report arity error if ALL variants of the function have different arity.
+                let call_arity = arg_types.len();
+                if let Some(arities) = self.find_all_function_arities(&resolved_name) {
+                    if !arities.contains(&call_arity) {
+                        // Function exists but not with this arity - report arity mismatch
+                        let expected_arity = arities.into_iter().next().unwrap_or(0);
+                        return Err(CompileError::ArityMismatch {
+                            name: resolved_name.clone(),
+                            expected: expected_arity,
+                            found: call_arity,
+                            span: func.span(),
+                        });
+                    }
+                    // Function exists with matching arity but types don't match
+                    // Fall through to wildcard resolution
+                }
                 // Fall back to trying with all wildcards (for backward compatibility)
                 let wildcard_sig = vec!["_".to_string(); arg_types.len()].join(",");
                 format!("{}/{}", resolved_name, wildcard_sig)
@@ -10542,5 +10597,61 @@ mod tests {
     #[test]
     fn test_type_060_char_type_valid() {
         expect_success("f(c: Char) = c\nmain() = f('a')");
+    }
+
+    // -------------------------------------------------------------------------
+    // Arity Mismatch Tests - Ensure wrong number of arguments is caught
+    // -------------------------------------------------------------------------
+
+    /// Helper to check that source code fails with an arity mismatch error
+    fn expect_arity_error(source: &str) {
+        let (module_opt, errors) = nostos_syntax::parser::parse(source);
+        if !errors.is_empty() {
+            panic!("Expected arity error, but got parse errors: {:?}", errors);
+        }
+        let module = module_opt.expect("Expected module from parse");
+        let result = compile_module(&module, source);
+        match result {
+            Err(CompileError::ArityMismatch { name, expected, found, .. }) => {
+                // This is what we want - arity mismatch was detected
+                assert!(true, "Got expected arity error: {} expected {} args, got {}", name, expected, found);
+            }
+            Err(other) => {
+                panic!("Expected ArityMismatch error, got different error: {:?}", other);
+            }
+            Ok(_) => {
+                panic!("Expected arity error, but code compiled successfully");
+            }
+        }
+    }
+
+    #[test]
+    fn test_arity_001_too_many_args() {
+        // foo() takes 0 args but is called with 1
+        expect_arity_error("foo() = 42\nmain() = foo(\"extra\")");
+    }
+
+    #[test]
+    fn test_arity_002_too_few_args() {
+        // foo(x) takes 1 arg but is called with 0
+        expect_arity_error("foo(x) = x + 1\nmain() = foo()");
+    }
+
+    #[test]
+    fn test_arity_003_extra_arg_in_nested_call() {
+        // bar() calls foo with wrong arity
+        expect_arity_error("foo() = 42\nbar() = foo(\"string\")\nmain() = bar()");
+    }
+
+    #[test]
+    fn test_arity_004_multiple_extra_args() {
+        // foo() takes 0 args but is called with 3
+        expect_arity_error("foo() = 42\nmain() = foo(1, 2, 3)");
+    }
+
+    #[test]
+    fn test_arity_005_one_arg_vs_two() {
+        // foo(x) takes 1 arg but is called with 2
+        expect_arity_error("foo(x) = x\nmain() = foo(1, 2)");
     }
 }
