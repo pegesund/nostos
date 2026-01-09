@@ -70,6 +70,6 @@ listShow() = {
 listInit() = {
     listPanelId = Panel.create("List Demo")
     Panel.onKey(listPanelId, "demo.list.listHandleKey")
-    Panel.registerHotkey("alt+l", "demo.list.listShow")
-    "List demo ready. Press Alt+L to open."
+    Panel.registerHotkey("alt+t", "demo.list.listShow")
+    "List demo ready. Press Alt+T to open."
 }
