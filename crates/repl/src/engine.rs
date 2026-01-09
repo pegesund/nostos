@@ -3025,6 +3025,8 @@ impl ReplEngine {
     /// This is used for live compile status in the editor
     pub fn check_module_compiles(&self, module_name: &str, content: &str) -> Result<(), String> {
         use nostos_syntax::{parse, parse_errors_to_source_errors, offset_to_line_col};
+        use nostos_syntax::ast::{Expr, Item, Stmt, DoStmt, TypeBody};
+        use nostos_compiler::Compiler;
 
         // First do a quick parse check
         let (module_opt, errors) = parse(content);
@@ -3039,14 +3041,281 @@ impl ReplEngine {
             return Err("Parse error".to_string());
         }
 
-        if module_opt.is_none() {
-            return Err("Failed to parse module".to_string());
+        let module = match module_opt {
+            Some(m) => m,
+            None => return Err("Failed to parse module".to_string()),
+        };
+
+        // Build set of known function base names (without signature suffix)
+        let mut known_functions: HashSet<String> = HashSet::new();
+
+        // Add builtins
+        for name in Compiler::get_builtin_names() {
+            known_functions.insert(name.to_string());
         }
 
-        // For now, just check parsing - full type checking would require
-        // cloning the compiler state which is expensive
-        // TODO: Add lightweight type checking if needed
-        let _ = module_name; // Silence unused warning for now
+        // Add user-defined functions from compiler (strip signature suffix)
+        for name in self.compiler.get_function_names() {
+            // Functions are stored as "name/signature", extract base name
+            if let Some(base) = name.split('/').next() {
+                known_functions.insert(base.to_string());
+            }
+        }
+
+        // Add types as they can be used as constructors
+        for type_name in self.compiler.get_type_names() {
+            known_functions.insert(type_name.to_string());
+        }
+
+        // Add functions defined in this module being checked
+        for item in &module.items {
+            if let Item::FnDef(fn_def) = item {
+                let fn_name = if module_name.is_empty() {
+                    fn_def.name.node.clone()
+                } else {
+                    format!("{}.{}", module_name, fn_def.name.node)
+                };
+                known_functions.insert(fn_name);
+                // Also add unqualified name for local calls
+                known_functions.insert(fn_def.name.node.clone());
+            }
+            if let Item::TypeDef(type_def) = item {
+                let type_name = if module_name.is_empty() {
+                    type_def.name.node.clone()
+                } else {
+                    format!("{}.{}", module_name, type_def.name.node)
+                };
+                known_functions.insert(type_name);
+                known_functions.insert(type_def.name.node.clone());
+                // Add variant constructors from variant types
+                if let TypeBody::Variant(variants) = &type_def.body {
+                    for variant in variants {
+                        known_functions.insert(variant.name.node.clone());
+                    }
+                }
+            }
+        }
+
+        // Helper to extract function name from call expression
+        fn get_call_name(expr: &Expr) -> Option<String> {
+            match expr {
+                Expr::Var(ident) => Some(ident.node.clone()),
+                Expr::FieldAccess(base, field, _) => {
+                    // Module.function pattern
+                    if let Expr::Var(module_ident) = base.as_ref() {
+                        Some(format!("{}.{}", module_ident.node, field.node))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        }
+
+        // Collect all function calls from a statement
+        fn collect_calls_stmt(stmt: &Stmt, calls: &mut Vec<(String, usize)>) {
+            match stmt {
+                Stmt::Expr(expr) => collect_calls(expr, calls),
+                Stmt::Let(binding) => collect_calls(&binding.value, calls),
+                Stmt::Assign(_, expr, _) => collect_calls(expr, calls),
+            }
+        }
+
+        // Collect all function calls from an expression
+        fn collect_calls(expr: &Expr, calls: &mut Vec<(String, usize)>) {
+            match expr {
+                Expr::Call(callee, _, args, span) => {
+                    if let Some(name) = get_call_name(callee) {
+                        calls.push((name, span.start));
+                    }
+                    collect_calls(callee, calls);
+                    for arg in args {
+                        collect_calls(arg, calls);
+                    }
+                }
+                Expr::MethodCall(receiver, _method, args, _) => {
+                    // Method calls are UFCS, so Type.method(receiver) should work
+                    // We'll trust method calls as they depend on runtime type
+                    collect_calls(receiver, calls);
+                    for arg in args {
+                        collect_calls(arg, calls);
+                    }
+                }
+                Expr::BinOp(left, _, right, _) => {
+                    collect_calls(left, calls);
+                    collect_calls(right, calls);
+                }
+                Expr::UnaryOp(_, operand, _) => {
+                    collect_calls(operand, calls);
+                }
+                Expr::If(cond, then_branch, else_branch, _) => {
+                    collect_calls(cond, calls);
+                    collect_calls(then_branch, calls);
+                    collect_calls(else_branch, calls);
+                }
+                Expr::Match(scrutinee, arms, _) => {
+                    collect_calls(scrutinee, calls);
+                    for arm in arms {
+                        if let Some(guard) = &arm.guard {
+                            collect_calls(guard, calls);
+                        }
+                        collect_calls(&arm.body, calls);
+                    }
+                }
+                Expr::Block(stmts, _) => {
+                    for stmt in stmts {
+                        collect_calls_stmt(stmt, calls);
+                    }
+                }
+                Expr::Lambda(_, body, _) => {
+                    collect_calls(body, calls);
+                }
+                Expr::Tuple(exprs, _) => {
+                    for e in exprs {
+                        collect_calls(e, calls);
+                    }
+                }
+                Expr::List(exprs, spread, _) => {
+                    for e in exprs {
+                        collect_calls(e, calls);
+                    }
+                    if let Some(s) = spread {
+                        collect_calls(s, calls);
+                    }
+                }
+                Expr::Map(pairs, _) => {
+                    for (k, v) in pairs {
+                        collect_calls(k, calls);
+                        collect_calls(v, calls);
+                    }
+                }
+                Expr::Set(exprs, _) => {
+                    for e in exprs {
+                        collect_calls(e, calls);
+                    }
+                }
+                Expr::Record(_, fields, _) => {
+                    for field in fields {
+                        match field {
+                            nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls),
+                            nostos_syntax::ast::RecordField::Named(_, expr) => collect_calls(expr, calls),
+                        }
+                    }
+                }
+                Expr::RecordUpdate(_, base, fields, _) => {
+                    collect_calls(base, calls);
+                    for field in fields {
+                        match field {
+                            nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls),
+                            nostos_syntax::ast::RecordField::Named(_, expr) => collect_calls(expr, calls),
+                        }
+                    }
+                }
+                Expr::FieldAccess(base, _, _) => {
+                    collect_calls(base, calls);
+                }
+                Expr::Index(base, index, _) => {
+                    collect_calls(base, calls);
+                    collect_calls(index, calls);
+                }
+                Expr::Try(try_expr, catch_arms, finally_expr, _) => {
+                    collect_calls(try_expr, calls);
+                    for arm in catch_arms {
+                        if let Some(guard) = &arm.guard {
+                            collect_calls(guard, calls);
+                        }
+                        collect_calls(&arm.body, calls);
+                    }
+                    if let Some(f) = finally_expr {
+                        collect_calls(f, calls);
+                    }
+                }
+                Expr::Try_(inner, _) => {
+                    collect_calls(inner, calls);
+                }
+                Expr::While(cond, body, _) => {
+                    collect_calls(cond, calls);
+                    collect_calls(body, calls);
+                }
+                Expr::For(_, start, end, body, _) => {
+                    collect_calls(start, calls);
+                    collect_calls(end, calls);
+                    collect_calls(body, calls);
+                }
+                Expr::Do(stmts, _) => {
+                    for stmt in stmts {
+                        match stmt {
+                            DoStmt::Bind(_, expr) => collect_calls(expr, calls),
+                            DoStmt::Expr(expr) => collect_calls(expr, calls),
+                        }
+                    }
+                }
+                Expr::Send(target, msg, _) => {
+                    collect_calls(target, calls);
+                    collect_calls(msg, calls);
+                }
+                Expr::Receive(arms, timeout, _) => {
+                    for arm in arms {
+                        if let Some(guard) = &arm.guard {
+                            collect_calls(guard, calls);
+                        }
+                        collect_calls(&arm.body, calls);
+                    }
+                    if let Some((timeout_expr, timeout_body)) = timeout {
+                        collect_calls(timeout_expr, calls);
+                        collect_calls(timeout_body, calls);
+                    }
+                }
+                Expr::Spawn(_, callee, args, _) => {
+                    collect_calls(callee, calls);
+                    for arg in args {
+                        collect_calls(arg, calls);
+                    }
+                }
+                Expr::Break(Some(expr), _) => {
+                    collect_calls(expr, calls);
+                }
+                Expr::Quote(inner, _) => {
+                    collect_calls(inner, calls);
+                }
+                Expr::Splice(inner, _) => {
+                    collect_calls(inner, calls);
+                }
+                // Literals and simple expressions - no calls
+                _ => {}
+            }
+        }
+
+        // Collect calls from all function definitions
+        let mut all_calls = Vec::new();
+        for item in &module.items {
+            if let Item::FnDef(fn_def) = item {
+                for clause in &fn_def.clauses {
+                    collect_calls(&clause.body, &mut all_calls);
+                }
+            }
+            if let Item::Binding(binding) = item {
+                collect_calls(&binding.value, &mut all_calls);
+            }
+        }
+
+        // Validate all calls
+        for (call_name, offset) in all_calls {
+            // Skip if it's a known function
+            if known_functions.contains(&call_name) {
+                continue;
+            }
+
+            // Check if it might be a local variable (not a function call error)
+            // Simple heuristic: if it doesn't contain a dot and isn't capitalized, might be a variable
+            if !call_name.contains('.') && call_name.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) {
+                continue;
+            }
+
+            // Unknown function
+            let (line, _col) = offset_to_line_col(content, offset);
+            return Err(format!("line {}: unknown function `{}`", line, call_name));
+        }
 
         Ok(())
     }
