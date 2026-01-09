@@ -1,0 +1,54 @@
+# expect: 0
+# Test custom trait method dispatch in generic functions
+
+trait Describable
+    describe(self) -> String
+end
+
+trait Sizeable
+    size(self) -> Int
+end
+
+type Dog = { name: String }
+type Cat = { name: String }
+type Box = { width: Int, height: Int }
+
+Dog: Describable
+    describe(self) = "Dog: " ++ self.name
+end
+
+Cat: Describable
+    describe(self) = "Cat: " ++ self.name
+end
+
+Box: Sizeable
+    size(self) = self.width * self.height
+end
+
+# Generic function that calls custom trait method on type parameter
+describeIt[T: Describable](x: T) -> String = x.describe()
+
+# Another generic function with different trait
+getSize[T: Sizeable](x: T) -> Int = x.size()
+
+# Generic function that uses result of trait method
+describeWithPrefix[T: Describable](x: T, prefix: String) -> String =
+    prefix ++ ": " ++ x.describe()
+
+main() = {
+    dog = Dog("Rex")
+    cat = Cat("Whiskers")
+    box = Box(10, 5)
+
+    # Basic trait method dispatch
+    assert_eq("Dog: Rex", describeIt(dog))
+    assert_eq("Cat: Whiskers", describeIt(cat))
+
+    # Different trait
+    assert_eq(50, getSize(box))
+
+    # Trait method used in expression
+    assert_eq("Pet: Dog: Rex", describeWithPrefix(dog, "Pet"))
+
+    0
+}

@@ -1,0 +1,40 @@
+# Built-in Traits
+#
+# These traits are automatically implemented for primitive types.
+# The compiler emits optimized instructions for primitives, but these
+# definitions document the trait interface and enable trait bounds.
+
+# Equality comparison
+trait Eq
+    eq(self, other: Self) -> Bool
+end
+
+# Ordering comparison (lexicographic for String, numeric for numbers)
+trait Ord
+    lt(self, other: Self) -> Bool
+    lte(self, other: Self) -> Bool
+    gt(self, other: Self) -> Bool
+    gte(self, other: Self) -> Bool
+end
+
+# Numeric operations
+trait Num
+    add(self, other: Self) -> Self
+    sub(self, other: Self) -> Self
+    mul(self, other: Self) -> Self
+    div(self, other: Self) -> Self
+end
+
+# Convert to string representation
+trait Show
+    show(self) -> String
+end
+
+# Hashable values (for Map/Set keys)
+trait Hash
+    hash(self) -> Int
+end
+
+# Copyable values (can be duplicated)
+trait Copy
+end

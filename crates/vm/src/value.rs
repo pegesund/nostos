@@ -785,6 +785,10 @@ pub enum Instruction {
 
     EqBool(Reg, Reg, Reg),
     EqStr(Reg, Reg, Reg),
+    LtStr(Reg, Reg, Reg),       // String lexicographic comparison
+    LeStr(Reg, Reg, Reg),
+    GtStr(Reg, Reg, Reg),
+    GeStr(Reg, Reg, Reg),
 
     /// Generic equality (for variants, records)
     Eq(Reg, Reg, Reg),

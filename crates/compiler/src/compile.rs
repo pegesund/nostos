@@ -1943,6 +1943,34 @@ impl Compiler {
         Self::is_small_int_type_name(ty) || Self::is_bigint_type_name(ty)
     }
 
+    /// Check if an expression is of String type.
+    fn is_string_expr(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::String(_, _) => true,
+            Expr::Var(ident) => {
+                // Check local_types for String type
+                if let Some(ty) = self.local_types.get(&ident.node) {
+                    return ty == "String";
+                }
+                // Check param_types for function parameters
+                if let Some(ty) = self.param_types.get(&ident.node) {
+                    return ty == "String";
+                }
+                false
+            }
+            Expr::Call(func, _, _, _) => {
+                // Check return type of function calls
+                if let Expr::Var(ident) = func.as_ref() {
+                    if let Some(ret_type) = self.get_function_return_type(&ident.node) {
+                        return ret_type == "String";
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
     fn is_float_expr(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Float(_, _) | Expr::Float32(_, _) => true,
@@ -3098,7 +3126,23 @@ impl Compiler {
 
     /// Check if a trait is a built-in derivable trait.
     fn is_builtin_derivable_trait(&self, name: &str) -> bool {
-        matches!(name, "Hash" | "Show" | "Copy" | "Eq")
+        matches!(name, "Hash" | "Show" | "Copy" | "Eq" | "Num" | "Ord")
+    }
+
+    /// Check if a type is a numeric type that implements Num trait.
+    fn is_numeric_type(type_name: &str) -> bool {
+        matches!(type_name,
+            "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
+            "UInt8" | "UInt16" | "UInt32" | "UInt64" |
+            "Float" | "Float32" | "Float64" |
+            "BigInt" | "Decimal"
+        )
+    }
+
+    /// Check if a type is an orderable type that implements Ord trait.
+    fn is_orderable_type(type_name: &str) -> bool {
+        // All numeric types, Char (code point comparison), and String (lexicographic comparison)
+        Self::is_numeric_type(type_name) || matches!(type_name, "Char" | "String")
     }
 
     /// Compile a trait implementation.
@@ -3625,7 +3669,11 @@ impl Compiler {
                         ("Show", "show") => true,
                         ("Hash", "hash") => true,
                         ("Copy", "copy") => true,
-                        ("Eq", "==") => true,
+                        ("Eq", "==") | ("Eq", "eq") | ("Eq", "neq") => true,
+                        // Num trait methods (arithmetic operations)
+                        ("Num", "add") | ("Num", "sub") | ("Num", "mul") | ("Num", "div") => true,
+                        // Ord trait methods (comparison operations)
+                        ("Ord", "lt") | ("Ord", "gt") | ("Ord", "lte") | ("Ord", "gte") => true,
                         _ => false,
                     }
                 } else if let Some(trait_info) = self.trait_defs.get(trait_name) {
@@ -3640,7 +3688,37 @@ impl Compiler {
                 }
             }
         }
+
+        // Check if type_name is a type parameter with trait bounds that provide this method
+        for type_param in &self.current_fn_type_params {
+            if type_param.name.node == type_name {
+                for constraint in &type_param.constraints {
+                    let trait_name = &constraint.node;
+                    // Check if this trait has the method
+                    if let Some(trait_info) = self.trait_defs.get(trait_name) {
+                        if trait_info.methods.iter().any(|m| m.name == method_name) {
+                            // Return a placeholder name using the type parameter
+                            // During monomorphization, this will be resolved to the concrete type's method
+                            return Some(format!("{}.{}.{}", type_name, trait_name, method_name));
+                        }
+                    }
+                    // Also try with qualified trait name (in case trait is from another module)
+                    let qualified_trait = self.qualify_name(trait_name);
+                    if let Some(trait_info) = self.trait_defs.get(&qualified_trait) {
+                        if trait_info.methods.iter().any(|m| m.name == method_name) {
+                            return Some(format!("{}.{}.{}", type_name, qualified_trait, method_name));
+                        }
+                    }
+                }
+            }
+        }
+
         None
+    }
+
+    /// Check if a type name is a type parameter in the current function.
+    fn is_current_type_param(&self, type_name: &str) -> bool {
+        self.current_fn_type_params.iter().any(|tp| tp.name.node == type_name)
     }
 
     /// Check if a method name belongs to any trait.
@@ -3715,6 +3793,16 @@ impl Compiler {
         // Hash, Show, Eq, and Copy are now built-in for ALL types
         if matches!(trait_name, "Hash" | "Show" | "Eq" | "Copy") {
             return Some(trait_name.to_string());
+        }
+
+        // Num is built-in for numeric types
+        if trait_name == "Num" && Self::is_numeric_type(type_name) {
+            return Some("Num".to_string());
+        }
+
+        // Ord is built-in for orderable types
+        if trait_name == "Ord" && Self::is_orderable_type(type_name) {
+            return Some("Ord".to_string());
         }
 
         // Check if the type has an explicit trait implementation
@@ -6760,6 +6848,16 @@ impl Compiler {
                                 self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
                                 return Ok(dst);
                             }
+                        } else if self.is_current_type_param(&type_name) {
+                            // This is a trait method on a type parameter.
+                            // The concrete function doesn't exist yet - return an error
+                            // that will mark this function as needing monomorphization.
+                            // During monomorphization, the type parameter will be replaced
+                            // with a concrete type and the method will resolve correctly.
+                            return Err(CompileError::UnresolvedTraitMethod {
+                                method: format!("{}.{}", type_name, method.node),
+                                span: method.span,
+                            });
                         }
                     }
                 } else {
@@ -7330,6 +7428,24 @@ impl Compiler {
         // dispatch to the trait method instead of using primitive VM instructions
         if let Some((trait_name, method_name)) = Self::operator_to_trait_method(op) {
             if let Some(left_type) = self.expr_type_name(left) {
+                // Check if left_type is a type parameter with the appropriate trait bound
+                // If so, this function needs monomorphization - return error to trigger marking
+                if self.is_current_type_param(&left_type) {
+                    // Verify the type parameter has the required trait bound
+                    for type_param in &self.current_fn_type_params {
+                        if type_param.name.node == left_type {
+                            let has_bound = type_param.constraints.iter()
+                                .any(|c| c.node == trait_name);
+                            if has_bound {
+                                return Err(CompileError::UnresolvedTraitMethod {
+                                    method: format!("{}.{}", trait_name, method_name),
+                                    span: left.span(),
+                                });
+                            }
+                        }
+                    }
+                }
+
                 // Only dispatch to trait methods for non-primitive custom types
                 if !Self::is_primitive_type(&left_type) && self.types.contains_key(&left_type) {
                     // Check if the type implements the trait and get the actual registered trait name
@@ -7428,6 +7544,7 @@ impl Compiler {
         let right_is_bigint = self.is_bigint_expr(right);
         let is_float = left_is_float || right_is_float;
         let is_bigint = left_is_bigint || right_is_bigint;
+        let is_string = self.is_string_expr(left) || self.is_string_expr(right);
 
         // Compile-time coercion: if one side is float and the other is an int literal,
         // compile the int literal directly as a float constant (no runtime conversion needed)
@@ -7569,30 +7686,38 @@ impl Compiler {
                 return Ok(dst);
             }
             BinOp::Lt => {
-                if is_float {
+                if is_string {
+                    Instruction::LtStr(dst, left_reg, right_reg)
+                } else if is_float {
                     Instruction::LtFloat(dst, left_reg, right_reg)
                 } else {
                     Instruction::LtInt(dst, left_reg, right_reg)
                 }
             }
             BinOp::LtEq => {
-                if is_float {
+                if is_string {
+                    Instruction::LeStr(dst, left_reg, right_reg)
+                } else if is_float {
                     Instruction::LeFloat(dst, left_reg, right_reg)
                 } else {
                     Instruction::LeInt(dst, left_reg, right_reg)
                 }
             }
             BinOp::Gt => {
-                // Gt is Lt with args swapped
-                if is_float {
+                if is_string {
+                    Instruction::GtStr(dst, left_reg, right_reg)
+                } else if is_float {
+                    // Gt is Lt with args swapped
                     Instruction::LtFloat(dst, right_reg, left_reg)
                 } else {
                     Instruction::GtInt(dst, left_reg, right_reg)
                 }
             }
             BinOp::GtEq => {
-                // GtEq is LeEq with args swapped
-                if is_float {
+                if is_string {
+                    Instruction::GeStr(dst, left_reg, right_reg)
+                } else if is_float {
+                    // GtEq is LeEq with args swapped
                     Instruction::LeFloat(dst, right_reg, left_reg)
                 } else {
                     Instruction::GeInt(dst, left_reg, right_reg)

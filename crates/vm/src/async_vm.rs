@@ -4100,6 +4100,54 @@ impl AsyncProcess {
                 set_reg!(dst, GcValue::Bool(equal));
             }
 
+            LtStr(dst, a, b) => {
+                let str_a = match reg!(a) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|x| x.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::Panic("LtStr: expected String".into())),
+                };
+                let str_b = match reg!(b) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|x| x.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::Panic("LtStr: expected String".into())),
+                };
+                set_reg!(dst, GcValue::Bool(str_a < str_b));
+            }
+
+            LeStr(dst, a, b) => {
+                let str_a = match reg!(a) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|x| x.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::Panic("LeStr: expected String".into())),
+                };
+                let str_b = match reg!(b) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|x| x.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::Panic("LeStr: expected String".into())),
+                };
+                set_reg!(dst, GcValue::Bool(str_a <= str_b));
+            }
+
+            GtStr(dst, a, b) => {
+                let str_a = match reg!(a) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|x| x.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::Panic("GtStr: expected String".into())),
+                };
+                let str_b = match reg!(b) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|x| x.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::Panic("GtStr: expected String".into())),
+                };
+                set_reg!(dst, GcValue::Bool(str_a > str_b));
+            }
+
+            GeStr(dst, a, b) => {
+                let str_a = match reg!(a) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|x| x.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::Panic("GeStr: expected String".into())),
+                };
+                let str_b = match reg!(b) {
+                    GcValue::String(ptr) => self.heap.get_string(ptr).map(|x| x.data.clone()).unwrap_or_default(),
+                    _ => return Err(RuntimeError::Panic("GeStr: expected String".into())),
+                };
+                set_reg!(dst, GcValue::Bool(str_a >= str_b));
+            }
+
             EqBool(dst, a, b) => {
                 let va = match reg!(a) { GcValue::Bool(b) => b, _ => return Err(RuntimeError::Panic("EqBool: expected Bool".into())) };
                 let vb = match reg!(b) { GcValue::Bool(b) => b, _ => return Err(RuntimeError::Panic("EqBool: expected Bool".into())) };

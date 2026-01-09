@@ -1,0 +1,49 @@
+# expect: 0
+# Test String Ord trait - lexicographic comparison
+
+# Generic max function with Ord bound
+maxOf[T: Ord](a: T, b: T) -> T = if a > b then a else b
+
+# Generic min function with Ord bound
+minOf[T: Ord](a: T, b: T) -> T = if a < b then a else b
+
+main() = {
+    # Direct string comparisons
+    assert_eq(true, "apple" < "banana")
+    assert_eq(false, "banana" < "apple")
+    assert_eq(true, "aaa" < "aab")
+    assert_eq(true, "a" < "aa")
+
+    assert_eq(true, "banana" > "apple")
+    assert_eq(false, "apple" > "banana")
+
+    assert_eq(true, "apple" <= "apple")
+    assert_eq(true, "apple" <= "banana")
+    assert_eq(false, "banana" <= "apple")
+
+    assert_eq(true, "apple" >= "apple")
+    assert_eq(true, "banana" >= "apple")
+    assert_eq(false, "apple" >= "banana")
+
+    # String variables
+    s1 = "cat"
+    s2 = "dog"
+    assert_eq(true, s1 < s2)
+    assert_eq(false, s1 > s2)
+    assert_eq(true, s1 <= s2)
+    assert_eq(false, s1 >= s2)
+
+    # Generic max/min with strings
+    assert_eq("dog", maxOf("cat", "dog"))
+    assert_eq("cat", minOf("cat", "dog"))
+    assert_eq("zebra", maxOf("apple", "zebra"))
+    assert_eq("apple", minOf("apple", "zebra"))
+
+    # Edge cases
+    assert_eq(true, "" < "a")
+    assert_eq(false, "" > "a")
+    assert_eq(true, "" <= "")
+    assert_eq(true, "" >= "")
+
+    0
+}
