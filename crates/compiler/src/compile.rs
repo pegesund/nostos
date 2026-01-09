@@ -7594,29 +7594,30 @@ impl Compiler {
                     }
                     visited.insert(callee.clone());
 
-                    // Check if callee accesses the same mvar
+                    // Check mvar access patterns for deadlocks
+                    // RwLock semantics: multiple readers OK, writer needs exclusive access
+                    // Since locks are held for entire function duration:
+                    // - Caller READS + Callee READS -> Safe (multiple readers allowed)
+                    // - Caller WRITES + Callee READS/WRITES -> Unsafe (writer blocks all)
+                    // - Caller READS + Callee WRITES -> Unsafe (reader blocks writer)
                     if let Some(callee_access) = self.fn_mvar_access.get(&callee) {
-                        let callee_accesses_mvar = callee_access.reads.contains(mvar)
-                            || callee_access.writes.contains(mvar);
+                        let caller_writes = fn_access.writes.contains(mvar);
+                        let callee_reads = callee_access.reads.contains(mvar);
+                        let callee_writes = callee_access.writes.contains(mvar);
 
-                        if callee_accesses_mvar {
-                            let caller_access = if fn_access.writes.contains(mvar) {
-                                "writes to"
-                            } else {
-                                "reads"
-                            };
-                            let callee_access_type = if callee_access.writes.contains(mvar) {
-                                "writes to"
-                            } else {
-                                "reads"
-                            };
+                        // Only safe case: both caller and callee only READ
+                        let is_unsafe = caller_writes || callee_writes;
+
+                        if is_unsafe && (callee_reads || callee_writes) {
+                            let caller_access = if caller_writes { "writes to" } else { "reads" };
+                            let callee_access_type = if callee_writes { "writes to" } else { "reads" };
                             errors.push(format!(
                                 "Potential deadlock: `{}` {} mvar `{}` and calls `{}` which {} the same mvar",
                                 fn_name.split('/').next().unwrap_or(fn_name),
                                 caller_access,
                                 mvar,
                                 callee.split('/').next().unwrap_or(&callee),
-                                callee_access_type
+                                callee_access_type,
                             ));
                         }
                     }
