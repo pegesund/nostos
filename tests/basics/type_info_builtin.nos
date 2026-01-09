@@ -1,0 +1,24 @@
+# expect: 1
+# Test typeInfo builtin returns type metadata as Json
+
+type Color = Red | Green | Blue
+type Person = { name: String, age: Int }
+
+main() = {
+    # typeInfo for variant type returns Object with constructors
+    colorInfo = typeInfo("Color")
+    colorType = tagOf(colorInfo)
+
+    # typeInfo for record type returns Object with fields
+    personInfo = typeInfo("Person")
+    personType = tagOf(personInfo)
+
+    # typeInfo for unknown type returns Null
+    unknownInfo = typeInfo("NoSuchType")
+    unknownType = tagOf(unknownInfo)
+
+    if colorType == "Object" &&
+       personType == "Object" &&
+       unknownType == "Null"
+    then 1 else 0
+}

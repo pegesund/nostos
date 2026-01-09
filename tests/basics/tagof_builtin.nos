@@ -1,0 +1,25 @@
+# expect: 1
+# Test tagOf builtin returns variant constructor names
+
+type Color = Red | Green | Blue
+type Option[T] = None | Some(T)
+
+main() = {
+    # Variant tags return the constructor name
+    redTag = tagOf(Red)
+    someTag = tagOf(Some(42))
+    noneTag = tagOf(None)
+
+    # Non-variants return empty string
+    intTag = tagOf(42)
+    strTag = tagOf("hello")
+    listTag = tagOf([1, 2, 3])
+
+    if redTag == "Red" &&
+       someTag == "Some" &&
+       noneTag == "None" &&
+       intTag == "" &&
+       strTag == "" &&
+       listTag == ""
+    then 1 else 0
+}

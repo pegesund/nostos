@@ -1033,6 +1033,17 @@ pub enum Instruction {
     /// Extract second from timestamp: dst = Time.second(ts)
     TimeSecond(Reg, Reg),
 
+    // === Type introspection and reflection ===
+    /// Get type info by name: dst = Type.info(name_reg)
+    /// Returns Json with fields, constructors, etc.
+    TypeInfo(Reg, Reg),
+    /// Get variant tag: dst = tagOf(value)
+    /// Returns tag name for variants, empty string otherwise
+    TagOf(Reg, Reg),
+    /// Reflect value to Json: dst = reflect(value)
+    /// Converts any value to the Json sum type
+    Reflect(Reg, Reg),
+
     // === IO/Debug builtins ===
     /// Print value, return string representation: dst = print(value)
     Print(Reg, Reg),

@@ -1,0 +1,32 @@
+# expect: 1
+# Test reflect builtin converts values to Json type
+
+type Person = { name: String, age: Int }
+
+main() = {
+    # Reflect primitive types
+    intJson = reflect(42)
+    strJson = reflect("hello")
+    boolJson = reflect(true)
+
+    # Check the type names
+    intType = tagOf(intJson)
+    strType = tagOf(strJson)
+    boolType = tagOf(boolJson)
+
+    # Reflect a record
+    person = Person("Alice", 30)
+    personJson = reflect(person)
+    personType = tagOf(personJson)
+
+    # Reflect a list
+    listJson = reflect([1, 2, 3])
+    listType = tagOf(listJson)
+
+    if intType == "Number" &&
+       strType == "String" &&
+       boolType == "Bool" &&
+       personType == "Object" &&
+       listType == "Array"
+    then 1 else 0
+}
