@@ -7,7 +7,7 @@ main() = {
 
     # Simple query to verify connection works
     rows = Pg.query(conn, "SELECT 1 as test", [])
-    result = head(head(rows))
+    result = head(rows).0
 
     println("SSL connection test: " ++ show(result))
     assert_eq(result, 1)

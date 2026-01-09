@@ -16,7 +16,7 @@ test_create_insert_drop(conn) = {
 
     # Verify data - query returns count
     rows = Pg.query(conn, "SELECT COUNT(*) FROM test_exec", [])
-    assert_eq(head(head(rows)), 2)
+    assert_eq(head(rows).0, 2)
 
     # Drop table
     Pg.execute(conn, "DROP TABLE test_exec", [])
@@ -33,7 +33,7 @@ test_update(conn) = {
 
     # Verify update
     r1 = Pg.query(conn, "SELECT value FROM test_update WHERE id = $1", [2])
-    assert_eq(head(head(r1)), 999)
+    assert_eq(head(r1).0, 999)
 
     # Update multiple rows
     affected2 = Pg.execute(conn, "UPDATE test_update SET value = value + $1", [1])
@@ -54,7 +54,7 @@ test_delete(conn) = {
 
     # Verify
     r1 = Pg.query(conn, "SELECT COUNT(*) FROM test_delete", [])
-    assert_eq(head(head(r1)), 2)
+    assert_eq(head(r1).0, 2)
 
     # Delete all
     affected2 = Pg.execute(conn, "DELETE FROM test_delete", [])

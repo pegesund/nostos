@@ -4,13 +4,13 @@
 
 test_float64_basic(conn) = {
     r1 = Pg.query(conn, "SELECT $1", [3.14159])
-    v1 = head(head(r1))
+    v1 = head(r1).0
     # Just verify it's close to 3.14 by checking range
     assert(v1 > 3.14)
     assert(v1 < 3.15)
 
     r2 = Pg.query(conn, "SELECT $1", [-123.456])
-    v2 = head(head(r2))
+    v2 = head(r2).0
     assert(v2 < -123.0)
     assert(v2 > -124.0)
 }
@@ -19,38 +19,38 @@ test_float64_large(conn) = {
     # Large positive
     big = 1.7976931348623157e+100
     r1 = Pg.query(conn, "SELECT $1", [big])
-    v1 = head(head(r1))
+    v1 = head(r1).0
     assert(v1 > 1.0e+99)
 
     # Large negative
     r2 = Pg.query(conn, "SELECT $1", [-1.0e+50])
-    v2 = head(head(r2))
+    v2 = head(r2).0
     assert(v2 < -1.0e+49)
 }
 
 test_float64_small(conn) = {
     small = 1.0e-100
     r1 = Pg.query(conn, "SELECT $1", [small])
-    v1 = head(head(r1))
+    v1 = head(r1).0
     assert(v1 > 0.0)
     assert(v1 < 1.0e-99)
 }
 
 test_float64_zero(conn) = {
     r1 = Pg.query(conn, "SELECT $1", [0.0])
-    v1 = head(head(r1))
+    v1 = head(r1).0
     assert(v1 == 0.0)
 }
 
 test_float64_arithmetic(conn) = {
     r1 = Pg.query(conn, "SELECT $1 * $2", [3.14159, 2.0])
-    v1 = head(head(r1))
+    v1 = head(r1).0
     # 3.14159 * 2 = 6.28318
     assert(v1 > 6.28)
     assert(v1 < 6.29)
 
     r2 = Pg.query(conn, "SELECT $1 + $2", [0.1, 0.2])
-    v2 = head(head(r2))
+    v2 = head(r2).0
     # 0.1 + 0.2 = 0.3 (with float precision)
     assert(v2 > 0.29)
     assert(v2 < 0.31)
@@ -60,12 +60,12 @@ test_float32(conn) = {
     # Float32 values using Float32Array for pgvector compatibility
     # Note: PostgreSQL REAL type is 32-bit float
     r1 = Pg.query(conn, "SELECT 3.14::real", [])
-    v1 = head(head(r1))
+    v1 = head(r1).0
     assert(v1 > 3.1)
     assert(v1 < 3.2)
 
     r2 = Pg.query(conn, "SELECT (-42.5)::real", [])
-    v2 = head(head(r2))
+    v2 = head(r2).0
     assert(v2 < -42.0)
     assert(v2 > -43.0)
 }
@@ -74,7 +74,7 @@ test_float32_precision(conn) = {
     # Float32 has less precision than Float64
     # This tests that real (float4) is correctly returned
     r1 = Pg.query(conn, "SELECT 1.23456789::real", [])
-    v1 = head(head(r1))
+    v1 = head(r1).0
     # Float32 can only represent ~7 significant digits
     assert(v1 > 1.23)
     assert(v1 < 1.24)

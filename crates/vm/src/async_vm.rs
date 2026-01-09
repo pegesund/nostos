@@ -5449,9 +5449,20 @@ impl AsyncProcess {
                         use crate::io_runtime::PgParam;
                         list.iter().map(|i| PgParam::Int(i)).collect()
                     }
+                    GcValue::Tuple(ptr) => {
+                        // Handle tuples for heterogeneous parameter types
+                        let tuple = self.heap.get_tuple(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".into()))?;
+                        let mut pg_params = Vec::new();
+                        for item in &tuple.items {
+                            let param = self.gc_value_to_pg_param(item)?;
+                            pg_params.push(param);
+                        }
+                        pg_params
+                    }
                     _ => return Err(RuntimeError::TypeError {
-                        expected: "List".to_string(),
-                        found: "non-list".to_string(),
+                        expected: "List or Tuple".to_string(),
+                        found: "non-list/tuple".to_string(),
                     }),
                 };
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -5508,9 +5519,20 @@ impl AsyncProcess {
                         use crate::io_runtime::PgParam;
                         list.iter().map(|i| PgParam::Int(i)).collect()
                     }
+                    GcValue::Tuple(ptr) => {
+                        // Handle tuples for heterogeneous parameter types
+                        let tuple = self.heap.get_tuple(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".into()))?;
+                        let mut pg_params = Vec::new();
+                        for item in &tuple.items {
+                            let param = self.gc_value_to_pg_param(item)?;
+                            pg_params.push(param);
+                        }
+                        pg_params
+                    }
                     _ => return Err(RuntimeError::TypeError {
-                        expected: "List".to_string(),
-                        found: "non-list".to_string(),
+                        expected: "List or Tuple".to_string(),
+                        found: "non-list/tuple".to_string(),
                     }),
                 };
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -5730,9 +5752,20 @@ impl AsyncProcess {
                         use crate::io_runtime::PgParam;
                         list.iter().map(|i| PgParam::Int(i)).collect()
                     }
+                    GcValue::Tuple(ptr) => {
+                        // Handle tuples for heterogeneous parameter types
+                        let tuple = self.heap.get_tuple(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".into()))?;
+                        let mut pg_params = Vec::new();
+                        for item in &tuple.items {
+                            let param = self.gc_value_to_pg_param(item)?;
+                            pg_params.push(param);
+                        }
+                        pg_params
+                    }
                     _ => return Err(RuntimeError::TypeError {
-                        expected: "List".to_string(),
-                        found: "non-list".to_string(),
+                        expected: "List or Tuple".to_string(),
+                        found: "non-list/tuple".to_string(),
                     }),
                 };
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -5788,9 +5821,20 @@ impl AsyncProcess {
                         use crate::io_runtime::PgParam;
                         list.iter().map(|i| PgParam::Int(i)).collect()
                     }
+                    GcValue::Tuple(ptr) => {
+                        // Handle tuples for heterogeneous parameter types
+                        let tuple = self.heap.get_tuple(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".into()))?;
+                        let mut pg_params = Vec::new();
+                        for item in &tuple.items {
+                            let param = self.gc_value_to_pg_param(item)?;
+                            pg_params.push(param);
+                        }
+                        pg_params
+                    }
                     _ => return Err(RuntimeError::TypeError {
-                        expected: "List".to_string(),
-                        found: "non-list".to_string(),
+                        expected: "List or Tuple".to_string(),
+                        found: "non-list/tuple".to_string(),
                     }),
                 };
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -6316,7 +6360,8 @@ impl AsyncProcess {
                             .into_iter()
                             .map(|col| self.pg_value_to_gc_value(col))
                             .collect();
-                        GcValue::List(GcList::from_vec(col_values))
+                        // Return each row as a tuple for heterogeneous column types
+                        GcValue::Tuple(self.heap.alloc_tuple(col_values))
                     })
                     .collect();
                 GcValue::List(GcList::from_vec(row_values))

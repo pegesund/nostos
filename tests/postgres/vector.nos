@@ -16,7 +16,7 @@ test_vector_basic(conn) = {
 
     # Select and verify
     rows = Pg.query(conn, "SELECT embedding FROM test_vectors", [])
-    result = head(head(rows))
+    result = head(rows).0
 
     # Result should be a Float32Array
     println("Vector result type: " ++ typeOf(result))
@@ -35,7 +35,7 @@ test_vector_from_list(conn) = {
     Pg.execute(conn, "INSERT INTO test_vectors (embedding) VALUES ($1)", [vecList])
 
     rows = Pg.query(conn, "SELECT embedding FROM test_vectors", [])
-    result = head(head(rows))
+    result = head(rows).0
     println("Vector from list: " ++ show(result))
     assert_eq(Float32Array.length(result), 3)
 }
@@ -53,8 +53,8 @@ test_vector_similarity(conn) = {
     query = Float32Array.fromList([1.0, 0.0, 0.0])
     rows = Pg.query(conn, "SELECT id, embedding <-> $1 as distance FROM test_vectors ORDER BY distance LIMIT 1", [query])
     row = head(rows)
-    id = head(row)
-    distance = head(tail(row))
+    id = row.0
+    distance = row.1
 
     println("Nearest vector ID: " ++ show(id) ++ ", distance: " ++ show(distance))
     assert_eq(id, 1)  # First vector should be nearest
@@ -69,7 +69,7 @@ test_vector_l2_distance(conn) = {
     # L2 distance from origin
     query = Float32Array.fromList([0.0, 0.0, 0.0])
     rows = Pg.query(conn, "SELECT embedding <-> $1 as distance FROM test_vectors", [query])
-    distance = head(head(rows))
+    distance = head(rows).0
 
     println("L2 distance from origin: " ++ show(distance))
     # Distance should be 5 (3-4-5 triangle)
