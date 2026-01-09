@@ -235,16 +235,16 @@ isNumericType(typeName) =
 
 # Convert a number to the expected numeric type
 convertNumber(n, typeName) =
-    if typeName == "Int" || typeName == "Int64" then toInt(n)
-    else if typeName == "Int8" then toInt8(n)
-    else if typeName == "Int16" then toInt16(n)
-    else if typeName == "Int32" then toInt32(n)
-    else if typeName == "UInt8" then toUInt8(n)
-    else if typeName == "UInt16" then toUInt16(n)
-    else if typeName == "UInt32" then toUInt32(n)
-    else if typeName == "UInt64" then toUInt64(n)
-    else if typeName == "Float32" then toFloat32(n)
-    else if typeName == "BigInt" then toBigInt(n)
+    if typeName == "Int" || typeName == "Int64" then n.asInt64()
+    else if typeName == "Int8" then n.asInt8()
+    else if typeName == "Int16" then n.asInt16()
+    else if typeName == "Int32" then n.asInt32()
+    else if typeName == "UInt8" then n.asUInt8()
+    else if typeName == "UInt16" then n.asUInt16()
+    else if typeName == "UInt32" then n.asUInt32()
+    else if typeName == "UInt64" then n.asUInt64()
+    else if typeName == "Float32" then n.asFloat32()
+    else if typeName == "BigInt" then n.asBigInt()
     else n  # Float64 or Float
 
 # Convert a Json value to the expected primitive type

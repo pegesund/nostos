@@ -1049,6 +1049,28 @@ impl Autocomplete {
                 ("tokioWorkers", "() -> Int", "Get number of tokio worker threads"),
                 ("blockingThreads", "() -> Int", "Get number of tokio blocking threads"),
             ]
+        } else if base_type == "Int" || base_type == "Int8" || base_type == "Int16"
+               || base_type == "Int32" || base_type == "Int64"
+               || base_type == "UInt8" || base_type == "UInt16"
+               || base_type == "UInt32" || base_type == "UInt64"
+               || base_type == "Float" || base_type == "Float32" || base_type == "Float64"
+               || base_type == "BigInt" {
+            // Type conversion methods available on all numeric types
+            vec![
+                ("asInt8", "() -> Int8", "Convert to Int8"),
+                ("asInt16", "() -> Int16", "Convert to Int16"),
+                ("asInt32", "() -> Int32", "Convert to Int32"),
+                ("asInt64", "() -> Int64", "Convert to Int64"),
+                ("asInt", "() -> Int", "Convert to Int (alias for asInt64)"),
+                ("asUInt8", "() -> UInt8", "Convert to UInt8"),
+                ("asUInt16", "() -> UInt16", "Convert to UInt16"),
+                ("asUInt32", "() -> UInt32", "Convert to UInt32"),
+                ("asUInt64", "() -> UInt64", "Convert to UInt64"),
+                ("asFloat32", "() -> Float32", "Convert to Float32"),
+                ("asFloat64", "() -> Float64", "Convert to Float64"),
+                ("asFloat", "() -> Float", "Convert to Float (alias for asFloat64)"),
+                ("asBigInt", "() -> BigInt", "Convert to BigInt"),
+            ]
         } else {
             // For all other types, return generic builtins only
             vec![
