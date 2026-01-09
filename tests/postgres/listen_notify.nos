@@ -1,0 +1,113 @@
+# expect: 0
+# PostgreSQL LISTEN/NOTIFY tests
+# REQUIRES: PostgreSQL running at localhost with user/password: postgres/postgres
+
+# Test basic LISTEN/NOTIFY flow
+test_basic_notify(listener, sender) = {
+    # Start listening on channel
+    Pg.listen(listener, "test_channel")
+
+    # Send notification from sender connection
+    Pg.notify(sender, "test_channel", "hello world")
+
+    # Wait for notification (with 5 second timeout)
+    result = Pg.awaitNotification(listener, 5000)
+
+    match result {
+        Some((channel, payload)) -> {
+            assert_eq(channel, "test_channel")
+            assert_eq(payload, "hello world")
+        }
+        None -> {
+            # Should not timeout
+            assert(false)
+        }
+    }
+
+    Pg.unlisten(listener, "test_channel")
+}
+
+# Test timeout when no notification arrives
+test_timeout(listener) = {
+    # Listen on a channel that won't receive any notifications
+    Pg.listen(listener, "unused_channel")
+
+    # Should timeout after 100ms
+    result = Pg.awaitNotification(listener, 100)
+
+    match result {
+        None -> assert(true)  # Expected timeout
+        Some(_) -> assert(false)  # Should not receive anything
+    }
+
+    Pg.unlisten(listener, "unused_channel")
+}
+
+# Test multiple notifications
+test_multiple_notifications(listener, sender) = {
+    Pg.listen(listener, "multi_channel")
+
+    # Send multiple notifications
+    Pg.notify(sender, "multi_channel", "first")
+    Pg.notify(sender, "multi_channel", "second")
+    Pg.notify(sender, "multi_channel", "third")
+
+    # Receive all three
+    r1 = Pg.awaitNotification(listener, 5000)
+    r2 = Pg.awaitNotification(listener, 5000)
+    r3 = Pg.awaitNotification(listener, 5000)
+
+    match r1 {
+        Some((_, payload)) -> assert_eq(payload, "first")
+        None -> assert(false)
+    }
+
+    match r2 {
+        Some((_, payload)) -> assert_eq(payload, "second")
+        None -> assert(false)
+    }
+
+    match r3 {
+        Some((_, payload)) -> assert_eq(payload, "third")
+        None -> assert(false)
+    }
+
+    Pg.unlisten(listener, "multi_channel")
+}
+
+# Test notify with empty payload
+test_empty_payload(listener, sender) = {
+    Pg.listen(listener, "empty_channel")
+
+    Pg.notify(sender, "empty_channel", "")
+
+    result = Pg.awaitNotification(listener, 5000)
+
+    match result {
+        Some((channel, payload)) -> {
+            assert_eq(channel, "empty_channel")
+            assert_eq(payload, "")
+        }
+        None -> assert(false)
+    }
+
+    Pg.unlisten(listener, "empty_channel")
+}
+
+main() = {
+    # Create two connections: listener and sender
+    connStr = "host=localhost user=postgres password=postgres"
+
+    listener = Pg.listenConnect(connStr)
+    sender = Pg.connect(connStr)
+
+    test_basic_notify(listener, sender)
+    test_timeout(listener)
+    test_multiple_notifications(listener, sender)
+    test_empty_payload(listener, sender)
+
+    Pg.close(sender)
+    # Note: listener connection will be closed when process exits
+
+    0
+}

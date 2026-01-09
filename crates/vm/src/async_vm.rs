@@ -6055,6 +6055,202 @@ impl AsyncProcess {
                 }
             }
 
+            // LISTEN/NOTIFY builtins
+            PgListenConnect(dst, conn_str_reg) => {
+                let conn_str = match reg!(conn_str_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr).map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid connection string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::PgListenConnect { connection_string: conn_str, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(resp) => {
+                            let gc_value = self.io_response_to_gc_value(resp);
+                            set_reg!(dst, gc_value);
+                        }
+                        Err(e) => {
+                            self.throw_exception("connect_error", format!("{}", e))?;
+                        }
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            PgListen(dst, handle_reg, channel_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int (listener handle)".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let channel = match reg!(channel_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr).map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid channel string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::PgListen { handle, channel, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(resp) => {
+                            let gc_value = self.io_response_to_gc_value(resp);
+                            set_reg!(dst, gc_value);
+                        }
+                        Err(e) => {
+                            self.throw_exception("listen_error", format!("{}", e))?;
+                        }
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            PgUnlisten(dst, handle_reg, channel_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int (listener handle)".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let channel = match reg!(channel_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr).map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid channel string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::PgUnlisten { handle, channel, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(resp) => {
+                            let gc_value = self.io_response_to_gc_value(resp);
+                            set_reg!(dst, gc_value);
+                        }
+                        Err(e) => {
+                            self.throw_exception("unlisten_error", format!("{}", e))?;
+                        }
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            PgNotify(dst, handle_reg, channel_reg, payload_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int (pg handle)".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let channel = match reg!(channel_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr).map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid channel string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let payload = match reg!(payload_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr).map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid payload string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::PgNotify { handle, channel, payload, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(resp) => {
+                            let gc_value = self.io_response_to_gc_value(resp);
+                            set_reg!(dst, gc_value);
+                        }
+                        Err(e) => {
+                            self.throw_exception("notify_error", format!("{}", e))?;
+                        }
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            PgAwaitNotification(dst, handle_reg, timeout_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int (listener handle)".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let timeout_ms = match reg!(timeout_reg) {
+                    GcValue::Int64(n) => n as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int (timeout ms)".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::PgAwaitNotification { handle, timeout_ms, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(resp) => {
+                            let gc_value = self.io_response_to_gc_value(resp);
+                            set_reg!(dst, gc_value);
+                        }
+                        Err(e) => {
+                            self.throw_exception("await_notification_error", format!("{}", e))?;
+                        }
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
             // === Time builtins ===
             TimeNow(dst) => {
                 use chrono::Utc;
@@ -6575,6 +6771,36 @@ impl AsyncProcess {
                 GcValue::List(GcList::from_vec(row_values))
             }
             IoResponseValue::PgAffected(count) => GcValue::Int64(count as i64),
+            IoResponseValue::PgNotification { channel, payload } => {
+                // Return as tuple (channel, payload)
+                let channel_val = GcValue::String(self.heap.alloc_string(channel));
+                let payload_val = GcValue::String(self.heap.alloc_string(payload));
+                GcValue::Tuple(self.heap.alloc_tuple(vec![channel_val, payload_val]))
+            }
+            IoResponseValue::PgNotificationOption(opt) => {
+                // Return as Option: Some((channel, payload)) or None
+                match opt {
+                    Some((channel, payload)) => {
+                        let channel_val = GcValue::String(self.heap.alloc_string(channel));
+                        let payload_val = GcValue::String(self.heap.alloc_string(payload));
+                        let tuple = GcValue::Tuple(self.heap.alloc_tuple(vec![channel_val, payload_val]));
+                        // Create Some variant
+                        GcValue::Variant(self.heap.alloc_variant(
+                            Arc::new("Option".to_string()),
+                            Arc::new("Some".to_string()),
+                            vec![tuple],
+                        ))
+                    }
+                    None => {
+                        // Create None variant
+                        GcValue::Variant(self.heap.alloc_variant(
+                            Arc::new("Option".to_string()),
+                            Arc::new("None".to_string()),
+                            vec![],
+                        ))
+                    }
+                }
+            }
         }
     }
 

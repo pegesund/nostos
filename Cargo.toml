@@ -61,6 +61,7 @@ deadpool-postgres = { version = "0.14", features = ["serde"] }
 postgres-native-tls = "0.5"
 native-tls = "0.2"
 serde_json = "1"
+futures = "0.3"
 
 # Internal crates
 nostos-syntax = { path = "crates/syntax" }

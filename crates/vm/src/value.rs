@@ -1033,6 +1033,16 @@ pub enum Instruction {
     PgExecutePrepared(Reg, Reg, Reg, Reg),
     /// Deallocate prepared statement: dst = Pg.deallocate(handle, name)
     PgDeallocate(Reg, Reg, Reg),
+    /// Create listener connection: dst = Pg.listenConnect(connection_string)
+    PgListenConnect(Reg, Reg),
+    /// Start listening on channel: dst = Pg.listen(handle, channel)
+    PgListen(Reg, Reg, Reg),
+    /// Stop listening on channel: dst = Pg.unlisten(handle, channel)
+    PgUnlisten(Reg, Reg, Reg),
+    /// Send notification: dst = Pg.notify(handle, channel, payload)
+    PgNotify(Reg, Reg, Reg, Reg),
+    /// Wait for notification: dst = Pg.awaitNotification(handle, timeout_ms)
+    PgAwaitNotification(Reg, Reg, Reg),
 
     // === Time builtins ===
     /// Get current UTC timestamp in milliseconds: dst = Time.now()

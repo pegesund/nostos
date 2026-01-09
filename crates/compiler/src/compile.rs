@@ -330,6 +330,12 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Pg.queryPrepared", signature: "Int -> String -> [a] -> [[a]]", doc: "Execute prepared query with params, returns rows" },
     BuiltinInfo { name: "Pg.executePrepared", signature: "Int -> String -> [a] -> Int", doc: "Execute prepared statement with params, returns affected count" },
     BuiltinInfo { name: "Pg.deallocate", signature: "Int -> String -> ()", doc: "Deallocate a prepared statement" },
+    // LISTEN/NOTIFY
+    BuiltinInfo { name: "Pg.listenConnect", signature: "String -> Int", doc: "Create dedicated listener connection for LISTEN/NOTIFY" },
+    BuiltinInfo { name: "Pg.listen", signature: "Int -> String -> ()", doc: "Start listening on a channel" },
+    BuiltinInfo { name: "Pg.unlisten", signature: "Int -> String -> ()", doc: "Stop listening on a channel" },
+    BuiltinInfo { name: "Pg.notify", signature: "Int -> String -> String -> ()", doc: "Send notification: notify(handle, channel, payload)" },
+    BuiltinInfo { name: "Pg.awaitNotification", signature: "Int -> Int -> Option (String, String)", doc: "Wait for notification with timeout(ms), returns Some((channel, payload)) or None" },
 
     // === UUID Functions ===
     BuiltinInfo { name: "Uuid.v4", signature: "() -> String", doc: "Generate a random UUID v4" },
@@ -3969,6 +3975,42 @@ impl Compiler {
                             self.chunk.emit(Instruction::PgDeallocate(dst, handle_reg, name_reg), line);
                             return Ok(dst);
                         }
+                        // LISTEN/NOTIFY builtins
+                        "Pg.listenConnect" if args.len() == 1 => {
+                            let conn_str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgListenConnect(dst, conn_str_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.listen" if args.len() == 2 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let channel_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgListen(dst, handle_reg, channel_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.unlisten" if args.len() == 2 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let channel_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgUnlisten(dst, handle_reg, channel_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.notify" if args.len() == 3 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let channel_reg = self.compile_expr_tail(&args[1], false)?;
+                            let payload_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgNotify(dst, handle_reg, channel_reg, payload_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.awaitNotification" if args.len() == 2 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let timeout_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgAwaitNotification(dst, handle_reg, timeout_reg), line);
+                            return Ok(dst);
+                        }
                         // Time builtins
                         "Time.now" if args.is_empty() => {
                             let dst = self.alloc_reg();
@@ -4717,6 +4759,42 @@ impl Compiler {
                             let name_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgDeallocate(dst, handle_reg, name_reg), line);
+                            return Ok(dst);
+                        }
+                        // LISTEN/NOTIFY builtins
+                        "Pg.listenConnect" if args.len() == 1 => {
+                            let conn_str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgListenConnect(dst, conn_str_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.listen" if args.len() == 2 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let channel_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgListen(dst, handle_reg, channel_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.unlisten" if args.len() == 2 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let channel_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgUnlisten(dst, handle_reg, channel_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.notify" if args.len() == 3 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let channel_reg = self.compile_expr_tail(&args[1], false)?;
+                            let payload_reg = self.compile_expr_tail(&args[2], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgNotify(dst, handle_reg, channel_reg, payload_reg), line);
+                            return Ok(dst);
+                        }
+                        "Pg.awaitNotification" if args.len() == 2 => {
+                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let timeout_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::PgAwaitNotification(dst, handle_reg, timeout_reg), line);
                             return Ok(dst);
                         }
                         // Time builtins
