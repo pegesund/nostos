@@ -48,12 +48,12 @@ async fn test_external_push() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(initial["type"], "full", "Expected initial 'full' message");
     println!("Got initial page (type=full)");
 
-    // Send an action to the server to test two-way communication
-    println!("Sending 'increment' action to server...");
-    ws.send(Message::Text(r#"{"action":"increment","params":{}}"#.to_string())).await?;
+    // Send a "join" action to join room A (required to receive push updates)
+    println!("Sending 'join' action to join room A...");
+    ws.send(Message::Text(r#"{"action":"join","params":{"room":"A"}}"#.to_string())).await?;
 
-    // Wait for the action response
-    println!("Waiting for action response...");
+    // Wait for the join action response
+    println!("Waiting for join response...");
     let response = timeout(Duration::from_secs(5), ws.next())
         .await?
         .ok_or("Connection closed")??;
