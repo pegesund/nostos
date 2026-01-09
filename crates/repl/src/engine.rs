@@ -2459,6 +2459,33 @@ impl ReplEngine {
 
         let module = module_opt.ok_or("Failed to parse file")?;
 
+        // Build prefix for qualified names (e.g., "demo.panel.")
+        let prefix = if module_path.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", module_path.join("."))
+        };
+
+        // Update call graph BEFORE compiling (so dependencies are tracked even if compile fails)
+        for fn_def in Self::get_fn_defs(&module) {
+            let fn_name = fn_def.name.node.clone();
+            let qualified_name = format!("{}{}", prefix, fn_name);
+            let deps = extract_dependencies_from_fn(fn_def);
+            // Qualify the dependencies with the current module prefix
+            let qualified_deps: HashSet<String> = deps.into_iter()
+                .map(|dep| {
+                    // If the dependency doesn't have a module prefix and we're in a module,
+                    // assume it's in the same module
+                    if !dep.contains('.') && !prefix.is_empty() {
+                        format!("{}{}", prefix, dep)
+                    } else {
+                        dep
+                    }
+                })
+                .collect();
+            self.call_graph.update(&qualified_name, qualified_deps);
+        }
+
         // Add to compiler with the specified module path
         self.compiler.add_module(&module, module_path.clone(), Arc::new(source.clone()), path_str.to_string())
             .map_err(|e| format!("Compilation error: {}", e))?;
@@ -2473,7 +2500,13 @@ impl ReplEngine {
 
         // Track loaded file
         if !self.loaded_files.contains(&path) {
-            self.loaded_files.push(path);
+            self.loaded_files.push(path.clone());
+        }
+
+        // Track module source
+        let module_name = module_path.join(".");
+        if !module_name.is_empty() {
+            self.module_sources.insert(module_name, path);
         }
 
         Ok(())
