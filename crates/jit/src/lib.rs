@@ -185,6 +185,16 @@ pub struct CompiledListSumFunction {
     pub func_id: FuncId,
 }
 
+/// A compiled native function for tail-recursive Int64List sum operations
+/// Signature: fn(data_ptr: *const i64, len: i64, initial_acc: i64) -> i64
+/// For sumTR([], acc) = acc; sumTR([x|xs], acc) = sumTR(xs, acc+x)
+pub struct CompiledListSumTrFunction {
+    /// Pointer to the native code
+    pub code_ptr: *const u8,
+    /// Function ID in the module
+    pub func_id: FuncId,
+}
+
 /// The JIT compiler
 pub struct JitCompiler {
     /// Cranelift JIT module
@@ -203,6 +213,8 @@ pub struct JitCompiler {
     array_fill_cache: HashMap<(u16, ArrayElementType), CompiledArrayFunction>,
     /// Cache of compiled list sum functions: func_index → compiled function
     list_sum_cache: HashMap<u16, CompiledListSumFunction>,
+    /// Cache of compiled tail-recursive list sum functions: func_index → compiled function
+    list_sum_tr_cache: HashMap<u16, CompiledListSumTrFunction>,
     /// Configuration
     #[allow(dead_code)]
     config: JitConfig,
@@ -251,6 +263,7 @@ impl JitCompiler {
             loop_array_cache: HashMap::new(),
             array_fill_cache: HashMap::new(),
             list_sum_cache: HashMap::new(),
+            list_sum_tr_cache: HashMap::new(),
             config,
             compile_queue: Vec::new(),
             declared_funcs: HashMap::new(),
@@ -429,6 +442,19 @@ impl JitCompiler {
         })
     }
 
+    /// Check if a function is compiled as a tail-recursive list sum function
+    pub fn is_list_sum_tr_compiled(&self, func_index: u16) -> bool {
+        self.list_sum_tr_cache.contains_key(&func_index)
+    }
+
+    /// Get compiled tail-recursive list sum function: fn(data_ptr, len, acc) -> i64
+    /// For sumTR([], acc) = acc; sumTR([x|xs], acc) = sumTR(xs, acc+x)
+    pub fn get_list_sum_tr_function(&self, func_index: u16) -> Option<fn(*const i64, i64, i64) -> i64> {
+        self.list_sum_tr_cache.get(&func_index).map(|f| {
+            unsafe { std::mem::transmute::<*const u8, fn(*const i64, i64, i64) -> i64>(f.code_ptr) }
+        })
+    }
+
     /// Queue a function for compilation
     pub fn queue_compilation(&mut self, func_index: u16) {
         if !self.is_compiled(func_index) && !self.compile_queue.contains(&func_index) {
@@ -506,6 +532,17 @@ impl JitCompiler {
 
                     // Try list sum JIT (pattern matching on Int64List)
                     match self.compile_list_sum_function(func_index, func) {
+                        Ok(_) => {
+                            compiled += 1;
+                            made_progress = true;
+                            continue;
+                        }
+                        Err(JitError::NotSuitable(_)) => {}
+                        Err(_) => {}
+                    }
+
+                    // Try tail-recursive list sum JIT: sumTR(list, acc)
+                    match self.compile_list_sum_tr_function(func_index, func) {
                         Ok(_) => {
                             compiled += 1;
                             made_progress = true;
@@ -2483,6 +2520,206 @@ impl JitCompiler {
 
         // Cache the compiled function
         self.list_sum_cache.insert(func_index, CompiledListSumFunction {
+            code_ptr,
+            func_id,
+        });
+
+        Ok(())
+    }
+
+    /// Detect a tail-recursive list sum function pattern:
+    /// sumTR([], acc) = acc
+    /// sumTR([x | xs], acc) = sumTR(xs, acc + x)
+    fn detect_list_sum_tr_function(&self, func: &FunctionValue) -> Result<(), JitError> {
+        // Must have exactly 2 arguments: list and accumulator
+        if func.arity != 2 {
+            return Err(JitError::NotSuitable(format!(
+                "tail-recursive list sum function must have 2 args (list, acc), got {}", func.arity
+            )));
+        }
+
+        let mut has_test_nil = false;
+        let mut head_regs: std::collections::HashSet<u8> = std::collections::HashSet::new();
+        let mut has_tail_call = false;
+        let mut adds_head = false;
+
+        // First pass: collect head registers from Decons
+        for instr in func.code.code.iter() {
+            match instr {
+                Instruction::DeconsInt64(head, _, _) | Instruction::Decons(head, _, _) => {
+                    head_regs.insert(*head);
+                }
+                Instruction::Move(dst, src) => {
+                    if head_regs.contains(src) {
+                        head_regs.insert(*dst);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Second pass: check the pattern
+        for instr in func.code.code.iter() {
+            match instr {
+                Instruction::TestNilInt64(_, _) | Instruction::TestNil(_, _) => {
+                    has_test_nil = true;
+                }
+                Instruction::DeconsInt64(_, _, _) | Instruction::Decons(_, _, _) => {}
+                // Must be tail-recursive
+                Instruction::TailCallSelf(_) => {
+                    has_tail_call = true;
+                }
+                // Verify that AddInt uses the head element
+                Instruction::AddInt(_, a, b) => {
+                    if head_regs.contains(a) || head_regs.contains(b) {
+                        adds_head = true;
+                    }
+                }
+                // Allow these instructions
+                Instruction::Move(_, _) |
+                Instruction::LoadConst(_, _) |
+                Instruction::LoadTrue(_) | Instruction::LoadFalse(_) |
+                Instruction::LoadUnit(_) |
+                Instruction::Jump(_) |
+                Instruction::JumpIfTrue(_, _) | Instruction::JumpIfFalse(_, _) |
+                Instruction::Return(_) |
+                Instruction::SubInt(_, _, _) | Instruction::MulInt(_, _, _) |
+                Instruction::NegInt(_, _) |
+                Instruction::EqInt(_, _, _) | Instruction::NeInt(_, _, _) |
+                Instruction::LtInt(_, _, _) | Instruction::LeInt(_, _, _) |
+                Instruction::GtInt(_, _, _) | Instruction::GeInt(_, _, _) |
+                Instruction::And(_, _, _) | Instruction::Or(_, _, _) | Instruction::Not(_, _) |
+                Instruction::Length(_, _) |
+                Instruction::Throw(_) => {}
+
+                other => return Err(JitError::NotSuitable(
+                    format!("unsupported instruction in tail-recursive list sum: {:?}", other)
+                )),
+            }
+        }
+
+        if !has_test_nil {
+            return Err(JitError::NotSuitable("no TestNil/TestNilInt64 found".to_string()));
+        }
+        if head_regs.is_empty() {
+            return Err(JitError::NotSuitable("no Decons/DeconsInt64 found".to_string()));
+        }
+        if !has_tail_call {
+            return Err(JitError::NotSuitable("no TailCallSelf found (must be tail-recursive)".to_string()));
+        }
+        if !adds_head {
+            return Err(JitError::NotSuitable("AddInt does not use head element".to_string()));
+        }
+
+        Ok(())
+    }
+
+    /// Compile a tail-recursive list sum function.
+    /// sumTR(list, acc) → native fn(data_ptr, len, acc) -> i64
+    pub fn compile_list_sum_tr_function(
+        &mut self,
+        func_index: u16,
+        func: &FunctionValue,
+    ) -> Result<(), JitError> {
+        self.detect_list_sum_tr_function(func)?;
+
+        if self.is_list_sum_tr_compiled(func_index) {
+            return Ok(());
+        }
+
+        // Signature: fn(data_ptr: i64, len: i64, acc: i64) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(I64)); // data_ptr
+        sig.params.push(AbiParam::new(I64)); // len
+        sig.params.push(AbiParam::new(I64)); // initial accumulator
+        sig.returns.push(AbiParam::new(I64)); // sum result
+
+        let func_name = format!("nos_list_sum_tr_{}", func_index);
+        let func_id = self.module
+            .declare_function(&func_name, Linkage::Local, &sig)
+            .map_err(|e| JitError::Module(e.to_string()))?;
+
+        self.ctx.func.signature = sig.clone();
+        self.ctx.func.name = UserFuncName::user(5, func_index as u32);
+
+        {
+            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_ctx);
+
+            let entry_block = builder.create_block();
+            builder.append_block_params_for_function_params(entry_block);
+            builder.switch_to_block(entry_block);
+
+            // Get function parameters
+            let params = builder.block_params(entry_block).to_vec();
+            let data_ptr = params[0]; // pointer to i64 array
+            let len = params[1];      // number of elements
+            let initial_acc = params[2]; // initial accumulator
+
+            // Create variables for loop
+            let idx_var = Variable::from_u32(0);
+            let sum_var = Variable::from_u32(1);
+            builder.declare_var(idx_var, I64);
+            builder.declare_var(sum_var, I64);
+
+            // Initialize: idx = 0, sum = initial_acc
+            let zero = builder.ins().iconst(I64, 0);
+            builder.def_var(idx_var, zero);
+            builder.def_var(sum_var, initial_acc);
+
+            // Create blocks for loop
+            let loop_header = builder.create_block();
+            let loop_body = builder.create_block();
+            let loop_exit = builder.create_block();
+
+            builder.ins().jump(loop_header, &[]);
+
+            // Loop header: check if idx < len
+            builder.switch_to_block(loop_header);
+            let idx = builder.use_var(idx_var);
+            let cmp = builder.ins().icmp(IntCC::SignedLessThan, idx, len);
+            builder.ins().brif(cmp, loop_body, &[], loop_exit, &[]);
+
+            // Loop body: sum += data[idx]; idx++
+            builder.switch_to_block(loop_body);
+            let idx = builder.use_var(idx_var);
+            let sum = builder.use_var(sum_var);
+
+            // Load data[idx] - compute offset: data_ptr + idx * 8
+            let offset = builder.ins().imul_imm(idx, 8); // 8 bytes per i64
+            let elem_ptr = builder.ins().iadd(data_ptr, offset);
+            let elem = builder.ins().load(I64, cranelift_codegen::ir::MemFlags::trusted(), elem_ptr, 0);
+
+            // sum += elem
+            let new_sum = builder.ins().iadd(sum, elem);
+            builder.def_var(sum_var, new_sum);
+
+            // idx++
+            let one = builder.ins().iconst(I64, 1);
+            let new_idx = builder.ins().iadd(idx, one);
+            builder.def_var(idx_var, new_idx);
+
+            builder.ins().jump(loop_header, &[]);
+
+            // Loop exit: return sum
+            builder.switch_to_block(loop_exit);
+            let final_sum = builder.use_var(sum_var);
+            builder.ins().return_(&[final_sum]);
+
+            builder.seal_all_blocks();
+            builder.finalize();
+        }
+
+        // Compile and get code pointer
+        self.module.define_function(func_id, &mut self.ctx)
+            .map_err(|e| JitError::Module(e.to_string()))?;
+        self.module.clear_context(&mut self.ctx);
+        self.module.finalize_definitions()
+            .map_err(|e| JitError::Module(e.to_string()))?;
+
+        let code_ptr = self.module.get_finalized_function(func_id);
+
+        // Cache the compiled function
+        self.list_sum_tr_cache.insert(func_index, CompiledListSumTrFunction {
             code_ptr,
             func_id,
         });

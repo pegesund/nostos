@@ -123,6 +123,8 @@ pub struct AsyncSharedState {
     pub jit_array_sum_functions: RwLock<HashMap<u16, crate::shared_types::JitArraySumFn>>,
     /// JIT list sum functions: (data_ptr, len) -> sum
     pub jit_list_sum_functions: RwLock<HashMap<u16, crate::shared_types::JitListSumFn>>,
+    /// JIT tail-recursive list sum functions: (data_ptr, len, acc) -> sum
+    pub jit_list_sum_tr_functions: RwLock<HashMap<u16, crate::shared_types::JitListSumTrFn>>,
 
     /// Shutdown signal (permanent).
     pub shutdown: AtomicBool,
@@ -1828,6 +1830,25 @@ impl AsyncProcess {
                                 }
                             }
                         }
+                        // Tail-recursive list sum JIT: sumTR(list, acc) -> sum
+                        if self.shared.jit_list_sum_tr_functions.read().unwrap().contains_key(&func_idx_u16) {
+                            if let (GcValue::Int64List(ref list), GcValue::Int64(acc)) = (reg_ref!(args[0]), reg!(args[1])) {
+                                // Direct sum on imbl::Vector + initial accumulator
+                                let (result, duration) = if profiling {
+                                    let start = Instant::now();
+                                    let r = list.sum() + acc;
+                                    (r, Some(start.elapsed()))
+                                } else {
+                                    (list.sum() + acc, None)
+                                };
+                                set_reg!(dst, GcValue::Int64(result));
+                                if let Some(d) = duration {
+                                    let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    self.profile_jit_call(&name, d);
+                                }
+                                return Ok(StepResult::Continue);
+                            }
+                        }
                     }
                     3 => {
                         // Try numeric JIT first
@@ -2423,6 +2444,33 @@ impl AsyncProcess {
                                         return Ok(StepResult::Continue);
                                     }
                                 }
+                            }
+                        }
+                        // Tail-recursive list sum JIT: sumTR(list, acc) -> sum
+                        if self.shared.jit_list_sum_tr_functions.read().unwrap().contains_key(&func_idx_u16) {
+                            if let (GcValue::Int64List(ref list), GcValue::Int64(acc)) = (reg_ref!(args[0]), reg!(args[1])) {
+                                // Direct sum on imbl::Vector + initial accumulator
+                                let (res, duration) = if profiling {
+                                    let start = Instant::now();
+                                    let r = list.sum() + acc;
+                                    (r, Some(start.elapsed()))
+                                } else {
+                                    (list.sum() + acc, None)
+                                };
+                                if let Some(d) = duration {
+                                    let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    self.profile_jit_call(&name, d);
+                                }
+                                let result = GcValue::Int64(res);
+                                let return_reg = self.frames.last().unwrap().return_reg;
+                                self.frames.pop();
+                                if self.frames.is_empty() {
+                                    return Ok(StepResult::Finished(result));
+                                } else if let Some(ret_reg) = return_reg {
+                                    let frame = self.frames.last_mut().unwrap();
+                                    frame.registers[ret_reg as usize] = result;
+                                }
+                                return Ok(StepResult::Continue);
                             }
                         }
                     }
@@ -7569,6 +7617,7 @@ impl AsyncVM {
             jit_array_fill_functions: RwLock::new(HashMap::new()),
             jit_array_sum_functions: RwLock::new(HashMap::new()),
             jit_list_sum_functions: RwLock::new(HashMap::new()),
+            jit_list_sum_tr_functions: RwLock::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
             interrupt: AtomicBool::new(false),
             process_registry: TokioRwLock::new(HashMap::new()),
@@ -7680,6 +7729,12 @@ impl AsyncVM {
     /// Register a JIT list sum function - safe during concurrent evals.
     pub fn register_jit_list_sum_function(&mut self, func_index: u16, jit_fn: crate::shared_types::JitListSumFn) {
         self.shared.jit_list_sum_functions.write().unwrap()
+            .insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT tail-recursive list sum function - safe during concurrent evals.
+    pub fn register_jit_list_sum_tr_function(&mut self, func_index: u16, jit_fn: crate::shared_types::JitListSumTrFn) {
+        self.shared.jit_list_sum_tr_functions.write().unwrap()
             .insert(func_index, jit_fn);
     }
 
