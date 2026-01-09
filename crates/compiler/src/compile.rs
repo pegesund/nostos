@@ -8527,6 +8527,11 @@ impl Compiler {
                     // Use visibility and type_params from first definition
                     fn_visibility.insert(qualified_name.clone(), fn_def.visibility);
                     fn_type_params_map.insert(qualified_name.clone(), fn_def.type_params.clone());
+                } else {
+                    // Merge spans to cover all clauses (from first to last definition)
+                    if let Some(existing_span) = fn_spans.get_mut(&qualified_name) {
+                        existing_span.end = fn_def.span.end;
+                    }
                 }
                 fn_clauses.entry(qualified_name).or_default().extend(fn_def.clauses.iter().cloned());
             }
