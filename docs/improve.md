@@ -4,6 +4,22 @@ Ideas and potential improvements for the language.
 
 ## Language Features
 
+### Custom Trait Method Dispatch in Generics
+Currently trait bounds work for built-in traits (Hash, Show, Eq, Copy) but custom trait methods can't be called on generic types.
+
+```nostos
+# Works: built-in traits
+showable[T: Show](x: T) -> String = show(x)
+
+# Doesn't work: custom trait methods
+trait Describable
+    describe(self) -> String
+end
+describeIt[T: Describable](x: T) -> String = x.describe()  # Error
+```
+
+**Priority**: Medium - would enable more flexible generic code
+
 ### Multiline Type Definitions
 Allow record/variant types to span multiple lines.
 
@@ -114,4 +130,4 @@ Some callback patterns in the VM may have stale frame references.
 - ✅ String.drop and String.take
 - ✅ Mutual recursion (two-phase compilation - no forward declarations needed)
 - ✅ Auto-derived traits (Show, Eq, Hash, Copy work automatically for all types)
-- ✅ Trait bounds on generics (`[T: Eq]`, `[T: Hash + Eq]`, etc.)
+- ✅ Trait bounds on generics (`[T: Eq]`, `[T: Hash + Eq]` for built-in traits)
