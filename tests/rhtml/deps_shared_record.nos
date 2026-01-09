@@ -3,14 +3,13 @@
 
 reactive User = { name: String }
 
-greeting(user: User) = RHtml(h1(user.name))
-userInfo(user: User) = RHtml(p(user.name))
-
 main() = {
     user = User("Alice")
+    greeting = () => RHtml(h1(user.name))
+    userInfo = () => RHtml(p(user.name))
     result = RHtml(div([
-        component("greeting", () => greeting(user)),
-        component("info", () => userInfo(user))
+        component("greeting", greeting),
+        component("info", userInfo)
     ]))
     # Should have 1 entry in deps (the user record)
     # That entry should list both component names
