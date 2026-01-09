@@ -12,7 +12,7 @@ mvar listCursor: Int = 0
 mvar listItems: List[String] = ["First item", "Second item", "Third item", "Fourth item", "Fifth item"]
 
 # Get total item count
-listItemCount() = List.length(listItems)
+listItemCount() = length(listItems)
 
 # Handle keyboard input - single entry point for all keys
 listHandleKey(key) = {
