@@ -370,7 +370,7 @@ pub enum GcValue {
 
     // Callable values (Arc-managed, not GC'd - code doesn't need collection)
     Function(Arc<FunctionValue>),
-    NativeFunction(Rc<GcNativeFn>),
+    NativeFunction(Arc<GcNativeFn>),
 
     // Special values
     Pid(u64),
@@ -418,7 +418,7 @@ impl PartialEq for GcValue {
             (GcValue::BigInt(a), GcValue::BigInt(b)) => a == b,
             (GcValue::Closure(a, _), GcValue::Closure(b, _)) => a == b,
             (GcValue::Function(a), GcValue::Function(b)) => Arc::ptr_eq(a, b),
-            (GcValue::NativeFunction(a), GcValue::NativeFunction(b)) => Rc::ptr_eq(a, b),
+            (GcValue::NativeFunction(a), GcValue::NativeFunction(b)) => Arc::ptr_eq(a, b),
             (GcValue::Pid(a), GcValue::Pid(b)) => a == b,
             (GcValue::Ref(a), GcValue::Ref(b)) => a == b,
             (GcValue::Type(a), GcValue::Type(b)) => Arc::ptr_eq(a, b),
@@ -1405,7 +1405,7 @@ impl Heap {
             // Functions and closures - compare by identity (pointer)
             (GcValue::Function(a), GcValue::Function(b)) => Arc::ptr_eq(a, b),
             (GcValue::Closure(a, _), GcValue::Closure(b, _)) => a == b,
-            (GcValue::NativeFunction(a), GcValue::NativeFunction(b)) => Rc::ptr_eq(a, b),
+            (GcValue::NativeFunction(a), GcValue::NativeFunction(b)) => Arc::ptr_eq(a, b),
 
             // Different types - not equal
             _ => false,
@@ -2537,14 +2537,14 @@ mod tests {
     fn test_alloc_variant() {
         let mut heap = Heap::new();
         let ptr = heap.alloc_variant(
-            "Option".to_string(),
-            "Some".to_string(),
+            Arc::new("Option".to_string()),
+            Arc::new("Some".to_string()),
             vec![GcValue::Int64(42)],
         );
 
         let var = heap.get_variant(ptr).unwrap();
-        assert_eq!(var.type_name, "Option");
-        assert_eq!(var.constructor, "Some");
+        assert_eq!(&*var.type_name, "Option");
+        assert_eq!(&*var.constructor, "Some");
         assert_eq!(var.fields.len(), 1);
     }
 
@@ -2850,8 +2850,8 @@ mod tests {
 
         let value = heap.alloc_string("result".to_string());
         let variant = heap.alloc_variant(
-            "Result".to_string(),
-            "Ok".to_string(),
+            Arc::new("Result".to_string()),
+            Arc::new("Ok".to_string()),
             vec![GcValue::String(value)],
         );
 
@@ -3630,8 +3630,8 @@ mod tests {
     fn test_gc_values_equal_variant() {
         let mut heap = Heap::new();
 
-        let var1 = heap.alloc_variant("Option".to_string(), "Some".to_string(), vec![GcValue::Int64(42)]);
-        let var2 = heap.alloc_variant("Option".to_string(), "Some".to_string(), vec![GcValue::Int64(42)]);
+        let var1 = heap.alloc_variant(Arc::new("Option".to_string()), Arc::new("Some".to_string()), vec![GcValue::Int64(42)]);
+        let var2 = heap.alloc_variant(Arc::new("Option".to_string()), Arc::new("Some".to_string()), vec![GcValue::Int64(42)]);
 
         let v1 = GcValue::Variant(var1);
         let v2 = GcValue::Variant(var2);
@@ -3643,8 +3643,8 @@ mod tests {
     fn test_gc_values_equal_variant_different_constructor() {
         let mut heap = Heap::new();
 
-        let var1 = heap.alloc_variant("Option".to_string(), "Some".to_string(), vec![GcValue::Int64(42)]);
-        let var2 = heap.alloc_variant("Option".to_string(), "None".to_string(), vec![]);
+        let var1 = heap.alloc_variant(Arc::new("Option".to_string()), Arc::new("Some".to_string()), vec![GcValue::Int64(42)]);
+        let var2 = heap.alloc_variant(Arc::new("Option".to_string()), Arc::new("None".to_string()), vec![]);
 
         let v1 = GcValue::Variant(var1);
         let v2 = GcValue::Variant(var2);

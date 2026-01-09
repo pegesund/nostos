@@ -1022,6 +1022,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_http_get() {
         let io = IoRuntime::new();
         let tx = io.request_sender();

@@ -24,7 +24,7 @@ use tokio::sync::mpsc as tokio_mpsc;
 
 use crate::gc::{constructor_discriminant, GcConfig, GcList, GcMapKey, GcNativeFn, GcValue, Heap, InlineOp};
 use crate::io_runtime::{IoRequest, IoRuntime};
-use crate::process::{CallFrame, IoResponseValue, Process, ProcessState};
+use crate::process::{CallFrame, IoResponseValue, Process, ProcessState, ThreadSafeValue};
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, TypeValue, Value};
 
 // JIT function pointer types (moved from runtime.rs)
@@ -59,149 +59,9 @@ fn pid_local_id(pid: Pid) -> u64 {
     pid.0 & LOCAL_ID_MASK
 }
 
-/// Thread-safe message value for cross-thread communication.
-/// This is a subset of values that can be serialized and sent between threads.
-#[derive(Debug, Clone)]
-pub enum ThreadSafeValue {
-    Unit,
-    Bool(bool),
-    Int64(i64),
-    Float64(f64),
-    Pid(u64),
-    String(String),
-    Char(char),
-    List(Vec<ThreadSafeValue>),
-    Tuple(Vec<ThreadSafeValue>),
-    Record {
-        type_name: String,
-        field_names: Vec<String>,
-        fields: Vec<ThreadSafeValue>,
-        mutable_fields: Vec<bool>,
-    },
-    /// A closure with its function and captured values
-    Closure {
-        function: Arc<FunctionValue>,
-        captures: Vec<ThreadSafeValue>,
-        capture_names: Vec<String>,
-    },
-    /// A function (already thread-safe via Arc)
-    Function(Arc<FunctionValue>),
-}
 
-impl ThreadSafeValue {
-    /// Convert a GcValue to a thread-safe value (deep copy).
-    fn from_gc_value(value: &GcValue, heap: &Heap) -> Option<Self> {
-        Some(match value {
-            GcValue::Unit => ThreadSafeValue::Unit,
-            GcValue::Bool(b) => ThreadSafeValue::Bool(*b),
-            GcValue::Int64(i) => ThreadSafeValue::Int64(*i),
-            GcValue::Float64(f) => ThreadSafeValue::Float64(*f),
-            GcValue::Pid(p) => ThreadSafeValue::Pid(*p),
-            GcValue::Char(c) => ThreadSafeValue::Char(*c),
-            GcValue::String(ptr) => {
-                let s = heap.get_string(*ptr)?;
-                ThreadSafeValue::String(s.data.clone())
-            }
-            GcValue::List(list) => {
-                let items: Option<Vec<_>> = list.items().iter()
-                    .map(|v| ThreadSafeValue::from_gc_value(v, heap))
-                    .collect();
-                ThreadSafeValue::List(items?)
-            }
-            GcValue::Tuple(ptr) => {
-                let tuple = heap.get_tuple(*ptr)?;
-                let items: Option<Vec<_>> = tuple.items.iter()
-                    .map(|v| ThreadSafeValue::from_gc_value(v, heap))
-                    .collect();
-                ThreadSafeValue::Tuple(items?)
-            }
-            GcValue::Record(ptr) => {
-                let rec = heap.get_record(*ptr)?;
-                let fields: Option<Vec<_>> = rec.fields.iter()
-                    .map(|v| ThreadSafeValue::from_gc_value(v, heap))
-                    .collect();
-                ThreadSafeValue::Record {
-                    type_name: rec.type_name.clone(),
-                    field_names: rec.field_names.clone(),
-                    fields: fields?,
-                    mutable_fields: rec.mutable_fields.clone(),
-                }
-            }
-            GcValue::Closure(ptr, _) => {
-                let closure = heap.get_closure(*ptr)?;
-                // Recursively convert captures to thread-safe values
-                let captures: Option<Vec<_>> = closure.captures.iter()
-                    .map(|v| ThreadSafeValue::from_gc_value(v, heap))
-                    .collect();
-                ThreadSafeValue::Closure {
-                    function: closure.function.clone(),
-                    captures: captures?,
-                    capture_names: closure.capture_names.clone(),
-                }
-            }
-            // Functions are already thread-safe (Arc<FunctionValue>)
-            GcValue::Function(func) => ThreadSafeValue::Function(func.clone()),
-            // Native functions, variants, etc cannot be sent between threads
-            _ => return None,
-        })
-    }
 
-    /// Convert back to GcValue, allocating on the given heap.
-    fn to_gc_value(&self, heap: &mut Heap) -> GcValue {
-        match self {
-            ThreadSafeValue::Unit => GcValue::Unit,
-            ThreadSafeValue::Bool(b) => GcValue::Bool(*b),
-            ThreadSafeValue::Int64(i) => GcValue::Int64(*i),
-            ThreadSafeValue::Float64(f) => GcValue::Float64(*f),
-            ThreadSafeValue::Pid(p) => GcValue::Pid(*p),
-            ThreadSafeValue::Char(c) => GcValue::Char(*c),
-            ThreadSafeValue::String(s) => {
-                let ptr = heap.alloc_string(s.clone());
-                GcValue::String(ptr)
-            }
-            ThreadSafeValue::List(items) => {
-                let gc_items: Vec<GcValue> = items.iter()
-                    .map(|v| v.to_gc_value(heap))
-                    .collect();
-                let list = heap.make_list(gc_items);
-                GcValue::List(list)
-            }
-            ThreadSafeValue::Tuple(items) => {
-                let gc_items: Vec<GcValue> = items.iter()
-                    .map(|v| v.to_gc_value(heap))
-                    .collect();
-                let ptr = heap.alloc_tuple(gc_items);
-                GcValue::Tuple(ptr)
-            }
-            ThreadSafeValue::Record { type_name, field_names, fields, mutable_fields } => {
-                let gc_fields: Vec<GcValue> = fields.iter()
-                    .map(|v| v.to_gc_value(heap))
-                    .collect();
-                let ptr = heap.alloc_record(
-                    type_name.clone(),
-                    field_names.clone(),
-                    gc_fields,
-                    mutable_fields.clone(),
-                );
-                GcValue::Record(ptr)
-            }
-            ThreadSafeValue::Closure { function, captures, capture_names } => {
-                // Recursively convert captures to GcValue
-                let gc_captures: Vec<GcValue> = captures.iter()
-                    .map(|v| v.to_gc_value(heap))
-                    .collect();
-                let inline_op = InlineOp::from_function(function);
-                let ptr = heap.alloc_closure(
-                    function.clone(),
-                    gc_captures,
-                    capture_names.clone(),
-                );
-                GcValue::Closure(ptr, inline_op)
-            }
-            ThreadSafeValue::Function(func) => GcValue::Function(func.clone()),
-        }
-    }
-}
+
 
 /// Message sent between threads.
 #[derive(Debug)]
@@ -1075,11 +935,8 @@ impl ThreadWorker {
                         CrossThreadMessage::SendMessage { target_pid, payload } => {
                             let local_id = pid_local_id(target_pid);
                             if let Some(process) = self.get_process_mut(local_id) {
-                                // Convert thread-safe value to GcValue on this process's heap
-                                let gc_value = payload.to_gc_value(&mut process.heap);
-
-                                // Deliver to mailbox
-                                process.sender.send(gc_value).expect("Failed to send message to process mailbox");
+                                // Send to process channel (thread-safe)
+                                let _ = process.sender.send(payload);
 
                                 // Wake process if waiting for message (with or without timeout)
                                 if matches!(process.state, ProcessState::Waiting | ProcessState::WaitingTimeout) {
@@ -1381,10 +1238,9 @@ impl ThreadWorker {
             let sender_process = self.get_process(sender_local_id).unwrap();
             let safe_value = ThreadSafeValue::from_gc_value(&message, &sender_process.heap);
 
-            // Then convert back to target's heap
             if let (Some(safe), Some(target_process)) = (safe_value, self.get_process_mut(target_local_id)) {
-                let copied_message = safe.to_gc_value(&mut target_process.heap);
-                target_process.sender.send(copied_message).expect("Failed to send message to local process");
+                // Send to target channel
+                let _ = target_process.sender.send(safe);
 
                 // Wake process if waiting for message (with or without timeout)
                 if matches!(target_process.state, ProcessState::Waiting | ProcessState::WaitingTimeout) {
@@ -3465,7 +3321,7 @@ impl ThreadWorker {
 
             Receive(dst) => {
                 let proc = self.get_process_mut(local_id).unwrap();
-                if let Some(msg) = proc.receiver.try_recv().ok() {
+                if let Some(msg) = proc.try_receive() {
                     // Result goes in destination register
                     let frame = proc.frames.last_mut().unwrap();
                     frame.registers[*dst as usize] = msg;
@@ -3483,12 +3339,12 @@ impl ThreadWorker {
                 // First check if there's a message
                 let has_msg = {
                     let proc = self.get_process(local_id).unwrap();
-                    !proc.receiver.is_empty()
+                    proc.has_messages()
                 };
 
                 if has_msg {
                     let proc = self.get_process_mut(local_id).unwrap();
-                    let msg = proc.receiver.try_recv().unwrap();
+                    let msg = proc.try_receive().unwrap();
                     // Message available - put in destination register
                     let frame = proc.frames.last_mut().unwrap();
                     frame.registers[*dst as usize] = msg;
