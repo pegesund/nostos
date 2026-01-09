@@ -46,12 +46,12 @@ acceptLoop(server, main_pid) = {
   (status, req) = Server.accept(server)
   
   if status == "error" then {
-    () # Exit if Server.accept returns error (e.g., server closed)
+    # Exit if Server.accept returns error (e.g., server closed)
   } else {
     (signal, _) = handleRequest(server, req, main_pid)
 
     if signal == "shutdown_signal" then {
-      () # Exit worker process
+      # Exit worker process
     } else {
       acceptLoop(server, main_pid) # Continue accepting requests
     }

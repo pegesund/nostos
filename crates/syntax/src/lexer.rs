@@ -6,7 +6,7 @@ use std::fmt;
 /// All tokens in the Nostos language.
 #[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
 #[logos(skip r"[ \t\r]+")]                // Skip spaces and tabs, but NOT newlines
-#[logos(skip r"#[^*{\n][^\n]*")]          // Single-line comment: # ... (not #* or #{)
+#[logos(skip r"#[^*{\n][^\n]*")]           // Single-line comment: # ... (not #* or #{)
 #[logos(skip r"#\*([^*]|\*[^#])*\*#")]    // Multi-line comment: #* ... *#
 pub enum Token {
     // Newline token - used as implicit statement separator
@@ -307,8 +307,19 @@ pub enum Token {
     Pipe,
     #[token("_")]
     Underscore,
-    #[token("#")]
+    #[regex(r"#", hash_callback)]
     Hash,
+}
+
+/// Callback for Hash token - only match if followed by '{' (for set literals)
+/// Otherwise it's an empty comment and should be skipped
+fn hash_callback(lex: &mut logos::Lexer<Token>) -> logos::Filter<()> {
+    // Check if next char is '{'
+    if lex.remainder().starts_with('{') {
+        logos::Filter::Emit(())
+    } else {
+        logos::Filter::Skip
+    }
 }
 
 /// Parse a character from escape sequence.

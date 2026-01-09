@@ -359,6 +359,19 @@ impl SendableValue {
     pub fn is_unit(&self) -> bool {
         matches!(self, SendableValue::Unit)
     }
+
+    /// Convert to Value (for tests and compatibility).
+    pub fn to_value(&self) -> Value {
+        match self {
+            SendableValue::Unit => Value::Unit,
+            SendableValue::Bool(b) => Value::Bool(*b),
+            SendableValue::Int64(i) => Value::Int64(*i),
+            SendableValue::Float64(f) => Value::Float64(*f),
+            SendableValue::Pid(_) => Value::Unit, // Pids don't convert cleanly to Value
+            SendableValue::String(s) => Value::String(Arc::new(s.clone())),
+            SendableValue::Error(_) => Value::Unit,
+        }
+    }
 }
 
 /// Result from a thread when it finishes.
@@ -2591,6 +2604,16 @@ impl ThreadWorker {
                 let vb = reg!(*b).clone();
                 let result = match (&va, &vb) {
                     (GcValue::Int64(x), GcValue::Int64(y)) => x == y,
+                    _ => false,
+                };
+                set_reg!(*dst, GcValue::Bool(result));
+            }
+
+            EqFloat(dst, a, b) => {
+                let va = reg!(*a).clone();
+                let vb = reg!(*b).clone();
+                let result = match (&va, &vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => x == y,
                     _ => false,
                 };
                 set_reg!(*dst, GcValue::Bool(result));
