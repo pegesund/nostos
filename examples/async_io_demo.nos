@@ -13,10 +13,10 @@ httpWorker(parent, id) = {
     data = Http.get("https://httpbin.org/delay/1")
     println("Worker " ++ show(id) ++ " done: status " ++ show(data.status))
     parent <- ("done", id)
-  } catch e ->
+  } catch e -> {
     println("Worker " ++ show(id) ++ " error: " ++ e)
     parent <- ("done", id)
-  end
+  } end
 }
 
 waitForAll(remaining) = {
