@@ -1,0 +1,77 @@
+# Test string encoding functions
+
+# Test Base64 encoding
+testBase64() = {
+    println("Testing Base64 encoding...")
+
+    # Encode a string
+    encoded = Base64.encode("Hello, World!")
+    println("Encoded: " ++ encoded)
+
+    # Decode it back
+    (status, decoded) = Base64.decode(encoded)
+    println("Status: " ++ status)
+    println("Decoded: " ++ decoded)
+
+    # Verify
+    assert(status == "ok")
+    assert(decoded == "Hello, World!")
+    println("Base64 test PASSED")
+}
+
+# Test URL encoding
+testUrlEncode() = {
+    println("")
+    println("Testing URL encoding...")
+
+    # Encode a string with special characters
+    original = "Hello World! How are you?"
+    encoded = Url.encode(original)
+    println("Original: " ++ original)
+    println("Encoded: " ++ encoded)
+
+    # Decode it back
+    (status, decoded) = Url.decode(encoded)
+    println("Status: " ++ status)
+    println("Decoded: " ++ decoded)
+
+    # Verify
+    assert(status == "ok")
+    assert(decoded == original)
+    println("URL encoding test PASSED")
+}
+
+# Test UTF-8 encoding
+testUtf8() = {
+    println("")
+    println("Testing UTF-8 encoding...")
+
+    # Convert string to bytes
+    original = "Hi"
+    bytes = Encoding.toBytes(original)
+    println("Original: " ++ original)
+    print("Bytes: ")
+    println(bytes)
+
+    # Convert bytes back to string
+    (status, decoded) = Encoding.fromBytes(bytes)
+    println("Status: " ++ status)
+    println("Decoded: " ++ decoded)
+
+    # Verify
+    assert(status == "ok")
+    assert(decoded == original)
+    println("UTF-8 encoding test PASSED")
+}
+
+main() = {
+    println("=== String Encoding Tests ===")
+    println("")
+
+    testBase64()
+    testUrlEncode()
+    testUtf8()
+
+    println("")
+    println("=== All encoding tests PASSED! ===")
+}

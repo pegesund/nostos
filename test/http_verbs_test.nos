@@ -1,0 +1,76 @@
+# Test HTTP verbs (POST, PUT, DELETE, PATCH, HEAD)
+
+# Test HTTP POST
+testPost() = {
+    println("Testing HTTP POST...")
+    (status, resp) = Http.post("https://httpbin.org/post", "{\"test\": \"data\"}")
+    println("Status code: " ++ show(resp.status))
+    assert(resp.status == 200)
+    println("POST test PASSED")
+}
+
+# Test HTTP PUT
+testPut() = {
+    println("")
+    println("Testing HTTP PUT...")
+    (status, resp) = Http.put("https://httpbin.org/put", "{\"update\": \"value\"}")
+    println("Status code: " ++ show(resp.status))
+    assert(resp.status == 200)
+    println("PUT test PASSED")
+}
+
+# Test HTTP DELETE
+testDelete() = {
+    println("")
+    println("Testing HTTP DELETE...")
+    (status, resp) = Http.delete("https://httpbin.org/delete")
+    println("Status code: " ++ show(resp.status))
+    assert(resp.status == 200)
+    println("DELETE test PASSED")
+}
+
+# Test HTTP PATCH
+testPatch() = {
+    println("")
+    println("Testing HTTP PATCH...")
+    (status, resp) = Http.patch("https://httpbin.org/patch", "{\"partial\": \"update\"}")
+    println("Status code: " ++ show(resp.status))
+    assert(resp.status == 200)
+    println("PATCH test PASSED")
+}
+
+# Test HTTP HEAD (returns headers only, no body)
+testHead() = {
+    println("")
+    println("Testing HTTP HEAD...")
+    (status, resp) = Http.head("https://httpbin.org/get")
+    println("Status code: " ++ show(resp.status))
+    assert(resp.status == 200)
+    println("HEAD test PASSED")
+}
+
+# Test generic HTTP request with custom headers
+testRequest() = {
+    println("")
+    println("Testing Http.request with custom headers...")
+    headers = [("Content-Type", "application/json"), ("X-Custom", "test-value")]
+    (status, resp) = Http.request("POST", "https://httpbin.org/post", headers, "{\"via\": \"request\"}")
+    println("Status code: " ++ show(resp.status))
+    assert(resp.status == 200)
+    println("Http.request test PASSED")
+}
+
+main() = {
+    println("=== HTTP Verbs Test ===")
+    println("")
+
+    testPost()
+    testPut()
+    testDelete()
+    testPatch()
+    testHead()
+    testRequest()
+
+    println("")
+    println("=== All HTTP verb tests PASSED! ===")
+}

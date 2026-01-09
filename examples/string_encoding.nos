@@ -1,0 +1,85 @@
+# String Encoding Example
+# Demonstrates Base64, URL encoding, and UTF-8 byte operations.
+
+# Base64 encoding/decoding
+base64Example() = {
+    println("=== Base64 Encoding ===")
+
+    original = "Hello, Nostos!"
+    println("Original: " ++ original)
+
+    # Encode to Base64
+    encoded = Base64.encode(original)
+    println("Encoded:  " ++ encoded)
+
+    # Decode back
+    (status, decoded) = Base64.decode(encoded)
+    println("Decoded:  " ++ decoded)
+    println("Status:   " ++ status)
+    println("")
+}
+
+# URL encoding/decoding
+urlExample() = {
+    println("=== URL Encoding ===")
+
+    original = "Hello World! name=value&foo=bar"
+    println("Original: " ++ original)
+
+    # Encode for URL
+    encoded = Url.encode(original)
+    println("Encoded:  " ++ encoded)
+
+    # Decode back
+    (status, decoded) = Url.decode(encoded)
+    println("Decoded:  " ++ decoded)
+    println("Status:   " ++ status)
+    println("")
+}
+
+# UTF-8 byte operations
+utf8Example() = {
+    println("=== UTF-8 Bytes ===")
+
+    original = "Hi!"
+    println("Original: " ++ original)
+
+    # Convert to bytes
+    bytes = Encoding.toBytes(original)
+    print("Bytes:    ")
+    println(bytes)
+
+    # Convert back to string
+    (status, decoded) = Encoding.fromBytes(bytes)
+    println("Decoded:  " ++ decoded)
+    println("Status:   " ++ status)
+    println("")
+}
+
+# Practical example: encode data for URL parameter
+practicalExample() = {
+    println("=== Practical: Encode Query Parameter ===")
+
+    # Build a search query with special characters
+    query = "language:nostos type:functional"
+    println("Query: " ++ query)
+
+    # URL-encode for use in URL
+    encoded = Url.encode(query)
+    url = "https://example.com/search?q=" ++ encoded
+    println("URL: " ++ url)
+    println("")
+}
+
+main() = {
+    println("String Encoding Examples")
+    println("========================")
+    println("")
+
+    base64Example()
+    urlExample()
+    utf8Example()
+    practicalExample()
+
+    println("All encoding examples completed!")
+}

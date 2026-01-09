@@ -2360,7 +2360,22 @@ impl Runtime {
 
             // === Async IO operations ===
             // These are only supported in the parallel VM
-            Instruction::FileReadAll(_, _) | Instruction::FileWriteAll(_, _, _) | Instruction::HttpGet(_, _) => {
+            Instruction::FileReadAll(_, _)
+            | Instruction::FileWriteAll(_, _, _)
+            | Instruction::HttpGet(_, _)
+            | Instruction::HttpPost(_, _, _)
+            | Instruction::HttpPut(_, _, _)
+            | Instruction::HttpDelete(_, _)
+            | Instruction::HttpPatch(_, _, _)
+            | Instruction::HttpHead(_, _)
+            | Instruction::HttpRequest(_, _, _, _, _)
+            | Instruction::Base64Encode(_, _)
+            | Instruction::Base64Decode(_, _)
+            | Instruction::UrlEncode(_, _)
+            | Instruction::UrlDecode(_, _)
+            | Instruction::Utf8Encode(_, _)
+            | Instruction::Utf8Decode(_, _)
+            => {
                 return Err(RuntimeError::IOError(
                     "Async IO operations require ParallelVM".to_string()
                 ));
