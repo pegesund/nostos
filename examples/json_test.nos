@@ -1,27 +1,37 @@
-use json.{jsonParse}
+use json.{jsonParse, Null, Bool, Number, String, Array, Object}
 
 main() = {
     println("Testing complex JSON...")
     
     # Simple values
     j1 = jsonParse("null")
-    println(show(j1))
+    assert_eq(j1, Null)
     
     j2 = jsonParse("123")
-    println(show(j2))
+    assert_eq(j2, Number(123))
     
     j3 = jsonParse("\"hello\"")
-    println(show(j3))
+    assert_eq(j3, String("hello"))
     
     # Array
     j4 = jsonParse("[1, 2, 3]")
-    println(show(j4))
+    assert_eq(j4, Array([Number(1), Number(2), Number(3)]))
     
     # Object
     j5 = jsonParse("{\"key\": \"value\", \"num\": 42}")
-    println(show(j5))
+    # Note: Object stores list of tuples. Order is preserved from parsing.
+    assert_eq(j5, Object([("key", String("value")), ("num", Number(42))]))
     
     # Nested
     j6 = jsonParse("{\"list\": [1, {\"inner\": null}], \"bool\": true}")
-    println(show(j6))
+    expected_j6 = Object([
+        ("list", Array([
+            Number(1),
+            Object([("inner", Null)])
+        ])),
+        ("bool", Bool(true))
+    ])
+    assert_eq(j6, expected_j6)
+    
+    println("All JSON tests passed!")
 }
