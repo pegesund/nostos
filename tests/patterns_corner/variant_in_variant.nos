@@ -1,0 +1,21 @@
+# expect: 42
+# Variant containing variant
+
+type Opt[T] = Some(T) | None
+type Result[T] = Ok(T) | Err(String)
+
+# Nested: Result containing Opt - use match expression
+unwrapNestedOk(r) = match r {
+    Ok(inner) -> match inner {
+        Some(x) -> x
+        None -> 0
+    }
+    Err(_) -> -1
+}
+
+main() = {
+    assert_eq(10, unwrapNestedOk(Ok(Some(10))))
+    assert_eq(0, unwrapNestedOk(Ok(None)))
+    assert_eq(-1, unwrapNestedOk(Err("error")))
+    42
+}

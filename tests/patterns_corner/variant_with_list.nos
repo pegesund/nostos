@@ -1,0 +1,24 @@
+# expect: 42
+# Variant containing list
+
+type Container = NoItems | Items(List[Int])
+
+countItems(NoItems) = 0
+countItems(Items(lst)) = length(lst)
+
+firstItem(x) = match x {
+    Items(lst) -> match lst {
+        [h | _] -> h
+        [] -> 0
+    }
+    NoItems -> 0
+}
+
+main() = {
+    assert_eq(0, countItems(NoItems))
+    assert_eq(3, countItems(Items([1, 2, 3])))
+    assert_eq(10, firstItem(Items([10, 20, 30])))
+    assert_eq(0, firstItem(NoItems))
+    assert_eq(0, firstItem(Items([])))
+    42
+}

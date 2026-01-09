@@ -1,0 +1,13 @@
+# expect: 42
+# Two element list pattern
+
+getTwo([a, b]) = a + b
+getTwo(_) = 0
+
+main() = {
+    assert_eq(30, getTwo([10, 20]))
+    assert_eq(0, getTwo([1]))
+    assert_eq(0, getTwo([1, 2, 3]))
+    assert_eq(0, getTwo([]))
+    42
+}

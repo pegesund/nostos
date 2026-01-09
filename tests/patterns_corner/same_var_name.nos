@@ -1,0 +1,18 @@
+# expect: 42
+# Same variable name in different clauses
+
+getValue(0) = 100
+getValue(x) = x * 2
+
+process((0, y)) = y
+process((x, 0)) = x
+process((x, y)) = x + y
+
+main() = {
+    assert_eq(100, getValue(0))
+    assert_eq(10, getValue(5))
+    assert_eq(5, process((0, 5)))
+    assert_eq(3, process((3, 0)))
+    assert_eq(7, process((3, 4)))
+    42
+}

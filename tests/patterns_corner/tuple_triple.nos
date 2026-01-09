@@ -1,0 +1,15 @@
+# expect: 42
+# Tuple triple patterns
+
+sum3((a, b, c)) = a + b + c
+first3((a, _, _)) = a
+last3((_, _, c)) = c
+mid3((_, b, _)) = b
+
+main() = {
+    assert_eq(60, sum3((10, 20, 30)))
+    assert_eq(1, first3((1, 2, 3)))
+    assert_eq(3, last3((1, 2, 3)))
+    assert_eq(2, mid3((1, 2, 3)))
+    42
+}

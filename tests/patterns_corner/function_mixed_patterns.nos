@@ -1,0 +1,15 @@
+# expect: 42
+# Function with mixed pattern types
+
+process(0, []) = "empty"
+process(0, [h | _]) = "zero with list starting " ++ show(h)
+process(n, []) = "number " ++ show(n) ++ " with empty list"
+process(n, [h | _]) = "number " ++ show(n) ++ " with list starting " ++ show(h)
+
+main() = {
+    assert_eq("empty", process(0, []))
+    assert_eq("zero with list starting 5", process(0, [5, 6, 7]))
+    assert_eq("number 3 with empty list", process(3, []))
+    assert_eq("number 3 with list starting 5", process(3, [5, 6, 7]))
+    42
+}

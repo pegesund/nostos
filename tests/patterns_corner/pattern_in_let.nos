@@ -1,0 +1,20 @@
+# expect: 42
+# Pattern matching in let bindings
+
+main() = {
+    # Tuple destructuring in let
+    (a, b) = (10, 20)
+    assert_eq(10, a)
+    assert_eq(20, b)
+
+    # Nested tuple
+    ((x, y), z) = ((1, 2), 3)
+    assert_eq(1, x)
+    assert_eq(2, y)
+    assert_eq(3, z)
+
+    # List head/tail (if supported)
+    # [h | t] = [1, 2, 3]
+
+    42
+}

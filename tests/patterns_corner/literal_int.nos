@@ -1,0 +1,18 @@
+# expect: 42
+# Literal int pattern matching
+
+matchInt(0) = "zero"
+matchInt(1) = "one"
+matchInt(999) = "large"
+matchInt(n) when n < 0 = "negative"
+matchInt(_) = "other"
+
+main() = {
+    assert_eq("zero", matchInt(0))
+    assert_eq("one", matchInt(1))
+    assert_eq("negative", matchInt(-1))
+    assert_eq("large", matchInt(999))
+    assert_eq("other", matchInt(42))
+    assert_eq("negative", matchInt(-999))
+    42
+}

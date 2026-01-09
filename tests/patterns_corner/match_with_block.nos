@@ -1,0 +1,26 @@
+# expect: 42
+# Match with block expressions
+
+type Action = Add(Int) | Sub(Int) | Mul(Int)
+
+applyAction(value, action) = match action {
+    Add(n) -> {
+        result = value + n
+        result
+    }
+    Sub(n) -> {
+        result = value - n
+        result
+    }
+    Mul(n) -> {
+        result = value * n
+        result
+    }
+}
+
+main() = {
+    assert_eq(15, applyAction(10, Add(5)))
+    assert_eq(5, applyAction(10, Sub(5)))
+    assert_eq(50, applyAction(10, Mul(5)))
+    42
+}

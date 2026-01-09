@@ -1,0 +1,17 @@
+# expect: 42
+# List of strings with pattern matching
+
+firstWord([w | _]) = w
+firstWord([]) = ""
+
+countWords([]) = 0
+countWords([_ | t]) = 1 + countWords(t)
+
+main() = {
+    words = ["hello", "world", "test"]
+    assert_eq("hello", firstWord(words))
+    assert_eq(3, countWords(words))
+    assert_eq("", firstWord([]))
+    assert_eq(0, countWords([]))
+    42
+}

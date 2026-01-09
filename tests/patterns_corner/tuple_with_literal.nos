@@ -1,0 +1,13 @@
+# expect: 42
+# Tuple with literal patterns
+
+matchFirst((0, x)) = x
+matchFirst((1, x)) = x * 2
+matchFirst((_, x)) = x * 3
+
+main() = {
+    assert_eq(10, matchFirst((0, 10)))
+    assert_eq(20, matchFirst((1, 10)))
+    assert_eq(30, matchFirst((2, 10)))
+    42
+}

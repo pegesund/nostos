@@ -1,0 +1,19 @@
+# expect: 42
+# Guard patterns (when clause)
+
+classify(n) when n < 0 = "negative"
+classify(n) when n == 0 = "zero"
+classify(n) when n > 0 = "positive"
+
+myAbs(n) when n < 0 = 0 - n
+myAbs(n) = n
+
+main() = {
+    assert_eq("negative", classify(-5))
+    assert_eq("zero", classify(0))
+    assert_eq("positive", classify(5))
+    assert_eq(5, myAbs(-5))
+    assert_eq(5, myAbs(5))
+    assert_eq(0, myAbs(0))
+    42
+}

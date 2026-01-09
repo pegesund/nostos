@@ -1,0 +1,19 @@
+# expect: 42
+# Pattern matching in receive
+
+type Msg = Ping(Int) | Pong | Data(String)
+
+main() = {
+    me = self()
+
+    spawn { me <- Ping(5) }
+    spawn { me <- Pong }
+    spawn { me <- Data("hello") }
+
+    # Receive and validate each message type
+    pingOk = receive { Ping(_) -> true }
+    pongOk = receive { Pong -> true }
+    dataOk = receive { Data(_) -> true }
+
+    if pingOk && pongOk && dataOk then 42 else 0
+}

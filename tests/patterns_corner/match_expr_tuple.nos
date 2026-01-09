@@ -1,0 +1,18 @@
+# expect: 42
+# Match expression with tuples
+
+classify(pair) = match pair {
+    (0, 0) -> "origin"
+    (0, _) -> "y-axis"
+    (_, 0) -> "x-axis"
+    (x, y) -> if x == y then "diagonal" else "other"
+}
+
+main() = {
+    assert_eq("origin", classify((0, 0)))
+    assert_eq("y-axis", classify((0, 5)))
+    assert_eq("x-axis", classify((5, 0)))
+    assert_eq("diagonal", classify((3, 3)))
+    assert_eq("other", classify((1, 2)))
+    42
+}

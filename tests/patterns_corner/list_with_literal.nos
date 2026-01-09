@@ -1,0 +1,17 @@
+# expect: 42
+# List with literal element patterns
+
+startsWithZero([0 | _]) = true
+startsWithZero(_) = false
+
+startsWithOne([1 | _]) = true
+startsWithOne(_) = false
+
+main() = {
+    assert_eq(true, startsWithZero([0, 1, 2]))
+    assert_eq(false, startsWithZero([1, 2, 3]))
+    assert_eq(false, startsWithZero([]))
+    assert_eq(true, startsWithOne([1, 2, 3]))
+    assert_eq(false, startsWithOne([0, 1, 2]))
+    42
+}

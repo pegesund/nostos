@@ -1,0 +1,15 @@
+# expect: 42
+# String literal patterns
+
+greet("hello") = "Hi there!"
+greet("goodbye") = "See you!"
+greet("") = "Nothing to say"
+greet(_) = "What?"
+
+main() = {
+    assert_eq("Hi there!", greet("hello"))
+    assert_eq("See you!", greet("goodbye"))
+    assert_eq("Nothing to say", greet(""))
+    assert_eq("What?", greet("random"))
+    42
+}

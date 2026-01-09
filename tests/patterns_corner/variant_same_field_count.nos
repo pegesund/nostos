@@ -1,0 +1,15 @@
+# expect: 42
+# Variants with same field count
+
+type Op = Plus(Int, Int) | Minus(Int, Int) | Times(Int, Int)
+
+compute(Plus(a, b)) = a + b
+compute(Minus(a, b)) = a - b
+compute(Times(a, b)) = a * b
+
+main() = {
+    assert_eq(7, compute(Plus(3, 4)))
+    assert_eq(-1, compute(Minus(3, 4)))
+    assert_eq(12, compute(Times(3, 4)))
+    42
+}

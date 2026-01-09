@@ -1,0 +1,15 @@
+# expect: 42
+# Variant with no arguments
+
+type Color = Red | Green | Blue
+
+colorToInt(Red) = 1
+colorToInt(Green) = 2
+colorToInt(Blue) = 3
+
+main() = {
+    assert_eq(1, colorToInt(Red))
+    assert_eq(2, colorToInt(Green))
+    assert_eq(3, colorToInt(Blue))
+    42
+}

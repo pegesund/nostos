@@ -1,0 +1,19 @@
+# expect: 42
+# Order of variant patterns matters (using guards for literal matching)
+
+type Num = Zero | Pos(Int) | Neg(Int)
+
+classify(Zero) = "zero"
+classify(Pos(n)) when n == 1 = "one"
+classify(Pos(_)) = "positive"
+classify(Neg(n)) when n == -1 = "minus one"
+classify(Neg(_)) = "negative"
+
+main() = {
+    assert_eq("zero", classify(Zero))
+    assert_eq("one", classify(Pos(1)))
+    assert_eq("positive", classify(Pos(5)))
+    assert_eq("minus one", classify(Neg(-1)))
+    assert_eq("negative", classify(Neg(-5)))
+    42
+}

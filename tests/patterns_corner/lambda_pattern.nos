@@ -1,0 +1,17 @@
+# expect: 42
+# Pattern matching in lambda arguments
+
+main() = {
+    pairs = [(1, 2), (3, 4), (5, 6)]
+
+    # Lambda with tuple pattern
+    sums = pairs.map((a, b) => a + b)
+    assert_eq([3, 7, 11], sums)
+
+    # Lambda with nested tuple
+    nested = [((1, 2), 3), ((4, 5), 6)]
+    firsts = nested.map(((a, _), _) => a)
+    assert_eq([1, 4], firsts)
+
+    42
+}

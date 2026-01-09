@@ -1,0 +1,18 @@
+# expect: 42
+# Singleton tuple (edge case)
+
+# Note: (x) is not a tuple, it's just grouping
+# This tests if the language handles this correctly
+
+unwrapPair((a, b)) = a + b
+
+main() = {
+    x = (1, 2)
+    assert_eq(3, unwrapPair(x))
+
+    # Nested grouping
+    y = ((1 + 2), 3)
+    assert_eq(6, unwrapPair(y))
+
+    42
+}

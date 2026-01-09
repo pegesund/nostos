@@ -1,0 +1,24 @@
+# expect: 42
+# Guards with tuple patterns
+
+compare((a, b)) when a > b = "first greater"
+compare((a, b)) when a < b = "second greater"
+compare((a, b)) when a == b = "equal"
+
+quadrant((x, y)) when x > 0 && y > 0 = 1
+quadrant((x, y)) when x < 0 && y > 0 = 2
+quadrant((x, y)) when x < 0 && y < 0 = 3
+quadrant((x, y)) when x > 0 && y < 0 = 4
+quadrant(_) = 0
+
+main() = {
+    assert_eq("first greater", compare((5, 3)))
+    assert_eq("second greater", compare((3, 5)))
+    assert_eq("equal", compare((4, 4)))
+    assert_eq(1, quadrant((1, 1)))
+    assert_eq(2, quadrant((-1, 1)))
+    assert_eq(3, quadrant((-1, -1)))
+    assert_eq(4, quadrant((1, -1)))
+    assert_eq(0, quadrant((0, 0)))
+    42
+}

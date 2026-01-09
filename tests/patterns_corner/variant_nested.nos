@@ -1,0 +1,19 @@
+# expect: 42
+# Nested variant patterns
+
+type Maybe[T] = Just(T) | Nothing
+type Either[A, B] = Left(A) | Right(B)
+
+unwrapJust(Just(x)) = x
+unwrapJust(Nothing) = 0
+
+getLeftValue(Left(x)) = x
+getLeftValue(Right(_)) = 0
+
+main() = {
+    assert_eq(10, unwrapJust(Just(10)))
+    assert_eq(0, unwrapJust(Nothing))
+    assert_eq(5, getLeftValue(Left(5)))
+    assert_eq(0, getLeftValue(Right(99)))
+    42
+}

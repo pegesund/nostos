@@ -1,0 +1,20 @@
+# expect: 42
+# Pattern order matters - more specific first
+
+# More specific patterns should come first
+matchList([]) = "empty"
+matchList([0]) = "single zero"
+matchList([0 | _]) = "starts with zero"
+matchList([_]) = "single element"
+matchList([_, _]) = "two elements"
+matchList(_) = "other"
+
+main() = {
+    assert_eq("empty", matchList([]))
+    assert_eq("single zero", matchList([0]))
+    assert_eq("starts with zero", matchList([0, 1, 2]))
+    assert_eq("single element", matchList([5]))
+    assert_eq("two elements", matchList([1, 2]))
+    assert_eq("other", matchList([1, 2, 3]))
+    42
+}

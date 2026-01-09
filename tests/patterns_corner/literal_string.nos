@@ -1,0 +1,15 @@
+# expect: 42
+# Literal string pattern matching
+
+matchStr("") = "empty"
+matchStr("hello") = "greeting"
+matchStr("world") = "planet"
+matchStr(_) = "other"
+
+main() = {
+    assert_eq("empty", matchStr(""))
+    assert_eq("greeting", matchStr("hello"))
+    assert_eq("planet", matchStr("world"))
+    assert_eq("other", matchStr("foo"))
+    42
+}

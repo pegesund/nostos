@@ -1,0 +1,17 @@
+# expect: 42
+# Recursive list pattern matching
+
+mySum([]) = 0
+mySum([h | t]) = h + mySum(t)
+
+myLen([]) = 0
+myLen([_ | t]) = 1 + myLen(t)
+
+main() = {
+    assert_eq(0, mySum([]))
+    assert_eq(6, mySum([1, 2, 3]))
+    assert_eq(15, mySum([1, 2, 3, 4, 5]))
+    assert_eq(0, myLen([]))
+    assert_eq(3, myLen([1, 2, 3]))
+    42
+}

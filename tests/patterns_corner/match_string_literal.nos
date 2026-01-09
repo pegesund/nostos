@@ -1,0 +1,26 @@
+# expect: 42
+# Match expression with string literals
+
+httpStatus(code) = match code {
+    200 -> "OK"
+    404 -> "Not Found"
+    500 -> "Server Error"
+    _ -> "Unknown"
+}
+
+parseCommand(cmd) = match cmd {
+    "start" -> 1
+    "stop" -> 2
+    "restart" -> 3
+    _ -> 0
+}
+
+main() = {
+    assert_eq("OK", httpStatus(200))
+    assert_eq("Not Found", httpStatus(404))
+    assert_eq("Unknown", httpStatus(999))
+    assert_eq(1, parseCommand("start"))
+    assert_eq(2, parseCommand("stop"))
+    assert_eq(0, parseCommand("invalid"))
+    42
+}

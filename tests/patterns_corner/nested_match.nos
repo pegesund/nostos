@@ -1,0 +1,24 @@
+# expect: 42
+# Nested match expressions
+
+type Outer = A(Int) | B(Int)
+type Inner = X | Y
+
+process(outer, inner) = match outer {
+    A(n) -> match inner {
+        X -> n
+        Y -> n * 2
+    }
+    B(n) -> match inner {
+        X -> n * 10
+        Y -> n * 20
+    }
+}
+
+main() = {
+    assert_eq(5, process(A(5), X))
+    assert_eq(10, process(A(5), Y))
+    assert_eq(50, process(B(5), X))
+    assert_eq(100, process(B(5), Y))
+    42
+}

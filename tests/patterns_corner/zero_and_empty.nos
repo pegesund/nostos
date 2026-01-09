@@ -1,0 +1,15 @@
+# expect: 42
+# Zero and empty edge cases
+
+handleIntList(0, []) = "zero empty"
+handleIntList(0, _) = "zero nonempty"
+handleIntList(_, []) = "nonzero empty"
+handleIntList(_, _) = "nonzero nonempty"
+
+main() = {
+    assert_eq("zero empty", handleIntList(0, []))
+    assert_eq("zero nonempty", handleIntList(0, [1]))
+    assert_eq("nonzero empty", handleIntList(5, []))
+    assert_eq("nonzero nonempty", handleIntList(5, [1]))
+    42
+}

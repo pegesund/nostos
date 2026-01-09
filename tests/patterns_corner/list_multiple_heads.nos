@@ -1,0 +1,18 @@
+# expect: 42
+# Multiple elements before tail
+
+sumFirstTwo([a, b | _]) = a + b
+sumFirstTwo(_) = 0
+
+firstThree([a, b, c | _]) = (a, b, c)
+firstThree(_) = (0, 0, 0)
+
+main() = {
+    assert_eq(30, sumFirstTwo([10, 20, 30, 40]))
+    assert_eq(3, sumFirstTwo([1, 2]))
+    assert_eq(0, sumFirstTwo([1]))
+    assert_eq(0, sumFirstTwo([]))
+    assert_eq((1, 2, 3), firstThree([1, 2, 3, 4, 5]))
+    assert_eq((0, 0, 0), firstThree([1, 2]))
+    42
+}

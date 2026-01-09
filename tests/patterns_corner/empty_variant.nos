@@ -1,0 +1,21 @@
+# expect: 42
+# Empty variant (unit-like) patterns
+
+type TrafficLight = Red | Yellow | Green
+
+canGo(Green) = true
+canGo(_) = false
+
+nextLight(Red) = Green
+nextLight(Green) = Yellow
+nextLight(Yellow) = Red
+
+main() = {
+    assert_eq(true, canGo(Green))
+    assert_eq(false, canGo(Red))
+    assert_eq(false, canGo(Yellow))
+    assert_eq(Green, nextLight(Red))
+    assert_eq(Yellow, nextLight(Green))
+    assert_eq(Red, nextLight(Yellow))
+    42
+}

@@ -1,0 +1,18 @@
+# expect: 42
+# Function with multiple pattern clauses
+
+fib(0) = 0
+fib(1) = 1
+fib(n) = fib(n - 1) + fib(n - 2)
+
+factorial(0) = 1
+factorial(n) = n * factorial(n - 1)
+
+main() = {
+    assert_eq(0, fib(0))
+    assert_eq(1, fib(1))
+    assert_eq(55, fib(10))
+    assert_eq(1, factorial(0))
+    assert_eq(120, factorial(5))
+    42
+}

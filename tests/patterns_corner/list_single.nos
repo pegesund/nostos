@@ -1,0 +1,17 @@
+# expect: 42
+# Single element list pattern
+
+isSingle([_]) = true
+isSingle(_) = false
+
+getSingle([x]) = x
+getSingle(_) = 0
+
+main() = {
+    assert_eq(true, isSingle([5]))
+    assert_eq(false, isSingle([]))
+    assert_eq(false, isSingle([1, 2]))
+    assert_eq(99, getSingle([99]))
+    assert_eq(0, getSingle([1, 2]))
+    42
+}

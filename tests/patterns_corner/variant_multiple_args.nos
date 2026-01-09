@@ -1,0 +1,17 @@
+# expect: 42
+# Variant with multiple arguments
+
+type Expr = Const(Int) | Add(Int, Int) | Mul(Int, Int) | Div(Int, Int)
+
+evaluate(Const(n)) = n
+evaluate(Add(a, b)) = a + b
+evaluate(Mul(a, b)) = a * b
+evaluate(Div(a, b)) = a / b
+
+main() = {
+    assert_eq(5, evaluate(Const(5)))
+    assert_eq(7, evaluate(Add(3, 4)))
+    assert_eq(12, evaluate(Mul(3, 4)))
+    assert_eq(5, evaluate(Div(20, 4)))
+    42
+}

@@ -1,0 +1,23 @@
+# expect: 42
+# Generic variant patterns
+
+type Option[T] = Some(T) | None
+
+mapOption(Some(x), f) = Some(f(x))
+mapOption(None, _) = None
+
+flatMapOption(Some(x), f) = f(x)
+flatMapOption(None, _) = None
+
+double(x) = x * 2
+maybeDouble(x) = if x > 0 then Some(x * 2) else None
+
+main() = {
+    assert_eq(Some(10), mapOption(Some(5), double))
+    assert_eq(None, mapOption(None, double))
+
+    assert_eq(Some(10), flatMapOption(Some(5), maybeDouble))
+    assert_eq(None, flatMapOption(Some(-5), maybeDouble))
+    assert_eq(None, flatMapOption(None, maybeDouble))
+    42
+}

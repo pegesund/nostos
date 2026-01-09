@@ -1,0 +1,17 @@
+# expect: 42
+# Match expression with lists
+
+describeList(lst) = match lst {
+    [] -> "empty"
+    [_] -> "single"
+    [_, _] -> "pair"
+    _ -> "many"
+}
+
+main() = {
+    assert_eq("empty", describeList([]))
+    assert_eq("single", describeList([1]))
+    assert_eq("pair", describeList([1, 2]))
+    assert_eq("many", describeList([1, 2, 3]))
+    42
+}

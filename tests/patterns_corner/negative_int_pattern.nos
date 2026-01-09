@@ -1,0 +1,17 @@
+# expect: 42
+# Negative integer literal patterns (using guards)
+
+sign(0) = "zero"
+sign(1) = "one"
+sign(n) when n == -1 = "minus one"
+sign(n) when n < 0 = "negative"
+sign(_) = "positive"
+
+main() = {
+    assert_eq("minus one", sign(-1))
+    assert_eq("zero", sign(0))
+    assert_eq("one", sign(1))
+    assert_eq("negative", sign(-5))
+    assert_eq("positive", sign(5))
+    42
+}

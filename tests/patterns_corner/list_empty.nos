@@ -1,0 +1,12 @@
+# expect: 42
+# Empty list pattern
+
+checkEmpty([]) = true
+checkEmpty(_) = false
+
+main() = {
+    assert_eq(true, checkEmpty([]))
+    assert_eq(false, checkEmpty([1]))
+    assert_eq(false, checkEmpty([1, 2, 3]))
+    42
+}

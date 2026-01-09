@@ -1,0 +1,16 @@
+# expect: 42
+# Multiple wildcards in same pattern
+
+onlyFirst((a, _, _)) = a
+onlyLast((_, _, c)) = c
+onlyMid((_, b, _)) = b
+
+discardAll((_, _, _)) = 999
+
+main() = {
+    assert_eq(1, onlyFirst((1, 2, 3)))
+    assert_eq(3, onlyLast((1, 2, 3)))
+    assert_eq(2, onlyMid((1, 2, 3)))
+    assert_eq(999, discardAll((1, 2, 3)))
+    42
+}

@@ -1,0 +1,20 @@
+# expect: 42
+# Get last element of list
+
+lastElem([x]) = x
+lastElem([_ | t]) = lastElem(t)
+lastElem([]) = 0
+
+initList([_]) = []
+initList([h | t]) = [h] ++ initList(t)
+initList([]) = []
+
+main() = {
+    assert_eq(3, lastElem([1, 2, 3]))
+    assert_eq(5, lastElem([5]))
+    assert_eq(0, lastElem([]))
+    assert_eq([1, 2], initList([1, 2, 3]))
+    assert_eq([], initList([1]))
+    assert_eq([], initList([]))
+    42
+}

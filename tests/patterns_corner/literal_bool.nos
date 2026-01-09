@@ -1,0 +1,11 @@
+# expect: 42
+# Literal bool pattern matching
+
+matchBool(true) = "yes"
+matchBool(false) = "no"
+
+main() = {
+    assert_eq("yes", matchBool(true))
+    assert_eq("no", matchBool(false))
+    42
+}

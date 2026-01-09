@@ -1,0 +1,17 @@
+# expect: 42
+# Match expression with variants
+
+type Status = Active | Inactive | Pending(Int)
+
+statusCode(s) = match s {
+    Active -> 1
+    Inactive -> 0
+    Pending(days) -> days + 100
+}
+
+main() = {
+    assert_eq(1, statusCode(Active))
+    assert_eq(0, statusCode(Inactive))
+    assert_eq(105, statusCode(Pending(5)))
+    42
+}

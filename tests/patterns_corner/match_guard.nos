@@ -1,0 +1,20 @@
+# expect: 42
+# Match expression with guards
+
+grade(score) = match score {
+    n when n >= 90 -> "A"
+    n when n >= 80 -> "B"
+    n when n >= 70 -> "C"
+    n when n >= 60 -> "D"
+    _ -> "F"
+}
+
+main() = {
+    assert_eq("A", grade(95))
+    assert_eq("A", grade(90))
+    assert_eq("B", grade(85))
+    assert_eq("C", grade(75))
+    assert_eq("D", grade(65))
+    assert_eq("F", grade(55))
+    42
+}

@@ -1,0 +1,13 @@
+# expect: 42
+# Variant with arguments
+
+type Shape = Circle(Int) | Rectangle(Int, Int)
+
+area(Circle(r)) = r * r * 3
+area(Rectangle(w, h)) = w * h
+
+main() = {
+    assert_eq(75, area(Circle(5)))
+    assert_eq(20, area(Rectangle(4, 5)))
+    42
+}

@@ -1,0 +1,27 @@
+# expect: 42
+# Match expression with nested variant
+
+type Tree = Leaf(Int) | Node(Tree, Tree)
+
+treeSum(tree) = match tree {
+    Leaf(n) -> n
+    Node(left, right) -> treeSum(left) + treeSum(right)
+}
+
+treeDepth(tree) = match tree {
+    Leaf(_) -> 1
+    Node(left, right) -> 1 + maxVal(treeDepth(left), treeDepth(right))
+}
+
+maxVal(a, b) = if a > b then a else b
+
+main() = {
+    leaf = Leaf(5)
+    tree = Node(Leaf(1), Node(Leaf(2), Leaf(3)))
+
+    assert_eq(5, treeSum(leaf))
+    assert_eq(6, treeSum(tree))
+    assert_eq(1, treeDepth(leaf))
+    assert_eq(3, treeDepth(tree))
+    42
+}

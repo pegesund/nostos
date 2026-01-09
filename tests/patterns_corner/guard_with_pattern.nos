@@ -1,0 +1,18 @@
+# expect: 42
+# Guards combined with patterns
+
+firstPositive([h | _]) when h > 0 = h
+firstPositive([_ | t]) = firstPositive(t)
+firstPositive([]) = 0
+
+sumPositive([h | t]) when h > 0 = h + sumPositive(t)
+sumPositive([_ | t]) = sumPositive(t)
+sumPositive([]) = 0
+
+main() = {
+    assert_eq(3, firstPositive([-1, -2, 3, 4]))
+    assert_eq(1, firstPositive([1, 2, 3]))
+    assert_eq(0, firstPositive([-1, -2]))
+    assert_eq(7, sumPositive([1, -2, 3, -4, 3]))
+    42
+}

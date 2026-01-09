@@ -1,0 +1,18 @@
+# expect: 42
+# Wildcard in variant patterns
+
+type Result = Ok(Int) | Err(String)
+
+isOk(Ok(_)) = true
+isOk(Err(_)) = false
+
+getOkOrDefault(Ok(x)) = x
+getOkOrDefault(Err(_)) = -1
+
+main() = {
+    assert_eq(true, isOk(Ok(5)))
+    assert_eq(false, isOk(Err("error")))
+    assert_eq(10, getOkOrDefault(Ok(10)))
+    assert_eq(-1, getOkOrDefault(Err("oops")))
+    42
+}

@@ -1,0 +1,16 @@
+# expect: 42
+# Nested tuple patterns
+
+deepFirst(((a, _), _)) = a
+deepSecond(((_, b), _)) = b
+deepThird((_, c)) = c
+
+extractAll(((a, b), c)) = a + b + c
+
+main() = {
+    assert_eq(1, deepFirst(((1, 2), 3)))
+    assert_eq(2, deepSecond(((1, 2), 3)))
+    assert_eq(3, deepThird(((1, 2), 3)))
+    assert_eq(6, extractAll(((1, 2), 3)))
+    42
+}
