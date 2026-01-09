@@ -1821,6 +1821,600 @@ impl Worker {
                 });
             }
 
+            // === Assertions ===
+            Instruction::Assert(cond) => {
+                let val = get_reg!(cond);
+                match val {
+                    GcValue::Bool(true) => {}
+                    GcValue::Bool(false) => {
+                        return Err(RuntimeError::Panic("Assertion failed".to_string()));
+                    }
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "Bool".to_string(),
+                            found: format!("{:?}", val),
+                        });
+                    }
+                }
+            }
+
+            Instruction::AssertEq(a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                let equal = self.scheduler.with_process(pid, |proc| {
+                    proc.heap.gc_values_equal(&va, &vb)
+                }).unwrap_or(false);
+                if !equal {
+                    let (sa, sb) = self.scheduler.with_process(pid, |proc| {
+                        (proc.heap.display_value(&va), proc.heap.display_value(&vb))
+                    }).unwrap_or(("?".to_string(), "?".to_string()));
+                    return Err(RuntimeError::Panic(format!("Assertion failed: {} != {}", sa, sb)));
+                }
+            }
+
+            // === Arithmetic ===
+            Instruction::DivInt(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                let result = match (&va, &vb) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => {
+                        if *y == 0 { return Err(RuntimeError::DivisionByZero); }
+                        GcValue::Int64(x / y)
+                    }
+                    (GcValue::Float64(x), GcValue::Float64(y)) => {
+                        if *y == 0.0 { return Err(RuntimeError::DivisionByZero); }
+                        GcValue::Float64(x / y)
+                    }
+                    (GcValue::Float32(x), GcValue::Float32(y)) => {
+                        if *y == 0.0 { return Err(RuntimeError::DivisionByZero); }
+                        GcValue::Float32(x / y)
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching numeric types".to_string(),
+                        found: format!("{:?}", va),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::ModInt(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                let result = match (&va, &vb) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => {
+                        if *y == 0 { return Err(RuntimeError::DivisionByZero); }
+                        GcValue::Int64(x % y)
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64".to_string(),
+                        found: format!("{:?}", va),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::NegInt(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Int64(x) => GcValue::Int64(-x),
+                    GcValue::Float64(x) => GcValue::Float64(-x),
+                    GcValue::Float32(x) => GcValue::Float32(-x),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: format!("{:?}", val),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::SqrtFloat(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Float64(x) => GcValue::Float64(x.sqrt()),
+                    GcValue::Float32(x) => GcValue::Float32(x.sqrt()),
+                    GcValue::Int64(x) => GcValue::Float64((x as f64).sqrt()),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: format!("{:?}", val),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::PowFloat(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                let result = match (&va, &vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x.powf(*y)),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x.powf(*y)),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => {
+                        if *y >= 0 {
+                            GcValue::Int64(x.pow(*y as u32))
+                        } else {
+                            GcValue::Float64((*x as f64).powf(*y as f64))
+                        }
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: format!("{:?}", va),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            // === Comparisons ===
+            Instruction::GeInt(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                let result = match (&va, &vb) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => x >= y,
+                    (GcValue::Float64(x), GcValue::Float64(y)) => x >= y,
+                    _ => false,
+                };
+                set_reg!(dst, GcValue::Bool(result));
+            }
+
+            // === Strings ===
+            Instruction::Concat(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                let result = self.scheduler.with_process_mut(pid, |proc| {
+                    let sa = proc.heap.display_value(&va);
+                    let sb = proc.heap.display_value(&vb);
+                    let combined = format!("{}{}", sa, sb);
+                    proc.heap.alloc_string(combined)
+                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
+                set_reg!(dst, GcValue::String(result));
+            }
+
+            // === Lists ===
+            Instruction::Cons(dst, head, tail) => {
+                let head_val = get_reg!(head);
+                let tail_val = get_reg!(tail);
+                let tail_ptr = match tail_val {
+                    GcValue::List(ptr) => ptr,
+                    _ => return Err(RuntimeError::Panic("Cons expects list tail".to_string())),
+                };
+                let result = self.scheduler.with_process_mut(pid, |proc| {
+                    let tail_items = proc.heap.get_list(tail_ptr)
+                        .map(|l| l.items.clone())
+                        .unwrap_or_default();
+                    let mut new_items = vec![head_val];
+                    new_items.extend(tail_items);
+                    let list_ptr = proc.heap.alloc_list(new_items);
+                    GcValue::List(list_ptr)
+                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
+                set_reg!(dst, result);
+            }
+
+            Instruction::ListHead(dst, list) => {
+                let l = get_reg!(list);
+                let result = match l {
+                    GcValue::List(ptr) => {
+                        self.scheduler.with_process(pid, |proc| {
+                            proc.heap.get_list(ptr)
+                                .and_then(|list| {
+                                    if list.items.is_empty() {
+                                        None
+                                    } else {
+                                        Some(list.items[0].clone())
+                                    }
+                                })
+                        }).flatten()
+                    }
+                    _ => None,
+                }.ok_or_else(|| RuntimeError::Panic("head: empty or invalid list".to_string()))?;
+                set_reg!(dst, result);
+            }
+
+            Instruction::TestNil(dst, list) => {
+                let l = get_reg!(list);
+                let is_nil = match l {
+                    GcValue::List(ptr) => {
+                        self.scheduler.with_process(pid, |proc| {
+                            proc.heap.get_list(ptr)
+                                .map(|list| list.items.is_empty())
+                                .unwrap_or(false)
+                        }).unwrap_or(false)
+                    }
+                    _ => false,
+                };
+                set_reg!(dst, GcValue::Bool(is_nil));
+            }
+
+            // === Collections ===
+            Instruction::MakeInt64Array(dst, size_reg) => {
+                let size = get_reg!(size_reg);
+                let len = match size {
+                    GcValue::Int64(n) => n as usize,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64".to_string(),
+                        found: format!("{:?}", size),
+                    }),
+                };
+                let items = vec![0i64; len];
+                let ptr = self.scheduler.with_process_mut(pid, |proc| {
+                    proc.heap.alloc_int64_array(items)
+                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
+                set_reg!(dst, GcValue::Int64Array(ptr));
+            }
+
+            Instruction::MakeFloat64Array(dst, size_reg) => {
+                let size = get_reg!(size_reg);
+                let len = match size {
+                    GcValue::Int64(n) => n as usize,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64".to_string(),
+                        found: format!("{:?}", size),
+                    }),
+                };
+                let items = vec![0.0f64; len];
+                let ptr = self.scheduler.with_process_mut(pid, |proc| {
+                    proc.heap.alloc_float64_array(items)
+                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
+                set_reg!(dst, GcValue::Float64Array(ptr));
+            }
+
+            Instruction::Index(dst, arr, idx) => {
+                let arr_val = get_reg!(arr);
+                let idx_val = get_reg!(idx);
+                let idx_num = match idx_val {
+                    GcValue::Int64(i) => i as usize,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64".to_string(),
+                        found: format!("{:?}", idx_val),
+                    }),
+                };
+                let result = self.scheduler.with_process(pid, |proc| {
+                    match &arr_val {
+                        GcValue::Int64Array(ptr) => {
+                            proc.heap.get_int64_array(*ptr)
+                                .and_then(|arr| arr.items.get(idx_num).map(|v| GcValue::Int64(*v)))
+                        }
+                        GcValue::Float64Array(ptr) => {
+                            proc.heap.get_float64_array(*ptr)
+                                .and_then(|arr| arr.items.get(idx_num).map(|v| GcValue::Float64(*v)))
+                        }
+                        _ => None,
+                    }
+                }).flatten().ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_num)))?;
+                set_reg!(dst, result);
+            }
+
+            Instruction::IndexSet(coll, idx, val) => {
+                let coll_val = get_reg!(coll);
+                let idx_val = get_reg!(idx);
+                let new_val = get_reg!(val);
+                let idx_num = match idx_val {
+                    GcValue::Int64(i) => i as usize,
+                    _ => return Err(RuntimeError::Panic("Index must be integer".to_string())),
+                };
+                self.scheduler.with_process_mut(pid, |proc| {
+                    match coll_val {
+                        GcValue::Array(ptr) => {
+                            if let Some(array) = proc.heap.get_array_mut(ptr) {
+                                if idx_num < array.items.len() {
+                                    array.items[idx_num] = new_val;
+                                }
+                            }
+                        }
+                        GcValue::Int64Array(ptr) => {
+                            if let GcValue::Int64(v) = new_val {
+                                if let Some(array) = proc.heap.get_int64_array_mut(ptr) {
+                                    if idx_num < array.items.len() {
+                                        array.items[idx_num] = v;
+                                    }
+                                }
+                            }
+                        }
+                        GcValue::Float64Array(ptr) => {
+                            if let GcValue::Float64(v) = new_val {
+                                if let Some(array) = proc.heap.get_float64_array_mut(ptr) {
+                                    if idx_num < array.items.len() {
+                                        array.items[idx_num] = v;
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                });
+            }
+
+            Instruction::GetTupleField(dst, tuple, idx) => {
+                let t = get_reg!(tuple);
+                let result = self.scheduler.with_process(pid, |proc| {
+                    match &t {
+                        GcValue::Tuple(ptr) => {
+                            proc.heap.get_tuple(*ptr)
+                                .and_then(|tup| tup.items.get(idx as usize).cloned())
+                        }
+                        _ => None,
+                    }
+                }).flatten().ok_or_else(|| RuntimeError::Panic("Invalid tuple access".to_string()))?;
+                set_reg!(dst, result);
+            }
+
+            Instruction::MakeRecord(dst, type_idx, ref field_regs) => {
+                let type_name = match constants.get(type_idx as usize) {
+                    Some(Value::String(s)) => (**s).clone(),
+                    _ => return Err(RuntimeError::Panic("Invalid type name".to_string())),
+                };
+                let fields: Vec<GcValue> = field_regs.iter().map(|&r| get_reg!(r)).collect();
+                let type_info = self.scheduler.types.read().get(&type_name).cloned();
+                let field_names: Vec<String> = type_info
+                    .as_ref()
+                    .map(|t| t.fields.iter().map(|f| f.name.clone()).collect())
+                    .unwrap_or_else(|| (0..fields.len()).map(|i| format!("_{}", i)).collect());
+                let mutable_fields: Vec<bool> = type_info
+                    .as_ref()
+                    .map(|t| t.fields.iter().map(|f| f.mutable).collect())
+                    .unwrap_or_else(|| vec![false; fields.len()]);
+                let ptr = self.scheduler.with_process_mut(pid, |proc| {
+                    proc.heap.alloc_record(type_name, field_names, fields, mutable_fields)
+                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
+                set_reg!(dst, GcValue::Record(ptr));
+            }
+
+            Instruction::MakeClosure(dst, func_idx, ref capture_regs) => {
+                let func = match constants.get(func_idx as usize) {
+                    Some(Value::Function(f)) => f.clone(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Function".to_string(),
+                        found: "non-function".to_string(),
+                    }),
+                };
+                let captures: Vec<GcValue> = capture_regs.iter().map(|&r| get_reg!(r)).collect();
+                let capture_names: Vec<String> = (0..captures.len())
+                    .map(|i| format!("capture_{}", i))
+                    .collect();
+                let ptr = self.scheduler.with_process_mut(pid, |proc| {
+                    proc.heap.alloc_closure(func, captures, capture_names)
+                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
+                set_reg!(dst, GcValue::Closure(ptr));
+            }
+
+            // === Type Conversions ===
+            Instruction::ToInt32(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Int64(x) => GcValue::Int32(x as i32),
+                    GcValue::Int32(x) => GcValue::Int32(x),
+                    GcValue::Float64(x) => GcValue::Int32(x as i32),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: format!("{:?}", val),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            // === Length ===
+            Instruction::Length(dst, src) => {
+                let val = get_reg!(src);
+                let len = self.scheduler.with_process(pid, |proc| {
+                    match &val {
+                        GcValue::List(ptr) => proc.heap.get_list(*ptr).map(|l| l.items.len()),
+                        GcValue::Tuple(ptr) => proc.heap.get_tuple(*ptr).map(|t| t.items.len()),
+                        GcValue::Array(ptr) => proc.heap.get_array(*ptr).map(|a| a.items.len()),
+                        GcValue::Int64Array(ptr) => proc.heap.get_int64_array(*ptr).map(|a| a.items.len()),
+                        GcValue::Float64Array(ptr) => proc.heap.get_float64_array(*ptr).map(|a| a.items.len()),
+                        GcValue::String(ptr) => proc.heap.get_string(*ptr).map(|s| s.data.len()),
+                        _ => None,
+                    }
+                }).flatten().ok_or_else(|| RuntimeError::Panic("Length expects collection or string".to_string()))?;
+                set_reg!(dst, GcValue::Int64(len as i64));
+            }
+
+            // === IO/Debug ===
+            Instruction::Print(dst, src) => {
+                let val = get_reg!(src);
+                let s = self.scheduler.with_process_mut(pid, |proc| {
+                    let display = proc.heap.display_value(&val);
+                    println!("{}", display);
+                    proc.output.push(display.clone());
+                    proc.heap.alloc_string(display)
+                }).ok_or_else(|| RuntimeError::Panic("Process not found".to_string()))?;
+                set_reg!(dst, GcValue::String(s));
+            }
+
+            Instruction::Println(src) => {
+                let val = get_reg!(src);
+                self.scheduler.with_process_mut(pid, |proc| {
+                    let display = proc.heap.display_value(&val);
+                    println!("{}", display);
+                    proc.output.push(display);
+                });
+            }
+
+            // === Pattern matching ===
+            Instruction::TestTag(dst, value, tag_idx) => {
+                let tag = match constants.get(tag_idx as usize) {
+                    Some(Value::String(s)) => (**s).clone(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let val = get_reg!(value);
+                let result = self.scheduler.with_process(pid, |proc| {
+                    match &val {
+                        GcValue::Variant(ptr) => {
+                            proc.heap.get_variant(*ptr)
+                                .map(|v| v.constructor == tag)
+                                .unwrap_or(false)
+                        }
+                        GcValue::Record(ptr) => {
+                            proc.heap.get_record(*ptr)
+                                .map(|r| r.type_name == tag)
+                                .unwrap_or(false)
+                        }
+                        _ => false,
+                    }
+                }).unwrap_or(false);
+                set_reg!(dst, GcValue::Bool(result));
+            }
+
+            Instruction::GetField(dst, record, field_idx) => {
+                let field_name = match constants.get(field_idx as usize) {
+                    Some(Value::String(s)) => (**s).clone(),
+                    _ => return Err(RuntimeError::Panic("Field name must be string".to_string())),
+                };
+                let rec_val = get_reg!(record);
+                let result = self.scheduler.with_process(pid, |proc| {
+                    match &rec_val {
+                        GcValue::Record(ptr) => {
+                            proc.heap.get_record(*ptr)
+                                .and_then(|rec| {
+                                    rec.field_names.iter().position(|n| n == &field_name)
+                                        .and_then(|idx| rec.fields.get(idx).cloned())
+                                })
+                        }
+                        GcValue::Tuple(ptr) => {
+                            proc.heap.get_tuple(*ptr)
+                                .and_then(|tuple| {
+                                    field_name.parse::<usize>().ok()
+                                        .and_then(|idx| tuple.items.get(idx).cloned())
+                                })
+                        }
+                        _ => None,
+                    }
+                }).flatten().ok_or_else(|| RuntimeError::Panic(format!("Unknown field: {}", field_name)))?;
+                set_reg!(dst, result);
+            }
+
+            Instruction::Decons(head_dst, tail_dst, list) => {
+                let list_val = get_reg!(list);
+                let list_ptr = match list_val {
+                    GcValue::List(ptr) => ptr,
+                    _ => return Err(RuntimeError::Panic("Decons expects list".to_string())),
+                };
+                let (head, tail_ptr) = self.scheduler.with_process_mut(pid, |proc| {
+                    let items = proc.heap.get_list(list_ptr)
+                        .map(|l| l.items.clone())
+                        .unwrap_or_default();
+                    if items.is_empty() {
+                        None
+                    } else {
+                        let head = items[0].clone();
+                        let tail = items[1..].to_vec();
+                        let tail_ptr = proc.heap.alloc_list(tail);
+                        Some((head, tail_ptr))
+                    }
+                }).flatten().ok_or_else(|| RuntimeError::Panic("Cannot decons empty list".to_string()))?;
+                set_reg!(head_dst, head);
+                set_reg!(tail_dst, GcValue::List(tail_ptr));
+            }
+
+            // === Float comparisons ===
+            Instruction::LtFloat(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                let result = match (va, vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => x < y,
+                    _ => false,
+                };
+                set_reg!(dst, GcValue::Bool(result));
+            }
+
+            Instruction::LeFloat(dst, a, b) => {
+                let va = get_reg!(a);
+                let vb = get_reg!(b);
+                let result = match (va, vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => x <= y,
+                    _ => false,
+                };
+                set_reg!(dst, GcValue::Bool(result));
+            }
+
+            // === Type conversions ===
+            Instruction::FloatToInt(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Float64(v) => GcValue::Int64(v as i64),
+                    GcValue::Float32(v) => GcValue::Int64(v as i64),
+                    GcValue::Int64(v) => GcValue::Int64(v),
+                    GcValue::Int32(v) => GcValue::Int64(v as i64),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: format!("{:?}", val),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::IntToFloat(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Int64(v) => GcValue::Float64(v as f64),
+                    GcValue::Int32(v) => GcValue::Float64(v as f64),
+                    GcValue::Float64(v) => GcValue::Float64(v),
+                    GcValue::Float32(v) => GcValue::Float64(v as f64),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "numeric".to_string(),
+                        found: format!("{:?}", val),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            // === Math builtins ===
+            Instruction::AbsInt(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Int64(v) => GcValue::Int64(v.abs()),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64".to_string(),
+                        found: format!("{:?}", val),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::AbsFloat(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Float64(v) => GcValue::Float64(v.abs()),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float64".to_string(),
+                        found: format!("{:?}", val),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            Instruction::NegFloat(dst, src) => {
+                let val = get_reg!(src);
+                let result = match val {
+                    GcValue::Float64(v) => GcValue::Float64(-v),
+                    GcValue::Float32(v) => GcValue::Float32(-v),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: format!("{:?}", val),
+                    }),
+                };
+                set_reg!(dst, result);
+            }
+
+            // === Variants ===
+            Instruction::GetVariantField(dst, src, idx) => {
+                let val = get_reg!(src);
+                let result = self.scheduler.with_process(pid, |proc| {
+                    match &val {
+                        GcValue::Variant(ptr) => {
+                            proc.heap.get_variant(*ptr)
+                                .and_then(|v| v.fields.get(idx as usize).cloned())
+                        }
+                        GcValue::Record(ptr) => {
+                            proc.heap.get_record(*ptr)
+                                .and_then(|r| r.fields.get(idx as usize).cloned())
+                        }
+                        _ => None,
+                    }
+                }).flatten().ok_or_else(|| RuntimeError::Panic("GetVariantField: invalid access".to_string()))?;
+                set_reg!(dst, result);
+            }
+
             // Unhandled
             other => {
                 return Err(RuntimeError::Panic(format!(
