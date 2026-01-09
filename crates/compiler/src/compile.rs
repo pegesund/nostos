@@ -996,6 +996,11 @@ impl Compiler {
         self.imports.insert(local_name, qualified_name);
     }
 
+    /// Get all prelude imports (local name -> qualified name mappings)
+    pub fn get_prelude_imports(&self) -> &HashMap<String, String> {
+        &self.imports
+    }
+
     /// Convert a byte offset to a line number (1-indexed).
     fn offset_to_line(&self, offset: usize) -> usize {
         // Binary search for the line containing this offset
@@ -7507,6 +7512,53 @@ impl Compiler {
     /// Get a compiled function.
     pub fn get_function(&self, name: &str) -> Option<Arc<FunctionValue>> {
         self.find_function(name).cloned()
+    }
+
+    /// Register an externally compiled function (e.g., from a previous eval).
+    /// This makes the function callable from code compiled by this compiler.
+    pub fn register_external_function(&mut self, name: &str, func: Arc<FunctionValue>) {
+        // Only add if not already present
+        if self.functions.contains_key(name) {
+            return;
+        }
+
+        // Add to functions map
+        self.functions.insert(name.to_string(), func);
+
+        // Allocate an index for indexed calls
+        let idx = self.function_list.len() as u16;
+        self.function_indices.insert(name.to_string(), idx);
+        self.function_list.push(name.to_string());
+    }
+
+    /// Register all external functions at once, preserving their indices.
+    /// This is important for eval because compiled bytecode contains CallDirect
+    /// instructions with hardcoded function indices that must be preserved.
+    pub fn register_external_functions_with_list(
+        &mut self,
+        functions: &HashMap<String, Arc<FunctionValue>>,
+        function_list: &[String],
+    ) {
+        // First, ensure function_list has enough capacity
+        // We'll fill in the functions at their original indices
+        self.function_list.clear();
+        self.function_list.extend(function_list.iter().cloned());
+
+        // Set up indices
+        self.function_indices.clear();
+        for (idx, name) in function_list.iter().enumerate() {
+            self.function_indices.insert(name.clone(), idx as u16);
+        }
+
+        // Copy all functions
+        for (name, func) in functions {
+            self.functions.insert(name.clone(), func.clone());
+        }
+    }
+
+    /// Get the ordered function list (names).
+    pub fn get_function_list_names(&self) -> &[String] {
+        &self.function_list
     }
 
     /// Get all compiled functions.

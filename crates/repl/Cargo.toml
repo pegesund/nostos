@@ -11,5 +11,6 @@ nostos-types.workspace = true
 nostos-jit.workspace = true
 nostos-source = { path = "../source" }
 thiserror.workspace = true
+parking_lot = "0.12"
 
 [dev-dependencies]

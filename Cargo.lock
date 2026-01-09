@@ -1626,6 +1626,7 @@ dependencies = [
  "nostos-syntax",
  "nostos-types",
  "nostos-vm",
+ "parking_lot",
  "thiserror 2.0.17",
 ]
 
