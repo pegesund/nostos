@@ -8,7 +8,6 @@
 #   curl http://localhost:8080/hello
 #   curl http://localhost:8080/echo -d "test data"
 
-# Handle requests based on path
 handle(req) = {
     match req.path {
         "/" ->
@@ -29,8 +28,6 @@ handle(req) = {
     }
 }
 
-# Accept loop: spawns a new process for each request
-# The recursion is OUTSIDE the try block for proper tail-call optimization
 acceptLoop(server) = {
     ok = try {
         req = Server.accept(server)
