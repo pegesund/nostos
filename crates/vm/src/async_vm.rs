@@ -98,8 +98,12 @@ pub struct AsyncSharedState {
     /// JIT recursive array sum functions (arity 3: arr, idx, acc)
     pub jit_array_sum_functions: HashMap<u16, crate::parallel::JitArraySumFn>,
 
-    /// Shutdown signal.
+    /// Shutdown signal (permanent).
     pub shutdown: AtomicBool,
+
+    /// Interrupt signal (temporary, for Ctrl+C).
+    /// Stops current execution but allows VM to be reused.
+    pub interrupt: AtomicBool,
 
     /// Process registry: Pid -> mailbox sender.
     /// Protected by tokio RwLock for async access.
@@ -569,6 +573,11 @@ impl AsyncProcess {
                     return Ok(GcValue::Unit);
                 }
 
+                // Check interrupt (Ctrl+C)
+                if self.shared.interrupt.load(Ordering::SeqCst) {
+                    return Err(RuntimeError::Interrupted);
+                }
+
                 // Yield for fairness
                 tokio::task::yield_now().await;
             }
@@ -602,6 +611,20 @@ impl AsyncProcess {
 
         // Execute multiple instructions without returning to reduce async overhead
         'instruction_loop: loop {
+
+        // Periodically check for interrupts and yield for fairness
+        self.instructions_since_yield += 1;
+        if self.instructions_since_yield >= REDUCTIONS_PER_YIELD {
+            self.instructions_since_yield = 0;
+
+            // Check interrupt (Ctrl+C)
+            if self.shared.interrupt.load(Ordering::SeqCst) {
+                return Err(RuntimeError::Interrupted);
+            }
+
+            // Yield for fairness (allow other tasks to run)
+            tokio::task::yield_now().await;
+        }
 
         // Cache frame index once - avoid repeated len() calls
         let cur_frame = match self.frames.len().checked_sub(1) {
@@ -4678,6 +4701,7 @@ impl AsyncVM {
             jit_array_fill_functions: HashMap::new(),
             jit_array_sum_functions: HashMap::new(),
             shutdown: AtomicBool::new(false),
+            interrupt: AtomicBool::new(false),
             process_registry: TokioRwLock::new(HashMap::new()),
             mvars: HashMap::new(),
             dynamic_mvars: Arc::new(RwLock::new(HashMap::new())),
@@ -4866,6 +4890,28 @@ impl AsyncVM {
     /// Set stdlib function list.
     pub fn set_stdlib_function_list(&self, names: Vec<String>) {
         *self.shared.stdlib_function_list.write().unwrap() = names;
+    }
+
+    /// Set the interrupt flag to stop execution (for Ctrl+C handling).
+    /// This will cause the VM to return Interrupted error within ~100 instructions.
+    pub fn interrupt(&self) {
+        self.shared.interrupt.store(true, Ordering::SeqCst);
+    }
+
+    /// Clear the interrupt flag (call before starting new execution).
+    pub fn clear_interrupt(&self) {
+        self.shared.interrupt.store(false, Ordering::SeqCst);
+    }
+
+    /// Check if the interrupt flag is set.
+    pub fn is_interrupted(&self) -> bool {
+        self.shared.interrupt.load(Ordering::SeqCst)
+    }
+
+    /// Get a clone of the shared state Arc for external interrupt handling.
+    /// This allows setting the interrupt flag from another thread (e.g., Ctrl+C handler).
+    pub fn get_interrupt_handle(&self) -> Arc<AsyncSharedState> {
+        Arc::clone(&self.shared)
     }
 
     /// Setup inspect channel and register inspect native function.

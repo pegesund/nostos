@@ -450,6 +450,9 @@ pub enum RuntimeError {
     #[error("I/O error: {0}")]
     IOError(String),
 
+    #[error("Interrupted (Ctrl+C)")]
+    Interrupted,
+
     #[error("{error}\n\nStack trace:\n{stack_trace}")]
     WithStackTrace {
         error: Box<RuntimeError>,
@@ -523,6 +526,9 @@ impl RuntimeError {
                 // For now, just return the inner error's value
                 // Stack traces are primarily for CLI display, not try/catch
                 return inner;
+            }
+            RuntimeError::Interrupted => {
+                ("Interrupted", "execution interrupted (Ctrl+C)".to_string())
             }
         };
 

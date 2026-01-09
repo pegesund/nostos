@@ -17,6 +17,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::borrow::Cow;
 
 use nostos_compiler::compile::Compiler;
@@ -372,6 +373,14 @@ impl Repl {
         println!("Nostos REPL v{}", env!("CARGO_PKG_VERSION"));
         println!("Type :help for available commands, :quit to exit");
         println!();
+
+        // Set up Ctrl+C handler for interrupting running code
+        let interrupt_handle = self.vm.get_interrupt_handle();
+        if let Err(e) = ctrlc::set_handler(move || {
+            interrupt_handle.interrupt.store(true, Ordering::SeqCst);
+        }) {
+            eprintln!("Warning: Could not set Ctrl+C handler: {}", e);
+        }
 
         // Setup history
         let history = Box::new(
@@ -1325,6 +1334,9 @@ impl Repl {
         // Sync VM and execute
         self.sync_vm();
 
+        // Clear any pending interrupt before execution
+        self.vm.clear_interrupt();
+
         // eval_name is a 0-arity function, so add "/" suffix
         let fn_name = format!("{}/", eval_name);
         match self.vm.run(&fn_name) {
@@ -1334,6 +1346,10 @@ impl Repl {
                 if !result.is_unit() {
                     return Some(result.display());
                 }
+                None
+            }
+            Err(e) if e.contains("Interrupted") => {
+                eprintln!("Interrupted");
                 None
             }
             Err(e) => {

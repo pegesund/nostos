@@ -12,7 +12,7 @@ use crate::CallGraph;
 use crate::session::extract_dependencies_from_fn;
 use nostos_syntax::ast::{Item, Pattern};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
-use nostos_vm::async_vm::{AsyncVM, AsyncConfig};
+use nostos_vm::async_vm::{AsyncVM, AsyncConfig, AsyncSharedState};
 use nostos_vm::parallel::{InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver};
 use nostos_vm::process::ThreadSafeValue;
 
@@ -1482,6 +1482,9 @@ impl ReplEngine {
 
         self.sync_vm();
 
+        // Clear any pending interrupt before execution
+        self.vm.clear_interrupt();
+
         // eval_name is a 0-arity function, so add "/" suffix
         let fn_name = format!("{}/", eval_name);
         match self.vm.run(&fn_name) {
@@ -1506,6 +1509,7 @@ impl ReplEngine {
 
                 Ok(output.trim_end().to_string())
             }
+            Err(e) if e.contains("Interrupted") => Err("Interrupted".to_string()),
             Err(e) => Err(format!("Runtime error: {}", e)),
         }
     }
@@ -3642,6 +3646,21 @@ impl ReplEngine {
     /// Get all hotkey callbacks
     pub fn get_hotkey_callbacks(&self) -> &HashMap<String, String> {
         &self.hotkey_callbacks
+    }
+
+    /// Get a handle to the VM's interrupt flag for Ctrl+C handling.
+    pub fn get_interrupt_handle(&self) -> Arc<AsyncSharedState> {
+        self.vm.get_interrupt_handle()
+    }
+
+    /// Clear the interrupt flag (call before starting new execution).
+    pub fn clear_interrupt(&self) {
+        self.vm.clear_interrupt();
+    }
+
+    /// Check if the VM is currently interrupted.
+    pub fn is_interrupted(&self) -> bool {
+        self.vm.is_interrupted()
     }
 
     /// Profile an expression and return formatted results

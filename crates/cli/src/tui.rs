@@ -552,6 +552,10 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         }
     }
 
+    // NOTE: Ctrl+C interrupt is NOT supported in TUI mode.
+    // Signal handlers conflict with cursive's terminal handling and cause crashes.
+    // If stuck in an infinite loop, you must kill the process externally (pkill nostos).
+
     let engine = Rc::new(RefCell::new(engine));
 
     // Initialize State
