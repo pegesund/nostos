@@ -2,11 +2,14 @@
 
 use cursive::Cursive;
 use cursive::traits::*;
-use cursive::views::{Dialog, EditView, LinearLayout, ScrollView, TextView, OnEventView, SelectView, Panel};
+use cursive::views::{Dialog, EditView, LinearLayout, ScrollView, TextView, OnEventView, SelectView, Panel, BoxedView};
 use cursive::theme::{Color, PaletteColor, Theme, BorderStyle, Style, ColorStyle};
 use cursive::view::Resizable;
 use cursive::utils::markup::StyledString;
 use cursive::event::{Event, EventResult, EventTrigger, Key};
+use cursive_multiplex::Mux;
+use cursive_core::event::Event as CoreEvent;
+use cursive_core::event::Key as CoreKey;
 use nostos_repl::{ReplEngine, ReplConfig, BrowserItem, SaveCompileResult, CompileStatus, SearchResult, PanelInfo, PanelState};
 use nostos_vm::PanelCommand;
 use nostos_vm::{Value, Inspector, Slot, SlotInfo};
@@ -509,6 +512,8 @@ struct TuiState {
     current_panel: Option<PanelInfo>,
     /// Currently open panel ID (if nostos_panel_open is true) - new API
     current_panel_id: Option<u64>,
+    /// Mux node IDs for each open window
+    mux_nodes: std::collections::HashMap<String, cursive_multiplex::Id>,
 }
 
 pub fn run_tui(args: &[String]) -> ExitCode {
@@ -566,6 +571,7 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         nostos_panel_open: false,
         current_panel: None,
         current_panel_id: None,
+        mux_nodes: std::collections::HashMap::new(),
     })));
 
     // Components
@@ -596,22 +602,34 @@ pub fn run_tui(args: &[String]) -> ExitCode {
             }
         });
 
-    // 2. Workspace - starts with just Console (full width and height)
-    let workspace = LinearLayout::vertical()
-        .child(
-            LinearLayout::horizontal()
-                .child(ActiveWindow::new(repl_log_with_events, "Console").full_width())
-                .full_width()
-                .full_height()
-                .with_name("workspace_row_0")
-        )
-        .with_name("workspace");
+    // 2. Workspace - Mux-based tiling window manager
+    // Create empty Mux and add the Console as first view
+    let console_view = ActiveWindow::new(repl_log_with_events, "Console");
+    let mut mux = Mux::new();
 
-    // Root Layout - Just workspace, no input
-    let root_layout = LinearLayout::vertical()
-        .child(workspace.full_width().full_height());
+    // Add console to the root position
+    let console_node_id = mux.add_right_of(console_view, mux.root().build().unwrap()).unwrap();
 
-    siv.add_layer(root_layout);
+    // Configure Mux key bindings:
+    // - Ctrl+arrows: Navigate between panes
+    // - Alt+arrows: Resize panes
+    // - Ctrl+Z: Zoom/unzoom current pane
+    mux.set_move_focus_up(CoreEvent::Ctrl(CoreKey::Up));
+    mux.set_move_focus_down(CoreEvent::Ctrl(CoreKey::Down));
+    mux.set_move_focus_left(CoreEvent::Ctrl(CoreKey::Left));
+    mux.set_move_focus_right(CoreEvent::Ctrl(CoreKey::Right));
+    mux.set_resize_up(CoreEvent::Alt(CoreKey::Up));
+    mux.set_resize_down(CoreEvent::Alt(CoreKey::Down));
+    mux.set_resize_left(CoreEvent::Alt(CoreKey::Left));
+    mux.set_resize_right(CoreEvent::Alt(CoreKey::Right));
+    mux.set_zoom(CoreEvent::CtrlChar('z'));
+
+    // Store the console node ID
+    siv.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow_mut().mux_nodes.insert("console".to_string(), console_node_id);
+    });
+
+    siv.add_fullscreen_layer(mux);
 
     // Focus repl_log at start
     siv.focus_name("repl_log").ok();
@@ -757,9 +775,10 @@ fn poll_inspect_entries(s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>) {
 }
 
 /// Rebuild the workspace layout based on current windows
-/// Layout rules:
-/// - 1-3 windows: single row, equal width
-/// - 4-6 windows: two rows, top row has 3 windows, bottom row has rest
+/// Uses cursive-multiplex Mux for tiled window management with:
+/// - Ctrl+arrows: Navigate between panes
+/// - Alt+arrows: Resize panes
+/// - Ctrl+Z: Zoom/unzoom current pane
 fn rebuild_workspace(s: &mut Cursive) {
     let (editor_names, repl_ids, engine, inspector_open, console_open, nostos_panel_open, current_panel, current_panel_id) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let state = state.borrow();
@@ -789,21 +808,14 @@ fn rebuild_workspace(s: &mut Cursive) {
         }
     }
 
-    // Remove old workspace content
-    s.call_on_name("workspace", |ws: &mut LinearLayout| {
-        ws.clear();
-    });
+    // Remove old Mux layer and create fresh one
+    s.pop_layer();
 
-    // Total windows = Console + editors + REPL panels + (inspector if open) + (nostos panel if open)
-    let inspector_count = if inspector_open { 1 } else { 0 };
-    let nostos_panel_count = if nostos_panel_open { 1 } else { 0 };
-    let total_windows = 1 + editor_names.len() + repl_ids.len() + inspector_count + nostos_panel_count;
-
+    // Create console view
     let repl_log = FocusableConsole::new(
         TextView::new(repl_log_content).scrollable().scroll_x(true)
     ).with_name("repl_log");
 
-    // Wrap console with OnEventView for Ctrl+Y copy (same pattern as Ctrl+S on editor)
     let repl_log_with_events = OnEventView::new(repl_log)
         .on_event(Event::CtrlChar('y'), |s| {
             if let Some(text) = s.call_on_name("repl_log", |view: &mut FocusableConsole| {
@@ -818,51 +830,44 @@ fn rebuild_workspace(s: &mut Cursive) {
             }
         })
         .on_event(Event::CtrlChar('w'), |s| {
-            // Close console (toggle off)
             s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
                 state.borrow_mut().console_open = false;
             });
             rebuild_workspace(s);
         });
 
-    // Console is smaller and shrinks first - use max_width to limit size
     let console = ActiveWindow::new(repl_log_with_events, "Console").max_width(60);
 
-    // Collect all window views: editors + REPL panels + inspector (if open)
-    let mut windows: Vec<Box<dyn View>> = Vec::new();
+    // Collect all window views
+    let mut windows: Vec<BoxedView> = Vec::new();
 
-    // Add console first if open
     if console_open {
-        windows.push(Box::new(console));
+        windows.push(BoxedView::boxed(console));
     }
 
-    // Add inspector
     if inspector_open {
         let inspector_view = create_inspector_view(&engine);
-        windows.push(Box::new(inspector_view));
+        windows.push(BoxedView::boxed(inspector_view));
     }
 
     for name in &editor_names {
         let read_only = engine.borrow().is_eval_function(name);
         let editor_view = create_editor_view(s, &engine, name, read_only);
-        windows.push(Box::new(editor_view));
+        windows.push(BoxedView::boxed(editor_view));
     }
 
     for &repl_id in &repl_ids {
         let eval_state = repl_eval_handles.remove(&repl_id);
         let repl_view = create_repl_panel_view(&engine, repl_id, repl_histories.remove(&repl_id), eval_state);
-        windows.push(Box::new(repl_view));
+        windows.push(BoxedView::boxed(repl_view));
     }
 
-    // Nostos panel gets its own row at the bottom (if open)
-    // This ensures other windows (Console, REPL, editors) share the top row(s)
-    let nostos_view: Option<Box<dyn View>> = if nostos_panel_open {
-        // Try new API first (panel ID)
+    // Nostos panel (if open)
+    let nostos_view: Option<BoxedView> = if nostos_panel_open {
         if let Some(panel_id) = current_panel_id {
-            Some(Box::new(create_nostos_panel_view_by_id(&engine, panel_id)))
-        // Fall back to old API (PanelInfo)
+            Some(BoxedView::boxed(create_nostos_panel_view_by_id(&engine, panel_id)))
         } else if let Some(ref info) = current_panel {
-            Some(Box::new(create_nostos_panel_view(&engine, info)))
+            Some(BoxedView::boxed(create_nostos_panel_view(&engine, info)))
         } else {
             None
         }
@@ -870,72 +875,51 @@ fn rebuild_workspace(s: &mut Cursive) {
         None
     };
 
+    // Create Mux and add views
+    let mut mux = Mux::new();
+
+    // Configure key bindings
+    mux.set_move_focus_up(CoreEvent::Ctrl(CoreKey::Up));
+    mux.set_move_focus_down(CoreEvent::Ctrl(CoreKey::Down));
+    mux.set_move_focus_left(CoreEvent::Ctrl(CoreKey::Left));
+    mux.set_move_focus_right(CoreEvent::Ctrl(CoreKey::Right));
+    mux.set_resize_up(CoreEvent::Alt(CoreKey::Up));
+    mux.set_resize_down(CoreEvent::Alt(CoreKey::Down));
+    mux.set_resize_left(CoreEvent::Alt(CoreKey::Left));
+    mux.set_resize_right(CoreEvent::Alt(CoreKey::Right));
+    mux.set_zoom(CoreEvent::CtrlChar('z'));
+
     if windows.is_empty() && nostos_view.is_none() {
-        // Empty workspace - maybe show a hint
-        s.call_on_name("workspace", |ws: &mut LinearLayout| {
-             ws.add_child(
-                 TextView::new("Workspace empty. Ctrl+O for Console, Ctrl+B for Browser.")
-                    .center()
-                    .full_width()
-                    .full_height()
-             );
-        });
+        // Empty workspace - show hint
+        let hint = TextView::new("Workspace empty. Ctrl+B for Browser, Ctrl+R for REPL.")
+            .center()
+            .full_width()
+            .full_height();
+        let _ = mux.add_right_of(hint, mux.root().build().unwrap());
+        s.add_fullscreen_layer(mux);
         return;
     }
 
-    // Build main window rows (without NostosPanel)
-    let total_windows = windows.len();
+    // Add windows to Mux - horizontally side by side
+    let root_id = mux.root().build().unwrap();
+    let mut last_id = root_id;
 
-    if total_windows == 0 {
-        // Only NostosPanel is open
-        if let Some(nostos) = nostos_view {
-            s.call_on_name("workspace", |ws: &mut LinearLayout| {
-                let row = LinearLayout::horizontal().child(nostos);
-                ws.add_child(row.full_width().full_height().with_name("workspace_row_0"));
-            });
+    for (i, window) in windows.into_iter().enumerate() {
+        if i == 0 {
+            // First window goes at root
+            last_id = mux.add_right_of(window, root_id).unwrap();
+        } else {
+            // Subsequent windows go to the right
+            last_id = mux.add_right_of(window, last_id).unwrap();
         }
-    } else if total_windows <= 3 {
-        // Single row layout for main windows
-        let mut row = LinearLayout::horizontal();
-
-        for window in windows {
-            row.add_child(window);
-        }
-
-        s.call_on_name("workspace", |ws: &mut LinearLayout| {
-            ws.add_child(row.full_width().full_height().with_name("workspace_row_0"));
-            // Add NostosPanel as its own row below
-            if let Some(nostos) = nostos_view {
-                let panel_row = LinearLayout::horizontal().child(nostos);
-                ws.add_child(panel_row.full_width().full_height().with_name("workspace_row_panel"));
-            }
-        });
-    } else {
-        // Two row layout: first 2 or 3 windows on top, rest on bottom
-        // If we have 4 windows, do 2x2. If 5, 2x3. If 6, 3x3.
-        let split_idx = if total_windows >= 6 { 3 } else { 2 };
-
-        let mut row0 = LinearLayout::horizontal();
-        let mut row1 = LinearLayout::horizontal();
-
-        for (i, window) in windows.into_iter().enumerate() {
-            if i < split_idx {
-                row0.add_child(window);
-            } else {
-                row1.add_child(window);
-            }
-        }
-
-        s.call_on_name("workspace", |ws: &mut LinearLayout| {
-            ws.add_child(row0.full_width().full_height().with_name("workspace_row_0"));
-            ws.add_child(row1.full_width().full_height().with_name("workspace_row_1"));
-            // Add NostosPanel as its own row below
-            if let Some(nostos) = nostos_view {
-                let panel_row = LinearLayout::horizontal().child(nostos);
-                ws.add_child(panel_row.full_width().full_height().with_name("workspace_row_panel"));
-            }
-        });
     }
+
+    // Add nostos panel below if open
+    if let Some(nostos) = nostos_view {
+        let _ = mux.add_below(nostos, last_id);
+    }
+
+    s.add_fullscreen_layer(mux);
 }
 
 /// Create a REPL panel view
