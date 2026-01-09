@@ -1,0 +1,32 @@
+# expect: 42
+# TCP echo test - server and client in same program
+
+main() = {
+    me = self()
+
+    # Spawn server in background
+    spawn {
+        listener = Tcp.listen(19999)
+        me <- "ready"
+        client = Tcp.accept(listener)
+        data = Tcp.read(client, 1024)
+        Tcp.write(client, "Echo: " ++ data)
+        Tcp.close(client)
+        Tcp.close(listener)
+        me <- "done"
+    }
+
+    # Wait for server to be ready
+    receive { "ready" -> () }
+
+    # Client connects
+    sock = Tcp.connect("localhost", 19999)
+    Tcp.write(sock, "Hello TCP")
+    response = Tcp.read(sock, 1024)
+    Tcp.close(sock)
+
+    # Wait for server to finish
+    receive { "done" -> () }
+
+    if response == "Echo: Hello TCP" then 42 else 0
+}

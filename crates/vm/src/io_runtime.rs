@@ -826,8 +826,9 @@ impl IoRuntime {
         let tcp_listeners: Arc<TokioMutex<HashMap<u64, TcpListener>>> = Arc::new(TokioMutex::new(HashMap::new()));
         let mut next_tcp_listener_handle: u64 = 1;
 
-        // TCP streams (client connections)
-        let tcp_streams: Arc<TokioMutex<HashMap<u64, TcpStream>>> = Arc::new(TokioMutex::new(HashMap::new()));
+        // TCP streams (client connections) - each stream has its own mutex to avoid deadlocks
+        // when multiple processes read/write different streams concurrently
+        let tcp_streams: Arc<TokioMutex<HashMap<u64, Arc<TokioMutex<TcpStream>>>>> = Arc::new(TokioMutex::new(HashMap::new()));
         let mut next_tcp_stream_handle: u64 = 1;
 
         while let Some(request) = request_rx.recv().await {
@@ -2614,7 +2615,8 @@ impl IoRuntime {
                         let addr = format!("{}:{}", host, port);
                         match TcpStream::connect(&addr).await {
                             Ok(stream) => {
-                                streams.lock().await.insert(handle, stream);
+                                // Wrap in Arc<Mutex> for per-stream locking
+                                streams.lock().await.insert(handle, Arc::new(TokioMutex::new(stream)));
                                 let _ = response.send(Ok(IoResponseValue::Int(handle as i64)));
                             }
                             Err(e) => {
@@ -2655,7 +2657,8 @@ impl IoRuntime {
                             match listener.accept().await {
                                 Ok((stream, _addr)) => {
                                     drop(listeners_guard); // Release listener lock before getting stream lock
-                                    streams.lock().await.insert(stream_handle, stream);
+                                    // Wrap in Arc<Mutex> for per-stream locking
+                                    streams.lock().await.insert(stream_handle, Arc::new(TokioMutex::new(stream)));
                                     let _ = response.send(Ok(IoResponseValue::Int(stream_handle as i64)));
                                 }
                                 Err(e) => {
@@ -2672,8 +2675,15 @@ impl IoRuntime {
                     let streams = tcp_streams.clone();
 
                     tokio::spawn(async move {
-                        let mut streams_guard = streams.lock().await;
-                        if let Some(stream) = streams_guard.get_mut(&handle) {
+                        // Get the stream Arc, releasing the HashMap lock immediately
+                        let stream_arc = {
+                            let streams_guard = streams.lock().await;
+                            streams_guard.get(&handle).cloned()
+                        };
+
+                        if let Some(stream_arc) = stream_arc {
+                            // Lock only this specific stream
+                            let mut stream = stream_arc.lock().await;
                             let mut buf = vec![0u8; max_bytes];
                             match stream.read(&mut buf).await {
                                 Ok(n) => {
@@ -2703,10 +2713,22 @@ impl IoRuntime {
                     let streams = tcp_streams.clone();
 
                     tokio::spawn(async move {
-                        let mut streams_guard = streams.lock().await;
-                        if let Some(stream) = streams_guard.get_mut(&handle) {
+                        // Get the stream Arc, releasing the HashMap lock immediately
+                        let stream_arc = {
+                            let streams_guard = streams.lock().await;
+                            streams_guard.get(&handle).cloned()
+                        };
+
+                        if let Some(stream_arc) = stream_arc {
+                            // Lock only this specific stream
+                            let mut stream = stream_arc.lock().await;
                             match stream.write_all(&data).await {
                                 Ok(_) => {
+                                    // Flush to ensure data is sent immediately
+                                    if let Err(e) = stream.flush().await {
+                                        let _ = response.send(Err(IoError::IoError(format!("TCP flush error: {}", e))));
+                                        return;
+                                    }
                                     let _ = response.send(Ok(IoResponseValue::Int(data.len() as i64)));
                                 }
                                 Err(e) => {
