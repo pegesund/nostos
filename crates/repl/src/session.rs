@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use nostos_syntax::ast::{Expr, FnDef, MatchArm, Stmt};
+use nostos_syntax::ast::{CallArg, Expr, FnDef, MatchArm, Stmt};
 use thiserror::Error;
 
 use crate::CallGraph;
@@ -391,7 +391,10 @@ fn extract_dependencies_from_expr(expr: &Expr, deps: &mut HashSet<String>) {
         Expr::Call(callee, _type_args, args, _) => {
             extract_dependencies_from_expr(callee, deps);
             for arg in args {
-                extract_dependencies_from_expr(arg, deps);
+                let expr = match arg {
+                    CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                };
+                extract_dependencies_from_expr(expr, deps);
             }
         }
         Expr::BinOp(left, _, right, _) => {
@@ -468,7 +471,10 @@ fn extract_dependencies_from_expr(expr: &Expr, deps: &mut HashSet<String>) {
         Expr::MethodCall(receiver, _, args, _) => {
             extract_dependencies_from_expr(receiver, deps);
             for arg in args {
-                extract_dependencies_from_expr(arg, deps);
+                let expr = match arg {
+                    CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                };
+                extract_dependencies_from_expr(expr, deps);
             }
         }
         Expr::Map(pairs, _) => {

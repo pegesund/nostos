@@ -3696,7 +3696,7 @@ mod tests {
             doc: None,
             signature: None,
             param_types: vec![],
-            return_type: None,
+            return_type: None, required_params: None,
         });
 
         let ptr = heap.alloc_closure(
@@ -4017,7 +4017,7 @@ mod tests {
             doc: None,
             signature: None,
             param_types: vec![],
-            return_type: None,
+            return_type: None, required_params: None,
         });
 
         let x = heap.alloc_string("captured x".to_string());
@@ -4274,7 +4274,7 @@ mod tests {
             doc: None,
             signature: None,
             param_types: vec![],
-            return_type: None,
+            return_type: None, required_params: None,
         });
 
         let captured = heap1.alloc_string("captured_value".to_string());

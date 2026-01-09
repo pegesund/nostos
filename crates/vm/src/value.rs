@@ -407,6 +407,9 @@ pub struct FunctionValue {
     pub param_types: Vec<String>,
     /// Return type as string
     pub return_type: Option<String>,
+    /// Number of required (non-optional) parameters
+    /// If None, all parameters are required
+    pub required_params: Option<usize>,
 }
 
 impl FunctionValue {
@@ -430,6 +433,7 @@ impl FunctionValue {
             signature: None,
             param_types: vec![],
             return_type: None,
+            required_params: None,
         }
     }
 }
@@ -453,6 +457,7 @@ impl Clone for FunctionValue {
             signature: self.signature.clone(),
             param_types: self.param_types.clone(),
             return_type: self.return_type.clone(),
+            required_params: self.required_params,
         }
     }
 }

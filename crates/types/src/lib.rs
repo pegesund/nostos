@@ -130,6 +130,9 @@ pub struct FunctionType {
     pub params: Vec<Type>,
     /// Return type
     pub ret: Box<Type>,
+    /// Number of required parameters (without defaults).
+    /// If None, all parameters are required.
+    pub required_params: Option<usize>,
 }
 
 impl FunctionType {
@@ -341,11 +344,12 @@ impl TypeEnv {
 
     /// Look up a function by name with arity-aware resolution.
     /// First tries arity-qualified name (e.g., `foo/_` for 1 arg), then falls back to exact match.
+    /// Also handles optional parameters by trying higher arities.
     /// This is essential for resolving overloaded functions by call arity.
     pub fn lookup_function_with_arity(&self, name: &str, arity: usize) -> Option<&FunctionType> {
         // Don't apply arity resolution if name already has a slash (already qualified)
         if !name.contains('/') {
-            // Construct arity-qualified name: "foo/" for 0 args, "foo/_" for 1, "foo/_,_" for 2, etc.
+            // First try exact arity match
             let arity_suffix = if arity == 0 {
                 "/".to_string()
             } else {
@@ -354,6 +358,21 @@ impl TypeEnv {
             let qualified_name = format!("{}{}", name, arity_suffix);
             if let Some(ft) = self.functions.get(&qualified_name) {
                 return Some(ft);
+            }
+
+            // Try higher arities for functions with optional params
+            // (provided arity >= required_params)
+            for extra in 1..=10 {
+                let total_arity = arity + extra;
+                let arity_suffix = format!("/{}", vec!["_"; total_arity].join(","));
+                let qualified_name = format!("{}{}", name, arity_suffix);
+                if let Some(ft) = self.functions.get(&qualified_name) {
+                    // Check if this function accepts our arity (has enough defaults)
+                    let min_required = ft.required_params.unwrap_or(ft.params.len());
+                    if arity >= min_required && arity <= ft.params.len() {
+                        return Some(ft);
+                    }
+                }
             }
         }
         // Fall back to exact match
@@ -525,7 +544,7 @@ impl TypeEnv {
                     .map(|(n, t, m)| (n.clone(), self.apply_subst(t), *m))
                     .collect(),
             }),
-            Type::Function(f) => Type::Function(FunctionType {
+            Type::Function(f) => Type::Function(FunctionType { required_params: None,
                 type_params: f.type_params.clone(),
                 params: f.params.iter().map(|t| self.apply_subst(t)).collect(),
                 ret: Box::new(self.apply_subst(&f.ret)),
@@ -921,7 +940,7 @@ pub fn standard_env() -> TypeEnv {
     // println: Show a => a -> ()
     env.functions.insert(
         "println".to_string(),
-        FunctionType {
+        FunctionType { required_params: None,
             type_params: vec![TypeParam {
                 name: "a".to_string(),
                 constraints: vec!["Show".to_string()],
@@ -934,7 +953,7 @@ pub fn standard_env() -> TypeEnv {
     // print: Show a => a -> ()
     env.functions.insert(
         "print".to_string(),
-        FunctionType {
+        FunctionType { required_params: None,
             type_params: vec![TypeParam {
                 name: "a".to_string(),
                 constraints: vec!["Show".to_string()],
@@ -947,7 +966,7 @@ pub fn standard_env() -> TypeEnv {
     // show: Show a => a -> String
     env.functions.insert(
         "show".to_string(),
-        FunctionType {
+        FunctionType { required_params: None,
             type_params: vec![TypeParam {
                 name: "a".to_string(),
                 constraints: vec!["Show".to_string()],
@@ -960,7 +979,7 @@ pub fn standard_env() -> TypeEnv {
     // inspect: a -> String -> () (for TUI debugging - sends value to inspector panel)
     env.functions.insert(
         "inspect".to_string(),
-        FunctionType {
+        FunctionType { required_params: None,
             type_params: vec![TypeParam {
                 name: "a".to_string(),
                 constraints: vec![],  // No constraints - any value can be inspected
@@ -990,7 +1009,7 @@ mod tests {
             "(Int, String)"
         );
         assert_eq!(
-            Type::Function(FunctionType {
+            Type::Function(FunctionType { required_params: None,
                 type_params: vec![],
                 params: vec![Type::Int, Type::Int],
                 ret: Box::new(Type::Int),

@@ -3981,7 +3981,7 @@ impl ReplEngine {
     /// This is used for live compile status in the editor
     pub fn check_module_compiles(&self, module_name: &str, content: &str) -> Result<(), String> {
         use nostos_syntax::{parse, parse_errors_to_source_errors, offset_to_line_col};
-        use nostos_syntax::ast::{Expr, Item, Stmt, DoStmt, TypeBody, Pattern};
+        use nostos_syntax::ast::{CallArg, Expr, Item, Stmt, DoStmt, TypeBody, Pattern};
         use nostos_compiler::Compiler;
 
         // Prepend module-level imports and use statements if editing within a module context
@@ -4511,7 +4511,10 @@ impl ReplEngine {
                     }
                     collect_calls(callee, calls, local_types, variant_constructors, known_modules);
                     for arg in args {
-                        collect_calls(arg, calls, local_types, variant_constructors, known_modules);
+                        let expr = match arg {
+                            CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                        };
+                        collect_calls(expr, calls, local_types, variant_constructors, known_modules);
                     }
                 }
                 Expr::MethodCall(receiver, method, args, span) => {
@@ -4563,7 +4566,10 @@ impl ReplEngine {
                         collect_calls(receiver, calls, local_types, variant_constructors, known_modules);
                     }
                     for arg in args {
-                        collect_calls(arg, calls, local_types, variant_constructors, known_modules);
+                        let expr = match arg {
+                            CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                        };
+                        collect_calls(expr, calls, local_types, variant_constructors, known_modules);
                     }
                 }
                 Expr::BinOp(left, _, right, _) => {

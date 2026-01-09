@@ -1,0 +1,6 @@
+# expect: 0
+greet(name, greeting = "Hello") = greeting ++ ", " ++ name
+main() = {
+    result = greet("World")
+    if result == "Hello, World" then 0 else 1
+}

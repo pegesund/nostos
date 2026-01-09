@@ -1,0 +1,35 @@
+# expect: 0
+# Simpler test for optional parameters
+
+# Function with one optional param
+greet(name, greeting = "Hello") = greeting ++ ", " ++ name
+
+# Test 1: With both args
+test1() = greet("World", "Hi") == "Hi, World"
+
+# Test 2: With only required arg
+test2() = greet("World") == "Hello, World"
+
+# Function with all optional params
+makeRange(start = 0, stop = 10, step = 1) = (start, stop, step)
+
+# Test 3: All defaults
+test3() = makeRange() == (0, 10, 1)
+
+# Test 4: One positional
+test4() = makeRange(5) == (5, 10, 1)
+
+# Test 5: Two positional
+test5() = makeRange(5, 20) == (5, 20, 1)
+
+main() = {
+    results = [test1(), test2(), test3(), test4(), test5()]
+    failed = results.filter(r => !r)
+    if length(failed) > 0 then {
+        println("Failed: " ++ show(length(failed)) ++ " tests")
+        1
+    } else {
+        println("All simple optional param tests passed!")
+        0
+    }
+}

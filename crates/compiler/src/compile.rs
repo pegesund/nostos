@@ -1108,9 +1108,19 @@ impl Compiler {
                         nostos_types::Type::Var(counter)
                     });
 
+                // Compute required_params for functions with optional parameters
+                let required_count = clause.params.iter()
+                    .filter(|p| p.default.is_none())
+                    .count();
+                let required_params = if required_count < clause.params.len() {
+                    Some(required_count)
+                } else {
+                    None // All required
+                };
+
                 self.pending_fn_signatures.insert(
                     fn_name,
-                    nostos_types::FunctionType {
+                    nostos_types::FunctionType { required_params,
                         type_params: vec![],
                         params: param_types,
                         ret: Box::new(ret_ty),
@@ -2493,14 +2503,20 @@ impl Compiler {
             Expr::Call(func, _type_args, args, _) => {
                 self.collect_mvar_access(func, reads, writes);
                 for arg in args {
-                    self.collect_mvar_access(arg, reads, writes);
+                    let expr = match arg {
+                        CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                    };
+                    self.collect_mvar_access(expr, reads, writes);
                 }
             }
             // Method call
             Expr::MethodCall(receiver, _, args, _) => {
                 self.collect_mvar_access(receiver, reads, writes);
                 for arg in args {
-                    self.collect_mvar_access(arg, reads, writes);
+                    let expr = match arg {
+                        CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                    };
+                    self.collect_mvar_access(expr, reads, writes);
                 }
             }
             // Field access
@@ -3167,6 +3183,7 @@ impl Compiler {
 
     /// Check if a function with the given base name exists (with any arity).
     /// Returns Some(set of arities) if found, None if no such function exists.
+    /// Includes intermediate arities for functions with optional parameters.
     fn find_all_function_arities(&self, base_name: &str) -> Option<std::collections::HashSet<usize>> {
         let prefix = format!("{}/", base_name);
         let mut arities = std::collections::HashSet::new();
@@ -3180,10 +3197,22 @@ impl Compiler {
         }
 
         // Check fn_asts (for functions being compiled or not yet compiled)
-        for key in self.fn_asts.keys() {
+        // Also add intermediate arities for functions with optional params
+        for (key, def) in &self.fn_asts {
             if let Some(suffix) = key.strip_prefix(&prefix) {
                 let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
                 arities.insert(param_count);
+
+                // Check if function has optional params and add intermediate arities
+                if !def.clauses.is_empty() {
+                    let required_count = def.clauses[0].params.iter()
+                        .filter(|p| p.default.is_none())
+                        .count();
+                    // Add all arities from required_count to total params
+                    for arity in required_count..=param_count {
+                        arities.insert(arity);
+                    }
+                }
             }
         }
 
@@ -3204,10 +3233,11 @@ impl Compiler {
 
     /// Find a function by base name and arity, returning the full function key.
     /// Used when we know a function exists with matching arity but types don't match.
+    /// Also finds functions with more params if the extra params have defaults.
     fn find_function_by_arity(&self, base_name: &str, arity: usize) -> Option<String> {
         let prefix = format!("{}/", base_name);
 
-        // Check compiled functions first
+        // Check compiled functions first (exact match)
         for key in self.functions.keys() {
             if let Some(suffix) = key.strip_prefix(&prefix) {
                 let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
@@ -3217,12 +3247,21 @@ impl Compiler {
             }
         }
 
-        // Check fn_asts
-        for key in self.fn_asts.keys() {
+        // Check fn_asts - also consider functions with optional params
+        for (key, def) in &self.fn_asts {
             if let Some(suffix) = key.strip_prefix(&prefix) {
                 let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
                 if param_count == arity {
                     return Some(key.clone());
+                }
+                // Check if this function accepts our arity via optional params
+                if param_count > arity && !def.clauses.is_empty() {
+                    let required_count = def.clauses[0].params.iter()
+                        .filter(|p| p.default.is_none())
+                        .count();
+                    if arity >= required_count && arity <= param_count {
+                        return Some(key.clone());
+                    }
                 }
             }
         }
@@ -3620,6 +3659,7 @@ impl Compiler {
                     signature: None,
                     param_types: vec![],
                     return_type: None,
+                    required_params: None,
                 };
                 self.functions.insert(variant.clone(), Arc::new(stale_marker));
             }
@@ -3887,6 +3927,20 @@ impl Compiler {
             })
         });
 
+        // Compute required_params from the first clause (all clauses should have same structure)
+        let required_params = if let Some(first_clause) = def.clauses.first() {
+            let required_count = first_clause.params.iter()
+                .filter(|p| p.default.is_none())
+                .count();
+            if required_count < first_clause.params.len() {
+                Some(required_count)
+            } else {
+                None // All required, use None to indicate no optional params
+            }
+        } else {
+            None
+        };
+
         let func = FunctionValue {
             name: name.clone(),
             arity,
@@ -3904,6 +3958,7 @@ impl Compiler {
             signature: Some(self.infer_signature(def)),
             param_types: def.param_type_strings(),
             return_type: def.return_type_string(),
+            required_params,
         };
 
         // Assign function index if not already indexed (for trait methods and late-compiled functions)
@@ -4363,170 +4418,170 @@ impl Compiler {
                     // === Check for builtin module-qualified functions first ===
                     match qualified_name.as_str() {
                         "File.readAll" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FileReadAll(dst, path_reg), line);
                             return Ok(dst);
                         }
                         "File.writeAll" if args.len() == 2 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
-                            let content_reg = self.compile_expr_tail(&args[1], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let content_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FileWriteAll(dst, path_reg, content_reg), line);
                             return Ok(dst);
                         }
                         "Http.get" if args.len() == 1 => {
-                            let url_reg = self.compile_expr_tail(&args[0], false)?;
+                            let url_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::HttpGet(dst, url_reg), line);
                             return Ok(dst);
                         }
                         "Http.post" if args.len() == 2 => {
-                            let url_reg = self.compile_expr_tail(&args[0], false)?;
-                            let body_reg = self.compile_expr_tail(&args[1], false)?;
+                            let url_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let body_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::HttpPost(dst, url_reg, body_reg), line);
                             return Ok(dst);
                         }
                         "Http.put" if args.len() == 2 => {
-                            let url_reg = self.compile_expr_tail(&args[0], false)?;
-                            let body_reg = self.compile_expr_tail(&args[1], false)?;
+                            let url_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let body_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::HttpPut(dst, url_reg, body_reg), line);
                             return Ok(dst);
                         }
                         "Http.delete" if args.len() == 1 => {
-                            let url_reg = self.compile_expr_tail(&args[0], false)?;
+                            let url_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::HttpDelete(dst, url_reg), line);
                             return Ok(dst);
                         }
                         "Http.patch" if args.len() == 2 => {
-                            let url_reg = self.compile_expr_tail(&args[0], false)?;
-                            let body_reg = self.compile_expr_tail(&args[1], false)?;
+                            let url_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let body_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::HttpPatch(dst, url_reg, body_reg), line);
                             return Ok(dst);
                         }
                         "Http.head" if args.len() == 1 => {
-                            let url_reg = self.compile_expr_tail(&args[0], false)?;
+                            let url_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::HttpHead(dst, url_reg), line);
                             return Ok(dst);
                         }
                         "Http.request" if args.len() == 4 => {
-                            let method_reg = self.compile_expr_tail(&args[0], false)?;
-                            let url_reg = self.compile_expr_tail(&args[1], false)?;
-                            let headers_reg = self.compile_expr_tail(&args[2], false)?;
-                            let body_reg = self.compile_expr_tail(&args[3], false)?;
+                            let method_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let url_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let headers_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
+                            let body_reg = self.compile_expr_tail(Self::call_arg_expr(&args[3]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::HttpRequest(dst, method_reg, url_reg, headers_reg, body_reg), line);
                             return Ok(dst);
                         }
                         // HTTP Server functions
                         "Server.bind" if args.len() == 1 => {
-                            let port_reg = self.compile_expr_tail(&args[0], false)?;
+                            let port_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ServerBind(dst, port_reg), line);
                             return Ok(dst);
                         }
                         "Server.accept" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ServerAccept(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         "Server.respond" if args.len() == 4 => {
-                            let req_id_reg = self.compile_expr_tail(&args[0], false)?;
-                            let status_reg = self.compile_expr_tail(&args[1], false)?;
-                            let headers_reg = self.compile_expr_tail(&args[2], false)?;
-                            let body_reg = self.compile_expr_tail(&args[3], false)?;
+                            let req_id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let status_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let headers_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
+                            let body_reg = self.compile_expr_tail(Self::call_arg_expr(&args[3]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ServerRespond(dst, req_id_reg, status_reg, headers_reg, body_reg), line);
                             return Ok(dst);
                         }
                         "Server.close" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ServerClose(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         "Server.matchPath" if args.len() == 2 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
-                            let pattern_reg = self.compile_expr_tail(&args[1], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let pattern_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![path_reg, pattern_reg].into(), line);
                             return Ok(dst);
                         }
                         // WebSocket functions
                         "WebSocket.accept" if args.len() == 1 => {
-                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let request_id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::WebSocketAccept(dst, request_id_reg), line);
                             return Ok(dst);
                         }
                         "WebSocket.send" if args.len() == 2 => {
-                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
-                            let message_reg = self.compile_expr_tail(&args[1], false)?;
+                            let request_id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let message_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::WebSocketSend(dst, request_id_reg, message_reg), line);
                             return Ok(dst);
                         }
                         "WebSocket.recv" if args.len() == 1 => {
-                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let request_id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::WebSocketReceive(dst, request_id_reg), line);
                             return Ok(dst);
                         }
                         "WebSocket.close" if args.len() == 1 => {
-                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let request_id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::WebSocketClose(dst, request_id_reg), line);
                             return Ok(dst);
                         }
                         // PostgreSQL functions
                         "Pg.connect" if args.len() == 1 => {
-                            let conn_str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let conn_str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgConnect(dst, conn_str_reg), line);
                             return Ok(dst);
                         }
                         "Pg.query" if args.len() == 3 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let query_reg = self.compile_expr_tail(&args[1], false)?;
-                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let query_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let params_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgQuery(dst, handle_reg, query_reg, params_reg), line);
                             return Ok(dst);
                         }
                         "Pg.execute" if args.len() == 3 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let query_reg = self.compile_expr_tail(&args[1], false)?;
-                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let query_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let params_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgExecute(dst, handle_reg, query_reg, params_reg), line);
                             return Ok(dst);
                         }
                         "Pg.close" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgClose(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         "Pg.begin" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgBegin(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         "Pg.commit" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgCommit(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         "Pg.rollback" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgRollback(dst, handle_reg), line);
                             return Ok(dst);
@@ -4537,8 +4592,8 @@ impl Compiler {
                             // result = try fn() catch e -> { Pg.rollback(conn); throw(e) } end
                             // Pg.commit(conn)
                             // result
-                            let conn_reg = self.compile_expr_tail(&args[0], false)?;
-                            let fn_reg = self.compile_expr_tail(&args[1], false)?;
+                            let conn_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let fn_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
 
                             // 1. Begin transaction
@@ -4583,148 +4638,148 @@ impl Compiler {
                             return Ok(dst);
                         }
                         "Pg.prepare" if args.len() == 3 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let name_reg = self.compile_expr_tail(&args[1], false)?;
-                            let query_reg = self.compile_expr_tail(&args[2], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let name_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let query_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgPrepare(dst, handle_reg, name_reg, query_reg), line);
                             return Ok(dst);
                         }
                         "Pg.queryPrepared" if args.len() == 3 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let name_reg = self.compile_expr_tail(&args[1], false)?;
-                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let name_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let params_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgQueryPrepared(dst, handle_reg, name_reg, params_reg), line);
                             return Ok(dst);
                         }
                         "Pg.executePrepared" if args.len() == 3 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let name_reg = self.compile_expr_tail(&args[1], false)?;
-                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let name_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let params_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgExecutePrepared(dst, handle_reg, name_reg, params_reg), line);
                             return Ok(dst);
                         }
                         "Pg.deallocate" if args.len() == 2 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let name_reg = self.compile_expr_tail(&args[1], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let name_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgDeallocate(dst, handle_reg, name_reg), line);
                             return Ok(dst);
                         }
                         // LISTEN/NOTIFY builtins
                         "Pg.listenConnect" if args.len() == 1 => {
-                            let conn_str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let conn_str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgListenConnect(dst, conn_str_reg), line);
                             return Ok(dst);
                         }
                         "Pg.listen" if args.len() == 2 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let channel_reg = self.compile_expr_tail(&args[1], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let channel_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgListen(dst, handle_reg, channel_reg), line);
                             return Ok(dst);
                         }
                         "Pg.unlisten" if args.len() == 2 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let channel_reg = self.compile_expr_tail(&args[1], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let channel_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgUnlisten(dst, handle_reg, channel_reg), line);
                             return Ok(dst);
                         }
                         "Pg.notify" if args.len() == 3 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let channel_reg = self.compile_expr_tail(&args[1], false)?;
-                            let payload_reg = self.compile_expr_tail(&args[2], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let channel_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let payload_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgNotify(dst, handle_reg, channel_reg, payload_reg), line);
                             return Ok(dst);
                         }
                         "Pg.awaitNotification" if args.len() == 2 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let timeout_reg = self.compile_expr_tail(&args[1], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let timeout_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgAwaitNotification(dst, handle_reg, timeout_reg), line);
                             return Ok(dst);
                         }
                         // Selenium WebDriver builtins
                         "Selenium.connect" if args.len() == 1 => {
-                            let url_reg = self.compile_expr_tail(&args[0], false)?;
+                            let url_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumConnect(dst, url_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.goto" if args.len() == 2 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let url_reg = self.compile_expr_tail(&args[1], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let url_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumGoto(dst, driver_reg, url_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.click" if args.len() == 2 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let selector_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumClick(dst, driver_reg, selector_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.text" if args.len() == 2 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let selector_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumText(dst, driver_reg, selector_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.sendKeys" if args.len() == 3 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
-                            let text_reg = self.compile_expr_tail(&args[2], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let selector_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let text_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumSendKeys(dst, driver_reg, selector_reg, text_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.executeJs" if args.len() == 2 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let script_reg = self.compile_expr_tail(&args[1], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let script_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumExecuteJs(dst, driver_reg, script_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.executeJsWithArgs" if args.len() == 3 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let script_reg = self.compile_expr_tail(&args[1], false)?;
-                            let args_reg = self.compile_expr_tail(&args[2], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let script_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let args_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumExecuteJsWithArgs(dst, driver_reg, script_reg, args_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.waitFor" if args.len() == 3 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
-                            let timeout_reg = self.compile_expr_tail(&args[2], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let selector_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let timeout_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumWaitFor(dst, driver_reg, selector_reg, timeout_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.getAttribute" if args.len() == 3 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
-                            let attr_reg = self.compile_expr_tail(&args[2], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let selector_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let attr_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumGetAttribute(dst, driver_reg, selector_reg, attr_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.exists" if args.len() == 2 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let selector_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumExists(dst, driver_reg, selector_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.close" if args.len() == 1 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumClose(dst, driver_reg), line);
                             return Ok(dst);
@@ -4736,126 +4791,126 @@ impl Compiler {
                             return Ok(dst);
                         }
                         "Time.fromDate" if args.len() == 3 => {
-                            let year_reg = self.compile_expr_tail(&args[0], false)?;
-                            let month_reg = self.compile_expr_tail(&args[1], false)?;
-                            let day_reg = self.compile_expr_tail(&args[2], false)?;
+                            let year_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let month_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let day_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeFromDate(dst, year_reg, month_reg, day_reg), line);
                             return Ok(dst);
                         }
                         "Time.fromTime" if args.len() == 3 => {
-                            let hour_reg = self.compile_expr_tail(&args[0], false)?;
-                            let min_reg = self.compile_expr_tail(&args[1], false)?;
-                            let sec_reg = self.compile_expr_tail(&args[2], false)?;
+                            let hour_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let min_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let sec_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeFromTime(dst, hour_reg, min_reg, sec_reg), line);
                             return Ok(dst);
                         }
                         "Time.fromDateTime" if args.len() == 6 => {
-                            let year_reg = self.compile_expr_tail(&args[0], false)?;
-                            let month_reg = self.compile_expr_tail(&args[1], false)?;
-                            let day_reg = self.compile_expr_tail(&args[2], false)?;
-                            let hour_reg = self.compile_expr_tail(&args[3], false)?;
-                            let min_reg = self.compile_expr_tail(&args[4], false)?;
-                            let sec_reg = self.compile_expr_tail(&args[5], false)?;
+                            let year_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let month_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let day_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
+                            let hour_reg = self.compile_expr_tail(Self::call_arg_expr(&args[3]), false)?;
+                            let min_reg = self.compile_expr_tail(Self::call_arg_expr(&args[4]), false)?;
+                            let sec_reg = self.compile_expr_tail(Self::call_arg_expr(&args[5]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeFromDateTime(dst, year_reg, month_reg, day_reg, hour_reg, min_reg, sec_reg), line);
                             return Ok(dst);
                         }
                         "Time.year" if args.len() == 1 => {
-                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let ts_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeYear(dst, ts_reg), line);
                             return Ok(dst);
                         }
                         "Time.month" if args.len() == 1 => {
-                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let ts_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeMonth(dst, ts_reg), line);
                             return Ok(dst);
                         }
                         "Time.day" if args.len() == 1 => {
-                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let ts_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeDay(dst, ts_reg), line);
                             return Ok(dst);
                         }
                         "Time.hour" if args.len() == 1 => {
-                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let ts_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeHour(dst, ts_reg), line);
                             return Ok(dst);
                         }
                         "Time.minute" if args.len() == 1 => {
-                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let ts_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeMinute(dst, ts_reg), line);
                             return Ok(dst);
                         }
                         "Time.second" if args.len() == 1 => {
-                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let ts_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeSecond(dst, ts_reg), line);
                             return Ok(dst);
                         }
                         // Type introspection and reflection
                         "typeInfo" if args.len() == 1 => {
-                            let name_reg = self.compile_expr_tail(&args[0], false)?;
+                            let name_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TypeInfo(dst, name_reg), line);
                             return Ok(dst);
                         }
                         "typeOf" if args.len() == 1 => {
-                            let val_reg = self.compile_expr_tail(&args[0], false)?;
+                            let val_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TypeOf(dst, val_reg), line);
                             return Ok(dst);
                         }
                         "tagOf" if args.len() == 1 => {
-                            let val_reg = self.compile_expr_tail(&args[0], false)?;
+                            let val_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TagOf(dst, val_reg), line);
                             return Ok(dst);
                         }
                         "reflect" if args.len() == 1 => {
-                            let val_reg = self.compile_expr_tail(&args[0], false)?;
+                            let val_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::Reflect(dst, val_reg), line);
                             return Ok(dst);
                         }
                         // String encoding functions
                         "Base64.encode" if args.len() == 1 => {
-                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::Base64Encode(dst, str_reg), line);
                             return Ok(dst);
                         }
                         "Base64.decode" if args.len() == 1 => {
-                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::Base64Decode(dst, str_reg), line);
                             return Ok(dst);
                         }
                         "Url.encode" if args.len() == 1 => {
-                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::UrlEncode(dst, str_reg), line);
                             return Ok(dst);
                         }
                         "Url.decode" if args.len() == 1 => {
-                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::UrlDecode(dst, str_reg), line);
                             return Ok(dst);
                         }
                         "Encoding.toBytes" if args.len() == 1 => {
-                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::Utf8Encode(dst, str_reg), line);
                             return Ok(dst);
                         }
                         "Encoding.fromBytes" if args.len() == 1 => {
-                            let bytes_reg = self.compile_expr_tail(&args[0], false)?;
+                            let bytes_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::Utf8Decode(dst, bytes_reg), line);
                             return Ok(dst);
@@ -4867,20 +4922,20 @@ impl Compiler {
                             return Ok(dst);
                         }
                         "Buffer.append" if args.len() == 2 => {
-                            let buf_reg = self.compile_expr_tail(&args[0], false)?;
-                            let str_reg = self.compile_expr_tail(&args[1], false)?;
+                            let buf_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             self.chunk.emit(Instruction::BufferAppend(buf_reg, str_reg), line);
                             return Ok(buf_reg); // Return the buffer
                         }
                         "Buffer.toString" if args.len() == 1 => {
-                            let buf_reg = self.compile_expr_tail(&args[0], false)?;
+                            let buf_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::BufferToString(dst, buf_reg), line);
                             return Ok(dst);
                         }
                         // === Reactive Render Context (for RHtml) ===
                         "RenderStack.push" if args.len() == 1 => {
-                            let id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             self.chunk.emit(Instruction::RenderStackPush(id_reg), line);
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::LoadUnit(dst), line);
@@ -4925,20 +4980,20 @@ impl Compiler {
                             return Ok(dst);
                         }
                         "Reactive.clearComponentDeps" if args.len() == 1 => {
-                            let id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             self.chunk.emit(Instruction::ClearComponentDeps(id_reg), line);
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::LoadUnit(dst), line);
                             return Ok(dst);
                         }
                         "Reactive.getId" if args.len() == 1 => {
-                            let rec_reg = self.compile_expr_tail(&args[0], false)?;
+                            let rec_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ReactiveGetId(dst, rec_reg), line);
                             return Ok(dst);
                         }
                         "Reactive.setDeps" if args.len() == 1 => {
-                            let deps_reg = self.compile_expr_tail(&args[0], false)?;
+                            let deps_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             self.chunk.emit(Instruction::ReactiveSetDeps(deps_reg), line);
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::LoadUnit(dst), line);
@@ -4954,7 +5009,7 @@ impl Compiler {
                         | "String.toFloat" | "String.trim" | "String.trimStart" | "String.trimEnd"
                         | "String.toUpper" | "String.toLower" | "String.reverse" | "String.lines"
                         | "String.words" | "String.isEmpty" if args.len() == 1 => {
-                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
@@ -4962,8 +5017,8 @@ impl Compiler {
                         // String functions (2 args)
                         "String.contains" | "String.startsWith" | "String.endsWith"
                         | "String.indexOf" | "String.lastIndexOf" | "String.repeat" if args.len() == 2 => {
-                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
-                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let arg0_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let arg1_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
@@ -4971,9 +5026,9 @@ impl Compiler {
                         // String functions (3 args)
                         "String.replace" | "String.replaceAll" | "String.substring"
                         | "String.padStart" | "String.padEnd" if args.len() == 3 => {
-                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
-                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
-                            let arg2_reg = self.compile_expr_tail(&args[2], false)?;
+                            let arg0_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let arg1_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let arg2_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg, arg2_reg].into(), line);
                             return Ok(dst);
@@ -4987,15 +5042,15 @@ impl Compiler {
                         // Time functions (1 arg)
                         "Time.year" | "Time.month" | "Time.day" | "Time.hour" | "Time.minute"
                         | "Time.second" | "Time.weekday" | "Time.toUtc" | "Time.fromUtc" if args.len() == 1 => {
-                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Time functions (2 args)
                         "Time.format" | "Time.formatUtc" | "Time.parse" if args.len() == 2 => {
-                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
-                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let arg0_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let arg1_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
@@ -5014,15 +5069,15 @@ impl Compiler {
                         }
                         // Random functions (1 arg)
                         "Random.choice" | "Random.shuffle" | "Random.bytes" if args.len() == 1 => {
-                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Random.int (2 args)
                         "Random.int" if args.len() == 2 => {
-                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
-                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let arg0_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let arg1_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
@@ -5035,15 +5090,15 @@ impl Compiler {
                         }
                         // Env functions (1 arg)
                         "Env.get" | "Env.remove" | "Env.setCwd" if args.len() == 1 => {
-                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Env.set (2 args)
                         "Env.set" if args.len() == 2 => {
-                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
-                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let arg0_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let arg1_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
@@ -5051,32 +5106,32 @@ impl Compiler {
                         // Path functions (1 arg)
                         "Path.dirname" | "Path.basename" | "Path.extension" | "Path.normalize"
                         | "Path.isAbsolute" | "Path.isRelative" | "Path.split" if args.len() == 1 => {
-                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Path functions (2 args)
                         "Path.join" | "Path.withExtension" if args.len() == 2 => {
-                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
-                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let arg0_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let arg1_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
                         }
                         // Regex functions (2 args)
                         "Regex.matches" | "Regex.find" | "Regex.findAll" | "Regex.split" | "Regex.captures" if args.len() == 2 => {
-                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
-                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let arg0_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let arg1_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
                         }
                         // Regex functions (3 args)
                         "Regex.replace" | "Regex.replaceAll" if args.len() == 3 => {
-                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
-                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
-                            let arg2_reg = self.compile_expr_tail(&args[2], false)?;
+                            let arg0_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let arg1_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let arg2_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg, arg2_reg].into(), line);
                             return Ok(dst);
@@ -5089,53 +5144,53 @@ impl Compiler {
                         }
                         // UUID functions (1 arg)
                         "Uuid.isValid" if args.len() == 1 => {
-                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Crypto functions (1 arg)
                         "Crypto.sha256" | "Crypto.sha512" | "Crypto.md5" | "Crypto.randomBytes" if args.len() == 1 => {
-                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Crypto functions (2 args)
                         "Crypto.bcryptHash" | "Crypto.bcryptVerify" if args.len() == 2 => {
-                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
-                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let arg0_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let arg1_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
                         }
                         // Map functions (1 arg)
                         "Map.keys" | "Map.values" | "Map.size" | "Map.isEmpty" | "Map.toList" | "Map.fromList" if args.len() == 1 => {
-                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Map functions (2 args)
                         "Map.get" | "Map.contains" | "Map.remove" | "Map.union" | "Map.intersection" | "Map.difference" if args.len() == 2 => {
-                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
-                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let arg0_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let arg1_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
                         }
                         // Map.insert (3 args)
                         "Map.insert" if args.len() == 3 => {
-                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
-                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
-                            let arg2_reg = self.compile_expr_tail(&args[2], false)?;
+                            let arg0_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let arg1_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let arg2_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg, arg2_reg].into(), line);
                             return Ok(dst);
                         }
                         // Set functions (1 arg)
                         "Set.size" | "Set.isEmpty" | "Set.toList" | "Set.fromList" if args.len() == 1 => {
-                            let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
@@ -5144,207 +5199,207 @@ impl Compiler {
                         "Set.insert" | "Set.remove" | "Set.contains" | "Set.union"
                         | "Set.intersection" | "Set.difference" | "Set.symmetricDifference"
                         | "Set.isSubset" | "Set.isProperSubset" if args.len() == 2 => {
-                            let arg0_reg = self.compile_expr_tail(&args[0], false)?;
-                            let arg1_reg = self.compile_expr_tail(&args[1], false)?;
+                            let arg0_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let arg1_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
                             return Ok(dst);
                         }
                         // File handle operations
                         "File.open" if args.len() == 2 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
-                            let mode_reg = self.compile_expr_tail(&args[1], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let mode_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FileOpen(dst, path_reg, mode_reg), line);
                             return Ok(dst);
                         }
                         "File.write" if args.len() == 2 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let data_reg = self.compile_expr_tail(&args[1], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let data_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FileWrite(dst, handle_reg, data_reg), line);
                             return Ok(dst);
                         }
                         "File.read" if args.len() == 2 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let size_reg = self.compile_expr_tail(&args[1], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let size_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FileRead(dst, handle_reg, size_reg), line);
                             return Ok(dst);
                         }
                         "File.readLine" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FileReadLine(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         "File.flush" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FileFlush(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         "File.close" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FileClose(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         "File.seek" if args.len() == 3 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let offset_reg = self.compile_expr_tail(&args[1], false)?;
-                            let whence_reg = self.compile_expr_tail(&args[2], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let offset_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let whence_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FileSeek(dst, handle_reg, offset_reg, whence_reg), line);
                             return Ok(dst);
                         }
                         // Directory operations
                         "Dir.create" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::DirCreate(dst, path_reg), line);
                             return Ok(dst);
                         }
                         "Dir.createAll" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::DirCreateAll(dst, path_reg), line);
                             return Ok(dst);
                         }
                         "Dir.list" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::DirList(dst, path_reg), line);
                             return Ok(dst);
                         }
                         "Dir.remove" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::DirRemove(dst, path_reg), line);
                             return Ok(dst);
                         }
                         "Dir.removeAll" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::DirRemoveAll(dst, path_reg), line);
                             return Ok(dst);
                         }
                         // File utilities
                         "File.exists" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FileExists(dst, path_reg), line);
                             return Ok(dst);
                         }
                         "Dir.exists" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::DirExists(dst, path_reg), line);
                             return Ok(dst);
                         }
                         "File.remove" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FileRemove(dst, path_reg), line);
                             return Ok(dst);
                         }
                         "File.rename" if args.len() == 2 => {
-                            let old_reg = self.compile_expr_tail(&args[0], false)?;
-                            let new_reg = self.compile_expr_tail(&args[1], false)?;
+                            let old_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let new_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FileRename(dst, old_reg, new_reg), line);
                             return Ok(dst);
                         }
                         "File.copy" if args.len() == 2 => {
-                            let src_reg = self.compile_expr_tail(&args[0], false)?;
-                            let dest_reg = self.compile_expr_tail(&args[1], false)?;
+                            let src_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let dest_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FileCopy(dst, src_reg, dest_reg), line);
                             return Ok(dst);
                         }
                         "File.size" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FileSize(dst, path_reg), line);
                             return Ok(dst);
                         }
                         "File.append" if args.len() == 2 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
-                            let content_reg = self.compile_expr_tail(&args[1], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let content_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::FileAppend(dst, path_reg, content_reg), line);
                             return Ok(dst);
                         }
                         // === Directory operations ===
                         "Dir.create" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::DirCreate(dst, path_reg), line);
                             return Ok(dst);
                         }
                         "Dir.createAll" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::DirCreateAll(dst, path_reg), line);
                             return Ok(dst);
                         }
                         "Dir.list" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::DirList(dst, path_reg), line);
                             return Ok(dst);
                         }
                         "Dir.remove" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::DirRemove(dst, path_reg), line);
                             return Ok(dst);
                         }
                         "Dir.removeAll" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::DirRemoveAll(dst, path_reg), line);
                             return Ok(dst);
                         }
                         "Dir.exists" if args.len() == 1 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::DirExists(dst, path_reg), line);
                             return Ok(dst);
                         }
                         // === String encoding operations ===
                         "Base64.encode" if args.len() == 1 => {
-                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::Base64Encode(dst, str_reg), line);
                             return Ok(dst);
                         }
                         "Base64.decode" if args.len() == 1 => {
-                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::Base64Decode(dst, str_reg), line);
                             return Ok(dst);
                         }
                         "Url.encode" if args.len() == 1 => {
-                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::UrlEncode(dst, str_reg), line);
                             return Ok(dst);
                         }
                         "Url.decode" if args.len() == 1 => {
-                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::UrlDecode(dst, str_reg), line);
                             return Ok(dst);
                         }
                         "Encoding.toBytes" if args.len() == 1 => {
-                            let str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::Utf8Encode(dst, str_reg), line);
                             return Ok(dst);
                         }
                         "Encoding.fromBytes" if args.len() == 1 => {
-                            let bytes_reg = self.compile_expr_tail(&args[0], false)?;
+                            let bytes_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::Utf8Decode(dst, bytes_reg), line);
                             return Ok(dst);
@@ -5356,20 +5411,20 @@ impl Compiler {
                             return Ok(dst);
                         }
                         "Buffer.append" if args.len() == 2 => {
-                            let buf_reg = self.compile_expr_tail(&args[0], false)?;
-                            let str_reg = self.compile_expr_tail(&args[1], false)?;
+                            let buf_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             self.chunk.emit(Instruction::BufferAppend(buf_reg, str_reg), line);
                             return Ok(buf_reg); // Return the buffer
                         }
                         "Buffer.toString" if args.len() == 1 => {
-                            let buf_reg = self.compile_expr_tail(&args[0], false)?;
+                            let buf_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::BufferToString(dst, buf_reg), line);
                             return Ok(dst);
                         }
                         // === Reactive Render Context (for RHtml) ===
                         "RenderStack.push" if args.len() == 1 => {
-                            let id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             self.chunk.emit(Instruction::RenderStackPush(id_reg), line);
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::LoadUnit(dst), line);
@@ -5414,20 +5469,20 @@ impl Compiler {
                             return Ok(dst);
                         }
                         "Reactive.clearComponentDeps" if args.len() == 1 => {
-                            let id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             self.chunk.emit(Instruction::ClearComponentDeps(id_reg), line);
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::LoadUnit(dst), line);
                             return Ok(dst);
                         }
                         "Reactive.getId" if args.len() == 1 => {
-                            let rec_reg = self.compile_expr_tail(&args[0], false)?;
+                            let rec_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ReactiveGetId(dst, rec_reg), line);
                             return Ok(dst);
                         }
                         "Reactive.setDeps" if args.len() == 1 => {
-                            let deps_reg = self.compile_expr_tail(&args[0], false)?;
+                            let deps_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             self.chunk.emit(Instruction::ReactiveSetDeps(deps_reg), line);
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::LoadUnit(dst), line);
@@ -5440,108 +5495,108 @@ impl Compiler {
                         }
                         // === HTTP Server operations ===
                         "Server.bind" if args.len() == 1 => {
-                            let port_reg = self.compile_expr_tail(&args[0], false)?;
+                            let port_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ServerBind(dst, port_reg), line);
                             return Ok(dst);
                         }
                         "Server.accept" if args.len() == 1 => {
-                            let server_reg = self.compile_expr_tail(&args[0], false)?;
+                            let server_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ServerAccept(dst, server_reg), line);
                             return Ok(dst);
                         }
                         "Server.respond" if args.len() == 4 => {
-                            let req_id_reg = self.compile_expr_tail(&args[0], false)?;
-                            let status_reg = self.compile_expr_tail(&args[1], false)?;
-                            let headers_reg = self.compile_expr_tail(&args[2], false)?;
-                            let body_reg = self.compile_expr_tail(&args[3], false)?;
+                            let req_id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let status_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let headers_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
+                            let body_reg = self.compile_expr_tail(Self::call_arg_expr(&args[3]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ServerRespond(dst, req_id_reg, status_reg, headers_reg, body_reg), line);
                             return Ok(dst);
                         }
                         "Server.close" if args.len() == 1 => {
-                            let server_reg = self.compile_expr_tail(&args[0], false)?;
+                            let server_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ServerClose(dst, server_reg), line);
                             return Ok(dst);
                         }
                         "Server.matchPath" if args.len() == 2 => {
-                            let path_reg = self.compile_expr_tail(&args[0], false)?;
-                            let pattern_reg = self.compile_expr_tail(&args[1], false)?;
+                            let path_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let pattern_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![path_reg, pattern_reg].into(), line);
                             return Ok(dst);
                         }
                         // === WebSocket operations ===
                         "WebSocket.accept" if args.len() == 1 => {
-                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let request_id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::WebSocketAccept(dst, request_id_reg), line);
                             return Ok(dst);
                         }
                         "WebSocket.send" if args.len() == 2 => {
-                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
-                            let message_reg = self.compile_expr_tail(&args[1], false)?;
+                            let request_id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let message_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::WebSocketSend(dst, request_id_reg, message_reg), line);
                             return Ok(dst);
                         }
                         "WebSocket.recv" if args.len() == 1 => {
-                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let request_id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::WebSocketReceive(dst, request_id_reg), line);
                             return Ok(dst);
                         }
                         "WebSocket.close" if args.len() == 1 => {
-                            let request_id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let request_id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::WebSocketClose(dst, request_id_reg), line);
                             return Ok(dst);
                         }
                         // === PostgreSQL operations ===
                         "Pg.connect" if args.len() == 1 => {
-                            let conn_str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let conn_str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgConnect(dst, conn_str_reg), line);
                             return Ok(dst);
                         }
                         "Pg.query" if args.len() == 3 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let query_reg = self.compile_expr_tail(&args[1], false)?;
-                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let query_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let params_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgQuery(dst, handle_reg, query_reg, params_reg), line);
                             return Ok(dst);
                         }
                         "Pg.execute" if args.len() == 3 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let query_reg = self.compile_expr_tail(&args[1], false)?;
-                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let query_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let params_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgExecute(dst, handle_reg, query_reg, params_reg), line);
                             return Ok(dst);
                         }
                         "Pg.close" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgClose(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         "Pg.begin" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgBegin(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         "Pg.commit" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgCommit(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         "Pg.rollback" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgRollback(dst, handle_reg), line);
                             return Ok(dst);
@@ -5552,8 +5607,8 @@ impl Compiler {
                             // result = try fn() catch e -> { Pg.rollback(conn); throw(e) } end
                             // Pg.commit(conn)
                             // result
-                            let conn_reg = self.compile_expr_tail(&args[0], false)?;
-                            let fn_reg = self.compile_expr_tail(&args[1], false)?;
+                            let conn_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let fn_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
 
                             // 1. Begin transaction
@@ -5598,148 +5653,148 @@ impl Compiler {
                             return Ok(dst);
                         }
                         "Pg.prepare" if args.len() == 3 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let name_reg = self.compile_expr_tail(&args[1], false)?;
-                            let query_reg = self.compile_expr_tail(&args[2], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let name_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let query_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgPrepare(dst, handle_reg, name_reg, query_reg), line);
                             return Ok(dst);
                         }
                         "Pg.queryPrepared" if args.len() == 3 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let name_reg = self.compile_expr_tail(&args[1], false)?;
-                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let name_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let params_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgQueryPrepared(dst, handle_reg, name_reg, params_reg), line);
                             return Ok(dst);
                         }
                         "Pg.executePrepared" if args.len() == 3 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let name_reg = self.compile_expr_tail(&args[1], false)?;
-                            let params_reg = self.compile_expr_tail(&args[2], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let name_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let params_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgExecutePrepared(dst, handle_reg, name_reg, params_reg), line);
                             return Ok(dst);
                         }
                         "Pg.deallocate" if args.len() == 2 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let name_reg = self.compile_expr_tail(&args[1], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let name_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgDeallocate(dst, handle_reg, name_reg), line);
                             return Ok(dst);
                         }
                         // LISTEN/NOTIFY builtins
                         "Pg.listenConnect" if args.len() == 1 => {
-                            let conn_str_reg = self.compile_expr_tail(&args[0], false)?;
+                            let conn_str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgListenConnect(dst, conn_str_reg), line);
                             return Ok(dst);
                         }
                         "Pg.listen" if args.len() == 2 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let channel_reg = self.compile_expr_tail(&args[1], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let channel_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgListen(dst, handle_reg, channel_reg), line);
                             return Ok(dst);
                         }
                         "Pg.unlisten" if args.len() == 2 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let channel_reg = self.compile_expr_tail(&args[1], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let channel_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgUnlisten(dst, handle_reg, channel_reg), line);
                             return Ok(dst);
                         }
                         "Pg.notify" if args.len() == 3 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let channel_reg = self.compile_expr_tail(&args[1], false)?;
-                            let payload_reg = self.compile_expr_tail(&args[2], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let channel_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let payload_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgNotify(dst, handle_reg, channel_reg, payload_reg), line);
                             return Ok(dst);
                         }
                         "Pg.awaitNotification" if args.len() == 2 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let timeout_reg = self.compile_expr_tail(&args[1], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let timeout_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::PgAwaitNotification(dst, handle_reg, timeout_reg), line);
                             return Ok(dst);
                         }
                         // Selenium WebDriver builtins
                         "Selenium.connect" if args.len() == 1 => {
-                            let url_reg = self.compile_expr_tail(&args[0], false)?;
+                            let url_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumConnect(dst, url_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.goto" if args.len() == 2 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let url_reg = self.compile_expr_tail(&args[1], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let url_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumGoto(dst, driver_reg, url_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.click" if args.len() == 2 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let selector_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumClick(dst, driver_reg, selector_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.text" if args.len() == 2 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let selector_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumText(dst, driver_reg, selector_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.sendKeys" if args.len() == 3 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
-                            let text_reg = self.compile_expr_tail(&args[2], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let selector_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let text_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumSendKeys(dst, driver_reg, selector_reg, text_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.executeJs" if args.len() == 2 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let script_reg = self.compile_expr_tail(&args[1], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let script_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumExecuteJs(dst, driver_reg, script_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.executeJsWithArgs" if args.len() == 3 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let script_reg = self.compile_expr_tail(&args[1], false)?;
-                            let args_reg = self.compile_expr_tail(&args[2], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let script_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let args_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumExecuteJsWithArgs(dst, driver_reg, script_reg, args_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.waitFor" if args.len() == 3 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
-                            let timeout_reg = self.compile_expr_tail(&args[2], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let selector_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let timeout_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumWaitFor(dst, driver_reg, selector_reg, timeout_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.getAttribute" if args.len() == 3 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
-                            let attr_reg = self.compile_expr_tail(&args[2], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let selector_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let attr_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumGetAttribute(dst, driver_reg, selector_reg, attr_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.exists" if args.len() == 2 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
-                            let selector_reg = self.compile_expr_tail(&args[1], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let selector_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumExists(dst, driver_reg, selector_reg), line);
                             return Ok(dst);
                         }
                         "Selenium.close" if args.len() == 1 => {
-                            let driver_reg = self.compile_expr_tail(&args[0], false)?;
+                            let driver_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::SeleniumClose(dst, driver_reg), line);
                             return Ok(dst);
@@ -5751,89 +5806,89 @@ impl Compiler {
                             return Ok(dst);
                         }
                         "Time.fromDate" if args.len() == 3 => {
-                            let year_reg = self.compile_expr_tail(&args[0], false)?;
-                            let month_reg = self.compile_expr_tail(&args[1], false)?;
-                            let day_reg = self.compile_expr_tail(&args[2], false)?;
+                            let year_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let month_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let day_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeFromDate(dst, year_reg, month_reg, day_reg), line);
                             return Ok(dst);
                         }
                         "Time.fromTime" if args.len() == 3 => {
-                            let hour_reg = self.compile_expr_tail(&args[0], false)?;
-                            let min_reg = self.compile_expr_tail(&args[1], false)?;
-                            let sec_reg = self.compile_expr_tail(&args[2], false)?;
+                            let hour_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let min_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let sec_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeFromTime(dst, hour_reg, min_reg, sec_reg), line);
                             return Ok(dst);
                         }
                         "Time.fromDateTime" if args.len() == 6 => {
-                            let year_reg = self.compile_expr_tail(&args[0], false)?;
-                            let month_reg = self.compile_expr_tail(&args[1], false)?;
-                            let day_reg = self.compile_expr_tail(&args[2], false)?;
-                            let hour_reg = self.compile_expr_tail(&args[3], false)?;
-                            let min_reg = self.compile_expr_tail(&args[4], false)?;
-                            let sec_reg = self.compile_expr_tail(&args[5], false)?;
+                            let year_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let month_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let day_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
+                            let hour_reg = self.compile_expr_tail(Self::call_arg_expr(&args[3]), false)?;
+                            let min_reg = self.compile_expr_tail(Self::call_arg_expr(&args[4]), false)?;
+                            let sec_reg = self.compile_expr_tail(Self::call_arg_expr(&args[5]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeFromDateTime(dst, year_reg, month_reg, day_reg, hour_reg, min_reg, sec_reg), line);
                             return Ok(dst);
                         }
                         "Time.year" if args.len() == 1 => {
-                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let ts_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeYear(dst, ts_reg), line);
                             return Ok(dst);
                         }
                         "Time.month" if args.len() == 1 => {
-                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let ts_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeMonth(dst, ts_reg), line);
                             return Ok(dst);
                         }
                         "Time.day" if args.len() == 1 => {
-                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let ts_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeDay(dst, ts_reg), line);
                             return Ok(dst);
                         }
                         "Time.hour" if args.len() == 1 => {
-                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let ts_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeHour(dst, ts_reg), line);
                             return Ok(dst);
                         }
                         "Time.minute" if args.len() == 1 => {
-                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let ts_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeMinute(dst, ts_reg), line);
                             return Ok(dst);
                         }
                         "Time.second" if args.len() == 1 => {
-                            let ts_reg = self.compile_expr_tail(&args[0], false)?;
+                            let ts_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TimeSecond(dst, ts_reg), line);
                             return Ok(dst);
                         }
                         // Type introspection and reflection
                         "typeInfo" if args.len() == 1 => {
-                            let name_reg = self.compile_expr_tail(&args[0], false)?;
+                            let name_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TypeInfo(dst, name_reg), line);
                             return Ok(dst);
                         }
                         "typeOf" if args.len() == 1 => {
-                            let val_reg = self.compile_expr_tail(&args[0], false)?;
+                            let val_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TypeOf(dst, val_reg), line);
                             return Ok(dst);
                         }
                         "tagOf" if args.len() == 1 => {
-                            let val_reg = self.compile_expr_tail(&args[0], false)?;
+                            let val_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::TagOf(dst, val_reg), line);
                             return Ok(dst);
                         }
                         "reflect" if args.len() == 1 => {
-                            let val_reg = self.compile_expr_tail(&args[0], false)?;
+                            let val_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::Reflect(dst, val_reg), line);
                             return Ok(dst);
@@ -5845,25 +5900,25 @@ impl Compiler {
                             return Ok(dst);
                         }
                         "Process.time" if args.len() == 1 => {
-                            let pid_reg = self.compile_expr_tail(&args[0], false)?;
+                            let pid_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ProcessTime(dst, pid_reg), line);
                             return Ok(dst);
                         }
                         "Process.alive" if args.len() == 1 => {
-                            let pid_reg = self.compile_expr_tail(&args[0], false)?;
+                            let pid_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ProcessAlive(dst, pid_reg), line);
                             return Ok(dst);
                         }
                         "Process.info" if args.len() == 1 => {
-                            let pid_reg = self.compile_expr_tail(&args[0], false)?;
+                            let pid_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ProcessInfo(dst, pid_reg), line);
                             return Ok(dst);
                         }
                         "Process.kill" if args.len() == 1 => {
-                            let pid_reg = self.compile_expr_tail(&args[0], false)?;
+                            let pid_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ProcessKill(dst, pid_reg), line);
                             return Ok(dst);
@@ -5881,40 +5936,40 @@ impl Compiler {
                         }
                         // === Panel (TUI) functions ===
                         "Panel.create" if args.len() == 1 => {
-                            let title_reg = self.compile_expr_tail(&args[0], false)?;
+                            let title_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, "Panel.create", vec![title_reg].into(), line);
                             return Ok(dst);
                         }
                         "Panel.setContent" if args.len() == 2 => {
-                            let id_reg = self.compile_expr_tail(&args[0], false)?;
-                            let content_reg = self.compile_expr_tail(&args[1], false)?;
+                            let id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let content_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, "Panel.setContent", vec![id_reg, content_reg].into(), line);
                             return Ok(dst);
                         }
                         "Panel.show" if args.len() == 1 => {
-                            let id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, "Panel.show", vec![id_reg].into(), line);
                             return Ok(dst);
                         }
                         "Panel.hide" if args.len() == 1 => {
-                            let id_reg = self.compile_expr_tail(&args[0], false)?;
+                            let id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, "Panel.hide", vec![id_reg].into(), line);
                             return Ok(dst);
                         }
                         "Panel.onKey" if args.len() == 2 => {
-                            let id_reg = self.compile_expr_tail(&args[0], false)?;
-                            let handler_reg = self.compile_expr_tail(&args[1], false)?;
+                            let id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let handler_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, "Panel.onKey", vec![id_reg, handler_reg].into(), line);
                             return Ok(dst);
                         }
                         "Panel.registerHotkey" if args.len() == 2 => {
-                            let key_reg = self.compile_expr_tail(&args[0], false)?;
-                            let callback_reg = self.compile_expr_tail(&args[1], false)?;
+                            let key_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let callback_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, "Panel.registerHotkey", vec![key_reg, callback_reg].into(), line);
                             return Ok(dst);
@@ -5922,176 +5977,176 @@ impl Compiler {
                         // === Eval ===
                         // Only use built-in eval if no user-defined function exists
                         "eval" if args.len() == 1 && !self.has_user_function("eval", 1) => {
-                            let code_reg = self.compile_expr_tail(&args[0], false)?;
+                            let code_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, "eval", vec![code_reg].into(), line);
                             return Ok(dst);
                         }
                         // === External process execution ===
                         "Exec.run" if args.len() == 2 => {
-                            let cmd_reg = self.compile_expr_tail(&args[0], false)?;
-                            let args_reg = self.compile_expr_tail(&args[1], false)?;
+                            let cmd_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let args_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ExecRun(dst, cmd_reg, args_reg), line);
                             return Ok(dst);
                         }
                         "Exec.start" if args.len() == 2 => {
-                            let cmd_reg = self.compile_expr_tail(&args[0], false)?;
-                            let args_reg = self.compile_expr_tail(&args[1], false)?;
+                            let cmd_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let args_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ExecSpawn(dst, cmd_reg, args_reg), line);
                             return Ok(dst);
                         }
                         "Exec.readline" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ExecReadLine(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         "Exec.readStderr" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ExecReadStderr(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         "Exec.write" if args.len() == 2 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
-                            let data_reg = self.compile_expr_tail(&args[1], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let data_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ExecWrite(dst, handle_reg, data_reg), line);
                             return Ok(dst);
                         }
                         "Exec.wait" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ExecWait(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         "Exec.kill" if args.len() == 1 => {
-                            let handle_reg = self.compile_expr_tail(&args[0], false)?;
+                            let handle_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ExecKill(dst, handle_reg), line);
                             return Ok(dst);
                         }
                         // === Float64Array builtins ===
                         "Float64Array.fromList" if args.len() == 1 => {
-                            let list_reg = self.compile_expr_tail(&args[0], false)?;
+                            let list_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![list_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float64Array.length" if args.len() == 1 => {
-                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arr_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arr_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float64Array.get" if args.len() == 2 => {
-                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
-                            let idx_reg = self.compile_expr_tail(&args[1], false)?;
+                            let arr_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let idx_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arr_reg, idx_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float64Array.set" if args.len() == 3 => {
-                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
-                            let idx_reg = self.compile_expr_tail(&args[1], false)?;
-                            let val_reg = self.compile_expr_tail(&args[2], false)?;
+                            let arr_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let idx_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let val_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arr_reg, idx_reg, val_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float64Array.toList" if args.len() == 1 => {
-                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arr_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arr_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float64Array.make" if args.len() == 2 => {
-                            let size_reg = self.compile_expr_tail(&args[0], false)?;
-                            let val_reg = self.compile_expr_tail(&args[1], false)?;
+                            let size_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let val_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![size_reg, val_reg].into(), line);
                             return Ok(dst);
                         }
                         // === Int64Array builtins ===
                         "Int64Array.fromList" if args.len() == 1 => {
-                            let list_reg = self.compile_expr_tail(&args[0], false)?;
+                            let list_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![list_reg].into(), line);
                             return Ok(dst);
                         }
                         "Int64Array.length" if args.len() == 1 => {
-                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arr_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arr_reg].into(), line);
                             return Ok(dst);
                         }
                         "Int64Array.get" if args.len() == 2 => {
-                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
-                            let idx_reg = self.compile_expr_tail(&args[1], false)?;
+                            let arr_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let idx_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arr_reg, idx_reg].into(), line);
                             return Ok(dst);
                         }
                         "Int64Array.set" if args.len() == 3 => {
-                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
-                            let idx_reg = self.compile_expr_tail(&args[1], false)?;
-                            let val_reg = self.compile_expr_tail(&args[2], false)?;
+                            let arr_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let idx_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let val_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arr_reg, idx_reg, val_reg].into(), line);
                             return Ok(dst);
                         }
                         "Int64Array.toList" if args.len() == 1 => {
-                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arr_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arr_reg].into(), line);
                             return Ok(dst);
                         }
                         "Int64Array.make" if args.len() == 2 => {
-                            let size_reg = self.compile_expr_tail(&args[0], false)?;
-                            let val_reg = self.compile_expr_tail(&args[1], false)?;
+                            let size_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let val_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![size_reg, val_reg].into(), line);
                             return Ok(dst);
                         }
                         // === Float32Array builtins (for vectors/pgvector) ===
                         "Float32Array.fromList" if args.len() == 1 => {
-                            let list_reg = self.compile_expr_tail(&args[0], false)?;
+                            let list_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![list_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float32Array.length" if args.len() == 1 => {
-                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arr_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arr_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float32Array.get" if args.len() == 2 => {
-                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
-                            let idx_reg = self.compile_expr_tail(&args[1], false)?;
+                            let arr_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let idx_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arr_reg, idx_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float32Array.set" if args.len() == 3 => {
-                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
-                            let idx_reg = self.compile_expr_tail(&args[1], false)?;
-                            let val_reg = self.compile_expr_tail(&args[2], false)?;
+                            let arr_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let idx_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let val_reg = self.compile_expr_tail(Self::call_arg_expr(&args[2]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arr_reg, idx_reg, val_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float32Array.toList" if args.len() == 1 => {
-                            let arr_reg = self.compile_expr_tail(&args[0], false)?;
+                            let arr_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arr_reg].into(), line);
                             return Ok(dst);
                         }
                         "Float32Array.make" if args.len() == 2 => {
-                            let size_reg = self.compile_expr_tail(&args[0], false)?;
-                            let val_reg = self.compile_expr_tail(&args[1], false)?;
+                            let size_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let val_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![size_reg, val_reg].into(), line);
                             return Ok(dst);
@@ -6103,7 +6158,7 @@ impl Compiler {
 
                     // Compute argument types for function overloading
                     let arg_types: Vec<Option<String>> = args.iter()
-                        .map(|a| self.expr_type_name(a))
+                        .map(|a| self.expr_type_name(Self::call_arg_expr(a)))
                         .collect();
 
                     // Resolve to the correct function variant using signature matching
@@ -6127,7 +6182,7 @@ impl Compiler {
                         // Compile arguments
                         let mut arg_regs = Vec::new();
                         for arg in args {
-                            let reg = self.compile_expr_tail(arg, false)?;
+                            let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
                             arg_regs.push(reg);
                         }
 
@@ -6236,7 +6291,7 @@ impl Compiler {
                             "append" => {
                                 if args.len() == 1 {
                                     let buf_reg = self.compile_expr_tail(obj, false)?;
-                                    let str_reg = self.compile_expr_tail(&args[0], false)?;
+                                    let str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                                     self.chunk.emit(Instruction::BufferAppend(buf_reg, str_reg), line);
                                     return Ok(buf_reg);
                                 }
@@ -6286,7 +6341,7 @@ impl Compiler {
                             "onChange" => {
                                 if args.len() == 1 {
                                     let obj_reg = self.compile_expr_tail(obj, false)?;
-                                    let callback_reg = self.compile_expr_tail(&args[0], false)?;
+                                    let callback_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                                     self.chunk.emit(Instruction::ReactiveAddCallback(obj_reg, callback_reg), line);
                                     // Return unit
                                     let dst = self.alloc_reg();
@@ -6298,7 +6353,7 @@ impl Compiler {
                             "onRead" => {
                                 if args.len() == 1 {
                                     let obj_reg = self.compile_expr_tail(obj, false)?;
-                                    let callback_reg = self.compile_expr_tail(&args[0], false)?;
+                                    let callback_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                                     self.chunk.emit(Instruction::ReactiveAddReadCallback(obj_reg, callback_reg), line);
                                     // Return unit
                                     let dst = self.alloc_reg();
@@ -6318,7 +6373,7 @@ impl Compiler {
                         let obj_reg = self.compile_expr_tail(obj, false)?;
                         let mut arg_regs = vec![obj_reg];
                         for arg in args {
-                            let reg = self.compile_expr_tail(arg, false)?;
+                            let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
                             arg_regs.push(reg);
                         }
                         let dst = self.alloc_reg();
@@ -6332,7 +6387,7 @@ impl Compiler {
                     if let Some(qualified_method) = self.find_trait_method(&type_name, &method.node) {
                         // Found a trait method - compile as qualified function call
                         let mut all_args = vec![obj.as_ref().clone()];
-                        all_args.extend(args.iter().cloned());
+                        all_args.extend(args.iter().map(|a| Self::call_arg_expr(a).clone()));
 
                         // Compute argument types for function overloading
                         let arg_types: Vec<Option<String>> = all_args.iter()
@@ -6384,7 +6439,7 @@ impl Compiler {
                 }
 
                 // Regular UFCS method call: obj.method(args) -> method(obj, args)
-                let mut all_args = vec![obj.as_ref().clone()];
+                let mut all_args: Vec<CallArg> = vec![CallArg::Positional(obj.as_ref().clone())];
                 all_args.extend(args.iter().cloned());
 
                 let func_expr = Expr::Var(method.clone());
@@ -6862,7 +6917,7 @@ impl Compiler {
             BinOp::Or => return self.compile_or(left, right),
             BinOp::Pipe => {
                 // a |> f is f(a)
-                return self.compile_call(right, &[], &[left.clone()], false);
+                return self.compile_call(right, &[], &[CallArg::Positional(left.clone())], false);
             }
             _ => {}
         }
@@ -7204,8 +7259,16 @@ impl Compiler {
         Ok(dst)
     }
 
+    /// Extract expression from a CallArg
+    fn call_arg_expr(arg: &CallArg) -> &Expr {
+        match arg {
+            CallArg::Positional(e) | CallArg::Named(_, e) => e,
+        }
+    }
+
     /// Compile a function call, with tail call optimization.
-    fn compile_call(&mut self, func: &Expr, type_args: &[TypeExpr], args: &[Expr], is_tail: bool) -> Result<Reg, CompileError> {
+    /// Supports named arguments which are reordered to match parameter positions.
+    fn compile_call(&mut self, func: &Expr, type_args: &[TypeExpr], args: &[CallArg], is_tail: bool) -> Result<Reg, CompileError> {
         // Get line number for this call expression
         let line = self.span_line(func.span());
 
@@ -7215,7 +7278,7 @@ impl Compiler {
         // Handle special built-in `throw` that compiles to the Throw instruction
         if let Some(ref name) = maybe_qualified_name {
             if name == "throw" && args.len() == 1 {
-                let arg_reg = self.compile_expr_tail(&args[0], false)?;
+                let arg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                 self.chunk.emit(Instruction::Throw(arg_reg), line);
                 // Throw doesn't return, but we need to return a register
                 // Return a unit register since execution won't continue
@@ -7227,12 +7290,13 @@ impl Compiler {
             // Syntax: __native__("FunctionName", arg1, arg2, ...)
             if name == "__native__" && !args.is_empty() {
                 // First argument must be a string literal with the function name
-                let ext_func_name = match &args[0] {
+                let first_arg = Self::call_arg_expr(&args[0]);
+                let ext_func_name = match first_arg {
                     Expr::String(StringLit::Plain(s), _) => s.clone(),
                     _ => {
                         return Err(CompileError::TypeError {
                             message: "__native__ first argument must be a plain string literal".to_string(),
-                            span: args[0].span(),
+                            span: first_arg.span(),
                         });
                     }
                 };
@@ -7240,7 +7304,7 @@ impl Compiler {
                 // Compile remaining arguments
                 let mut arg_regs = Vec::new();
                 for arg in &args[1..] {
-                    let reg = self.compile_expr_tail(arg, false)?;
+                    let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
                     arg_regs.push(reg);
                 }
 
@@ -7264,7 +7328,7 @@ impl Compiler {
                 self.known_modules.insert("stdlib.html".to_string());
 
                 // Transform the argument expression to use stdlib.html.* functions
-                let transformed_arg = self.transform_html_expr(&args[0]);
+                let transformed_arg = self.transform_html_expr(Self::call_arg_expr(&args[0]));
 
                 // Compile the transformed expression and return the Html tree
                 return self.compile_expr_tail(&transformed_arg, is_tail);
@@ -7282,7 +7346,7 @@ impl Compiler {
                 self.chunk.emit(Instruction::RenderContextStart, line);
 
                 // 2. Transform and compile the tree
-                let transformed_arg = self.transform_rhtml_expr(&args[0]);
+                let transformed_arg = self.transform_rhtml_expr(Self::call_arg_expr(&args[0]));
                 let tree_reg = self.compile_expr_tail(&transformed_arg, false)?;
 
                 // 3. Finish render context - returns (deps, components, renderers, changedIds) tuple
@@ -7318,10 +7382,10 @@ impl Compiler {
                 //   6. return Component(name)
 
                 // Compile name argument
-                let name_reg = self.compile_expr_tail(&args[0], false)?;
+                let name_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
 
                 // Compile render function argument
-                let func_reg = self.compile_expr_tail(&args[1], false)?;
+                let func_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
 
                 // Register the renderer function
                 self.chunk.emit(Instruction::RegisterRenderer(name_reg, func_reg), line);
@@ -7354,19 +7418,96 @@ impl Compiler {
             vec![]
         };
 
+        // Get parameter names and defaults from the function definition
+        let (param_names, param_defaults): (Vec<Option<String>>, Vec<Option<Expr>>) =
+            if let Some(ref qname) = maybe_qualified_name {
+                (self.get_function_param_names(qname), self.get_function_param_defaults(qname))
+            } else {
+                (vec![], vec![])
+            };
+
+        // Reorder arguments based on named parameters and fill in defaults
+        // Result contains either a provided CallArg or a default Expr for each position
+        enum ResolvedArg<'a> {
+            Provided(&'a CallArg),
+            Default(&'a Expr),
+        }
+
+        let num_params = param_names.len().max(args.len());
+
+        let resolved_args: Vec<ResolvedArg> = if !param_names.is_empty() {
+            // Build a mapping of where each argument should go
+            let mut result: Vec<Option<&CallArg>> = vec![None; num_params];
+            let mut positional_idx = 0;
+
+            // Place arguments in their correct positions
+            for arg in args {
+                match arg {
+                    CallArg::Named(name, _) => {
+                        // Find the parameter position for this name
+                        if let Some(pos) = param_names.iter().position(|p| p.as_deref() == Some(&name.node)) {
+                            result[pos] = Some(arg);
+                        } else {
+                            // Unknown parameter name - treat as positional
+                            while positional_idx < result.len() && result[positional_idx].is_some() {
+                                positional_idx += 1;
+                            }
+                            if positional_idx < result.len() {
+                                result[positional_idx] = Some(arg);
+                            }
+                        }
+                    }
+                    CallArg::Positional(_) => {
+                        // Skip positions already filled by named args
+                        while positional_idx < result.len() && result[positional_idx].is_some() {
+                            positional_idx += 1;
+                        }
+                        if positional_idx < result.len() {
+                            result[positional_idx] = Some(arg);
+                            positional_idx += 1;
+                        }
+                    }
+                }
+            }
+
+            // Convert to ResolvedArg, using defaults for missing arguments
+            result.into_iter().enumerate().filter_map(|(i, opt_arg)| {
+                if let Some(arg) = opt_arg {
+                    Some(ResolvedArg::Provided(arg))
+                } else if let Some(Some(default)) = param_defaults.get(i) {
+                    Some(ResolvedArg::Default(default))
+                } else {
+                    None // No argument and no default - will cause arity error
+                }
+            }).collect()
+        } else {
+            // No param info available - use positional order
+            args.iter().map(ResolvedArg::Provided).collect()
+        };
+
+        // Extract expressions from resolved args for type parameter mapping
+        let arg_exprs: Vec<&Expr> = resolved_args.iter().map(|a| match a {
+            ResolvedArg::Provided(ca) => Self::call_arg_expr(ca),
+            ResolvedArg::Default(e) => e,
+        }).collect();
+
         // Build type parameter substitution map from argument types
         // This is needed when calling polymorphic functions like apply_hash[T: Hash](f: (T) -> Int, x: T)
         // where we need to substitute T with the concrete type from x (Val)
-        let type_param_map: HashMap<String, String> = self.build_type_param_map(&expected_param_types, args);
+        let type_param_map: HashMap<String, String> = self.build_type_param_map_refs(&expected_param_types, &arg_exprs);
 
         // Compile arguments, handling polymorphic function arguments specially
         let mut arg_regs = Vec::new();
-        for (i, arg) in args.iter().enumerate() {
+        for (i, arg) in resolved_args.iter().enumerate() {
+            let expr = match arg {
+                ResolvedArg::Provided(ca) => Self::call_arg_expr(ca),
+                ResolvedArg::Default(e) => e,
+            };
             // Get the expected parameter type and substitute any type parameters
             let expected_type = expected_param_types.get(i)
                 .and_then(|t| t.as_ref())
                 .map(|t| self.substitute_type_params(t, &type_param_map));
-            let reg = self.compile_arg_with_expected_type(arg, expected_type.as_ref())?;
+            let reg = self.compile_arg_with_expected_type(expr, expected_type.as_ref())?;
             arg_regs.push(reg);
         }
 
@@ -7670,7 +7811,7 @@ impl Compiler {
                     "abs" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         // Check if we can infer type from the argument expression
-                        let arg_type = self.infer_expr_type(&args[0]);
+                        let arg_type = self.infer_expr_type(Self::call_arg_expr(&args[0]));
                         match arg_type {
                             Some(InferredType::Int) => {
                                 self.chunk.emit(Instruction::AbsInt(dst, arg_regs[0]), line);
@@ -7739,7 +7880,7 @@ impl Compiler {
                     "min" if arg_regs.len() == 2 => {
                         let dst = self.alloc_reg();
                         // Check if we can infer type from the first argument
-                        let arg_type = self.infer_expr_type(&args[0]);
+                        let arg_type = self.infer_expr_type(Self::call_arg_expr(&args[0]));
                         match arg_type {
                             Some(InferredType::Int) => {
                                 self.chunk.emit(Instruction::MinInt(dst, arg_regs[0], arg_regs[1]), line);
@@ -7757,7 +7898,7 @@ impl Compiler {
                     "max" if arg_regs.len() == 2 => {
                         let dst = self.alloc_reg();
                         // Check if we can infer type from the first argument
-                        let arg_type = self.infer_expr_type(&args[0]);
+                        let arg_type = self.infer_expr_type(Self::call_arg_expr(&args[0]));
                         match arg_type {
                             Some(InferredType::Int) => {
                                 self.chunk.emit(Instruction::MaxInt(dst, arg_regs[0], arg_regs[1]), line);
@@ -7855,7 +7996,7 @@ impl Compiler {
                     // First try trait dispatch, then fall back to native
                     builtin @ ("show" | "copy" | "hash") if arg_regs.len() == 1 => {
                         // Try to dispatch to trait method if type is known
-                        let arg_type = self.expr_type_name(&args[0]);
+                        let arg_type = self.expr_type_name(Self::call_arg_expr(&args[0]));
 
                         if let Some(ref concrete_type) = arg_type {
                             if let Some(qualified_method) = self.find_trait_method(concrete_type, &qualified_name) {
@@ -8034,7 +8175,7 @@ impl Compiler {
 
             // Get argument types for function overloading resolution
             let arg_types: Vec<Option<String>> = args.iter()
-                .map(|arg| self.expr_type_name(arg))
+                .map(|arg| self.expr_type_name(Self::call_arg_expr(arg)))
                 .collect();
 
             // Check trait bounds if the function has type parameters with constraints
@@ -8273,7 +8414,7 @@ impl Compiler {
         let new_value = Expr::Call(
             Box::new(Expr::Var(Ident { node: "requestToType".to_string(), span })),
             vec![],  // no type args
-            vec![receiver.clone(), type_name_expr],
+            vec![CallArg::Positional(receiver.clone()), CallArg::Positional(type_name_expr)],
             span,
         );
 
@@ -8368,7 +8509,7 @@ impl Compiler {
                     match ident.node.as_str() {
                         "copy" if args.len() == 1 => {
                             // copy(x) returns the same type as x
-                            return self.expr_type_name(&args[0]);
+                            return self.expr_type_name(Self::call_arg_expr(&args[0]));
                         }
                         "hash" if args.len() == 1 => {
                             return Some("Int".to_string());
@@ -8900,6 +9041,7 @@ impl Compiler {
             signature: None,
             param_types: vec![],
             return_type: None,
+            required_params: None, // Will be set when fully compiled
         };
         self.functions.insert(mangled_name.clone(), Arc::new(placeholder));
 
@@ -8933,6 +9075,44 @@ impl Compiler {
                 if !def.clauses.is_empty() {
                     return def.clauses[0].params.iter()
                         .map(|p| p.ty.clone())
+                        .collect();
+                }
+            }
+        }
+        vec![]
+    }
+
+    /// Get parameter names for a function by name.
+    /// Returns the name for each parameter, or None if it has no name (pattern).
+    fn get_function_param_names(&self, fn_name: &str) -> Vec<Option<String>> {
+        let resolved = self.resolve_name(fn_name);
+        let prefix = format!("{}/", resolved);
+
+        // Try to find the function definition in fn_asts
+        for (key, def) in &self.fn_asts {
+            if key.starts_with(&prefix) || key == fn_name {
+                if !def.clauses.is_empty() {
+                    return def.clauses[0].params.iter()
+                        .map(|p| self.pattern_binding_name(&p.pattern))
+                        .collect();
+                }
+            }
+        }
+        vec![]
+    }
+
+    /// Get parameter defaults for a function by name.
+    /// Returns the default expression for each parameter, or None if no default.
+    fn get_function_param_defaults(&self, fn_name: &str) -> Vec<Option<Expr>> {
+        let resolved = self.resolve_name(fn_name);
+        let prefix = format!("{}/", resolved);
+
+        // Try to find the function definition in fn_asts
+        for (key, def) in &self.fn_asts {
+            if key.starts_with(&prefix) || key == fn_name {
+                if !def.clauses.is_empty() {
+                    return def.clauses[0].params.iter()
+                        .map(|p| p.default.clone())
                         .collect();
                 }
             }
@@ -9041,6 +9221,32 @@ impl Compiler {
     /// For example, if expected_types has `(T) -> Int` and `T`, and the second argument
     /// is `Val(42)`, we can deduce that `T = Val`.
     fn build_type_param_map(&self, expected_types: &[Option<TypeExpr>], args: &[Expr]) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+
+        // First pass: find simple type parameter mappings from non-function types
+        for (expected, arg) in expected_types.iter().zip(args.iter()) {
+            if let Some(type_expr) = expected {
+                // Check if this parameter is a simple type parameter (single uppercase letter)
+                if let TypeExpr::Name(ident) = type_expr {
+                    let name = &ident.node;
+                    if name.len() == 1 && name.chars().next().unwrap().is_uppercase() {
+                        // This is a type parameter - try to get concrete type from argument
+                        if let Some(concrete_type) = self.expr_type_name(arg) {
+                            // Only map if the concrete type is actually concrete (not another type param)
+                            if !(concrete_type.len() == 1 && concrete_type.chars().next().unwrap().is_uppercase()) {
+                                map.insert(name.clone(), concrete_type);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        map
+    }
+
+    /// Build a map from type parameters to concrete types based on argument expressions (reference variant).
+    fn build_type_param_map_refs(&self, expected_types: &[Option<TypeExpr>], args: &[&Expr]) -> HashMap<String, String> {
         let mut map = HashMap::new();
 
         // First pass: find simple type parameter mappings from non-function types
@@ -10249,7 +10455,10 @@ impl Compiler {
             Expr::Call(func, _type_args, args, _) => {
                 self.collect_mvar_writes_inner(func, writes);
                 for arg in args {
-                    self.collect_mvar_writes_inner(arg, writes);
+                    let expr = match arg {
+                        CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                    };
+                    self.collect_mvar_writes_inner(expr, writes);
                 }
             }
             Expr::Tuple(elems, _) => {
@@ -10291,7 +10500,10 @@ impl Compiler {
             Expr::Call(func, _type_args, args, _) => {
                 self.collect_mvar_refs_inner(func, refs);
                 for arg in args {
-                    self.collect_mvar_refs_inner(arg, refs);
+                    let expr = match arg {
+                        CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                    };
+                    self.collect_mvar_refs_inner(expr, refs);
                 }
             }
             Expr::If(cond, then_branch, else_branch, _) => {
@@ -10331,7 +10543,10 @@ impl Compiler {
             Expr::MethodCall(obj, _, args, _) => {
                 self.collect_mvar_refs_inner(obj, refs);
                 for arg in args {
-                    self.collect_mvar_refs_inner(arg, refs);
+                    let expr = match arg {
+                        CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                    };
+                    self.collect_mvar_refs_inner(expr, refs);
                 }
             }
             Expr::Lambda(_, body, _) => {
@@ -10369,7 +10584,7 @@ impl Compiler {
             }
             Expr::UnaryOp(_, operand, _) => self.expr_has_blocking(operand),
             Expr::Call(func, _type_args, args, _) => {
-                self.expr_has_blocking(func) || args.iter().any(|a| self.expr_has_blocking(a))
+                self.expr_has_blocking(func) || args.iter().any(|a| self.expr_has_blocking(Self::call_arg_expr(a)))
             }
             Expr::Tuple(elems, _) | Expr::List(elems, None, _) => {
                 elems.iter().any(|e| self.expr_has_blocking(e))
@@ -10383,7 +10598,7 @@ impl Compiler {
             }
             Expr::FieldAccess(obj, _, _) => self.expr_has_blocking(obj),
             Expr::MethodCall(obj, _, args, _) => {
-                self.expr_has_blocking(obj) || args.iter().any(|a| self.expr_has_blocking(a))
+                self.expr_has_blocking(obj) || args.iter().any(|a| self.expr_has_blocking(Self::call_arg_expr(a)))
             }
             Expr::Try(body, arms, finally_opt, _) => {
                 self.expr_has_blocking(body)
@@ -10731,6 +10946,7 @@ impl Compiler {
             signature: None,
             param_types: vec![],
             return_type: None,
+            required_params: None, // Lambdas don't support optional params currently
         };
 
         let dst = self.alloc_reg();
@@ -12043,7 +12259,9 @@ impl Compiler {
             // For example, "a -> List(a) -> a" should have the same Var ID for all occurrences of 'a'
             // Using param_types separately would create independent type variables
             let func_type = if let Some(sig) = fn_val.signature.as_ref() {
-                if let Some(ft) = self.parse_signature_string(sig) {
+                if let Some(mut ft) = self.parse_signature_string(sig) {
+                    // Preserve required_params from FunctionValue
+                    ft.required_params = fn_val.required_params;
                     ft
                 } else {
                     // Fallback: construct from param_types if signature parsing fails
@@ -12060,7 +12278,7 @@ impl Compiler {
                     let ret_ty = fn_val.return_type.as_ref()
                         .map(|ty| self.type_name_to_type(ty))
                         .unwrap_or_else(|| env.fresh_var());
-                    nostos_types::FunctionType {
+                    nostos_types::FunctionType { required_params: fn_val.required_params,
                         type_params: vec![],
                         params: param_types,
                         ret: Box::new(ret_ty),
@@ -12111,9 +12329,19 @@ impl Compiler {
                     .map(|ty| self.type_name_to_type(&self.type_expr_to_string(ty)))
                     .unwrap_or_else(|| env.fresh_var());
 
+            // Compute required_params for functions with optional parameters
+            let required_count = clause.params.iter()
+                .filter(|p| p.default.is_none())
+                .count();
+            let required_params = if required_count < clause.params.len() {
+                Some(required_count)
+            } else {
+                None
+            };
+
             env.functions.insert(
                 fn_name.clone(),
-                nostos_types::FunctionType {
+                nostos_types::FunctionType { required_params,
                     type_params: vec![],
                     params: param_types,
                     ret: Box::new(ret_ty),
@@ -12339,7 +12567,9 @@ impl Compiler {
             // Parse the full signature to get accurate param and return types
             // This is better than using param_types which may contain "?" placeholders
             let fn_type = if let Some(sig) = fn_val.signature.as_ref() {
-                if let Some(parsed) = self.parse_signature_string(sig) {
+                if let Some(mut parsed) = self.parse_signature_string(sig) {
+                    // Use the required_params from FunctionValue (computed during compilation)
+                    parsed.required_params = fn_val.required_params;
                     parsed
                 } else {
                     // Fallback to building from param_types
@@ -12350,7 +12580,7 @@ impl Compiler {
                     let ret_ty = fn_val.return_type.as_ref()
                         .map(|ty| self.type_name_to_type(ty))
                         .unwrap_or_else(|| env.fresh_var());
-                    nostos_types::FunctionType {
+                    nostos_types::FunctionType { required_params: fn_val.required_params,
                         type_params: vec![],
                         params: param_types,
                         ret: Box::new(ret_ty),
@@ -12365,7 +12595,7 @@ impl Compiler {
                 let ret_ty = fn_val.return_type.as_ref()
                     .map(|ty| self.type_name_to_type(ty))
                     .unwrap_or_else(|| env.fresh_var());
-                nostos_types::FunctionType {
+                nostos_types::FunctionType { required_params: fn_val.required_params,
                     type_params: vec![],
                     params: param_types,
                     ret: Box::new(ret_ty),
@@ -12502,9 +12732,19 @@ impl Compiler {
                 .map(|ty| self.type_name_to_type(&self.type_expr_to_string(ty)))
                 .unwrap_or_else(|| env.fresh_var());
 
+            // Compute required_params for functions with optional parameters
+            let required_count = clause.params.iter()
+                .filter(|p| p.default.is_none())
+                .count();
+            let required_params = if required_count < clause.params.len() {
+                Some(required_count)
+            } else {
+                None
+            };
+
             env.functions.insert(
                 fn_name.clone(),
-                nostos_types::FunctionType {
+                nostos_types::FunctionType { required_params,
                     type_params: vec![],
                     params: param_types,
                     ret: Box::new(ret_ty),
@@ -12613,7 +12853,7 @@ impl Compiler {
                 if Self::expr_contains_call(callee, fn_name) {
                     return true;
                 }
-                args.iter().any(|a| Self::expr_contains_call(a, fn_name))
+                args.iter().any(|a| Self::expr_contains_call(Self::call_arg_expr(a), fn_name))
             }
             Expr::BinOp(lhs, _, rhs, _) => {
                 Self::expr_contains_call(lhs, fn_name) ||
@@ -12675,7 +12915,7 @@ impl Compiler {
             Expr::List(elems, _, _) => elems.iter().any(|e| Self::expr_contains_call(e, fn_name)),
             Expr::MethodCall(receiver, _, args, _) => {
                 Self::expr_contains_call(receiver, fn_name) ||
-                args.iter().any(|a| Self::expr_contains_call(a, fn_name))
+                args.iter().any(|a| Self::expr_contains_call(Self::call_arg_expr(a), fn_name))
             }
             Expr::FieldAccess(e, _, _) => Self::expr_contains_call(e, fn_name),
             Expr::Index(e, idx, _) => {
@@ -12717,7 +12957,7 @@ impl Compiler {
                     }
                 }
                 // Recursively check arguments
-                args.iter().any(|a| self.expr_calls_function_with_untyped_params(a)) ||
+                args.iter().any(|a| self.expr_calls_function_with_untyped_params(Self::call_arg_expr(a))) ||
                 self.expr_calls_function_with_untyped_params(func)
             }
             Expr::BinOp(left, _, right, _) => {
@@ -12752,7 +12992,7 @@ impl Compiler {
             }
             Expr::MethodCall(receiver, _, args, _) => {
                 self.expr_calls_function_with_untyped_params(receiver) ||
-                args.iter().any(|a| self.expr_calls_function_with_untyped_params(a))
+                args.iter().any(|a| self.expr_calls_function_with_untyped_params(Self::call_arg_expr(a)))
             }
             Expr::FieldAccess(e, _, _) => self.expr_calls_function_with_untyped_params(e),
             Expr::Index(e, idx, _) => {
@@ -13159,7 +13399,7 @@ impl Compiler {
 
         let ret = self.type_name_to_type(ret_str.trim());
 
-        Some(nostos_types::FunctionType {
+        Some(nostos_types::FunctionType { required_params: None,
             type_params: vec![],
             params,
             ret: Box::new(ret),
@@ -13281,7 +13521,7 @@ impl Compiler {
 
                     let ret = self.type_name_to_type(ret_str);
 
-                    return Some(nostos_types::Type::Function(nostos_types::FunctionType {
+                    return Some(nostos_types::Type::Function(nostos_types::FunctionType { required_params: None,
                         type_params: vec![],
                         params,
                         ret: Box::new(ret),
@@ -13348,7 +13588,12 @@ impl Compiler {
                     self.transform_html_expr(func)
                 };
                 // Recursively transform arguments
-                let new_args: Vec<Expr> = args.iter().map(|a| self.transform_html_expr(a)).collect();
+                let new_args: Vec<CallArg> = args.iter().map(|a| {
+                    match a {
+                        CallArg::Positional(e) => CallArg::Positional(self.transform_html_expr(e)),
+                        CallArg::Named(name, e) => CallArg::Named(name.clone(), self.transform_html_expr(e)),
+                    }
+                }).collect();
                 Expr::Call(Box::new(new_func), type_args.clone(), new_args, *span)
             }
 
@@ -13359,7 +13604,12 @@ impl Compiler {
             // Recursively transform method calls
             Expr::MethodCall(obj, method, args, span) => {
                 let new_obj = self.transform_html_expr(obj);
-                let new_args: Vec<Expr> = args.iter().map(|a| self.transform_html_expr(a)).collect();
+                let new_args: Vec<CallArg> = args.iter().map(|a| {
+                    match a {
+                        CallArg::Positional(e) => CallArg::Positional(self.transform_html_expr(e)),
+                        CallArg::Named(name, e) => CallArg::Named(name.clone(), self.transform_html_expr(e)),
+                    }
+                }).collect();
                 Expr::MethodCall(Box::new(new_obj), method.clone(), new_args, *span)
             }
 
@@ -13654,7 +13904,12 @@ impl Compiler {
                 } else {
                     self.transform_rhtml_expr(func)
                 };
-                let new_args: Vec<Expr> = args.iter().map(|a| self.transform_rhtml_expr(a)).collect();
+                let new_args: Vec<CallArg> = args.iter().map(|a| {
+                    match a {
+                        CallArg::Positional(e) => CallArg::Positional(self.transform_rhtml_expr(e)),
+                        CallArg::Named(name, e) => CallArg::Named(name.clone(), self.transform_rhtml_expr(e)),
+                    }
+                }).collect();
                 Expr::Call(Box::new(new_func), type_args.clone(), new_args, *span)
             }
 
@@ -13662,7 +13917,12 @@ impl Compiler {
 
             Expr::MethodCall(obj, method, args, span) => {
                 let new_obj = self.transform_rhtml_expr(obj);
-                let new_args: Vec<Expr> = args.iter().map(|a| self.transform_rhtml_expr(a)).collect();
+                let new_args: Vec<CallArg> = args.iter().map(|a| {
+                    match a {
+                        CallArg::Positional(e) => CallArg::Positional(self.transform_rhtml_expr(e)),
+                        CallArg::Named(name, e) => CallArg::Named(name.clone(), self.transform_rhtml_expr(e)),
+                    }
+                }).collect();
                 Expr::MethodCall(Box::new(new_obj), method.clone(), new_args, *span)
             }
 
@@ -13828,7 +14088,10 @@ fn free_vars(expr: &Expr, bound: &std::collections::HashSet<String>) -> std::col
         Expr::Call(f, _type_args, args, _) => {
             free.extend(free_vars(f, bound));
             for arg in args {
-                free.extend(free_vars(arg, bound));
+                let expr = match arg {
+                    CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                };
+                free.extend(free_vars(expr, bound));
             }
         }
         Expr::If(c, t, e, _) => {
@@ -13952,7 +14215,10 @@ fn free_vars(expr: &Expr, bound: &std::collections::HashSet<String>) -> std::col
         Expr::MethodCall(obj, _, args, _) => {
             free.extend(free_vars(obj, bound));
             for arg in args {
-                free.extend(free_vars(arg, bound));
+                let expr = match arg {
+                    CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                };
+                free.extend(free_vars(expr, bound));
             }
         }
         Expr::Send(pid, msg, _) => {
@@ -14271,6 +14537,7 @@ impl Compiler {
                     signature: None,
                     param_types,
                     return_type,
+                    required_params: None, // Will be set when fully compiled
                 };
                 self.functions.insert(full_name.clone(), Arc::new(placeholder));
             }
