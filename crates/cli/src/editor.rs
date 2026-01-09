@@ -234,6 +234,26 @@ impl<'a> EditorCompletionSource<'a> {
                 continue;
             }
 
+            // Function definition: foo(param1, param2: Type) = ...
+            // Extract parameters as local variables
+            if let Some(paren_start) = trimmed.find('(') {
+                if let Some(paren_end) = trimmed[paren_start..].find(')') {
+                    let after_paren = trimmed[paren_start + paren_end + 1..].trim_start();
+                    // Check if this is a function definition (has = after params)
+                    if after_paren.starts_with('=') || after_paren.starts_with("->") {
+                        let params = &trimmed[paren_start + 1..paren_start + paren_end];
+                        for param in params.split(',') {
+                            let param = param.trim();
+                            // Handle "name: Type" or just "name"
+                            let name = param.split(':').next().unwrap_or(param).trim();
+                            if !name.is_empty() && name != "_" && name.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) {
+                                vars.push(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+
             // Tuple destructuring: (a, b, ...) = expr
             if trimmed.starts_with('(') {
                 if let Some(close_paren) = trimmed.find(')') {
@@ -271,6 +291,9 @@ impl<'a> EditorCompletionSource<'a> {
             }
         }
 
+        // Remove duplicates
+        vars.sort();
+        vars.dedup();
         vars
     }
 }
