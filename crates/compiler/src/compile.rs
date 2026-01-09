@@ -8760,6 +8760,17 @@ impl Compiler {
         self.types.keys().map(|s| s.as_str()).collect()
     }
 
+    /// Set local variable types for REPL method dispatch.
+    /// This allows the compiler to know variable types from previous REPL evaluations.
+    pub fn set_local_types(&mut self, types: HashMap<String, String>) {
+        self.local_types = types;
+    }
+
+    /// Add a single local variable type.
+    pub fn set_local_type(&mut self, name: String, type_name: String) {
+        self.local_types.insert(name, type_name);
+    }
+
     /// Get all trait names in the compiler.
     pub fn get_trait_names(&self) -> Vec<&str> {
         self.trait_defs.keys().map(|s| s.as_str()).collect()

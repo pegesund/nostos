@@ -184,6 +184,8 @@ pub struct ReplEngine {
     dynamic_mvars: Arc<std::sync::RwLock<HashMap<String, Arc<std::sync::RwLock<nostos_vm::ThreadSafeValue>>>>>,
     /// Track which dynamic mvars have been synced to compiler
     synced_dynamic_mvars: HashSet<String>,
+    /// Variable types for UFCS method dispatch - shared with eval callback
+    dynamic_var_types: Arc<std::sync::RwLock<HashMap<String, String>>>,
 }
 
 impl ReplEngine {
@@ -214,6 +216,11 @@ impl ReplEngine {
         // Get dynamic_mvars for eval to store variable bindings
         let dynamic_mvars = vm.get_dynamic_mvars();
         let dynamic_mvars_for_self = dynamic_mvars.clone();
+
+        // Create shared variable types for UFCS method dispatch
+        let dynamic_var_types: Arc<std::sync::RwLock<HashMap<String, String>>> = Arc::new(std::sync::RwLock::new(HashMap::new()));
+        let dynamic_var_types_for_eval = dynamic_var_types.clone();
+        let dynamic_var_types_for_self = dynamic_var_types.clone();
 
         // Get stdlib_functions, function list, and prelude_imports for eval to access all REPL compiler functions
         let stdlib_functions = vm.get_stdlib_functions();
@@ -274,6 +281,14 @@ impl ReplEngine {
                 let mvars = dynamic_mvars.read().expect("dynamic_mvars lock poisoned");
                 for name in mvars.keys() {
                     eval_compiler.register_dynamic_mvar(name);
+                }
+            }
+
+            // Set variable types for UFCS method dispatch (e.g., a.insert(1,2) where a is a Map)
+            {
+                let var_types = dynamic_var_types_for_eval.read().expect("dynamic_var_types lock poisoned");
+                for (name, type_name) in var_types.iter() {
+                    eval_compiler.set_local_type(name.clone(), type_name.clone());
                 }
             }
 
@@ -557,6 +572,7 @@ impl ReplEngine {
             synced_dynamic_types: HashSet::new(),
             dynamic_mvars: dynamic_mvars_for_self,
             synced_dynamic_mvars: HashSet::new(),
+            dynamic_var_types: dynamic_var_types_for_self,
         }
     }
 
@@ -749,6 +765,11 @@ impl ReplEngine {
                                 mutable,
                                 type_annotation: None,
                             });
+                            // Update variable type for UFCS method dispatch
+                            if let Some(var_type) = self.get_variable_type(&name) {
+                                let mut var_types = self.dynamic_var_types.write().expect("dynamic_var_types lock poisoned");
+                                var_types.insert(name.clone(), var_type);
+                            }
                         }
                     }
                 }
@@ -1020,6 +1041,12 @@ impl ReplEngine {
             type_annotation: None,
         });
 
+        // Update variable type for UFCS method dispatch
+        if let Some(var_type) = self.get_variable_type(name) {
+            let mut var_types = self.dynamic_var_types.write().expect("dynamic_var_types lock poisoned");
+            var_types.insert(name.to_string(), var_type);
+        }
+
         let mutability = if mutable { "var " } else { "" };
         Ok(format!("{}{} = {}", mutability, name, expr))
     }
@@ -1098,6 +1125,14 @@ impl ReplEngine {
         }
 
         self.sync_vm();
+
+        // Update variable types for UFCS method dispatch
+        for name in names {
+            if let Some(var_type) = self.get_variable_type(name) {
+                let mut var_types = self.dynamic_var_types.write().expect("dynamic_var_types lock poisoned");
+                var_types.insert(name.clone(), var_type);
+            }
+        }
 
         // Return a nice message
         let names_str = names.join(", ");
