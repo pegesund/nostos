@@ -33,7 +33,7 @@ ring_node(successor, count) = {
 create_ring_rec(n, first, prev, rounds) = {
     if n > 0 then {
         # Create new node that sends to prev (building backwards)
-        node = spawn(() => ring_node(prev, rounds))
+        node = spawn { ring_node(prev, rounds) }
         if n == 1 then {
             # Last node to create - this is actually first in the ring
             # Return it so we can close the ring
@@ -53,11 +53,11 @@ test_simple_ring() = {
 
     # Create 5 nodes that each handle 1 message
     # Node 5 -> Node 4 -> Node 3 -> Node 2 -> Node 1 -> me
-    node1 = spawn(() => ring_node(me, 1))
-    node2 = spawn(() => ring_node(node1, 1))
-    node3 = spawn(() => ring_node(node2, 1))
-    node4 = spawn(() => ring_node(node3, 1))
-    node5 = spawn(() => ring_node(node4, 1))
+    node1 = spawn { ring_node(me, 1) }
+    node2 = spawn { ring_node(node1, 1) }
+    node3 = spawn { ring_node(node2, 1) }
+    node4 = spawn { ring_node(node3, 1) }
+    node5 = spawn { ring_node(node4, 1) }
 
     # Start the ring with value 1
     node5 <- 1
@@ -78,9 +78,9 @@ test_multi_round_ring() = {
     me = self()
 
     # 3 nodes, each handles 5 messages
-    node1 = spawn(() => ring_node(me, 5))
-    node2 = spawn(() => ring_node(node1, 5))
-    node3 = spawn(() => ring_node(node2, 5))
+    node1 = spawn { ring_node(me, 5) }
+    node2 = spawn { ring_node(node1, 5) }
+    node3 = spawn { ring_node(node2, 5) }
 
     # Send 5 messages into the ring
     node3 <- 0
@@ -136,24 +136,24 @@ test_parallel_rings() = {
     me = self()
 
     # Ring 1
-    r1n1 = spawn(() => ring_node(me, 1))
-    r1n2 = spawn(() => ring_node(r1n1, 1))
-    r1n3 = spawn(() => ring_node(r1n2, 1))
+    r1n1 = spawn { ring_node(me, 1) }
+    r1n2 = spawn { ring_node(r1n1, 1) }
+    r1n3 = spawn { ring_node(r1n2, 1) }
 
     # Ring 2
-    r2n1 = spawn(() => ring_node(me, 1))
-    r2n2 = spawn(() => ring_node(r2n1, 1))
-    r2n3 = spawn(() => ring_node(r2n2, 1))
+    r2n1 = spawn { ring_node(me, 1) }
+    r2n2 = spawn { ring_node(r2n1, 1) }
+    r2n3 = spawn { ring_node(r2n2, 1) }
 
     # Ring 3
-    r3n1 = spawn(() => ring_node(me, 1))
-    r3n2 = spawn(() => ring_node(r3n1, 1))
-    r3n3 = spawn(() => ring_node(r3n2, 1))
+    r3n1 = spawn { ring_node(me, 1) }
+    r3n2 = spawn { ring_node(r3n1, 1) }
+    r3n3 = spawn { ring_node(r3n2, 1) }
 
     # Ring 4
-    r4n1 = spawn(() => ring_node(me, 1))
-    r4n2 = spawn(() => ring_node(r4n1, 1))
-    r4n3 = spawn(() => ring_node(r4n2, 1))
+    r4n1 = spawn { ring_node(me, 1) }
+    r4n2 = spawn { ring_node(r4n1, 1) }
+    r4n3 = spawn { ring_node(r4n2, 1) }
 
     # Start all rings simultaneously with different starting values
     r1n3 <- 100

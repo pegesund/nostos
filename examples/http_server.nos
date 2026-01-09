@@ -32,7 +32,7 @@ acceptLoop(server) = {
 # Spawn N worker processes all accepting from same server
 spawnWorkers(server, 0) = ()
 spawnWorkers(server, n) = {
-  spawn(() => acceptLoop(server))
+  spawn { acceptLoop(server) }
   spawnWorkers(server, n - 1)
 }
 

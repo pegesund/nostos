@@ -44,11 +44,11 @@ test_simple_chain() = {
 
     # Create chain: me <- link1 <- link2 <- link3 <- link4 <- link5
     add10 = n => n + 10
-    link1 = spawn(() => chain_link(me, add10, 0))
-    link2 = spawn(() => chain_link(link1, add10, 0))
-    link3 = spawn(() => chain_link(link2, add10, 0))
-    link4 = spawn(() => chain_link(link3, add10, 0))
-    link5 = spawn(() => chain_link(link4, add10, 0))
+    link1 = spawn { chain_link(me, add10, 0) }
+    link2 = spawn { chain_link(link1, add10, 0) }
+    link3 = spawn { chain_link(link2, add10, 0) }
+    link4 = spawn { chain_link(link3, add10, 0) }
+    link5 = spawn { chain_link(link4, add10, 0) }
 
     # Send initial value
     link5 <- 0
@@ -69,9 +69,9 @@ test_delayed_chain() = {
     me = self()
 
     double = n => n * 2
-    link1 = spawn(() => chain_link(me, double, 20))
-    link2 = spawn(() => chain_link(link1, double, 20))
-    link3 = spawn(() => chain_link(link2, double, 20))
+    link1 = spawn { chain_link(me, double, 20) }
+    link2 = spawn { chain_link(link1, double, 20) }
+    link3 = spawn { chain_link(link2, double, 20) }
 
     # Send initial value
     link3 <- 1
@@ -102,9 +102,9 @@ test_multi_message_chain() = {
     me = self()
 
     add1 = n => n + 1
-    link1 = spawn(() => multi_chain_link(me, add1, 5))
-    link2 = spawn(() => multi_chain_link(link1, add1, 5))
-    link3 = spawn(() => multi_chain_link(link2, add1, 5))
+    link1 = spawn { multi_chain_link(me, add1, 5) }
+    link2 = spawn { multi_chain_link(link1, add1, 5) }
+    link3 = spawn { multi_chain_link(link2, add1, 5) }
 
     # Send 5 messages
     link3 <- 10
@@ -150,11 +150,11 @@ test_parallel_chains() = {
     me = self()
 
     # Create 5 parallel workers with different delays
-    spawn(() => fork_worker(me, 1, 100))
-    spawn(() => fork_worker(me, 2, 50))
-    spawn(() => fork_worker(me, 3, 150))
-    spawn(() => fork_worker(me, 4, 75))
-    spawn(() => fork_worker(me, 5, 25))
+    spawn { fork_worker(me, 1, 100) }
+    spawn { fork_worker(me, 2, 50) }
+    spawn { fork_worker(me, 3, 150) }
+    spawn { fork_worker(me, 4, 75) }
+    spawn { fork_worker(me, 5, 25) }
 
     # Collect results - order should roughly match delay order
     results = collect_ordered(5, [])
@@ -192,9 +192,9 @@ test_pipeline() = {
     # Fast path: 10ms delay
     # Medium path: 50ms delay
     # Slow path: 100ms delay
-    fast = spawn(() => pipeline_stage(me, 10, "fast"))
-    medium = spawn(() => pipeline_stage(me, 50, "medium"))
-    slow = spawn(() => pipeline_stage(me, 100, "slow"))
+    fast = spawn { pipeline_stage(me, 10, "fast") }
+    medium = spawn { pipeline_stage(me, 50, "medium") }
+    slow = spawn { pipeline_stage(me, 100, "slow") }
 
     # Send same value to all three paths
     fast <- 42
@@ -222,7 +222,7 @@ print_result((label, value)) = {
 # Recursive chain builder
 build_chain_rec(parent, depth, transform) = {
     if depth > 0 then {
-        link = spawn(() => chain_link(parent, transform, 0))
+        link = spawn { chain_link(parent, transform, 0) }
         build_chain_rec(link, depth - 1, transform)
     } else {
         parent

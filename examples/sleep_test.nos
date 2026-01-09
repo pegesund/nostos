@@ -18,9 +18,9 @@ main() = {
     # Spawn workers with different sleep times
     # Worker 3 has shortest sleep (100ms), should wake first
     # Worker 1 has longest sleep (300ms), should wake last
-    spawn(() => worker(1, 300, me))
-    spawn(() => worker(2, 200, me))
-    spawn(() => worker(3, 100, me))
+    spawn { worker(1, 300, me) }
+    spawn { worker(2, 200, me) }
+    spawn { worker(3, 100, me) }
 
     println("All workers spawned, collecting results...")
 

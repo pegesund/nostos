@@ -23,11 +23,11 @@ main() = {
   
   me = self()
   
-  spawn(() => httpWorker(me, 1))
-  spawn(() => httpWorker(me, 2))
-  spawn(() => httpWorker(me, 3))
-  spawn(() => httpWorker(me, 4))
-  spawn(() => httpWorker(me, 5))
+  spawn { httpWorker(me, 1) }
+  spawn { httpWorker(me, 2) }
+  spawn { httpWorker(me, 3) }
+  spawn { httpWorker(me, 4) }
+  spawn { httpWorker(me, 5) }
   
   waitForAll(5)
   

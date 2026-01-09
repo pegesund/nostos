@@ -24,7 +24,7 @@ main() = {
 
     # Spawn all workers - each receives the secret and sends it back
     for i = 0 to n {
-        spawn(() => worker(me, secret))
+        spawn { worker(me, secret) }
     }
 
     println("Collecting and verifying responses...")

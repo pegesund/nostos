@@ -34,10 +34,10 @@ testHttpWithParentTimeout() = {
   println("Test 3: HTTP (3s) with parent timeout (1s) - should timeout")
   me = self()
 
-  spawn(() => {
+  spawn {
     (status, response) = Http.get("https://httpbin.org/delay/3")
     me <- ("done", response.status)
-  })
+  }
 
   result = receive
     ("done", status) -> ("completed", status)
@@ -58,10 +58,10 @@ testHttpWithLongTimeout() = {
   println("Test 4: HTTP (1s) with long timeout (5s) - should complete")
   me = self()
 
-  spawn(() => {
+  spawn {
     (status, response) = Http.get("https://httpbin.org/delay/1")
     me <- ("done", response.status)
-  })
+  }
 
   result = receive
     ("done", status) -> ("completed", status)
@@ -99,18 +99,18 @@ testConcurrentHttpTimeout() = {
   me = self()
 
   # Spawn 3 workers: 1s, 2s, 3s delays
-  spawn(() => {
+  spawn {
     (status, response) = Http.get("https://httpbin.org/delay/1")
     me <- ("worker1", response.status)
-  })
-  spawn(() => {
+  }
+  spawn {
     (status, response) = Http.get("https://httpbin.org/delay/2")
     me <- ("worker2", response.status)
-  })
-  spawn(() => {
+  }
+  spawn {
     (status, response) = Http.get("https://httpbin.org/delay/3")
     me <- ("worker3", response.status)
-  })
+  }
 
   # Collect with 2.5s timeout - should get worker1 and worker2
   completed = collectWithTimeout5(0, 3)

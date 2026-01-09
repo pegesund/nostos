@@ -7,7 +7,7 @@ child(parent) = {
 
 main() = {
     me = self()
-    spawn(() => child(me))
+    spawn { child(me) }
     result = receive
         msg -> msg
     end

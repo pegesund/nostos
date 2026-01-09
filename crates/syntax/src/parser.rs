@@ -800,8 +800,12 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
             just(Token::Spawn).to(SpawnKind::Normal),
         ));
 
+        // spawn(expr) or spawn { block } - block is treated as zero-param thunk
         let spawn_expr = spawn_kind
-            .then(expr.clone().delimited_by(just(Token::LParen), just(Token::RParen)))
+            .then(choice((
+                expr.clone().delimited_by(just(Token::LParen), just(Token::RParen)),
+                block.clone(),
+            )))
             .map_with_span(|(kind, func), span| {
                 Expr::Spawn(kind, Box::new(func), vec![], to_span(span))
             });

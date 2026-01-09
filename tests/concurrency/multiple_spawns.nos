@@ -7,8 +7,8 @@ worker(parent, n) = {
 
 main() = {
     me = self()
-    spawn(() => worker(me, 5))
-    spawn(() => worker(me, 10))
+    spawn { worker(me, 5) }
+    spawn { worker(me, 10) }
 
     # Receive both results and sum them
     result = receive

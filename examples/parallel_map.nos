@@ -11,7 +11,7 @@ worker(parent, f, x, idx) = {
 # Spawn workers for each element
 spawn_workers(_, _, [], _) = ()
 spawn_workers(parent, f, [h | t], idx) = {
-    spawn(() => worker(parent, f, h, idx))
+    spawn { worker(parent, f, h, idx) }
     spawn_workers(parent, f, t, idx + 1)
 }
 

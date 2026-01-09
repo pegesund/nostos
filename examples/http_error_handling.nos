@@ -1,0 +1,184 @@
+# HTTP Error Handling Example
+# Demonstrates proper error handling for IO operations in Nostos.
+# All IO operations return ("ok", value) or ("error", message) tuples.
+# Always check the status before accessing the response!
+# Run with: nostos examples/http_error_handling.nos
+
+# Pattern 1: Basic error checking
+basicErrorHandling() = {
+  println("Pattern 1: Basic error checking")
+  println("  Testing valid URL...")
+
+  (status, response) = Http.get("https://httpbin.org/get")
+
+  if status == "ok" then {
+    print("    Success! HTTP status: ")
+    println(response.status)
+  } else {
+    print("    Error: ")
+    println(response)
+  }
+  println("")
+}
+
+# Pattern 2: DNS error handling
+dnsErrorHandling() = {
+  println("Pattern 2: DNS error (invalid domain)")
+  println("  Testing invalid domain...")
+
+  (status, response) = Http.get("https://this-domain-does-not-exist-xyz123.com/test")
+
+  if status == "ok" then {
+    print("    Unexpected success: ")
+    println(response.status)
+  } else {
+    print("    Expected error: ")
+    println(response)
+  }
+  println("")
+}
+
+# Pattern 3: HTTP 404 error (not a connection error)
+http404Handling() = {
+  println("Pattern 3: HTTP 404 (valid connection, page not found)")
+  println("  Testing non-existent path...")
+
+  (status, response) = Http.get("https://httpbin.org/status/404")
+
+  if status == "ok" then {
+    print("    Got response with HTTP status: ")
+    println(response.status)
+    println("    Note: 404 is a successful HTTP response, not an IO error")
+  } else {
+    print("    Connection error: ")
+    println(response)
+  }
+  println("")
+}
+
+# Pattern 4: Worker process with error handling
+httpWorker(parent, id, url) = {
+  (status, response) = Http.get(url)
+  if status == "ok" then {
+    parent <- ("success", id, response.status)
+  } else {
+    parent <- ("failure", id, response)
+  }
+}
+
+workerErrorHandling() = {
+  println("Pattern 4: Worker processes with error handling")
+  me = self()
+
+  spawn { httpWorker(me, 1, "https://httpbin.org/get"  }
+  spawn { httpWorker(me, 2, "https://invalid-domain-xyz.com/"  }
+  spawn { httpWorker(me, 3, "https://httpbin.org/status/500"  }
+
+  r1 = receive
+    ("success", id, httpStatus) -> ("worker " ++ show(id), "success", httpStatus)
+    ("failure", id, errMsg) -> ("worker " ++ show(id), "failure", errMsg)
+  after 10000 -> ("timeout", "no response", 0)
+  end
+
+  r2 = receive
+    ("success", id, httpStatus) -> ("worker " ++ show(id), "success", httpStatus)
+    ("failure", id, errMsg) -> ("worker " ++ show(id), "failure", errMsg)
+  after 10000 -> ("timeout", "no response", 0)
+  end
+
+  r3 = receive
+    ("success", id, httpStatus) -> ("worker " ++ show(id), "success", httpStatus)
+    ("failure", id, errMsg) -> ("worker " ++ show(id), "failure", errMsg)
+  after 10000 -> ("timeout", "no response", 0)
+  end
+
+  print("  Result 1: ")
+  println(r1)
+  print("  Result 2: ")
+  println(r2)
+  print("  Result 3: ")
+  println(r3)
+  println("")
+}
+
+# Pattern 5: Retry on error
+retryRequest(url, retriesLeft) = {
+  if retriesLeft <= 0 then {
+    ("error", "max retries exceeded")
+  } else {
+    (status, response) = Http.get(url)
+    if status == "ok" then {
+      ("ok", response)
+    } else {
+      print("    Retry ")
+      print(4 - retriesLeft)
+      print(" failed: ")
+      println(response)
+      sleep(500)
+      retryRequest(url, retriesLeft - 1)
+    }
+  }
+}
+
+retryExample() = {
+  println("Pattern 5: Retry on error")
+  println("  Attempting request with retries to invalid domain...")
+
+  (status, result) = retryRequest("https://will-fail-xyz.com/", 3)
+
+  print("  Final result: ")
+  println(status)
+  println("")
+}
+
+# Pattern 6: File IO error handling
+fileErrorHandling() = {
+  println("Pattern 6: File IO error handling")
+
+  println("  Reading non-existent file...")
+  (status, content) = File.readAll("/tmp/this-file-does-not-exist-xyz.txt")
+
+  if status == "ok" then {
+    print("    Content: ")
+    println(content)
+  } else {
+    print("    Expected error: ")
+    println(content)
+  }
+
+  println("  Writing to valid path...")
+  (wstatus, wresult) = File.writeAll("/tmp/nostos_test_write.txt", "Hello from Nostos!")
+
+  if wstatus == "ok" then {
+    println("    Write successful!")
+
+    (rstatus, rcontent) = File.readAll("/tmp/nostos_test_write.txt")
+    if rstatus == "ok" then {
+      print("    Read back: ")
+      println(rcontent)
+    } else {
+      print("    Read error: ")
+      println(rcontent)
+    }
+  } else {
+    print("    Write error: ")
+    println(wresult)
+  }
+  println("")
+}
+
+main() = {
+  println("=== HTTP Error Handling Examples ===")
+  println("")
+  println("IO operations return: (\"ok\", value) or (\"error\", message)")
+  println("")
+
+  basicErrorHandling()
+  dnsErrorHandling()
+  http404Handling()
+  workerErrorHandling()
+  retryExample()
+  fileErrorHandling()
+
+  println("=== Example Complete ===")
+}

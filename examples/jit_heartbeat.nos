@@ -34,10 +34,10 @@ main() = {
     me = self()
 
     # Unleash the beast (JIT-heavy)
-    spawn(() => beast(me))
+    spawn { beast(me) }
 
     # Start the heart (rapid-fire messages)
-    spawn(() => heart(me, 100))
+    spawn { heart(me, 100) }
 
     # Collect 102 messages: 100 heartbeats + 1 final zero + 1 beast result
     beats = collect(102, 0)

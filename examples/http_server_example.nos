@@ -71,7 +71,7 @@ main() = {
   println("")
 
   # Step 2: Spawn server loop in background process
-  spawn(() => serverLoop(server))
+  spawn { serverLoop(server) }
 
   # Give server time to start accepting
   sleep(50)
@@ -80,11 +80,11 @@ main() = {
   println("Making client requests...")
   me = self()
 
-  spawn(() => clientRequest(me, "/"))
-  spawn(() => clientRequest(me, "/hello"))
-  spawn(() => clientRequest(me, "/echo"))
-  spawn(() => clientRequest(me, "/json"))
-  spawn(() => clientRequest(me, "/notfound"))
+  spawn { clientRequest(me, "/") }
+  spawn { clientRequest(me, "/hello") }
+  spawn { clientRequest(me, "/echo") }
+  spawn { clientRequest(me, "/json") }
+  spawn { clientRequest(me, "/notfound") }
 
   # Collect all responses
   completed = collectResponses(0, 5)

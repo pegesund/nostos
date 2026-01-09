@@ -19,7 +19,7 @@ counter_loop(state) = receive
 end
 
 # Start a counter with initial value
-start_counter(initial) = spawn(() => counter_loop(initial))
+start_counter(initial) = spawn { counter_loop(initial) }
 
 # Client operations
 increment(counter) = {
