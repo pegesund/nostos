@@ -117,6 +117,10 @@ get_x(Point { x, y }) = x
 empty = []
 numbers = [1, 2, 3, 4, 5]
 
+# Cons operator (::) - prepend element to list
+list1 = 1 :: [2, 3]           # [1, 2, 3]
+list2 = 1 :: 2 :: 3 :: []     # [1, 2, 3] (right-associative)
+
 # List cons pattern matching
 head([x | _]) = x
 tail([_ | xs]) = xs
@@ -250,6 +254,16 @@ unwrap(None) = panic("None")
 
 # Nested patterns
 first_of_first([[x | _] | _]) = x
+
+# String patterns - match string prefixes
+greet(["hello" | rest]) = "Hi! " ++ rest
+greet(["bye" | rest]) = "Goodbye! " ++ rest
+greet(_) = "I don't understand"
+
+# Single character string patterns
+first_char(["h" | _]) = "starts with h"
+first_char(["a" | _]) = "starts with a"
+first_char(_) = "other"
 ```
 
 ## Control Flow
@@ -425,12 +439,12 @@ twice(f, x) = f(f(x))
 add(n) = x => x + n
 add5 = add(5)
 
-# Common patterns
+# Common patterns (using :: cons operator for building results)
 map(_, []) = []
-map(f, [x | xs]) = [f(x) | map(f, xs)]
+map(f, [x | xs]) = f(x) :: map(f, xs)
 
 filter(_, []) = []
-filter(p, [x | xs]) = if p(x) then [x | filter(p, xs)] else filter(p, xs)
+filter(p, [x | xs]) = if p(x) then x :: filter(p, xs) else filter(p, xs)
 
 foldl(_, acc, []) = acc
 foldl(f, acc, [x | xs]) = foldl(f, f(acc, x), xs)

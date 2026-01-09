@@ -648,6 +648,11 @@ pub enum Instruction {
     TestNil(Reg, Reg),
     /// Deconstruct list: head, tail = list (fails if empty)
     Decons(Reg, Reg, Reg),
+    /// Deconstruct string: head_char, tail_str = string (fails if empty)
+    /// head_char is a String containing first character, tail_str is rest of string
+    StringDecons(Reg, Reg, Reg),
+    /// Test if string is empty: dst = str == ""
+    TestEmptyString(Reg, Reg),
     /// Test if value is a Map: dst = is_map(val)
     IsMap(Reg, Reg),
     /// Test if value is a Set: dst = is_set(val)

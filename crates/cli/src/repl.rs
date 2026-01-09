@@ -92,9 +92,9 @@ impl Highlighter for NostosHighlighter {
                     Style::new().fg(Color::Cyan),
 
                 // Delimiters
-                Token::LParen | Token::RParen | Token::LBracket | Token::RBracket | 
-                Token::LBrace | Token::RBrace | Token::Comma | Token::Colon | Token::Dot | 
-                Token::Pipe | Token::Hash => 
+                Token::LParen | Token::RParen | Token::LBracket | Token::RBracket |
+                Token::LBrace | Token::RBrace | Token::Comma | Token::Colon | Token::ColonColon | Token::Dot |
+                Token::Pipe | Token::Hash =>
                     Style::new().fg(Color::White),
 
                 // Identifiers

@@ -2004,6 +2004,55 @@ impl ThreadWorker {
                         _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
                     }
                 }
+                StringDecons(head_dst, tail_dst, str_reg) => {
+                    proc.frames[frame_idx].ip += 1;
+                    match &proc.frames[frame_idx].registers[*str_reg as usize] {
+                        GcValue::String(str_ptr) => {
+                            // Clone the string data to avoid borrow conflicts
+                            let s = proc.heap.get_string(*str_ptr).map(|h| h.data.clone()).unwrap_or_default();
+                            if !s.is_empty() {
+                                let mut chars = s.chars();
+                                let head_char = chars.next().unwrap();
+                                let tail_str = chars.as_str();
+                                let head_ptr = proc.heap.alloc_string(head_char.to_string());
+                                let tail_ptr = proc.heap.alloc_string(tail_str.to_string());
+                                proc.frames[frame_idx].registers[*head_dst as usize] = GcValue::String(head_ptr);
+                                proc.frames[frame_idx].registers[*tail_dst as usize] = GcValue::String(tail_ptr);
+                            } else {
+                                return Ok(FastLoopResult::NeedSlowPath(instr.clone()));
+                            }
+                        }
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    }
+                }
+                TestEmptyString(dst, str_reg) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let is_empty = match &proc.frames[frame_idx].registers[*str_reg as usize] {
+                        GcValue::String(str_ptr) => {
+                            proc.heap.get_string(*str_ptr).map(|h| h.data.is_empty()).unwrap_or(true)
+                        }
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::Bool(is_empty);
+                }
+                EqStr(dst, left_reg, right_reg) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let left = &proc.frames[frame_idx].registers[*left_reg as usize];
+                    let right = &proc.frames[frame_idx].registers[*right_reg as usize];
+                    match (left, right) {
+                        (GcValue::String(left_ptr), GcValue::String(right_ptr)) => {
+                            // Clone strings to avoid borrow conflicts
+                            let left_str = proc.heap.get_string(*left_ptr).map(|h| h.data.clone());
+                            let right_str = proc.heap.get_string(*right_ptr).map(|h| h.data.clone());
+                            let is_equal = match (left_str, right_str) {
+                                (Some(l), Some(r)) => l == r,
+                                _ => false,
+                            };
+                            proc.frames[frame_idx].registers[*dst as usize] = GcValue::Bool(is_equal);
+                        }
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    }
+                }
                 // Fast path for Call with simple binary function inlining
                 // Uses cached InlineOp to avoid pattern matching on every call
                 Call(dst, func_reg, args) => {
@@ -5682,6 +5731,57 @@ impl ThreadWorker {
                 let tail_list = list_data.tail();
                 set_reg!(*head_dst, head);
                 set_reg!(*tail_dst, GcValue::List(tail_list));
+            }
+
+            StringDecons(head_dst, tail_dst, str_reg) => {
+                let str_val = reg!(*str_reg).clone();
+                match str_val {
+                    GcValue::String(str_ptr) => {
+                        let proc = self.get_process_mut(local_id).unwrap();
+                        let s = proc.heap.get_string(str_ptr).map(|h| h.data.clone()).unwrap_or_default();
+                        if s.is_empty() {
+                            return Err(RuntimeError::Panic("Cannot decons empty string".to_string()));
+                        }
+                        let mut chars = s.chars();
+                        let head_char = chars.next().unwrap();
+                        let tail_str = chars.as_str();
+                        let head_ptr = proc.heap.alloc_string(head_char.to_string());
+                        let tail_ptr = proc.heap.alloc_string(tail_str.to_string());
+                        set_reg!(*head_dst, GcValue::String(head_ptr));
+                        set_reg!(*tail_dst, GcValue::String(tail_ptr));
+                    }
+                    _ => return Err(RuntimeError::Panic("StringDecons expects string".to_string())),
+                }
+            }
+
+            TestEmptyString(dst, str_reg) => {
+                let str_val = reg!(*str_reg).clone();
+                let is_empty = match str_val {
+                    GcValue::String(str_ptr) => {
+                        let proc = self.get_process_mut(local_id).unwrap();
+                        proc.heap.get_string(str_ptr).map(|h| h.data.is_empty()).unwrap_or(true)
+                    }
+                    _ => return Err(RuntimeError::Panic("TestEmptyString expects string".to_string())),
+                };
+                set_reg!(*dst, GcValue::Bool(is_empty));
+            }
+
+            EqStr(dst, left_reg, right_reg) => {
+                let left_val = reg!(*left_reg).clone();
+                let right_val = reg!(*right_reg).clone();
+                match (left_val, right_val) {
+                    (GcValue::String(left_ptr), GcValue::String(right_ptr)) => {
+                        let proc = self.get_process_mut(local_id).unwrap();
+                        let left_str = proc.heap.get_string(left_ptr).map(|h| h.data.clone());
+                        let right_str = proc.heap.get_string(right_ptr).map(|h| h.data.clone());
+                        let is_equal = match (left_str, right_str) {
+                            (Some(l), Some(r)) => l == r,
+                            _ => false,
+                        };
+                        set_reg!(*dst, GcValue::Bool(is_equal));
+                    }
+                    _ => return Err(RuntimeError::Panic("EqStr expects two strings".to_string())),
+                }
             }
 
             Concat(dst, a, b) => {

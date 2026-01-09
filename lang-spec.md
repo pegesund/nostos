@@ -291,6 +291,10 @@ items = [1, 2, 3, 4, 5]
 empty = []
 [head | tail] = items          # destructure
 
+# Cons operator (::) - prepend element to list
+list = 1 :: [2, 3]             # => [1, 2, 3]
+list = 1 :: 2 :: 3 :: []       # => [1, 2, 3] (right-associative)
+
 # Arrays (indexed, mutable)
 arr = Array.new(10, 0)         # size 10, filled with 0
 arr[0] = 42
@@ -648,11 +652,21 @@ map(f, None) = None
 map(f, Some(x)) = Some(f(x))
 
 map(f, []) = []
-map(f, [h | t]) = [f(h) | map(f, t)]
+map(f, [h | t]) = f(h) :: map(f, t)
 
 # Nested patterns
 processResponse({status: 200, body: {data: [first | _]}}) = first
 processResponse({status: code, _}) = error("status: " ++ code.show())
+
+# String patterns - match string prefixes
+greet(["hello" | rest]) = "Hi! " ++ rest
+greet(["bye" | rest]) = "Goodbye! " ++ rest
+greet(_) = "unknown"
+
+# Single character string patterns
+first_char(["h" | _]) = "starts with h"
+first_char(["a" | _]) = "starts with a"
+first_char(_) = "other"
 
 # Pin operator in patterns
 matchValue(^expected, value) = value == expected
@@ -911,7 +925,8 @@ Standard precedence (unlike Smalltalk):
 # **                           (exponentiation, right-assoc)
 # * / %                        (multiplicative)
 # + -                          (additive)
-# ++ --                        (concatenation)
+# ::                           (cons, right-assoc)
+# ++                           (concatenation)
 # == != < > <= >=              (comparison)
 # &&                           (logical and)
 # ||                           (logical or)
