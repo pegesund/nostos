@@ -794,7 +794,7 @@ impl Compiler {
             "Pg", "Uuid", "Crypto",
         ].iter().map(|s| s.to_string()).collect();
 
-        Self {
+        let mut this = Self {
             chunk: Chunk::new(),
             locals: HashMap::new(),
             next_reg: 0,
@@ -839,7 +839,32 @@ impl Compiler {
             current_fn_calls: HashSet::new(),
             current_fn_mvar_locks: Vec::new(),
             current_fn_has_blocking: false,
-        }
+        };
+
+        // Register builtin types for autocomplete
+        this.register_builtin_types();
+
+        this
+    }
+
+    /// Register builtin types that are returned by native functions.
+    /// This enables autocomplete for fields on these types.
+    fn register_builtin_types(&mut self) {
+        // HttpResponse: returned by Http.get and Http.request
+        self.types.insert(
+            "HttpResponse".to_string(),
+            TypeInfo {
+                name: "HttpResponse".to_string(),
+                kind: TypeInfoKind::Record {
+                    fields: vec![
+                        ("status".to_string(), "Int".to_string()),
+                        ("headers".to_string(), "List".to_string()),
+                        ("body".to_string(), "String".to_string()),
+                    ],
+                    mutable: false,
+                },
+            },
+        );
     }
 
     /// Compile all pending functions.
@@ -6470,6 +6495,21 @@ impl Compiler {
             }
             // Method call - determine return type based on receiver type and method
             Expr::MethodCall(obj, method, _args, _) => {
+                // Check if this is a module-qualified builtin call (e.g., Http.get, File.readAll)
+                if let Some(module_path) = self.extract_module_path(obj) {
+                    let qualified_name = format!("{}.{}", module_path, method.node);
+                    // Check if it's a builtin with a known return type
+                    if let Some(sig) = Self::get_builtin_signature(&qualified_name) {
+                        // Extract return type from signature (after last "->")
+                        if let Some(arrow_pos) = sig.rfind("->") {
+                            let return_type = sig[arrow_pos + 2..].trim().to_string();
+                            if !return_type.is_empty() {
+                                return Some(return_type);
+                            }
+                        }
+                    }
+                }
+
                 if let Some(obj_type) = self.expr_type_name(obj) {
                     // Map methods
                     if obj_type.starts_with("Map[") || obj_type == "Map" {

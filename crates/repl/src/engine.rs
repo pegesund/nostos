@@ -9866,6 +9866,41 @@ main() = {
         // and contains(Int) should fail type check
         assert!(result.is_err(), "Expected type error for status.contains(Int)");
     }
+
+    #[test]
+    fn test_http_response_has_fields_for_autocomplete() {
+        // HttpResponse should be registered as a builtin type with fields
+        // so that autocomplete can suggest status, headers, body
+        use nostos_compiler::Compiler;
+
+        let compiler = Compiler::new_empty();
+        let fields = compiler.get_type_fields("HttpResponse");
+
+        println!("HttpResponse fields: {:?}", fields);
+        assert!(fields.contains(&"status".to_string()), "HttpResponse should have 'status' field");
+        assert!(fields.contains(&"headers".to_string()), "HttpResponse should have 'headers' field");
+        assert!(fields.contains(&"body".to_string()), "HttpResponse should have 'body' field");
+    }
+
+    #[test]
+    fn test_http_get_return_type_inferred() {
+        // When we have response = Http.get(url), the compiler should infer
+        // that response has type HttpResponse for field autocomplete
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Test that Http.get returns HttpResponse (signature check)
+        let code = r#"
+main() = {
+    response = Http.get("http://example.com")
+    response.status
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Http.get field access result: {:?}", result);
+        // This should compile without errors since HttpResponse has a status field
+        assert!(result.is_ok(), "response.status should be valid since Http.get returns HttpResponse");
+    }
 }
 
 #[cfg(test)]
