@@ -838,89 +838,89 @@ impl Autocomplete {
     }
 
     /// Get available methods for a builtin type
-    fn get_builtin_methods(type_name: &str) -> Vec<(&'static str, &'static str)> {
-        // Returns (method_name, signature)
+    /// Returns (method_name, signature, docstring)
+    fn get_builtin_methods(type_name: &str) -> Vec<(&'static str, &'static str, &'static str)> {
         if type_name.starts_with("Map") || type_name == "Map" {
             vec![
-                ("get", "(key) -> value"),
-                ("insert", "(key, value) -> Map"),
-                ("remove", "(key) -> Map"),
-                ("contains", "(key) -> Bool"),
-                ("keys", "() -> List"),
-                ("values", "() -> List"),
-                ("size", "() -> Int"),
-                ("isEmpty", "() -> Bool"),
-                ("merge", "(other) -> Map"),
+                ("get", "(key) -> value", "Get the value associated with a key"),
+                ("insert", "(key, value) -> Map", "Insert a key-value pair, returning a new map"),
+                ("remove", "(key) -> Map", "Remove a key, returning a new map"),
+                ("contains", "(key) -> Bool", "Check if the map contains a key"),
+                ("keys", "() -> List", "Get all keys as a list"),
+                ("values", "() -> List", "Get all values as a list"),
+                ("size", "() -> Int", "Get the number of key-value pairs"),
+                ("isEmpty", "() -> Bool", "Check if the map is empty"),
+                ("merge", "(other) -> Map", "Merge two maps, with other's values taking precedence"),
             ]
         } else if type_name.starts_with("Set") || type_name == "Set" {
             vec![
-                ("contains", "(elem) -> Bool"),
-                ("insert", "(elem) -> Set"),
-                ("remove", "(elem) -> Set"),
-                ("size", "() -> Int"),
-                ("isEmpty", "() -> Bool"),
-                ("union", "(other) -> Set"),
-                ("intersection", "(other) -> Set"),
-                ("difference", "(other) -> Set"),
-                ("toList", "() -> List"),
+                ("contains", "(elem) -> Bool", "Check if the set contains an element"),
+                ("insert", "(elem) -> Set", "Insert an element, returning a new set"),
+                ("remove", "(elem) -> Set", "Remove an element, returning a new set"),
+                ("size", "() -> Int", "Get the number of elements"),
+                ("isEmpty", "() -> Bool", "Check if the set is empty"),
+                ("union", "(other) -> Set", "Return the union of two sets"),
+                ("intersection", "(other) -> Set", "Return the intersection of two sets"),
+                ("difference", "(other) -> Set", "Return elements in this set but not in other"),
+                ("toList", "() -> List", "Convert the set to a list"),
             ]
         } else if type_name == "String" {
             vec![
-                ("length", "() -> Int"),
-                ("chars", "() -> List"),
-                ("toInt", "() -> Option Int"),
-                ("toFloat", "() -> Option Float"),
-                ("trim", "() -> String"),
-                ("trimStart", "() -> String"),
-                ("trimEnd", "() -> String"),
-                ("toUpper", "() -> String"),
-                ("toLower", "() -> String"),
-                ("contains", "(substr) -> Bool"),
-                ("startsWith", "(prefix) -> Bool"),
-                ("endsWith", "(suffix) -> Bool"),
-                ("replace", "(from, to) -> String"),
-                ("replaceAll", "(from, to) -> String"),
-                ("indexOf", "(substr) -> Int"),
-                ("lastIndexOf", "(substr) -> Int"),
-                ("substring", "(start, end) -> String"),
-                ("repeat", "(n) -> String"),
-                ("padStart", "(len, pad) -> String"),
-                ("padEnd", "(len, pad) -> String"),
-                ("reverse", "() -> String"),
-                ("lines", "() -> List"),
-                ("words", "() -> List"),
-                ("isEmpty", "() -> Bool"),
+                ("length", "() -> Int", "Get the length of the string"),
+                ("chars", "() -> List", "Get the characters as a list"),
+                ("toInt", "() -> Option Int", "Parse as an integer"),
+                ("toFloat", "() -> Option Float", "Parse as a float"),
+                ("trim", "() -> String", "Remove leading and trailing whitespace"),
+                ("trimStart", "() -> String", "Remove leading whitespace"),
+                ("trimEnd", "() -> String", "Remove trailing whitespace"),
+                ("toUpper", "() -> String", "Convert to uppercase"),
+                ("toLower", "() -> String", "Convert to lowercase"),
+                ("contains", "(substr) -> Bool", "Check if the string contains a substring"),
+                ("startsWith", "(prefix) -> Bool", "Check if the string starts with a prefix"),
+                ("endsWith", "(suffix) -> Bool", "Check if the string ends with a suffix"),
+                ("replace", "(from, to) -> String", "Replace first occurrence of a substring"),
+                ("replaceAll", "(from, to) -> String", "Replace all occurrences of a substring"),
+                ("indexOf", "(substr) -> Int", "Find the index of a substring (-1 if not found)"),
+                ("lastIndexOf", "(substr) -> Int", "Find the last index of a substring"),
+                ("substring", "(start, end) -> String", "Extract a substring by indices"),
+                ("repeat", "(n) -> String", "Repeat the string n times"),
+                ("padStart", "(len, pad) -> String", "Pad the start to reach length"),
+                ("padEnd", "(len, pad) -> String", "Pad the end to reach length"),
+                ("reverse", "() -> String", "Reverse the string"),
+                ("lines", "() -> List", "Split into lines"),
+                ("words", "() -> List", "Split into words"),
+                ("isEmpty", "() -> Bool", "Check if the string is empty"),
             ]
         } else if type_name.starts_with("List") || type_name == "List" {
             vec![
-                ("map", "(f) -> List"),
-                ("filter", "(pred) -> List"),
-                ("fold", "(acc, f) -> a"),
-                ("foldr", "(acc, f) -> a"),
-                ("any", "(pred) -> Bool"),
-                ("all", "(pred) -> Bool"),
-                ("find", "(pred) -> Option"),
-                ("position", "(pred) -> Option Int"),
-                ("take", "(n) -> List"),
-                ("drop", "(n) -> List"),
-                ("takeWhile", "(pred) -> List"),
-                ("dropWhile", "(pred) -> List"),
-                ("reverse", "() -> List"),
-                ("sort", "() -> List"),
-                ("concat", "(other) -> List"),
-                ("flatten", "() -> List"),
-                ("unique", "() -> List"),
-                ("zip", "(other) -> List"),
-                ("zipWith", "(other, f) -> List"),
-                ("partition", "(pred) -> (List, List)"),
-                ("splitAt", "(n) -> (List, List)"),
-                ("count", "(pred) -> Int"),
-                ("contains", "(elem) -> Bool"),
-                ("interleave", "(other) -> List"),
-                ("group", "() -> List"),
-                ("scanl", "(acc, f) -> List"),
-                ("maximum", "() -> a"),
-                ("minimum", "() -> a"),
+                ("map", "(f) -> List", "Apply a function to each element"),
+                ("filter", "(pred) -> List", "Keep elements that satisfy the predicate"),
+                ("fold", "(acc, f) -> a", "Left fold with accumulator"),
+                ("foldr", "(acc, f) -> a", "Right fold with accumulator"),
+                ("any", "(pred) -> Bool", "Check if any element satisfies the predicate"),
+                ("all", "(pred) -> Bool", "Check if all elements satisfy the predicate"),
+                ("find", "(pred) -> Option", "Find the first element satisfying the predicate"),
+                ("position", "(pred) -> Option Int", "Find the index of first matching element"),
+                ("take", "(n) -> List", "Take the first n elements"),
+                ("drop", "(n) -> List", "Drop the first n elements"),
+                ("takeWhile", "(pred) -> List", "Take elements while predicate is true"),
+                ("dropWhile", "(pred) -> List", "Drop elements while predicate is true"),
+                ("reverse", "() -> List", "Reverse the list"),
+                ("sort", "() -> List", "Sort the list"),
+                ("concat", "(other) -> List", "Concatenate two lists"),
+                ("flatten", "() -> List", "Flatten a list of lists"),
+                ("unique", "() -> List", "Remove duplicate elements"),
+                ("zip", "(other) -> List", "Zip two lists into pairs"),
+                ("zipWith", "(other, f) -> List", "Zip two lists using a function"),
+                ("partition", "(pred) -> (List, List)", "Split into (matching, non-matching)"),
+                ("splitAt", "(n) -> (List, List)", "Split at index n"),
+                ("count", "(pred) -> Int", "Count elements satisfying the predicate"),
+                ("contains", "(elem) -> Bool", "Check if the list contains an element"),
+                ("interleave", "(other) -> List", "Interleave elements from two lists"),
+                ("group", "() -> List", "Group consecutive equal elements"),
+                ("scanl", "(acc, f) -> List", "Left scan with accumulator"),
+                ("maximum", "() -> a", "Get the maximum element"),
+                ("minimum", "() -> a", "Get the minimum element"),
             ]
         } else {
             vec![]
@@ -981,13 +981,13 @@ impl Autocomplete {
         };
 
         // Get methods for builtin types (Map, Set, String, List)
-        for (method_name, signature) in Self::get_builtin_methods(&type_name) {
+        for (method_name, signature, docstring) in Self::get_builtin_methods(&type_name) {
             if method_name.to_lowercase().starts_with(&prefix_lower) {
                 items.push(CompletionItem {
                     text: method_name.to_string(),
                     label: format!("{}{}", method_name, signature),
                     kind: CompletionKind::Method,
-                    doc: None,
+                    doc: Some(docstring.to_string()),
                 });
             }
         }
@@ -2725,6 +2725,78 @@ mod tests {
         let items = ac.get_completions(&ctx, &source);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].text, "filter");
+    }
+
+    #[test]
+    fn test_completions_include_docstrings() {
+        // Method completions should include docstrings
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "[1,2,3]".to_string(),
+            prefix: "map".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].text, "map");
+        assert!(items[0].doc.is_some(), "Should have a docstring");
+        assert!(items[0].doc.as_ref().unwrap().contains("Apply"),
+            "Docstring should describe the method");
+    }
+
+    #[test]
+    fn test_all_builtin_methods_have_docstrings() {
+        // Every builtin method should have a docstring
+        let source = MockSource::new();
+        let ac = Autocomplete::new();
+
+        // Test List methods
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "[]".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+        for item in &items {
+            assert!(item.doc.is_some(),
+                "List method '{}' should have a docstring", item.text);
+            assert!(!item.doc.as_ref().unwrap().is_empty(),
+                "List method '{}' docstring should not be empty", item.text);
+        }
+
+        // Test String methods
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "\"\"".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+        for item in &items {
+            assert!(item.doc.is_some(),
+                "String method '{}' should have a docstring", item.text);
+        }
+
+        // Test Map methods
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "%{}".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+        for item in &items {
+            assert!(item.doc.is_some(),
+                "Map method '{}' should have a docstring", item.text);
+        }
+
+        // Test Set methods
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "#{}".to_string(),
+            prefix: "".to_string()
+        };
+        let items = ac.get_completions(&ctx, &source);
+        for item in &items {
+            assert!(item.doc.is_some(),
+                "Set method '{}' should have a docstring", item.text);
+        }
     }
 
 }

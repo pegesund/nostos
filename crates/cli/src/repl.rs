@@ -251,13 +251,20 @@ impl Completer for NostosCompleter {
 
                 let items = self.autocomplete.get_completions(&ctx, &source);
                 items.into_iter()
-                    .map(|item| Suggestion {
-                        value: item.text,
-                        description: Some(item.label),
-                        style: None,
-                        extra: None,
-                        span: method_span,
-                        append_whitespace: false,
+                    .map(|item| {
+                        // Combine signature and docstring for description
+                        let desc = match &item.doc {
+                            Some(doc) => format!("{} - {}", item.label, doc),
+                            None => item.label.clone(),
+                        };
+                        Suggestion {
+                            value: item.text,
+                            description: Some(desc),
+                            style: None,
+                            extra: None,
+                            span: method_span,
+                            append_whitespace: false,
+                        }
                     })
                     .collect()
             }
