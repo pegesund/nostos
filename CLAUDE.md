@@ -100,39 +100,31 @@ trait_bounds, traits, typed_bindings, type_errors, types, type_system
 
 ### Running Tests
 
-**IMPORTANT: DO NOT run `cargo test` or `test_all_nos_files` - they WILL HANG!**
+**CRITICAL: Use runall.sh - DO NOT CHANGE THIS PROCEDURE**
 
-Many tests use spawn/receive (concurrency) and will hang indefinitely without timeout protection.
-
-**Safe ways to run tests:**
-1. Run specific test categories with short timeout:
-   ```bash
-   timeout 30 cargo test --release -p nostos-compiler basics
-   timeout 30 cargo test --release -p nostos-compiler arithmetic
-   timeout 30 cargo test --release -p nostos-compiler functions
-   timeout 30 cargo test --release -p nostos-compiler types
-   ```
-
-2. Run examples with the script (has built-in timeouts):
-   ```bash
-   ./scripts/run_examples.sh
-   ```
-
-3. Test a specific .nos file directly:
-   ```bash
-   ./target/release/nostos path/to/file.nos
-   ```
-
-4. Run non-hanging categories in batch:
-   ```bash
-   timeout 60 cargo test --release -p nostos-compiler -- basics arithmetic functions types patterns comparison logical control_flow strings collections traits
-   ```
-
-**Run all safe tests with timeout:**
+The ONLY correct way to run all tests is:
 ```bash
-for f in $(find tests -name "*.nos" ! -path "*/timeout/*"); do
-    timeout 5 ./target/release/nostos "$f" >/dev/null 2>&1 || echo "FAIL: $f"
-done
+cd tests && ./runall.sh
+```
+
+This script:
+- Runs all 581+ tests in parallel with proper timeouts
+- Handles concurrency tests correctly
+- Shows pass/fail summary
+
+**DO NOT:**
+- Run `cargo test` for .nos files (will hang on concurrency tests)
+- Create new test runner scripts
+- Change the testing procedure in any way
+
+**For single file testing:**
+```bash
+./target/release/nostos path/to/file.nos
+```
+
+**For REPL/autocomplete unit tests:**
+```bash
+cargo test --release -p nostos-repl test_name -- --nocapture
 ```
 
 **Tests that may hang (avoid in batch runs):**
@@ -186,3 +178,12 @@ cargo test --release -p nostos-repl check_module_tests -- --nocapture
 4. Tests document expected behavior and prevent regressions
 
 **Key function:** `ReplEngine::check_module_compiles(&self, module_name: &str, content: &str) -> Result<(), String>`
+
+## BUILTINS Array Warning
+
+**DO NOT add Buffer methods to the BUILTINS array in compile.rs**
+
+Buffer is used by stdlib/html.nos and adding Buffer.* to BUILTINS causes type conflicts:
+- `Cannot unify types: stdlib.html.Html and Html`
+
+Float64Array, Int64Array, Float32Array methods ARE safe to add to BUILTINS since they don't conflict with stdlib.
