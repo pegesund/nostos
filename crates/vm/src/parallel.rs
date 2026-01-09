@@ -291,15 +291,54 @@ pub struct ParallelVM {
     io_runtime: Option<IoRuntime>,
 }
 
+/// Thread-safe sendable record value.
+#[derive(Clone, Debug)]
+pub struct SendableRecord {
+    pub type_name: String,
+    pub field_names: Vec<String>,
+    pub fields: Vec<SendableValue>,
+}
+
+/// Thread-safe sendable map key.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SendableMapKey {
+    Unit,
+    Bool(bool),
+    Char(char),
+    Int64(i64),
+    String(String),
+}
+
 /// Simple value that can be sent between threads.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum SendableValue {
     Unit,
     Bool(bool),
+    Char(char),
+    // Signed integers
+    Int8(i8),
+    Int16(i16),
+    Int32(i32),
     Int64(i64),
+    // Unsigned integers
+    UInt8(u8),
+    UInt16(u16),
+    UInt32(u32),
+    UInt64(u64),
+    // Floating point
+    Float32(f32),
     Float64(f64),
+    // Arbitrary precision
+    BigInt(num_bigint::BigInt),
+    Decimal(rust_decimal::Decimal),
+    // Other
     Pid(u64),
     String(String),
+    List(Vec<SendableValue>),
+    Tuple(Vec<SendableValue>),
+    Record(SendableRecord),
+    Map(std::collections::HashMap<SendableMapKey, SendableValue>),
+    Set(std::collections::HashSet<SendableMapKey>),
     Error(String),
 }
 
@@ -308,8 +347,31 @@ impl SendableValue {
         match value {
             GcValue::Unit => SendableValue::Unit,
             GcValue::Bool(b) => SendableValue::Bool(*b),
+            GcValue::Char(c) => SendableValue::Char(*c),
+            // Signed integers
+            GcValue::Int8(i) => SendableValue::Int8(*i),
+            GcValue::Int16(i) => SendableValue::Int16(*i),
+            GcValue::Int32(i) => SendableValue::Int32(*i),
             GcValue::Int64(i) => SendableValue::Int64(*i),
+            // Unsigned integers
+            GcValue::UInt8(i) => SendableValue::UInt8(*i),
+            GcValue::UInt16(i) => SendableValue::UInt16(*i),
+            GcValue::UInt32(i) => SendableValue::UInt32(*i),
+            GcValue::UInt64(i) => SendableValue::UInt64(*i),
+            // Floating point
+            GcValue::Float32(f) => SendableValue::Float32(*f),
             GcValue::Float64(f) => SendableValue::Float64(*f),
+            // BigInt
+            GcValue::BigInt(ptr) => {
+                if let Some(bi) = heap.get_bigint(*ptr) {
+                    SendableValue::BigInt(bi.value.clone())
+                } else {
+                    SendableValue::String("<bigint>".to_string())
+                }
+            }
+            // Decimal
+            GcValue::Decimal(d) => SendableValue::Decimal(*d),
+            // Process ID
             GcValue::Pid(p) => SendableValue::Pid(*p),
             GcValue::String(ptr) => {
                 if let Some(s) = heap.get_string(*ptr) {
@@ -318,8 +380,86 @@ impl SendableValue {
                     SendableValue::String("<string>".to_string())
                 }
             }
+            GcValue::List(list) => {
+                let items: Vec<SendableValue> = list.items()
+                    .iter()
+                    .map(|v| SendableValue::from_gc_value(v, heap))
+                    .collect();
+                SendableValue::List(items)
+            }
+            GcValue::Tuple(ptr) => {
+                if let Some(tuple) = heap.get_tuple(*ptr) {
+                    let items: Vec<SendableValue> = tuple.items
+                        .iter()
+                        .map(|v| SendableValue::from_gc_value(v, heap))
+                        .collect();
+                    SendableValue::Tuple(items)
+                } else {
+                    SendableValue::String("<tuple>".to_string())
+                }
+            }
+            GcValue::Record(ptr) => {
+                if let Some(record) = heap.get_record(*ptr) {
+                    let fields: Vec<SendableValue> = record.fields
+                        .iter()
+                        .map(|v| SendableValue::from_gc_value(v, heap))
+                        .collect();
+                    SendableValue::Record(SendableRecord {
+                        type_name: record.type_name.clone(),
+                        field_names: record.field_names.clone(),
+                        fields,
+                    })
+                } else {
+                    SendableValue::String("<record>".to_string())
+                }
+            }
+            GcValue::Set(ptr) => {
+                if let Some(set) = heap.get_set(*ptr) {
+                    let items: std::collections::HashSet<SendableMapKey> = set.items
+                        .iter()
+                        .filter_map(|k| Self::gc_map_key_to_sendable(k, heap))
+                        .collect();
+                    SendableValue::Set(items)
+                } else {
+                    SendableValue::String("<set>".to_string())
+                }
+            }
+            GcValue::Map(ptr) => {
+                if let Some(map) = heap.get_map(*ptr) {
+                    let entries: std::collections::HashMap<SendableMapKey, SendableValue> = map.entries
+                        .iter()
+                        .filter_map(|(k, v)| {
+                            Self::gc_map_key_to_sendable(k, heap)
+                                .map(|sk| (sk, SendableValue::from_gc_value(v, heap)))
+                        })
+                        .collect();
+                    SendableValue::Map(entries)
+                } else {
+                    SendableValue::String("<map>".to_string())
+                }
+            }
             // For other values, use their display representation
             _ => SendableValue::String(heap.display_value(value)),
+        }
+    }
+
+    fn gc_map_key_to_sendable(key: &crate::gc::GcMapKey, heap: &Heap) -> Option<SendableMapKey> {
+        use crate::gc::GcMapKey;
+        match key {
+            GcMapKey::Unit => Some(SendableMapKey::Unit),
+            GcMapKey::Bool(b) => Some(SendableMapKey::Bool(*b)),
+            GcMapKey::Char(c) => Some(SendableMapKey::Char(*c)),
+            GcMapKey::Int64(i) => Some(SendableMapKey::Int64(*i)),
+            GcMapKey::Int8(i) => Some(SendableMapKey::Int64(*i as i64)),
+            GcMapKey::Int16(i) => Some(SendableMapKey::Int64(*i as i64)),
+            GcMapKey::Int32(i) => Some(SendableMapKey::Int64(*i as i64)),
+            GcMapKey::UInt8(i) => Some(SendableMapKey::Int64(*i as i64)),
+            GcMapKey::UInt16(i) => Some(SendableMapKey::Int64(*i as i64)),
+            GcMapKey::UInt32(i) => Some(SendableMapKey::Int64(*i as i64)),
+            GcMapKey::UInt64(i) => Some(SendableMapKey::Int64(*i as i64)),
+            GcMapKey::String(ptr) => {
+                heap.get_string(*ptr).map(|s| SendableMapKey::String(s.data.clone()))
+            }
         }
     }
 
@@ -328,17 +468,25 @@ impl SendableValue {
         match self {
             SendableValue::Unit => GcValue::Unit,
             SendableValue::Bool(b) => GcValue::Bool(*b),
+            SendableValue::Char(c) => GcValue::Char(*c),
+            SendableValue::Int8(i) => GcValue::Int8(*i),
+            SendableValue::Int16(i) => GcValue::Int16(*i),
+            SendableValue::Int32(i) => GcValue::Int32(*i),
             SendableValue::Int64(i) => GcValue::Int64(*i),
+            SendableValue::UInt8(i) => GcValue::UInt8(*i),
+            SendableValue::UInt16(i) => GcValue::UInt16(*i),
+            SendableValue::UInt32(i) => GcValue::UInt32(*i),
+            SendableValue::UInt64(i) => GcValue::UInt64(*i),
+            SendableValue::Float32(f) => GcValue::Float32(*f),
             SendableValue::Float64(f) => GcValue::Float64(*f),
+            SendableValue::Decimal(d) => GcValue::Decimal(*d),
             SendableValue::Pid(p) => GcValue::Pid(*p),
-            // Use a placeholder - the CLI should use display() instead
             SendableValue::String(s) => {
-                // Create a simple heap for the string
                 let mut heap = Heap::new();
                 let ptr = heap.alloc_string(s.clone());
                 GcValue::String(ptr)
             }
-            SendableValue::Error(_) => GcValue::Unit,
+            _ => GcValue::Unit, // Complex types don't convert back cleanly
         }
     }
 
@@ -347,10 +495,42 @@ impl SendableValue {
         match self {
             SendableValue::Unit => "()".to_string(),
             SendableValue::Bool(b) => b.to_string(),
+            SendableValue::Char(c) => format!("'{}'", c),
+            SendableValue::Int8(i) => format!("{}i8", i),
+            SendableValue::Int16(i) => format!("{}i16", i),
+            SendableValue::Int32(i) => format!("{}i32", i),
             SendableValue::Int64(i) => i.to_string(),
+            SendableValue::UInt8(i) => format!("{}u8", i),
+            SendableValue::UInt16(i) => format!("{}u16", i),
+            SendableValue::UInt32(i) => format!("{}u32", i),
+            SendableValue::UInt64(i) => format!("{}u64", i),
+            SendableValue::Float32(f) => format!("{}f32", f),
             SendableValue::Float64(f) => f.to_string(),
+            SendableValue::BigInt(bi) => format!("{}n", bi),
+            SendableValue::Decimal(d) => format!("{}d", d),
             SendableValue::Pid(p) => format!("<pid {}>", p),
             SendableValue::String(s) => s.clone(),
+            SendableValue::List(items) => {
+                let items_str: Vec<String> = items.iter().map(|v| v.display()).collect();
+                format!("[{}]", items_str.join(", "))
+            }
+            SendableValue::Tuple(items) => {
+                let items_str: Vec<String> = items.iter().map(|v| v.display()).collect();
+                format!("({})", items_str.join(", "))
+            }
+            SendableValue::Record(r) => {
+                let fields_str: Vec<String> = r.field_names.iter()
+                    .zip(r.fields.iter())
+                    .map(|(n, v)| format!("{}: {}", n, v.display()))
+                    .collect();
+                format!("{}{{{}}}", r.type_name, fields_str.join(", "))
+            }
+            SendableValue::Set(items) => {
+                format!("#{{...{} items}}", items.len())
+            }
+            SendableValue::Map(entries) => {
+                format!("%{{...{} entries}}", entries.len())
+            }
             SendableValue::Error(e) => format!("Error: {}", e),
         }
     }
@@ -365,11 +545,62 @@ impl SendableValue {
         match self {
             SendableValue::Unit => Value::Unit,
             SendableValue::Bool(b) => Value::Bool(*b),
+            SendableValue::Char(c) => Value::Char(*c),
+            SendableValue::Int8(i) => Value::Int8(*i),
+            SendableValue::Int16(i) => Value::Int16(*i),
+            SendableValue::Int32(i) => Value::Int32(*i),
             SendableValue::Int64(i) => Value::Int64(*i),
+            SendableValue::UInt8(i) => Value::UInt8(*i),
+            SendableValue::UInt16(i) => Value::UInt16(*i),
+            SendableValue::UInt32(i) => Value::UInt32(*i),
+            SendableValue::UInt64(i) => Value::UInt64(*i),
+            SendableValue::Float32(f) => Value::Float32(*f),
             SendableValue::Float64(f) => Value::Float64(*f),
-            SendableValue::Pid(_) => Value::Unit, // Pids don't convert cleanly to Value
+            SendableValue::BigInt(bi) => Value::BigInt(Arc::new(bi.clone())),
+            SendableValue::Decimal(d) => Value::Decimal(*d),
+            SendableValue::Pid(_) => Value::Unit,
             SendableValue::String(s) => Value::String(Arc::new(s.clone())),
+            SendableValue::List(items) => {
+                let values: Vec<Value> = items.iter().map(|v| v.to_value()).collect();
+                Value::List(Arc::new(values))
+            }
+            SendableValue::Tuple(items) => {
+                let values: Vec<Value> = items.iter().map(|v| v.to_value()).collect();
+                Value::Tuple(Arc::new(values))
+            }
+            SendableValue::Record(r) => {
+                let fields: Vec<Value> = r.fields.iter().map(|v| v.to_value()).collect();
+                Value::Record(Arc::new(crate::value::RecordValue {
+                    type_name: r.type_name.clone(),
+                    field_names: r.field_names.clone(),
+                    fields,
+                    mutable_fields: vec![false; r.fields.len()],
+                }))
+            }
+            SendableValue::Set(items) => {
+                let set: std::collections::HashSet<crate::value::MapKey> = items.iter()
+                    .map(|k| Self::sendable_key_to_map_key(k))
+                    .collect();
+                Value::Set(Arc::new(set))
+            }
+            SendableValue::Map(entries) => {
+                let map: std::collections::HashMap<crate::value::MapKey, Value> = entries.iter()
+                    .map(|(k, v)| (Self::sendable_key_to_map_key(k), v.to_value()))
+                    .collect();
+                Value::Map(Arc::new(map))
+            }
             SendableValue::Error(_) => Value::Unit,
+        }
+    }
+
+    fn sendable_key_to_map_key(key: &SendableMapKey) -> crate::value::MapKey {
+        use crate::value::MapKey;
+        match key {
+            SendableMapKey::Unit => MapKey::Unit,
+            SendableMapKey::Bool(b) => MapKey::Bool(*b),
+            SendableMapKey::Char(c) => MapKey::Char(*c),
+            SendableMapKey::Int64(i) => MapKey::Int64(*i),
+            SendableMapKey::String(s) => MapKey::String(Arc::new(s.clone())),
         }
     }
 }
@@ -5286,11 +5517,24 @@ impl ThreadWorker {
             }
 
             Throw(src) => {
-                // Simple throw - just return the exception as an error
                 let exception = reg!(*src).clone();
-                let proc = self.get_process(local_id).unwrap();
-                let msg = proc.heap.display_value(&exception);
-                return Err(RuntimeError::Panic(format!("Exception: {}", msg)));
+                let proc = self.get_process_mut(local_id).unwrap();
+                proc.current_exception = Some(exception);
+
+                // Find the most recent handler
+                if let Some(handler) = proc.handlers.pop() {
+                    // Unwind stack to handler's frame
+                    while proc.frames.len() > handler.frame_index + 1 {
+                        proc.frames.pop();
+                    }
+                    // Jump to catch block
+                    proc.frames[handler.frame_index].ip = handler.catch_ip;
+                } else {
+                    // No handler - propagate as runtime error
+                    let proc = self.get_process(local_id).unwrap();
+                    let msg = proc.heap.display_value(proc.current_exception.as_ref().unwrap());
+                    return Err(RuntimeError::Panic(format!("Uncaught exception: {}", msg)));
+                }
             }
 
             // === I/O ===
@@ -5382,6 +5626,66 @@ impl ThreadWorker {
                         found: format!("{:?}", va),
                     }),
                 }
+            }
+
+            // === Exception handling ===
+            PushHandler(offset) => {
+                let proc = self.get_process_mut(local_id).unwrap();
+                let frame_index = proc.frames.len() - 1;
+                let catch_ip = (proc.frames[frame_index].ip as isize + *offset as isize) as usize;
+                proc.handlers.push(crate::process::ExceptionHandler {
+                    frame_index,
+                    catch_ip,
+                });
+            }
+
+            PopHandler => {
+                let proc = self.get_process_mut(local_id).unwrap();
+                proc.handlers.pop();
+            }
+
+            GetException(dst) => {
+                let proc = self.get_process(local_id).unwrap();
+                let exception = proc.current_exception.clone().unwrap_or(GcValue::Unit);
+                set_reg!(*dst, exception);
+            }
+
+            // === Collection literals ===
+            MakeSet(dst, ref elements) => {
+                let mut items = std::collections::HashSet::new();
+                for &r in elements.iter() {
+                    let val = reg!(r).clone();
+                    if let Some(key) = val.to_gc_map_key() {
+                        items.insert(key);
+                    } else {
+                        return Err(RuntimeError::TypeError {
+                            expected: "hashable type".to_string(),
+                            found: format!("{:?}", val),
+                        });
+                    }
+                }
+                let proc = self.get_process_mut(local_id).unwrap();
+                let ptr = proc.heap.alloc_set(items);
+                set_reg!(*dst, GcValue::Set(ptr));
+            }
+
+            MakeMap(dst, ref entries) => {
+                let mut map = std::collections::HashMap::new();
+                for (key_reg, val_reg) in entries.iter() {
+                    let key_val = reg!(*key_reg).clone();
+                    let val = reg!(*val_reg).clone();
+                    if let Some(key) = key_val.to_gc_map_key() {
+                        map.insert(key, val);
+                    } else {
+                        return Err(RuntimeError::TypeError {
+                            expected: "hashable type".to_string(),
+                            found: format!("{:?}", key_val),
+                        });
+                    }
+                }
+                let proc = self.get_process_mut(local_id).unwrap();
+                let ptr = proc.heap.alloc_map(map);
+                set_reg!(*dst, GcValue::Map(ptr));
             }
 
             // Unimplemented
