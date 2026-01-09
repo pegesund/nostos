@@ -2191,9 +2191,9 @@ impl Compiler {
                         return Ok(dst);
                     }
                     "assert_eq" if arg_regs.len() == 2 => {
-                        self.chunk.emit(Instruction::AssertEq(arg_regs[0], arg_regs[1]), 0);
+                        self.chunk.emit(Instruction::AssertEq(arg_regs[0], arg_regs[1]), line);
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::LoadUnit(dst), 0);
+                        self.chunk.emit(Instruction::LoadUnit(dst), line);
                         return Ok(dst);
                     }
                     "typeOf" if arg_regs.len() == 1 => {

@@ -1350,7 +1350,17 @@ impl ThreadWorker {
         // FAST PATH: Execute as many instructions as possible with ONE HashMap lookup
         // Only break out for slow-path instructions or when done
         loop {
-            match self.execute_fast_loop(local_id, remaining)? {
+            match self.execute_fast_loop(local_id, remaining) {
+                Err(e) => {
+                    // Wrap error with stack trace
+                    let stack_trace = if let Some(proc) = self.get_process(local_id) {
+                        crate::process::format_stack_trace(&proc.frames)
+                    } else {
+                        String::from("  <no stack frames>")
+                    };
+                    return Err(e.with_stack_trace(stack_trace));
+                }
+                Ok(fast_result) => match fast_result {
                 FastLoopResult::Continue => {
                     // Did all reductions - time to yield
                     // GC safepoint: collect garbage if heap threshold exceeded
@@ -1366,7 +1376,19 @@ impl ThreadWorker {
                         let proc = self.get_process(local_id).unwrap();
                         proc.frames.last().unwrap().function.code.constants.clone()
                     };
-                    match self.execute_instruction(local_id, &instr, &constants)? {
+                    let step_result = match self.execute_instruction(local_id, &instr, &constants) {
+                        Ok(result) => result,
+                        Err(e) => {
+                            // Wrap slow-path error with stack trace
+                            let stack_trace = if let Some(proc) = self.get_process(local_id) {
+                                crate::process::format_stack_trace(&proc.frames)
+                            } else {
+                                String::from("  <no stack frames>")
+                            };
+                            return Err(e.with_stack_trace(stack_trace));
+                        }
+                    };
+                    match step_result {
                         StepResult::Continue => {
                             // GC safepoint after slow-path instruction (where allocations happen)
                             if let Some(proc) = self.get_process_mut(local_id) {
@@ -1388,6 +1410,7 @@ impl ThreadWorker {
                         StepResult::Waiting => return Ok(SliceResult::Waiting),
                         StepResult::Finished(v) => return Ok(SliceResult::Finished(v)),
                     }
+                }
                 }
             }
         }
