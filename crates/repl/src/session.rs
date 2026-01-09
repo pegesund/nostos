@@ -371,7 +371,7 @@ impl ReplSession {
 }
 
 /// Extract function dependencies from a function definition.
-fn extract_dependencies_from_fn(fn_def: &FnDef) -> HashSet<String> {
+pub fn extract_dependencies_from_fn(fn_def: &FnDef) -> HashSet<String> {
     let mut deps = HashSet::new();
     for clause in &fn_def.clauses {
         extract_dependencies_from_expr(&clause.body, &mut deps);

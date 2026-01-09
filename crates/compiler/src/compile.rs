@@ -342,8 +342,26 @@ impl Compiler {
 
     /// Compile all pending functions.
     pub fn compile_all(&mut self) -> Result<(), (CompileError, String, String)> {
-        let pending = std::mem::take(&mut self.pending_functions);
+        let errors = self.compile_all_collecting_errors();
+        if let Some((fn_name, error)) = errors.into_iter().next() {
+            Err((error, fn_name, String::new()))
+        } else {
+            Ok(())
+        }
+    }
 
+    /// Compile all pending functions, collecting all errors.
+    /// Returns a vec of (function_name, error) for functions that failed to compile.
+    /// Functions that compile successfully get their signatures set.
+    ///
+    /// This uses two passes to handle dependencies:
+    /// 1. First pass: compile all functions (some may get placeholder type 'a' for dependencies)
+    /// 2. Second pass: re-run HM inference for functions with 'a' in their signatures
+    pub fn compile_all_collecting_errors(&mut self) -> Vec<(String, CompileError)> {
+        let pending = std::mem::take(&mut self.pending_functions);
+        let mut errors: Vec<(String, CompileError)> = Vec::new();
+
+        // First pass: compile all functions
         for (fn_def, module_path, imports, line_starts, source, source_name) in pending {
             let saved_path = self.module_path.clone();
             let saved_imports = self.imports.clone();
@@ -351,17 +369,24 @@ impl Compiler {
             let saved_source = self.current_source.clone();
             let saved_source_name = self.current_source_name.clone();
 
+            // Build qualified function name
+            let fn_name = if module_path.is_empty() {
+                fn_def.name.node.clone()
+            } else {
+                format!("{}.{}", module_path.join("."), fn_def.name.node)
+            };
+
             self.module_path = module_path;
-            // self.imports = imports;
-            // Merge imports instead of replacing, to be safe. 
-            // Also debug print to see what we are restoring.
-            // println!("DEBUG: Restoring {} imports for {}", imports.len(), fn_def.name.node);
+            // Merge imports instead of replacing, to be safe.
             self.imports.extend(imports);
             self.line_starts = line_starts;
             self.current_source = Some(source.clone());
             self.current_source_name = Some(source_name.clone());
 
-            self.compile_fn_def(&fn_def).map_err(|e| (e, source_name, source.to_string()))?;
+            // Continue compiling other functions even if one fails
+            if let Err(e) = self.compile_fn_def(&fn_def) {
+                errors.push((fn_name, e));
+            }
 
             self.module_path = saved_path;
             self.imports = saved_imports;
@@ -369,7 +394,42 @@ impl Compiler {
             self.current_source = saved_source;
             self.current_source_name = saved_source_name;
         }
-        Ok(())
+
+        // Second pass: re-run HM inference for functions with type variables in their signatures
+        // This handles cases like bar23() = bar() + 1 where bar was compiled after bar23's first inference
+        let fn_names: Vec<String> = self.functions.keys().cloned().collect();
+        for fn_name in fn_names {
+            if let Some(fn_val) = self.functions.get(&fn_name) {
+                if let Some(sig) = &fn_val.signature {
+                    // If signature contains ONLY type variables (like 'a' or 'a -> b'), re-infer
+                    // A signature with only type variables won't contain concrete type names
+                    let has_concrete_type = sig.contains("Int") || sig.contains("Float") ||
+                        sig.contains("String") || sig.contains("Bool") || sig.contains("Char") ||
+                        sig.contains("List") || sig.contains("Map") || sig.contains("Set") ||
+                        sig.contains("Option") || sig.contains("Result") || sig.contains("Unit") ||
+                        sig.contains("Bytes") || sig.contains("BigInt") || sig.contains("Decimal");
+                    // Has single-letter type variables like 'a', 'b', etc.
+                    let has_type_var = sig.chars().any(|c| c.is_ascii_lowercase() && c != '-' && c != '>');
+
+                    if has_type_var && !has_concrete_type {
+                        // Try HM inference again now that all dependencies are compiled
+                        if let Some(fn_ast) = self.fn_asts.get(&fn_name).cloned() {
+                            if let Some(inferred_sig) = self.try_hm_inference(&fn_ast) {
+                                // Update the function's signature - need to clone and replace
+                                // since Arc::get_mut won't work if there are other references
+                                if let Some(fn_val) = self.functions.get(&fn_name) {
+                                    let mut new_fn_val = (**fn_val).clone();
+                                    new_fn_val.signature = Some(inferred_sig);
+                                    self.functions.insert(fn_name.clone(), Arc::new(new_fn_val));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        errors
     }
 
     /// Compile a module and add it to the current compilation context.
@@ -6219,18 +6279,55 @@ impl Compiler {
                 .iter()
                 .map(|ty| self.type_name_to_type(ty))
                 .collect();
-            let ret_ty = fn_val.return_type.as_ref()
-                .map(|ty| self.type_name_to_type(ty))
-                .unwrap_or_else(|| env.fresh_var());
 
-            env.functions.insert(
-                fn_name.clone(),
-                nostos_types::FunctionType {
-                    type_params: vec![],
-                    params: param_types,
-                    ret: Box::new(ret_ty),
-                },
-            );
+            // Use declared return type if available, otherwise try to parse from inferred signature
+            let ret_ty = if let Some(ty) = fn_val.return_type.as_ref() {
+                self.type_name_to_type(ty)
+            } else if let Some(sig) = fn_val.signature.as_ref() {
+                // Parse return type from signature string (e.g., "Int -> Int" -> "Int", or just "Int")
+                // Handle constraint syntax: "Show a => a -> String" -> "String"
+                let sig_without_constraints = if let Some(idx) = sig.find("=>") {
+                    sig[idx + 2..].trim()
+                } else {
+                    sig.as_str()
+                };
+                // Return type is after the last "->"
+                let ret_str = sig_without_constraints
+                    .rsplit("->")
+                    .next()
+                    .map(|s| s.trim())
+                    .unwrap_or(sig_without_constraints);
+                self.type_name_to_type(ret_str)
+            } else {
+                env.fresh_var()
+            };
+
+            let func_type = nostos_types::FunctionType {
+                type_params: vec![],
+                params: param_types,
+                ret: Box::new(ret_ty.clone()),
+            };
+
+            // Insert with full name (e.g., "bar/")
+            env.functions.insert(fn_name.clone(), func_type.clone());
+
+            // Also insert with base name (e.g., "main.bar") for simple lookups
+            // Function names have format "module.name/" or "name/"
+            if let Some(slash_pos) = fn_name.find('/') {
+                let base_name = &fn_name[..slash_pos];
+                // Only insert if base name not already registered (don't overwrite overloads)
+                if !env.functions.contains_key(base_name) {
+                    env.functions.insert(base_name.to_string(), func_type.clone());
+                }
+
+                // Also insert without module prefix for local lookups (e.g., "main.bar" -> "bar")
+                if let Some(dot_pos) = base_name.rfind('.') {
+                    let short_name = &base_name[dot_pos + 1..];
+                    if !env.functions.contains_key(short_name) {
+                        env.functions.insert(short_name.to_string(), func_type);
+                    }
+                }
+            }
         }
 
         // Create inference context
