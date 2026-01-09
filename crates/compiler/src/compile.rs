@@ -1528,6 +1528,83 @@ impl Compiler {
         }
     }
 
+    /// Check if an expression is known to be an Int64List at compile time.
+    fn is_int64_list_expr(&self, expr: &Expr) -> bool {
+        match expr {
+            // Empty list can be Int64List
+            Expr::List(items, None, _) if items.is_empty() => true,
+            // List literal with all Int64 items
+            Expr::List(items, None, _) => {
+                !items.is_empty() && items.iter().all(|item| self.is_int64_expr(item))
+            }
+            // Cons expression with Int64 head and Int64List tail
+            Expr::List(items, Some(tail), _) => {
+                items.iter().all(|item| self.is_int64_expr(item)) && self.is_int64_list_expr(tail)
+            }
+            // Variable - check type
+            Expr::Var(ident) => {
+                if let Some(ty) = self.local_types.get(&ident.node) {
+                    return ty == "Int64List" || ty == "[Int]" || ty == "[Int64]";
+                }
+                if let Some(ty) = self.param_types.get(&ident.node) {
+                    return ty == "Int64List" || ty == "[Int]" || ty == "[Int64]";
+                }
+                false
+            }
+            // Known functions that return Int64List
+            Expr::Call(func, _, _, _) => {
+                if let Expr::Var(name) = func.as_ref() {
+                    matches!(name.node.as_str(), "intListRange" | "toIntList")
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if an expression is known to be Int64 at compile time (for list specialization).
+    fn is_int64_expr(&self, expr: &Expr) -> bool {
+        match expr {
+            // Int literals are Int64 by default
+            Expr::Int(_, _) => true,
+            // Other int types are NOT Int64
+            Expr::Int8(_, _) | Expr::Int16(_, _) | Expr::Int32(_, _)
+            | Expr::UInt8(_, _) | Expr::UInt16(_, _) | Expr::UInt32(_, _) | Expr::UInt64(_, _)
+            | Expr::BigInt(_, _) => false,
+            Expr::Float(_, _) | Expr::Float32(_, _) | Expr::Decimal(_, _) => false,
+            // Check if variable is known to be Int64
+            Expr::Var(ident) => {
+                if let Some(ty) = self.local_types.get(&ident.node) {
+                    return ty == "Int" || ty == "Int64";
+                }
+                if let Some(ty) = self.param_types.get(&ident.node) {
+                    return ty == "Int" || ty == "Int64";
+                }
+                false
+            }
+            // Arithmetic on Int64s stays Int64
+            Expr::BinOp(left, op, right, _) => {
+                match op {
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                        self.is_int64_expr(left) && self.is_int64_expr(right)
+                    }
+                    _ => false,
+                }
+            }
+            // Function call - check known return types
+            Expr::Call(func, _, _, _) => {
+                if let Expr::Var(name) = func.as_ref() {
+                    // Some builtins return Int64
+                    matches!(name.node.as_str(), "length" | "len" | "sum" | "count")
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// Check if an expression is known to be an integer at compile time.
     fn is_int_expr(&self, expr: &Expr) -> bool {
         match expr {
@@ -3437,9 +3514,14 @@ impl Compiler {
 
             // List literal
             Expr::List(items, tail, _) => {
+                // Check if all items are Int64 for specialization (only for non-cons literals)
+                let all_int64 = !items.is_empty() && items.iter().all(|item| self.is_int64_expr(item));
+
                 match tail {
                     Some(tail_expr) => {
                         // List cons syntax: [e1, e2, ... | tail]
+                        // NOTE: We don't use ConsInt64 here because Int64List.cons is O(n)
+                        // and would cause performance regression for recursive list building.
                         // Compile items in order first
                         let mut item_regs = Vec::new();
                         for item in items {
@@ -3457,14 +3539,19 @@ impl Compiler {
                         Ok(result_reg)
                     }
                     None => {
-                        // Simple list: [e1, e2, ...]
+                        // Simple list literal: [e1, e2, ...]
+                        // Use MakeInt64List for better sum/length performance
                         let mut regs = Vec::new();
                         for item in items {
                             let reg = self.compile_expr_tail(item, false)?;
                             regs.push(reg);
                         }
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::MakeList(dst, regs.into()), line);
+                        if all_int64 {
+                            self.chunk.emit(Instruction::MakeInt64List(dst, regs.into()), line);
+                        } else {
+                            self.chunk.emit(Instruction::MakeList(dst, regs.into()), line);
+                        }
                         Ok(dst)
                     }
                 }

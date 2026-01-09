@@ -2520,6 +2520,7 @@ impl AsyncProcess {
                 let list_val = reg_ref!(list_reg);
                 let result = match list_val {
                     GcValue::List(list) => list.is_empty(),
+                    GcValue::Int64List(list) => list.is_empty(),
                     _ => false,
                 };
                 set_reg!(dst, GcValue::Bool(result));
@@ -2759,35 +2760,80 @@ impl AsyncProcess {
                 set_reg!(dst, GcValue::List(list));
             }
 
+            MakeInt64List(dst, ref elems) => {
+                let mut values = Vec::with_capacity(elems.len());
+                for r in elems.iter() {
+                    match reg!(*r) {
+                        GcValue::Int64(n) => values.push(n),
+                        other => return Err(RuntimeError::Panic(
+                            format!("MakeInt64List: expected Int64, got {:?}", other.type_name(&self.heap))
+                        )),
+                    }
+                }
+                set_reg!(dst, GcValue::Int64List(GcInt64List::from_vec(values)));
+            }
+
             Cons(dst, head, tail) => {
                 let head_val = reg!(head);
                 // Use reg_ref to avoid cloning the tail list
                 let tail_val = reg_ref!(tail);
-                if let GcValue::List(tail_list) = tail_val {
-                    // O(log n) cons using persistent data structure
-                    let new_list = tail_list.cons(head_val);
-                    set_reg!(dst, GcValue::List(new_list));
-                } else {
-                    return Err(RuntimeError::Panic("Cons: tail must be a list".into()));
+                match tail_val {
+                    GcValue::List(tail_list) => {
+                        // O(log n) cons using persistent data structure
+                        let new_list = tail_list.cons(head_val);
+                        set_reg!(dst, GcValue::List(new_list));
+                    }
+                    GcValue::Int64List(tail_list) => {
+                        // Specialized path: if head is Int64, keep it as Int64List
+                        // Note: cons on Int64List is O(n) so this is only good for
+                        // small lists or when explicitly requested
+                        if let GcValue::Int64(n) = head_val {
+                            let new_list = tail_list.cons(n);
+                            set_reg!(dst, GcValue::Int64List(new_list));
+                        } else {
+                            // Head is not Int64, convert to regular list
+                            let items: Vec<GcValue> = std::iter::once(head_val)
+                                .chain(tail_list.iter().map(GcValue::Int64))
+                                .collect();
+                            let list = self.heap.make_list(items);
+                            set_reg!(dst, GcValue::List(list));
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::Panic("Cons: tail must be a list".into()));
+                    }
                 }
             }
 
             Decons(head_dst, tail_dst, list_reg) => {
                 // Use reg_ref to avoid cloning the entire list
                 let list_val = reg_ref!(list_reg);
-                if let GcValue::List(list) = list_val {
-                    if !list.is_empty() {
-                        // Clone only the head element, not the whole list
-                        let head = list.head().cloned().unwrap_or(GcValue::Unit);
-                        // tail() is O(1) - just Arc clone + offset increment
-                        let tail = list.tail();
-                        set_reg!(head_dst, head);
-                        set_reg!(tail_dst, GcValue::List(tail));
-                    } else {
-                        return Err(RuntimeError::Panic("Decons: empty list".into()));
+                match list_val {
+                    GcValue::List(list) => {
+                        if !list.is_empty() {
+                            // Clone only the head element, not the whole list
+                            let head = list.head().cloned().unwrap_or(GcValue::Unit);
+                            // tail() is O(1) - just Arc clone + offset increment
+                            let tail = list.tail();
+                            set_reg!(head_dst, head);
+                            set_reg!(tail_dst, GcValue::List(tail));
+                        } else {
+                            return Err(RuntimeError::Panic("Decons: empty list".into()));
+                        }
                     }
-                } else {
-                    return Err(RuntimeError::Panic("Decons: expected list".into()));
+                    GcValue::Int64List(list) => {
+                        if !list.is_empty() {
+                            let head = list.head().unwrap();
+                            let tail = list.tail();
+                            set_reg!(head_dst, GcValue::Int64(head));
+                            set_reg!(tail_dst, GcValue::Int64List(tail));
+                        } else {
+                            return Err(RuntimeError::Panic("Decons: empty Int64List".into()));
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::Panic("Decons: expected list".into()));
+                    }
                 }
             }
 
@@ -2836,11 +2882,18 @@ impl AsyncProcess {
                     _ => return Err(RuntimeError::Panic("ConsInt64: head must be Int64".into())),
                 };
                 let tail = reg_ref!(tail_reg);
-                if let GcValue::Int64List(list) = tail {
-                    let new_list = list.cons(head);
-                    set_reg!(dst, GcValue::Int64List(new_list));
-                } else {
-                    return Err(RuntimeError::Panic("ConsInt64: tail must be Int64List".into()));
+                match tail {
+                    GcValue::Int64List(list) => {
+                        let new_list = list.cons(head);
+                        set_reg!(dst, GcValue::Int64List(new_list));
+                    }
+                    GcValue::List(list) if list.is_empty() => {
+                        // Empty regular list - create new Int64List
+                        set_reg!(dst, GcValue::Int64List(GcInt64List::from_vec(vec![head])));
+                    }
+                    _ => {
+                        return Err(RuntimeError::Panic("ConsInt64: tail must be Int64List".into()));
+                    }
                 }
             }
 

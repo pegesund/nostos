@@ -652,6 +652,8 @@ pub enum Instruction {
     SetContains(Reg, Reg, Reg),
     /// List cons: dst = [head | tail]
     Cons(Reg, Reg, Reg),
+    /// Create Int64List from i64 registers: dst = Int64List[regs...]
+    MakeInt64List(Reg, RegList),
     /// List concat: dst = a ++ b
     ListConcat(Reg, Reg, Reg),
     /// Index access: dst = collection[index]
