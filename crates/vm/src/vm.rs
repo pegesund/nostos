@@ -30,6 +30,9 @@ pub struct CallFrame {
     pub return_reg: Option<Reg>,
 }
 
+/// How often to check for GC (every N instructions)
+const GC_CHECK_INTERVAL: u32 = 100;
+
 /// The virtual machine state.
 pub struct VM {
     /// Garbage-collected heap for runtime values
@@ -50,6 +53,8 @@ pub struct VM {
     pub current_exception: Option<GcValue>,
     /// Output buffer (for testing/REPL)
     pub output: Vec<String>,
+    /// Instruction counter for GC scheduling
+    instruction_count: u32,
 }
 
 /// Exception handler info.
@@ -80,6 +85,7 @@ impl VM {
             handlers: Vec::new(),
             current_exception: None,
             output: Vec::new(),
+            instruction_count: 0,
         };
         vm.register_builtins();
         vm
@@ -642,6 +648,12 @@ impl VM {
         loop {
             if self.frames.is_empty() {
                 return Ok(Value::Unit);
+            }
+
+            // Check for GC every N instructions (avoids per-instruction overhead)
+            self.instruction_count = self.instruction_count.wrapping_add(1);
+            if self.instruction_count % GC_CHECK_INTERVAL == 0 {
+                self.maybe_gc();
             }
 
             if self.frames.len() > MAX_STACK_DEPTH {
@@ -1457,29 +1469,17 @@ impl VM {
 
             // Control flow
             Instruction::Jump(offset) => {
-                // GC safepoint: backward jump (loop)
-                if offset < 0 {
-                    self.maybe_gc();
-                }
                 let frame = frame!();
                 frame.ip = (frame.ip as isize + offset as isize) as usize;
             }
             Instruction::JumpIfTrue(cond, offset) => {
                 if get_bool!(cond) {
-                    // GC safepoint: backward jump (loop)
-                    if offset < 0 {
-                        self.maybe_gc();
-                    }
                     let frame = frame!();
                     frame.ip = (frame.ip as isize + offset as isize) as usize;
                 }
             }
             Instruction::JumpIfFalse(cond, offset) => {
                 if !get_bool!(cond) {
-                    // GC safepoint: backward jump (loop)
-                    if offset < 0 {
-                        self.maybe_gc();
-                    }
                     let frame = frame!();
                     frame.ip = (frame.ip as isize + offset as isize) as usize;
                 }
@@ -1559,9 +1559,6 @@ impl VM {
 
             // Function calls
             Instruction::Call(dst, func_reg, arg_regs) => {
-                // GC safepoint: function call boundary
-                self.maybe_gc();
-
                 let args: Vec<GcValue> = arg_regs.iter()
                     .map(|r| reg!(*r).clone())
                     .collect();
@@ -1620,9 +1617,6 @@ impl VM {
                 }
             }
             Instruction::TailCall(func_reg, arg_regs) => {
-                // GC safepoint: tail call boundary
-                self.maybe_gc();
-
                 let args: Vec<GcValue> = arg_regs.iter()
                     .map(|r| reg!(*r).clone())
                     .collect();
@@ -1679,9 +1673,6 @@ impl VM {
                 }
             }
             Instruction::CallByName(dst, name_idx, arg_regs) => {
-                // GC safepoint: function call boundary
-                self.maybe_gc();
-
                 let name = match &constants[name_idx as usize] {
                     Value::String(s) => s.to_string(),
                     _ => return Err(RuntimeError::TypeError {
@@ -1710,8 +1701,6 @@ impl VM {
                 });
             }
             Instruction::TailCallByName(name_idx, arg_regs) => {
-                // GC safepoint: function call boundary
-                self.maybe_gc();
                 let name = match &constants[name_idx as usize] {
                     Value::String(s) => s.to_string(),
                     _ => return Err(RuntimeError::TypeError {
@@ -1739,8 +1728,6 @@ impl VM {
                 });
             }
             Instruction::CallNative(dst, name_idx, arg_regs) => {
-                // GC safepoint: native function call
-                self.maybe_gc();
                 let name = match &constants[name_idx as usize] {
                     Value::String(s) => s.to_string(),
                     _ => return Err(RuntimeError::TypeError {
