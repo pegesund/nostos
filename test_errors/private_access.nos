@@ -1,0 +1,6 @@
+# Test file for private access error
+module Secret
+    private_fn() = 42
+end
+
+main() = Secret.private_fn()

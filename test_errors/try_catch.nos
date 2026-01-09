@@ -1,0 +1,36 @@
+# Test try/catch basic functionality
+
+# Simple throw and catch
+test_basic() =
+    try throw("error!")
+    catch
+        e -> e
+    end
+
+# Test no exception - should return the value
+test_no_exception() =
+    try 42
+    catch
+        _ -> 0
+    end
+
+# Test catch with pattern matching
+test_pattern_catch() =
+    try throw("special")
+    catch
+        "special" -> 1
+        other -> 2
+    end
+
+main() = {
+    result1 = test_basic()
+    println("test_basic: " ++ show(result1))
+
+    result2 = test_no_exception()
+    println("test_no_exception: " ++ show(result2))
+
+    result3 = test_pattern_catch()
+    println("test_pattern_catch: " ++ show(result3))
+
+    "done"
+}

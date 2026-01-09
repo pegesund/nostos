@@ -1,0 +1,4 @@
+# Test file for parse error
+main() = {
+    x = 42 +
+}

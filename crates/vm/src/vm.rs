@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::gc::{GcNativeFn, GcValue, Heap};
+use crate::gc::{GcConfig, GcNativeFn, GcValue, Heap};
 use crate::value::*;
 
 /// Maximum call stack depth (before TCO kicks in).
@@ -64,8 +64,14 @@ pub type VMResult = Result<Value, RuntimeError>;
 
 impl VM {
     pub fn new() -> Self {
+        Self::with_gc_config(GcConfig::default())
+    }
+
+    /// Create a new VM with custom GC configuration.
+    /// Useful for testing GC behavior with low thresholds.
+    pub fn with_gc_config(gc_config: GcConfig) -> Self {
         let mut vm = Self {
-            heap: Heap::new(),
+            heap: Heap::with_config(gc_config),
             frames: Vec::new(),
             globals: HashMap::new(),
             functions: HashMap::new(),
@@ -504,6 +510,42 @@ impl VM {
 
     pub fn get_global(&self, name: &str) -> Option<&Value> {
         self.globals.get(name)
+    }
+
+    /// Update the heap's root set from the current VM state.
+    /// This must be called before GC to ensure all live values are marked.
+    fn update_roots(&mut self) {
+        self.heap.clear_roots();
+
+        // Root all registers and captures in all frames
+        for frame in &self.frames {
+            for reg in &frame.registers {
+                for ptr in reg.gc_pointers() {
+                    self.heap.add_root(ptr);
+                }
+            }
+            for cap in &frame.captures {
+                for ptr in cap.gc_pointers() {
+                    self.heap.add_root(ptr);
+                }
+            }
+        }
+
+        // Root the current exception if any
+        if let Some(ref exc) = self.current_exception {
+            for ptr in exc.gc_pointers() {
+                self.heap.add_root(ptr);
+            }
+        }
+    }
+
+    /// Check if GC should run and perform collection if needed.
+    /// Call this at safepoints (function calls, backward jumps).
+    fn maybe_gc(&mut self) {
+        if self.heap.should_collect() {
+            self.update_roots();
+            self.heap.collect();
+        }
     }
 
     pub fn call(&mut self, name: &str, args: Vec<Value>) -> VMResult {
@@ -1376,17 +1418,29 @@ impl VM {
 
             // Control flow
             Instruction::Jump(offset) => {
+                // GC safepoint: backward jump (loop)
+                if offset < 0 {
+                    self.maybe_gc();
+                }
                 let frame = frame!();
                 frame.ip = (frame.ip as isize + offset as isize) as usize;
             }
             Instruction::JumpIfTrue(cond, offset) => {
                 if get_bool!(cond) {
+                    // GC safepoint: backward jump (loop)
+                    if offset < 0 {
+                        self.maybe_gc();
+                    }
                     let frame = frame!();
                     frame.ip = (frame.ip as isize + offset as isize) as usize;
                 }
             }
             Instruction::JumpIfFalse(cond, offset) => {
                 if !get_bool!(cond) {
+                    // GC safepoint: backward jump (loop)
+                    if offset < 0 {
+                        self.maybe_gc();
+                    }
                     let frame = frame!();
                     frame.ip = (frame.ip as isize + offset as isize) as usize;
                 }
@@ -1466,6 +1520,9 @@ impl VM {
 
             // Function calls
             Instruction::Call(dst, func_reg, arg_regs) => {
+                // GC safepoint: function call boundary
+                self.maybe_gc();
+
                 let args: Vec<GcValue> = arg_regs.iter()
                     .map(|r| reg!(*r).clone())
                     .collect();
@@ -1524,6 +1581,9 @@ impl VM {
                 }
             }
             Instruction::TailCall(func_reg, arg_regs) => {
+                // GC safepoint: tail call boundary
+                self.maybe_gc();
+
                 let args: Vec<GcValue> = arg_regs.iter()
                     .map(|r| reg!(*r).clone())
                     .collect();
@@ -1580,6 +1640,9 @@ impl VM {
                 }
             }
             Instruction::CallByName(dst, name_idx, arg_regs) => {
+                // GC safepoint: function call boundary
+                self.maybe_gc();
+
                 let name = match &constants[name_idx as usize] {
                     Value::String(s) => s.to_string(),
                     _ => return Err(RuntimeError::TypeError {
@@ -1608,6 +1671,8 @@ impl VM {
                 });
             }
             Instruction::TailCallByName(name_idx, arg_regs) => {
+                // GC safepoint: function call boundary
+                self.maybe_gc();
                 let name = match &constants[name_idx as usize] {
                     Value::String(s) => s.to_string(),
                     _ => return Err(RuntimeError::TypeError {
@@ -1635,6 +1700,8 @@ impl VM {
                 });
             }
             Instruction::CallNative(dst, name_idx, arg_regs) => {
+                // GC safepoint: native function call
+                self.maybe_gc();
                 let name = match &constants[name_idx as usize] {
                     Value::String(s) => s.to_string(),
                     _ => return Err(RuntimeError::TypeError {
@@ -2441,5 +2508,406 @@ mod tests {
         let result = vm.call("test_list_eq", vec![]).unwrap();
         // Should be true - lists with same content are equal
         assert_eq!(result, Value::Bool(true));
+    }
+
+    // ============================================================
+    // GC Triggering Tests
+    // ============================================================
+
+    #[test]
+    fn test_gc_triggers_at_function_calls() {
+        // Create VM with very low GC threshold to force collections
+        let config = GcConfig {
+            gc_threshold: 100, // Only 100 bytes before GC triggers
+            ..Default::default()
+        };
+        let mut vm = VM::with_gc_config(config);
+
+        // Create a recursive function that allocates a LIST on each call (heap allocation!)
+        // alloc_recurse(n) = if n == 0 then n else { let _ = [n, n]; alloc_recurse(n - 1) }
+        // MakeList actually allocates on the GC heap, unlike LoadConst which uses constant pool
+        let mut chunk = Chunk::new();
+        chunk.register_count = 5;
+
+        let zero_idx = chunk.add_constant(Value::Int(0));
+        let one_idx = chunk.add_constant(Value::Int(1));
+        let func_name_idx = chunk.add_constant(Value::String(Rc::new("alloc_recurse".to_string())));
+
+        // alloc_recurse(n):
+        chunk.emit(Instruction::LoadConst(1, zero_idx), 1);       // 0: r1 = 0
+        chunk.emit(Instruction::EqInt(2, 0, 1), 1);               // 1: r2 = n == 0
+        chunk.emit(Instruction::JumpIfFalse(2, 1), 1);            // 2: if !r2, jump to 4
+        chunk.emit(Instruction::Return(0), 1);                     // 3: return n (which is 0)
+        // Jump lands here (index 4) - allocate then recurse:
+        chunk.emit(Instruction::MakeList(3, vec![0, 0]), 1);      // 4: r3 = [n, n] - HEAP ALLOCATION!
+        chunk.emit(Instruction::LoadConst(1, one_idx), 1);        // 5: r1 = 1
+        chunk.emit(Instruction::SubInt(4, 0, 1), 1);              // 6: r4 = n - 1
+        chunk.emit(Instruction::TailCallByName(func_name_idx, vec![4]), 1); // 7: tail alloc_recurse(r4)
+
+        let func = FunctionValue {
+            name: "alloc_recurse".to_string(),
+            arity: 1,
+            param_names: vec!["n".to_string()],
+            code: Rc::new(chunk),
+            module: None,
+            source_span: None,
+            jit_code: None,
+        };
+
+        vm.register_function(func);
+
+        // Run with n=100 - should trigger GC cycles due to list allocations
+        let result = vm.call("alloc_recurse", vec![Value::Int(100)]).unwrap();
+        assert_eq!(result, Value::Int(0));
+
+        // Verify GC actually ran
+        let collections = vm.heap.stats().collections;
+        assert!(
+            collections > 0,
+            "Expected GC to trigger at function calls, but got 0 collections. \
+             Allocated {} bytes total, {} objects.",
+            vm.heap.stats().total_bytes_allocated,
+            vm.heap.stats().total_allocated
+        );
+    }
+
+    #[test]
+    fn test_gc_triggers_at_backward_jumps() {
+        // Create VM with very low GC threshold
+        let config = GcConfig {
+            gc_threshold: 100,
+            ..Default::default()
+        };
+        let mut vm = VM::with_gc_config(config);
+
+        // Create a loop that allocates lists (actual heap allocation):
+        // loop_alloc(n, acc) =
+        //   if n == 0 then acc
+        //   else { allocate [n]; loop_alloc(n-1, acc+1) }
+        // But implemented with backward jump instead of tail call
+        let mut chunk = Chunk::new();
+        chunk.register_count = 6;
+
+        let zero_idx = chunk.add_constant(Value::Int(0));
+        let one_idx = chunk.add_constant(Value::Int(1));
+
+        // loop_alloc(n, acc):
+        // 0: Check n == 0
+        chunk.emit(Instruction::LoadConst(2, zero_idx), 1);       // 0: r2 = 0
+        chunk.emit(Instruction::EqInt(3, 0, 2), 1);               // 1: r3 = n == 0
+        chunk.emit(Instruction::JumpIfFalse(3, 1), 1);            // 2: if !r3, jump to 4
+        chunk.emit(Instruction::Return(1), 1);                     // 3: return acc
+        // Loop body (index 4):
+        chunk.emit(Instruction::MakeList(4, vec![0]), 1);         // 4: r4 = [n] - HEAP ALLOCATION!
+        chunk.emit(Instruction::LoadConst(2, one_idx), 1);        // 5: r2 = 1
+        chunk.emit(Instruction::SubInt(0, 0, 2), 1);              // 6: n = n - 1
+        chunk.emit(Instruction::AddInt(1, 1, 2), 1);              // 7: acc = acc + 1
+        chunk.emit(Instruction::Jump(-9), 1);                      // 8: jump back to 0 (backward!)
+
+        let func = FunctionValue {
+            name: "loop_alloc".to_string(),
+            arity: 2,
+            param_names: vec!["n".to_string(), "acc".to_string()],
+            code: Rc::new(chunk),
+            module: None,
+            source_span: None,
+            jit_code: None,
+        };
+
+        vm.register_function(func);
+
+        // Run loop 100 times
+        let result = vm.call("loop_alloc", vec![Value::Int(100), Value::Int(0)]).unwrap();
+        assert_eq!(result, Value::Int(100));
+
+        // Verify GC ran during backward jumps
+        let collections = vm.heap.stats().collections;
+        assert!(
+            collections > 0,
+            "Expected GC to trigger at backward jumps, but got 0 collections"
+        );
+    }
+
+    #[test]
+    fn test_gc_collects_unreachable_during_execution() {
+        let config = GcConfig {
+            gc_threshold: 200,
+            ..Default::default()
+        };
+        let mut vm = VM::with_gc_config(config);
+
+        // Create a function that allocates strings, overwrites them, and continues
+        // This tests that unreachable objects are collected
+        // The function: allocate 10 strings, keep only the last one
+        let mut chunk = Chunk::new();
+        chunk.register_count = 4;
+
+        let zero_idx = chunk.add_constant(Value::Int(0));
+        let one_idx = chunk.add_constant(Value::Int(1));
+        let str_idx = chunk.add_constant(Value::String(Rc::new("garbage_string_that_should_be_collected".to_string())));
+
+        // garbage_loop(n):
+        chunk.emit(Instruction::LoadConst(1, zero_idx), 1);       // 0: r1 = 0
+        chunk.emit(Instruction::EqInt(2, 0, 1), 1);               // 1: r2 = n == 0
+        chunk.emit(Instruction::JumpIfFalse(2, 1), 1);            // 2: if !r2, jump to 4
+        chunk.emit(Instruction::Return(3), 1);                     // 3: return r3 (last allocated string)
+        // Loop body (index 4):
+        chunk.emit(Instruction::LoadConst(3, str_idx), 1);        // 4: r3 = "garbage..." (overwrites previous!)
+        chunk.emit(Instruction::LoadConst(1, one_idx), 1);        // 5: r1 = 1
+        chunk.emit(Instruction::SubInt(0, 0, 1), 1);              // 6: n = n - 1
+        chunk.emit(Instruction::Jump(-8), 1);                      // 7: jump back to 0
+
+        let func = FunctionValue {
+            name: "garbage_loop".to_string(),
+            arity: 1,
+            param_names: vec!["n".to_string()],
+            code: Rc::new(chunk),
+            module: None,
+            source_span: None,
+            jit_code: None,
+        };
+
+        vm.register_function(func);
+
+        let result = vm.call("garbage_loop", vec![Value::Int(50)]).unwrap();
+        assert!(matches!(result, Value::String(_)));
+
+        // Verify objects were collected (freed > 0)
+        let stats = vm.heap.stats();
+        assert!(
+            stats.total_freed > 0,
+            "Expected some objects to be freed, but total_freed = 0. \
+             Collections: {}, Allocated: {}",
+            stats.collections,
+            stats.total_allocated
+        );
+
+        // After execution, should have minimal live objects
+        // (mainly just the return value and any internal strings)
+        let live = vm.heap.live_objects();
+        assert!(
+            live < 10,
+            "Expected few live objects after GC, but found {}",
+            live
+        );
+    }
+
+    #[test]
+    fn test_gc_preserves_live_values_in_registers() {
+        let config = GcConfig {
+            gc_threshold: 100,
+            ..Default::default()
+        };
+        let mut vm = VM::with_gc_config(config);
+
+        // Create a function that:
+        // 1. Allocates a string we want to keep
+        // 2. Allocates garbage strings in a loop (triggering GC)
+        // 3. Returns the original string (verifying it survived)
+        let mut chunk = Chunk::new();
+        chunk.register_count = 6;
+
+        let zero_idx = chunk.add_constant(Value::Int(0));
+        let one_idx = chunk.add_constant(Value::Int(1));
+        let keep_idx = chunk.add_constant(Value::String(Rc::new("KEEP_ME".to_string())));
+        let garbage_idx = chunk.add_constant(Value::String(Rc::new("garbage".to_string())));
+
+        // survive_gc(n):
+        chunk.emit(Instruction::LoadConst(1, keep_idx), 1);       // 0: r1 = "KEEP_ME" (this must survive!)
+        // Now loop and allocate garbage
+        chunk.emit(Instruction::LoadConst(2, zero_idx), 1);       // 1: r2 = 0
+        chunk.emit(Instruction::EqInt(3, 0, 2), 1);               // 2: r3 = n == 0
+        chunk.emit(Instruction::JumpIfFalse(3, 1), 1);            // 3: if !r3, jump to 5
+        chunk.emit(Instruction::Return(1), 1);                     // 4: return r1 ("KEEP_ME")
+        // Loop body (index 5):
+        chunk.emit(Instruction::LoadConst(4, garbage_idx), 1);    // 5: r4 = "garbage" (allocate)
+        chunk.emit(Instruction::LoadConst(5, one_idx), 1);        // 6: r5 = 1
+        chunk.emit(Instruction::SubInt(0, 0, 5), 1);              // 7: n = n - 1
+        chunk.emit(Instruction::Jump(-7), 1);                      // 8: jump back to 1
+
+        let func = FunctionValue {
+            name: "survive_gc".to_string(),
+            arity: 1,
+            param_names: vec!["n".to_string()],
+            code: Rc::new(chunk),
+            module: None,
+            source_span: None,
+            jit_code: None,
+        };
+
+        vm.register_function(func);
+
+        // Run with enough iterations to trigger GC
+        let result = vm.call("survive_gc", vec![Value::Int(100)]).unwrap();
+
+        // The original "KEEP_ME" string must have survived GC
+        match result {
+            Value::String(s) => {
+                assert_eq!(
+                    s.as_str(),
+                    "KEEP_ME",
+                    "Live value in register was corrupted by GC!"
+                );
+            }
+            _ => panic!("Expected String result"),
+        }
+
+        // Verify GC actually ran
+        assert!(
+            vm.heap.stats().collections > 0,
+            "GC should have triggered"
+        );
+    }
+
+    #[test]
+    fn test_gc_preserves_nested_structures() {
+        let config = GcConfig {
+            gc_threshold: 200,
+            ..Default::default()
+        };
+        let mut vm = VM::with_gc_config(config);
+
+        // Create a function that builds a nested list, then triggers GC,
+        // then accesses the nested structure
+        let mut chunk = Chunk::new();
+        chunk.register_count = 10;  // Need more registers to avoid conflicts
+
+        let one_idx = chunk.add_constant(Value::Int(1));
+        let two_idx = chunk.add_constant(Value::Int(2));
+        let three_idx = chunk.add_constant(Value::Int(3));
+        let zero_idx = chunk.add_constant(Value::Int(0));
+        let garbage_idx = chunk.add_constant(Value::String(Rc::new("garbage".to_string())));
+
+        // nested_survive():
+        // Build nested list [[1, 2], [3]] in r0-r5
+        chunk.emit(Instruction::LoadConst(0, one_idx), 1);        // 0: r0 = 1
+        chunk.emit(Instruction::LoadConst(1, two_idx), 1);        // 1: r1 = 2
+        chunk.emit(Instruction::MakeList(2, vec![0, 1]), 1);      // 2: r2 = [1, 2]
+        chunk.emit(Instruction::LoadConst(3, three_idx), 1);      // 3: r3 = 3
+        chunk.emit(Instruction::MakeList(4, vec![3]), 1);         // 4: r4 = [3]
+        chunk.emit(Instruction::MakeList(5, vec![2, 4]), 1);      // 5: r5 = [[1, 2], [3]] <- keep this!
+
+        // Now garbage loop to trigger GC using registers 6-9
+        let count_idx = chunk.add_constant(Value::Int(50));
+        chunk.emit(Instruction::LoadConst(6, count_idx), 1);      // 6: r6 = 50 (counter)
+        chunk.emit(Instruction::LoadConst(7, zero_idx), 1);       // 7: r7 = 0 (constant zero)
+        chunk.emit(Instruction::LoadConst(8, one_idx), 1);        // 8: r8 = 1 (constant one)
+
+        // Loop: (index 9)
+        chunk.emit(Instruction::EqInt(9, 6, 7), 1);               // 9: r9 = r6 == 0
+        chunk.emit(Instruction::JumpIfFalse(9, 1), 1);            // 10: if !r9, jump to 12
+        chunk.emit(Instruction::Return(5), 1);                     // 11: return r5 (nested list)
+        // Loop body (index 12):
+        chunk.emit(Instruction::LoadConst(9, garbage_idx), 1);    // 12: r9 = "garbage" (temporary)
+        chunk.emit(Instruction::SubInt(6, 6, 8), 1);              // 13: r6 = r6 - 1
+        chunk.emit(Instruction::Jump(-6), 1);                      // 14: jump back to 9 (IP=15, 15-6=9)
+
+        let func = FunctionValue {
+            name: "nested_survive".to_string(),
+            arity: 0,
+            param_names: vec![],
+            code: Rc::new(chunk),
+            module: None,
+            source_span: None,
+            jit_code: None,
+        };
+
+        vm.register_function(func);
+
+        let result = vm.call("nested_survive", vec![]).unwrap();
+
+        // Verify the nested list structure survived
+        match result {
+            Value::List(outer) => {
+                assert_eq!(outer.len(), 2, "Outer list should have 2 elements");
+                match &outer[0] {
+                    Value::List(inner) => {
+                        assert_eq!(inner.len(), 2);
+                        assert_eq!(inner[0], Value::Int(1));
+                        assert_eq!(inner[1], Value::Int(2));
+                    }
+                    _ => panic!("Expected inner list at index 0"),
+                }
+                match &outer[1] {
+                    Value::List(inner) => {
+                        assert_eq!(inner.len(), 1);
+                        assert_eq!(inner[0], Value::Int(3));
+                    }
+                    _ => panic!("Expected inner list at index 1"),
+                }
+            }
+            _ => panic!("Expected List result"),
+        }
+
+        assert!(vm.heap.stats().collections > 0, "GC should have triggered");
+    }
+
+    #[test]
+    fn test_gc_with_native_function_calls() {
+        let config = GcConfig {
+            gc_threshold: 100,
+            ..Default::default()
+        };
+        let mut vm = VM::with_gc_config(config);
+
+        // Register a native function that allocates
+        vm.register_native("make_string", 1, |args, heap| {
+            let n = match &args[0] {
+                GcValue::Int(n) => *n,
+                _ => return Err(RuntimeError::TypeError {
+                    expected: "Int".to_string(),
+                    found: "other".to_string(),
+                }),
+            };
+            let s = format!("string_{}", n);
+            Ok(GcValue::String(heap.alloc_string(s)))
+        });
+
+        // Create a function that calls the native function in a loop
+        let mut chunk = Chunk::new();
+        chunk.register_count = 5;
+
+        let zero_idx = chunk.add_constant(Value::Int(0));
+        let one_idx = chunk.add_constant(Value::Int(1));
+        let native_name_idx = chunk.add_constant(Value::String(Rc::new("make_string".to_string())));
+
+        // native_loop(n):
+        chunk.emit(Instruction::LoadConst(1, zero_idx), 1);       // 0: r1 = 0
+        chunk.emit(Instruction::EqInt(2, 0, 1), 1);               // 1: r2 = n == 0
+        chunk.emit(Instruction::JumpIfFalse(2, 1), 1);            // 2: if !r2, jump to 4
+        chunk.emit(Instruction::Return(3), 1);                     // 3: return r3 (last string)
+        // Loop body:
+        chunk.emit(Instruction::CallNative(3, native_name_idx, vec![0]), 1); // 4: r3 = make_string(n)
+        chunk.emit(Instruction::LoadConst(4, one_idx), 1);        // 5: r4 = 1
+        chunk.emit(Instruction::SubInt(0, 0, 4), 1);              // 6: n = n - 1
+        chunk.emit(Instruction::Jump(-8), 1);                      // 7: jump back to 0
+
+        let func = FunctionValue {
+            name: "native_loop".to_string(),
+            arity: 1,
+            param_names: vec!["n".to_string()],
+            code: Rc::new(chunk),
+            module: None,
+            source_span: None,
+            jit_code: None,
+        };
+
+        vm.register_function(func);
+
+        let result = vm.call("native_loop", vec![Value::Int(50)]).unwrap();
+
+        // Should return "string_1" (last iteration where n=1)
+        match result {
+            Value::String(s) => {
+                assert!(s.starts_with("string_"), "Expected string_N format");
+            }
+            _ => panic!("Expected String result"),
+        }
+
+        // GC should have triggered during native calls
+        assert!(
+            vm.heap.stats().collections > 0,
+            "GC should trigger during native function calls"
+        );
     }
 }

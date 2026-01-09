@@ -1,0 +1,34 @@
+# Test error propagation operator: expr?
+
+# Function that throws
+might_fail(should_fail) =
+    if should_fail then throw("failed!")
+    else 42
+
+# Function that uses ? (propagates exception)
+propagates(should_fail) =
+    might_fail(should_fail)? + 1
+
+# Test successful case (no throw)
+test_success() =
+    try propagates(false)
+    catch
+        e -> "caught: " ++ show(e)
+    end
+
+# Test propagation (exception propagates)
+test_propagate() =
+    try propagates(true)
+    catch
+        e -> "propagated: " ++ show(e)
+    end
+
+main() = {
+    result1 = test_success()
+    println("test_success: " ++ show(result1))
+
+    result2 = test_propagate()
+    println("test_propagate: " ++ show(result2))
+
+    "done"
+}

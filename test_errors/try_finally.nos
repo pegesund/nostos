@@ -1,0 +1,35 @@
+# Test finally block
+
+# Test finally runs on success
+test_finally_success() = {
+    result = try 42
+    catch
+        _ -> 0
+    finally
+        println("finally on success")
+    end
+    result
+}
+
+# Test finally runs on exception
+test_finally_exception() = {
+    result = try throw("error")
+    catch
+        e -> "caught: " ++ show(e)
+    finally
+        println("finally on exception")
+    end
+    result
+}
+
+main() = {
+    println("Testing finally on success:")
+    r1 = test_finally_success()
+    println("Result: " ++ show(r1))
+
+    println("\nTesting finally on exception:")
+    r2 = test_finally_exception()
+    println("Result: " ++ show(r2))
+
+    "done"
+}
