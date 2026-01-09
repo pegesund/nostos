@@ -1,0 +1,13 @@
+# expect: 0
+# Finally executes after exception is caught
+
+main() = {
+    # Test that finally runs after an exception is caught
+    result = try {
+        try { throw("error") } catch { e -> "caught" } finally { throw("finally ran") }
+    } catch {
+        msg -> msg
+    }
+    assert_eq("finally ran", result)
+    0
+}

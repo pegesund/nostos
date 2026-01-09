@@ -1,0 +1,13 @@
+# expect: 0
+# Finally result is discarded - try/catch result preserved
+
+main() = {
+    # Test that finally's return value doesn't affect the result
+    result = try { 42 } catch { _ -> -1 } finally { 999 }
+    assert_eq(42, result)
+
+    # Same with catch path
+    result2 = try { throw("err") } catch { _ -> 100 } finally { 888 }
+    assert_eq(100, result2)
+    0
+}

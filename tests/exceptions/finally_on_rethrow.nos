@@ -1,0 +1,18 @@
+# expect: 0
+# Finally executes when exception is rethrown (no pattern matches)
+# This is the critical test - finally must run even when no catch arm matches
+
+main() = {
+    # Inner try: throw "original", catch only matches "wrong", so rethrow happens
+    # Finally should run BEFORE the rethrow
+    # Finally throws "finally ran" which outer catch catches
+    result = try {
+        try { throw("original") } catch { "wrong" -> "not matched" } finally { throw("finally ran") }
+    } catch {
+        msg -> msg
+    }
+    # If finally ran, we catch "finally ran"
+    # If finally didn't run, we'd catch "original"
+    assert_eq("finally ran", result)
+    0
+}
