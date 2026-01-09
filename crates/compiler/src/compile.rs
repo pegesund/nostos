@@ -2656,9 +2656,11 @@ impl Compiler {
         let qualified_trait_name = self.qualify_name(&unqualified_trait_name);
 
         // Check that the trait exists (unless it's a built-in derivable trait)
-        // Try both qualified and unqualified names for traits defined elsewhere
+        // Try: qualified name, unqualified name, imported name, or builtin
+        let imported_trait_name = self.imports.get(&unqualified_trait_name).cloned();
         let trait_exists = self.trait_defs.contains_key(&qualified_trait_name)
             || self.trait_defs.contains_key(&unqualified_trait_name)
+            || imported_trait_name.as_ref().map(|n| self.trait_defs.contains_key(n)).unwrap_or(false)
             || self.is_builtin_derivable_trait(&unqualified_trait_name);
         if !trait_exists {
             return Err(CompileError::UnknownTrait {
@@ -2669,6 +2671,12 @@ impl Compiler {
         // Use the name that exists in trait_defs
         let trait_name = if self.trait_defs.contains_key(&qualified_trait_name) {
             qualified_trait_name
+        } else if let Some(ref imported) = imported_trait_name {
+            if self.trait_defs.contains_key(imported) {
+                imported.clone()
+            } else {
+                unqualified_trait_name
+            }
         } else {
             unqualified_trait_name
         };
@@ -13972,6 +13980,18 @@ impl Compiler {
                         .unwrap_or(&qualified_name)
                         .to_string();
                     self.imports.insert(local_name, qualified_base);
+                }
+
+                // Also import traits from the module
+                let trait_names: Vec<String> = self.trait_defs.keys()
+                    .filter(|name| name.starts_with(&prefix))
+                    .cloned()
+                    .collect();
+                for qualified_trait in trait_names {
+                    let local_name = qualified_trait.strip_prefix(&prefix)
+                        .unwrap_or(&qualified_trait)
+                        .to_string();
+                    self.imports.insert(local_name, qualified_trait);
                 }
             }
             UseImports::Named(items) => {
