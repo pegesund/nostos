@@ -10645,6 +10645,78 @@ impl Compiler {
         self.find_function(name).and_then(|f| f.doc.clone())
     }
 
+    /// Get all functions that can be called as UFCS methods on a given type.
+    /// Returns a list of (local_name, signature, doc) tuples for functions
+    /// whose first parameter matches the given type.
+    pub fn get_ufcs_methods_for_type(&self, type_name: &str) -> Vec<(String, String, Option<String>)> {
+        let mut methods = Vec::new();
+        let mut seen_names = std::collections::HashSet::new();
+
+        // Normalize type name - strip module prefix for matching
+        // e.g., "nalgebra.Vec" should match functions with first param "Vec" or "nalgebra.Vec"
+        let type_base = type_name.rsplit('.').next().unwrap_or(type_name);
+        let type_module = if type_name.contains('.') {
+            type_name.rsplit('.').skip(1).next()
+        } else {
+            None
+        };
+
+        for (fn_name, func) in &self.functions {
+            // Skip if no param types or if it takes no arguments
+            if func.param_types.is_empty() {
+                continue;
+            }
+
+            // Get the first parameter type
+            let first_param = &func.param_types[0];
+
+            // Match if:
+            // 1. Exact match: first_param == type_name (e.g., "nalgebra.Vec" == "nalgebra.Vec")
+            // 2. Base match with same module: first_param == type_base AND function is in same module
+            // 3. Unqualified match: first_param == type_base (for stdlib types)
+            let first_param_base = first_param.rsplit('.').next().unwrap_or(first_param);
+
+            let matches = first_param == type_name
+                || first_param == type_base
+                || (first_param_base == type_base && type_module.map_or(false, |m| fn_name.starts_with(&format!("{}.", m))));
+
+            if matches {
+                // Extract local function name (remove module prefix and signature suffix)
+                // e.g., "nalgebra.vecLen/Vec" -> "vecLen"
+                let local_name = fn_name
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or(fn_name)
+                    .split('/')
+                    .next()
+                    .unwrap_or(fn_name)
+                    .to_string();
+
+                // Skip if we've already seen this name (avoid duplicates from overloads)
+                if seen_names.contains(&local_name) {
+                    continue;
+                }
+                seen_names.insert(local_name.clone());
+
+                // Build a UFCS-style signature (without the first param since it's the receiver)
+                let ufcs_sig = if func.param_types.len() > 1 {
+                    let rest_params: Vec<&str> = func.param_types[1..].iter().map(|s| s.as_str()).collect();
+                    let ret = func.return_type.as_deref().unwrap_or("?");
+                    format!("({}) -> {}", rest_params.join(", "), ret)
+                } else {
+                    let ret = func.return_type.as_deref().unwrap_or("?");
+                    format!("() -> {}", ret)
+                };
+
+                methods.push((local_name, ufcs_sig, func.doc.clone()));
+            }
+        }
+
+        // Sort by name for consistent ordering
+        methods.sort_by(|a, b| a.0.cmp(&b.0));
+        methods
+    }
+
     /// Get a function's source code.
     pub fn get_function_source(&self, name: &str) -> Option<String> {
         self.find_function(name)

@@ -81,6 +81,10 @@ impl<'a> CompletionSource for EngineCompletionSource<'a> {
     fn get_variable_type(&self, var_name: &str) -> Option<String> {
         self.engine.get_variable_type(var_name)
     }
+
+    fn get_ufcs_methods_for_type(&self, type_name: &str) -> Vec<(String, String, Option<String>)> {
+        self.engine.get_ufcs_methods_for_type(type_name)
+    }
 }
 
 /// A single REPL entry (input + output)

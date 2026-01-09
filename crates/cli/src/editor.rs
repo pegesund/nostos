@@ -322,6 +322,10 @@ impl<'a> CompletionSource for EditorCompletionSource<'a> {
         // Then try local variable inference from buffer
         self.infer_local_var_type(var_name)
     }
+
+    fn get_ufcs_methods_for_type(&self, type_name: &str) -> Vec<(String, String, Option<String>)> {
+        self.engine.get_ufcs_methods_for_type(type_name)
+    }
 }
 
 /// Maximum items to show in autocomplete popup
