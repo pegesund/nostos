@@ -684,6 +684,8 @@ pub struct GcRecord {
     pub field_names: Vec<String>,
     pub fields: Vec<GcValue>,
     pub mutable_fields: Vec<bool>,
+    /// Cached discriminant for fast pattern matching (hash of type_name)
+    pub discriminant: u16,
 }
 
 /// A GC-managed variant.
@@ -1662,11 +1664,13 @@ impl Heap {
         fields: Vec<GcValue>,
         mutable_fields: Vec<bool>,
     ) -> GcPtr<GcRecord> {
+        let discriminant = constructor_discriminant(&type_name);
         let data = HeapData::Record(GcRecord {
             type_name,
             field_names,
             fields,
             mutable_fields,
+            discriminant,
         });
         GcPtr::from_raw(self.alloc(data))
     }

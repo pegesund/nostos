@@ -1,0 +1,108 @@
+# Pattern Matching Benchmark
+# Tests various pattern matching scenarios
+
+type Shape = Circle(Int) | Rectangle(Int, Int) | Triangle(Int, Int, Int)
+
+# Variant pattern matching
+matchShape(Circle(r)) = r * r
+matchShape(Rectangle(w, h)) = w * h
+matchShape(Triangle(a, b, c)) = a + b + c
+
+# Integer literal patterns
+classify(0) = "zero"
+classify(1) = "one"
+classify(n) when n == -1 = "neg_one"
+classify(n) when n > 0 = "positive"
+classify(x) = "negative"
+
+# List pattern matching
+sumList([]) = 0
+sumList([h | t]) = h + sumList(t)
+
+# Nested list patterns
+firstOfFirst([[x | xs] | rest]) = x
+firstOfFirst(other) = 0
+
+# Build test data
+makeShapes(0, acc) = acc
+makeShapes(n, acc) = {
+    shape = if n % 3 == 0 then Circle(n)
+            else if n % 3 == 1 then Rectangle(n, n + 1)
+            else Triangle(n, n + 1, n + 2)
+    makeShapes(n - 1, [shape | acc])
+}
+
+# Run variant pattern benchmark
+benchVariants([], acc) = acc
+benchVariants([s | rest], acc) = benchVariants(rest, acc + matchShape(s))
+
+# Run integer pattern benchmark
+benchInts(0, acc) = acc
+benchInts(n, acc) = {
+    v = classify(n % 10 - 5)
+    benchInts(n - 1, acc + length(v))
+}
+
+# Run list pattern benchmark
+benchListSum(0, acc) = acc
+benchListSum(n, acc) = {
+    lst = range(1, 100)
+    benchListSum(n - 1, acc + sumList(lst))
+}
+
+# Run nested pattern benchmark
+benchNested(0, acc) = acc
+benchNested(n, acc) = {
+    lst = [[1, 2, 3], [4, 5], [6]]
+    benchNested(n - 1, acc + firstOfFirst(lst))
+}
+
+main() = {
+    iterations = 5000
+
+    # Warmup
+    warmupShapes = makeShapes(100, [])
+    w1 = benchVariants(warmupShapes, 0)
+    w2 = benchInts(100, 0)
+    w3 = benchListSum(10, 0)
+    w4 = benchNested(100, 0)
+
+    # Benchmark variant patterns
+    t0 = Time.now()
+    shapes = makeShapes(1000, [])
+    r1 = benchVariants(shapes, 0)
+    r1b = benchVariants(shapes, r1)
+    r1c = benchVariants(shapes, r1b)
+    r1d = benchVariants(shapes, r1c)
+    r1e = benchVariants(shapes, r1d)
+    t1 = Time.now()
+    variantTime = t1 - t0
+
+    # Benchmark integer patterns
+    t2 = Time.now()
+    r2 = benchInts(iterations * 10, 0)
+    t3 = Time.now()
+    intTime = t3 - t2
+
+    # Benchmark list patterns
+    t4 = Time.now()
+    r3 = benchListSum(iterations, 0)
+    t5 = Time.now()
+    listTime = t5 - t4
+
+    # Benchmark nested patterns
+    t6 = Time.now()
+    r4 = benchNested(iterations * 10, 0)
+    t7 = Time.now()
+    nestedTime = t7 - t6
+
+    println("=== Pattern Matching Benchmark ===")
+    println("Variant patterns (5x1000 shapes): " ++ show(variantTime) ++ " ms")
+    println("Integer patterns (10000 tests): " ++ show(intTime) ++ " ms")
+    println("List patterns (1000 x sum(1..100)): " ++ show(listTime) ++ " ms")
+    println("Nested patterns (10000 tests): " ++ show(nestedTime) ++ " ms")
+    println("Total: " ++ show(variantTime + intTime + listTime + nestedTime) ++ " ms")
+
+    # Verify results are computed (prevents dead code elimination)
+    if r1e > 0 && r2 > 0 && r3 > 0 && r4 > 0 && w1 + w2 + w3 + w4 > 0 then 42 else 0
+}

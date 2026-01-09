@@ -16,7 +16,7 @@ use crossbeam::deque::{Injector, Stealer, Worker as WorkQueue};
 use parking_lot::Mutex;
 
 use crate::extensions::{ext_value_to_vm, vm_value_to_ext};
-use crate::gc::{constructor_discriminant, GcValue, InlineOp};
+use crate::gc::{GcValue, InlineOp};
 use crate::process::{CallFrame, ExceptionHandler, ExitReason, ProcessState};
 use crate::scheduler::Scheduler;
 use crate::value::{FunctionValue, Pid, RuntimeError, Value};
@@ -2550,11 +2550,21 @@ impl Worker {
             Instruction::TestConst(dst, value_reg, const_idx) => {
                 let value = get_reg!(value_reg);
                 let constant = &constants[const_idx as usize];
-                self.scheduler.with_process_mut(pid, |proc| {
-                    let gc_const = proc.heap.value_to_gc(constant);
-                    let result = proc.heap.gc_values_equal(&value, &gc_const);
-                    proc.frames.last_mut().unwrap().registers[dst as usize] = GcValue::Bool(result);
-                });
+                // Fast path for common integer types - avoid heap access
+                let result = match (constant, &value) {
+                    (Value::Int64(c), GcValue::Int64(v)) => *c == *v,
+                    (Value::Int32(c), GcValue::Int32(v)) => *c == *v,
+                    (Value::Bool(c), GcValue::Bool(v)) => *c == *v,
+                    (Value::Char(c), GcValue::Char(v)) => *c == *v,
+                    // Fall back to heap comparison for complex types
+                    _ => {
+                        self.scheduler.with_process_mut(pid, |proc| {
+                            let gc_const = proc.heap.value_to_gc(constant);
+                            proc.heap.gc_values_equal(&value, &gc_const)
+                        }).unwrap_or(false)
+                    }
+                };
+                set_reg!(dst, GcValue::Bool(result));
             }
 
             Instruction::Throw(msg_reg) => {
@@ -3089,7 +3099,7 @@ impl Worker {
                         }
                         GcValue::Record(ptr) => {
                             proc.heap.get_record(*ptr)
-                                .map(|r| constructor_discriminant(&r.type_name) == discriminant)
+                                .map(|r| r.discriminant == discriminant)
                                 .unwrap_or(false)
                         }
                         _ => false,
