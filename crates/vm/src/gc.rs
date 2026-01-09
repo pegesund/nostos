@@ -110,9 +110,46 @@ pub struct GcString {
 }
 
 /// A GC-managed list (immutable).
+/// Uses Arc for O(1) tail operations - tail just increments start offset.
 #[derive(Clone, Debug)]
 pub struct GcList {
-    pub items: Vec<GcValue>,
+    pub data: std::sync::Arc<Vec<GcValue>>,
+    pub start: usize,  // Offset into data for slice-like behavior
+}
+
+impl GcList {
+    /// Get effective items slice (from start to end)
+    #[inline]
+    pub fn items(&self) -> &[GcValue] {
+        &self.data[self.start..]
+    }
+
+    /// Check if empty
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.start >= self.data.len()
+    }
+
+    /// Get length
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.data.len().saturating_sub(self.start)
+    }
+
+    /// Get head element
+    #[inline]
+    pub fn head(&self) -> Option<&GcValue> {
+        self.data.get(self.start)
+    }
+
+    /// Create a tail view (O(1) - no allocation!)
+    #[inline]
+    pub fn tail(&self) -> GcList {
+        GcList {
+            data: self.data.clone(),  // Arc clone is cheap
+            start: (self.start + 1).min(self.data.len()),
+        }
+    }
 }
 
 /// A GC-managed array (mutable, heterogeneous).
@@ -615,7 +652,7 @@ impl HeapData {
         match self {
             HeapData::String(_) => vec![],
             HeapData::List(list) => list
-                .items
+                .items()
                 .iter()
                 .flat_map(|v| v.gc_pointers())
                 .collect(),
@@ -677,7 +714,7 @@ impl HeapData {
         match self {
             HeapData::String(s) => std::mem::size_of::<GcString>() + s.data.len(),
             HeapData::List(l) => {
-                std::mem::size_of::<GcList>() + l.items.len() * std::mem::size_of::<GcValue>()
+                std::mem::size_of::<GcList>() + l.len() * std::mem::size_of::<GcValue>()
             }
             HeapData::Array(a) => {
                 std::mem::size_of::<GcArray>() + a.items.len() * std::mem::size_of::<GcValue>()
@@ -884,7 +921,16 @@ impl Heap {
 
     /// Allocate a list.
     pub fn alloc_list(&mut self, items: Vec<GcValue>) -> GcPtr<GcList> {
-        let data = HeapData::List(GcList { items });
+        let data = HeapData::List(GcList {
+            data: std::sync::Arc::new(items),
+            start: 0,
+        });
+        GcPtr::from_raw(self.alloc(data))
+    }
+
+    /// Allocate a list with a pre-existing Arc (for O(1) tail)
+    pub fn alloc_list_tail(&mut self, list: GcList) -> GcPtr<GcList> {
+        let data = HeapData::List(list);
         GcPtr::from_raw(self.alloc(data))
     }
 
@@ -1188,12 +1234,12 @@ impl Heap {
                 }
                 match (self.get_list(*a), self.get_list(*b)) {
                     (Some(la), Some(lb)) => {
-                        if la.items.len() != lb.items.len() {
+                        if la.len() != lb.len() {
                             return false;
                         }
-                        la.items
+                        la.items()
                             .iter()
-                            .zip(lb.items.iter())
+                            .zip(lb.items().iter())
                             .all(|(ia, ib)| self.gc_values_equal(ia, ib))
                     }
                     _ => false,
@@ -1346,7 +1392,7 @@ impl Heap {
             GcValue::List(ptr) => {
                 if let Some(list) = self.get_list(*ptr) {
                     let mut result = "[".to_string();
-                    for (i, item) in list.items.iter().enumerate() {
+                    for (i, item) in list.items().iter().enumerate() {
                         if i > 0 {
                             result.push_str(", ");
                         }
@@ -1618,7 +1664,7 @@ impl Heap {
             GcValue::List(ptr) => {
                 if let Some(list) = source.get_list(*ptr) {
                     let items: Vec<GcValue> = list
-                        .items
+                        .items()
                         .iter()
                         .map(|v| self.deep_copy(v, source))
                         .collect();
@@ -1824,7 +1870,7 @@ impl Heap {
                 }
             }
             GcValue::List(ptr) => {
-                let items = self.get_list(*ptr).map(|l| l.items.clone());
+                let items = self.get_list(*ptr).map(|l| l.items().to_vec());
                 if let Some(items) = items {
                     let cloned: Vec<GcValue> = items.iter().map(|v| self.clone_value(v)).collect();
                     GcValue::List(self.alloc_list(cloned))
@@ -2178,7 +2224,7 @@ impl Heap {
             // List
             GcValue::List(ptr) => {
                 let list = self.get_list(*ptr).expect("invalid list pointer");
-                let items: Vec<Value> = list.items.iter().map(|v| self.gc_to_value(v)).collect();
+                let items: Vec<Value> = list.items().iter().map(|v| self.gc_to_value(v)).collect();
                 Value::List(Arc::new(items))
             }
 
@@ -2350,10 +2396,10 @@ mod tests {
         let ptr = heap.alloc_list(items);
 
         let list = heap.get_list(ptr).unwrap();
-        assert_eq!(list.items.len(), 3);
-        assert!(matches!(list.items[0], GcValue::Int64(1)));
-        assert!(matches!(list.items[1], GcValue::Int64(2)));
-        assert!(matches!(list.items[2], GcValue::Int64(3)));
+        assert_eq!(list.len(), 3);
+        assert!(matches!(list.items()[0], GcValue::Int64(1)));
+        assert!(matches!(list.items()[1], GcValue::Int64(2)));
+        assert!(matches!(list.items()[2], GcValue::Int64(3)));
     }
 
     #[test]
@@ -2367,11 +2413,11 @@ mod tests {
         let outer = heap.alloc_list(vec![GcValue::List(inner), GcValue::Int64(3)]);
 
         let outer_list = heap.get_list(outer).unwrap();
-        assert_eq!(outer_list.items.len(), 2);
+        assert_eq!(outer_list.len(), 2);
 
-        if let GcValue::List(inner_ptr) = &outer_list.items[0] {
+        if let GcValue::List(inner_ptr) = &outer_list.items()[0] {
             let inner_list = heap.get_list(*inner_ptr).unwrap();
-            assert_eq!(inner_list.items.len(), 2);
+            assert_eq!(inner_list.len(), 2);
         } else {
             panic!("Expected inner list");
         }
@@ -2655,7 +2701,7 @@ mod tests {
 
         // Verify data is intact
         let list_data = heap.get_list(list).unwrap();
-        if let GcValue::String(ptr) = &list_data.items[0] {
+        if let GcValue::String(ptr) = &list_data.items()[0] {
             assert_eq!(heap.get_string(*ptr).unwrap().data, "item1");
         }
     }
@@ -2974,13 +3020,13 @@ mod tests {
 
         if let GcValue::List(new_outer) = copied {
             let outer_list = heap2.get_list(new_outer).unwrap();
-            assert_eq!(outer_list.items.len(), 2);
+            assert_eq!(outer_list.len(), 2);
 
-            if let GcValue::List(new_inner) = &outer_list.items[0] {
+            if let GcValue::List(new_inner) = &outer_list.items()[0] {
                 let inner_list = heap2.get_list(*new_inner).unwrap();
-                assert_eq!(inner_list.items.len(), 2);
+                assert_eq!(inner_list.len(), 2);
 
-                if let GcValue::String(new_s) = &inner_list.items[0] {
+                if let GcValue::String(new_s) = &inner_list.items()[0] {
                     assert_eq!(heap2.get_string(*new_s).unwrap().data, "nested");
                 }
             }
@@ -3210,7 +3256,8 @@ mod tests {
         assert!(string_data.estimate_size() > 10);
 
         let list_data = HeapData::List(GcList {
-            items: vec![GcValue::Int64(1), GcValue::Int64(2), GcValue::Int64(3)],
+            data: std::sync::Arc::new(vec![GcValue::Int64(1), GcValue::Int64(2), GcValue::Int64(3)]),
+            start: 0,
         });
         assert!(list_data.estimate_size() > 0);
     }

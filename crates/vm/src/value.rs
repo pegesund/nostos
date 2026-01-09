@@ -654,6 +654,8 @@ pub enum Instruction {
     ListTail(Reg, Reg),
     /// Is list empty: dst = isEmpty(list)
     ListIsEmpty(Reg, Reg),
+    /// Sum list of integers: dst = listSum(list)
+    ListSum(Reg, Reg),
 
     // === IO/Debug builtins ===
     /// Print value, return string representation: dst = print(value)
