@@ -30,6 +30,7 @@ const tutorialChapters = [
     { num: 26, file: "26_reactive_web.html", title: "Reactive Web (RWeb)" },
     { num: 27, file: "27_logging.html", title: "Logging" },
     { num: 28, file: "28_selenium.html", title: "Selenium WebDriver" },
+    { num: 29, file: "29_tcp_sockets.html", title: "TCP Sockets" },
 ];
 
 function generateTutorialSidebar() {
