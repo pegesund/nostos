@@ -1,6 +1,6 @@
 //! Source Manager - central hub for source code management
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::fs;
 use walkdir::WalkDir;
@@ -163,6 +163,9 @@ pub struct SourceManager {
     /// Source files tracked by relative path (for file-by-file editing mode)
     /// Key is relative path from project root (e.g., "main.nos", "utils/math.nos")
     source_files: HashMap<String, String>,
+
+    /// Files that failed to parse (relative paths)
+    files_with_errors: HashSet<String>,
 }
 
 impl SourceManager {
@@ -175,6 +178,7 @@ impl SourceManager {
             def_index: HashMap::new(),
             repl_defs: HashMap::new(),
             source_files: HashMap::new(),
+            files_with_errors: HashSet::new(),
         };
 
         manager.initialize()?;
@@ -426,6 +430,9 @@ impl SourceManager {
         for (path, module_path, content) in new_files {
             if let Err(e) = self.parse_and_add_definitions(&module_path, &content) {
                 eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
+                if let Ok(relative) = path.strip_prefix(&self.project_root) {
+                    self.files_with_errors.insert(relative.to_string_lossy().to_string());
+                }
             }
         }
 
@@ -525,8 +532,15 @@ impl SourceManager {
             }
 
             // Re-parse and add definitions
+            let relative_path = path.strip_prefix(&self.project_root)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
             if let Err(e) = self.parse_and_add_definitions(module_path, content) {
                 eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
+                self.files_with_errors.insert(relative_path);
+            } else {
+                // File is now valid, remove from errors
+                self.files_with_errors.remove(&relative_path);
             }
         }
 
@@ -590,7 +604,10 @@ impl SourceManager {
         for (path, module_path, content) in files_to_process {
             if let Err(e) = self.parse_and_add_definitions(&module_path, &content) {
                 eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
-                // Continue processing other files
+                // Track file with error
+                if let Ok(relative) = path.strip_prefix(&self.project_root) {
+                    self.files_with_errors.insert(relative.to_string_lossy().to_string());
+                }
             }
         }
 
@@ -1866,6 +1883,11 @@ impl SourceManager {
         files
     }
 
+    /// Check if a file has parse errors
+    pub fn file_has_errors(&self, path: &str) -> bool {
+        self.files_with_errors.contains(path)
+    }
+
     /// Get content of a source file by relative path
     pub fn get_file_content(&self, path: &str) -> Option<String> {
         self.source_files.get(path).cloned()
@@ -1896,7 +1918,21 @@ impl SourceManager {
         // Update cache
         self.source_files.insert(relative_path.to_string(), content.to_string());
 
+        // Re-check for parse errors
+        self.revalidate_file(relative_path, content);
+
         Ok(())
+    }
+
+    /// Re-check a file for parse errors and update error tracking
+    pub fn revalidate_file(&mut self, relative_path: &str, content: &str) {
+        use nostos_syntax::parse;
+        let (parsed, errors) = parse(content);
+        if parsed.is_none() || !errors.is_empty() {
+            self.files_with_errors.insert(relative_path.to_string());
+        } else {
+            self.files_with_errors.remove(relative_path);
+        }
     }
 
     /// Check if a file exists (by relative path)
