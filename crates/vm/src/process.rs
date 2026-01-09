@@ -128,23 +128,31 @@ impl ProfileData {
 
     /// Print a summary of profiling data.
     pub fn print_summary(&self) {
+        print!("{}", self.format_summary());
+    }
+
+    /// Format a summary of profiling data as a string.
+    pub fn format_summary(&self) -> String {
+        use std::fmt::Write;
+        let mut output = String::new();
+
         if self.stats.is_empty() {
-            println!("No profiling data collected.");
-            return;
+            return "No profiling data collected.".to_string();
         }
 
         // Sort by total time descending
         let mut entries: Vec<_> = self.stats.iter().collect();
         entries.sort_by(|a, b| b.1.total_time_ns.cmp(&a.1.total_time_ns));
 
-        println!("\n{:=<80}", "");
-        println!("FUNCTION PROFILING SUMMARY");
-        println!("{:=<80}", "");
-        println!(
+        writeln!(output, "\n{:=<80}", "").unwrap();
+        writeln!(output, "FUNCTION PROFILING SUMMARY").unwrap();
+        writeln!(output, "{:=<80}", "").unwrap();
+        writeln!(
+            output,
             "{:<40} {:>10} {:>12} {:>12}",
             "Function", "Calls", "Total (ms)", "Avg (µs)"
-        );
-        println!("{:-<80}", "");
+        ).unwrap();
+        writeln!(output, "{:-<80}", "").unwrap();
 
         for (name, stats) in entries {
             let display_name = if name.len() > 38 {
@@ -152,15 +160,17 @@ impl ProfileData {
             } else {
                 name.clone()
             };
-            println!(
+            writeln!(
+                output,
                 "{:<40} {:>10} {:>12.3} {:>12.3}",
                 display_name,
                 stats.call_count,
                 stats.total_time_ns as f64 / 1_000_000.0,
                 stats.avg_time_ns() as f64 / 1_000.0,
-            );
+            ).unwrap();
         }
-        println!("{:=<80}\n", "");
+        writeln!(output, "{:=<80}", "").unwrap();
+        output
     }
 }
 

@@ -3779,12 +3779,19 @@ impl ReplEngine {
         }
 
         // Run the profiled function (0-arity, so add "/" suffix)
-        let result = async_vm.run("__profile_main__/");
+        let result = async_vm.run_with_profile("__profile_main__/");
 
-        // Format the result
+        // Format the result with profile data
         match result {
-            Ok(value) => {
-                Ok(format!("Result: {:?}\n\n(Profile data printed to console)", value))
+            Ok((value, profile_summary)) => {
+                let mut output = format!("Result: {:?}", value);
+                if let Some(summary) = profile_summary {
+                    output.push_str("\n");
+                    output.push_str(&summary);
+                } else {
+                    output.push_str("\n\n(No profiling data collected)");
+                }
+                Ok(output)
             }
             Err(e) => Err(format!("Runtime error: {}", e)),
         }
