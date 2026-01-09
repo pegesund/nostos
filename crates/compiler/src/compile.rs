@@ -48,10 +48,10 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "floor", signature: "Float -> Int", doc: "Round down to nearest integer" },
     BuiltinInfo { name: "ceil", signature: "Float -> Int", doc: "Round up to nearest integer" },
     BuiltinInfo { name: "round", signature: "Float -> Int", doc: "Round to nearest integer" },
-    BuiltinInfo { name: "abs", signature: "Num -> Num", doc: "Absolute value" },
+    BuiltinInfo { name: "abs", signature: "a -> a", doc: "Absolute value" },
     BuiltinInfo { name: "min", signature: "a -> a -> a", doc: "Return the smaller of two values" },
     BuiltinInfo { name: "max", signature: "a -> a -> a", doc: "Return the larger of two values" },
-    BuiltinInfo { name: "pow", signature: "Num -> Num -> Num", doc: "Raise to a power" },
+    BuiltinInfo { name: "pow", signature: "a -> a -> a", doc: "Raise to a power" },
     BuiltinInfo { name: "log", signature: "Float -> Float", doc: "Natural logarithm" },
     BuiltinInfo { name: "log10", signature: "Float -> Float", doc: "Base-10 logarithm" },
 
@@ -90,8 +90,8 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "replicate", signature: "Int -> a -> [a]", doc: "Create list of n copies of a value" },
     BuiltinInfo { name: "empty", signature: "[a] -> Bool", doc: "True if list is empty" },
     BuiltinInfo { name: "isEmpty", signature: "[a] -> Bool", doc: "True if list is empty (alias for empty)" },
-    BuiltinInfo { name: "sum", signature: "[Num] -> Num", doc: "Sum of all elements" },
-    BuiltinInfo { name: "product", signature: "[Num] -> Num", doc: "Product of all elements" },
+    BuiltinInfo { name: "sum", signature: "[a] -> a", doc: "Sum of all elements" },
+    BuiltinInfo { name: "product", signature: "[a] -> a", doc: "Product of all elements" },
 
     // === Typed Arrays ===
     BuiltinInfo { name: "newInt64Array", signature: "Int -> Int64Array", doc: "Create a new Int64 array of given size" },
@@ -156,11 +156,11 @@ pub const BUILTINS: &[BuiltinInfo] = &[
 
     // === External Process Execution ===
     // All Exec functions throw exceptions on error
-    BuiltinInfo { name: "Exec.run", signature: "(String, [String]) -> { exitCode: Int, stdout: String, stderr: String }", doc: "Run command and wait for completion, throws on error" },
-    BuiltinInfo { name: "Exec.start", signature: "(String, [String]) -> Int", doc: "Start process with streaming I/O, returns handle, throws on error" },
+    BuiltinInfo { name: "Exec.run", signature: "String -> [String] -> { exitCode: Int, stdout: String, stderr: String }", doc: "Run command and wait for completion, throws on error" },
+    BuiltinInfo { name: "Exec.start", signature: "String -> [String] -> Int", doc: "Start process with streaming I/O, returns handle, throws on error" },
     BuiltinInfo { name: "Exec.readline", signature: "Int -> String", doc: "Read line from spawned process stdout, throws on error" },
     BuiltinInfo { name: "Exec.readStderr", signature: "Int -> String", doc: "Read line from spawned process stderr, throws on error" },
-    BuiltinInfo { name: "Exec.write", signature: "(Int, String) -> ()", doc: "Write string to spawned process stdin, throws on error" },
+    BuiltinInfo { name: "Exec.write", signature: "Int -> String -> ()", doc: "Write string to spawned process stdin, throws on error" },
     BuiltinInfo { name: "Exec.wait", signature: "Int -> Int", doc: "Wait for spawned process to exit, returns exit code, throws on error" },
     BuiltinInfo { name: "Exec.kill", signature: "Int -> ()", doc: "Kill a spawned process, throws on error" },
 
@@ -316,10 +316,10 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "jsonToType", signature: "[T] Json -> T", doc: "Convert Json to typed value: jsonToType[Person](json)" },
     BuiltinInfo { name: "fromJson", signature: "[T] Json -> T", doc: "Convert Json to typed value: fromJson[Person](jsonParse(str))" },
     BuiltinInfo { name: "makeRecord", signature: "[T] Map[String, Json] -> T", doc: "Construct record from field map: makeRecord[Person](fields)" },
-    BuiltinInfo { name: "makeVariant", signature: "[T] (String, Map[String, Json]) -> T", doc: "Construct variant from constructor name and fields: makeVariant[Result](\"Ok\", fields)" },
-    BuiltinInfo { name: "makeRecordByName", signature: "(String, Map[String, Json]) -> a", doc: "Construct record by type name string: makeRecordByName(\"Person\", fields)" },
-    BuiltinInfo { name: "makeVariantByName", signature: "(String, String, Map[String, Json]) -> a", doc: "Construct variant by type name: makeVariantByName(\"Result\", \"Ok\", fields)" },
-    BuiltinInfo { name: "jsonToTypeByName", signature: "(String, Json) -> a", doc: "Convert Json to typed value by type name: jsonToTypeByName(\"Person\", json)" },
+    BuiltinInfo { name: "makeVariant", signature: "[T] String -> Map[String, Json] -> T", doc: "Construct variant from constructor name and fields: makeVariant[Result](\"Ok\", fields)" },
+    BuiltinInfo { name: "makeRecordByName", signature: "String -> Map[String, Json] -> a", doc: "Construct record by type name string: makeRecordByName(\"Person\", fields)" },
+    BuiltinInfo { name: "makeVariantByName", signature: "String -> String -> Map[String, Json] -> a", doc: "Construct variant by type name: makeVariantByName(\"Result\", \"Ok\", fields)" },
+    BuiltinInfo { name: "jsonToTypeByName", signature: "String -> Json -> a", doc: "Convert Json to typed value by type name: jsonToTypeByName(\"Person\", json)" },
 ];
 
 /// Extract doc comment immediately preceding a definition at the given span start.
@@ -2664,11 +2664,18 @@ impl Compiler {
                     let is_list_element_error = message.contains("List[") &&
                         (message.contains("] and ") || message.contains(" and List[")) &&
                         message.matches("List[").count() == 1;
+                    // Skip trait errors for type parameters (single uppercase letter)
+                    // These will be properly checked at monomorphization time
+                    let is_type_param_trait_error = message.contains("does not implement") &&
+                        message.split_whitespace()
+                            .find(|w| w.len() == 1 && w.chars().next().unwrap().is_uppercase())
+                            .is_some();
                     let is_inference_limitation = message.contains("Unknown identifier") ||
                         message.contains("Unknown type") ||
                         message.contains("has no field") ||
                         message.contains("() and ()") ||
                         is_list_element_error ||
+                        is_type_param_trait_error ||
                         Self::is_type_variable_only_error(message);
 
                     !is_inference_limitation
@@ -9364,6 +9371,40 @@ impl Compiler {
             }
         }
 
+        // Register trait implementations for custom types
+        // All types implement Hash, Show, Eq, and Copy automatically
+        let builtin_traits = ["Hash", "Show", "Eq", "Copy"];
+        for (type_name, _) in &self.types {
+            let for_type = nostos_types::Type::Named {
+                name: type_name.clone(),
+                args: vec![],
+            };
+            for trait_name in &builtin_traits {
+                env.impls.push(nostos_types::TraitImpl {
+                    trait_name: trait_name.to_string(),
+                    for_type: for_type.clone(),
+                    constraints: vec![],
+                });
+            }
+        }
+
+        // Also register any explicit trait implementations
+        for (type_name, traits) in &self.type_traits {
+            let for_type = nostos_types::Type::Named {
+                name: type_name.clone(),
+                args: vec![],
+            };
+            for trait_name in traits {
+                if !builtin_traits.contains(&trait_name.as_str()) {
+                    env.impls.push(nostos_types::TraitImpl {
+                        trait_name: trait_name.clone(),
+                        for_type: for_type.clone(),
+                        constraints: vec![],
+                    });
+                }
+            }
+        }
+
         // NOTE: We intentionally do NOT register mvars here in type_check_fn.
         // Mvar registration is only done in try_hm_inference for signature inference.
         // Registering mvars in type_check_fn can cause spurious type errors when
@@ -9607,14 +9648,20 @@ impl Compiler {
             }
         }
 
-        // Trait bound errors with type variables should be suppressed
-        let trait_bound_patterns = [
-            "T does not implement", "R does not implement", "L does not implement",
-            "A does not implement", "B does not implement", "E does not implement",
-            "a does not implement", "b does not implement", "c does not implement",
-        ];
-        if trait_bound_patterns.iter().any(|p| message.contains(p)) {
-            return true;
+        // Trait bound errors with type parameters should be suppressed
+        // Type parameters are single uppercase/lowercase letters followed by "does not implement"
+        if message.contains("does not implement") {
+            // Check if there's a single-letter type parameter before "does not implement"
+            if let Some(pos) = message.find("does not implement") {
+                let prefix = &message[..pos].trim();
+                let words: Vec<&str> = prefix.split_whitespace().collect();
+                if let Some(&last_word) = words.last() {
+                    // Type parameters are single letters (uppercase or lowercase)
+                    if last_word.len() == 1 && last_word.chars().next().unwrap().is_alphabetic() {
+                        return true;
+                    }
+                }
+            }
         }
 
         // Trait errors involving type variables (like List[?5]) should be suppressed

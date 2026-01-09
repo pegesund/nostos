@@ -3,16 +3,13 @@
 
 main() = {
     # Spawn a long-running process (sleep)
-    (status, handle) = Exec.start("sleep", ["100"])
-    assert(status == "ok")
+    handle = Exec.start("sleep", ["100"])
 
     # Kill it immediately
-    (ks, _) = Exec.kill(handle)
-    assert(ks == "ok")
+    Exec.kill(handle)
 
     # The process should be terminated
     # (we can't easily verify this without wait, but at least it shouldn't hang)
 
-    0
     0
 }

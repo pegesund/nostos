@@ -3,10 +3,7 @@
 
 main() = {
     # Run echo command
-    (status, result) = Exec.run("echo", ["hello", "world"])
-
-    # Check status is ok
-    assert(status == "ok")
+    result = Exec.run("echo", ["hello", "world"])
 
     # Check exit code is 0
     assert(result.exitCode == 0)
@@ -17,6 +14,5 @@ main() = {
     # Check stderr is empty
     assert(result.stderr == "")
 
-    0
     0
 }
