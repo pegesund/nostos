@@ -78,21 +78,35 @@ run_single_test() {
     else
         # Test expects a specific value - use last line only (tests may print debug info)
         local actual=$(echo "$output" | tail -1 | tr -d '\n')
-        # Normalize output inline
-        local normalized=$(echo "$actual" | sed -E '
-            s/^"(.*)"$/\1/
-            s/\(([0-9]+), "([^"]*)"\)/(\1, \2)/g
-            s/\(([0-9]+), "([^"]*)", ([a-z]+)\)/(\1, \2, \3)/g
-            s/\("([^"]*)", ([0-9]+)\)/(\1, \2)/g
-            s/\["([^"]*)"/[\1/g
-            s/, "([^"]*)"/, \1/g
-            s/"([^"]*)"\]$/\1]/g
-        ')
 
-        if [ "$normalized" = "$expect" ]; then
+        # Compare exact output first (preferred)
+        if [ "$actual" = "$expect" ]; then
+            echo "PASS|$file|"
+            return
+        fi
+
+        # Normalize function - strips quotes from strings for legacy compatibility
+        normalize() {
+            echo "$1" | sed -E '
+                s/^"(.*)"$/\1/
+                s/\(([0-9]+), "([^"]*)"\)/(\1, \2)/g
+                s/\(([0-9]+), "([^"]*)", ([a-z]+)\)/(\1, \2, \3)/g
+                s/\("([^"]*)", ([0-9]+)\)/(\1, \2)/g
+                s/\("([^"]*)", "([^"]*)"\)/(\1, \2)/g
+                s/\["([^"]*)"/[\1/g
+                s/, "([^"]*)"/, \1/g
+                s/"([^"]*)"\]$/\1]/g
+            '
+        }
+
+        # Normalize both sides and compare
+        local norm_actual=$(normalize "$actual")
+        local norm_expect=$(normalize "$expect")
+
+        if [ "$norm_actual" = "$norm_expect" ]; then
             echo "PASS|$file|"
         else
-            echo "FAIL|$file|Expected '$expect', got '$actual' (normalized: '$normalized')"
+            echo "FAIL|$file|Expected '$expect', got '$actual' (normalized: '$norm_actual' vs '$norm_expect')"
         fi
     fi
 }
