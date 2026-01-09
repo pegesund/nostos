@@ -24,16 +24,19 @@ false           # Bool
 ```
 
 ### Blocks
-Blocks use curly braces with **comma-separated** statements:
+Blocks use curly braces with statements separated by **newlines** or **commas**:
 ```nos
 main() = {
-    x = 10,
-    y = 20,
-    x + y       # Last expression is returned (no comma)
+    x = 10
+    y = 20
+    x + y       # Last expression is returned
 }
+
+# Or with commas (equivalent):
+main() = { x = 10, y = 20, x + y }
 ```
 
-**Important**: Statements in blocks MUST be separated by commas, otherwise the parser may misinterpret them.
+**Note**: Newlines are significant - each statement should be on its own line or separated by a comma.
 
 ## Functions
 
@@ -232,6 +235,76 @@ classify(n) = match n
 end
 ```
 
+### Loops
+
+#### While Loop
+```nos
+# while condition { body }
+countdown(n) = {
+    i = n
+    while i > 0 {
+        println(i)
+        i = i - 1
+    }
+}
+
+# Sum an array with while loop
+sumArray(arr) = {
+    total = 0
+    i = 0
+    n = length(arr)
+    while i < n {
+        total = total + arr[i]
+        i = i + 1
+    }
+    total
+}
+```
+
+#### For Loop
+```nos
+# for var = start to end { body }
+# Iterates from start up to (but not including) end
+printRange(a, b) = {
+    for i = a to b {
+        println(i)
+    }
+}
+
+# Fill array with squares
+fillSquares(arr) = {
+    n = length(arr)
+    for i = 0 to n {
+        arr[i] = i * i
+    }
+}
+```
+
+#### Break and Continue
+```nos
+# break exits the loop early, optionally with a value
+findFirst(arr, target) = {
+    result = -1
+    for i = 0 to length(arr) {
+        if arr[i] == target then {
+            result = i
+            break
+        }
+    }
+    result
+}
+
+# continue skips to the next iteration
+sumPositive(arr) = {
+    total = 0
+    for i = 0 to length(arr) {
+        if arr[i] < 0 then continue
+        total = total + arr[i]
+    }
+    total
+}
+```
+
 ## Higher-Order Functions
 
 ```nos
@@ -341,11 +414,42 @@ main() = {
 }
 ```
 
+## Command-Line Interface
+
+### Running Programs
+```bash
+nostos <file.nos>           # Run a program
+nostos --help               # Show help
+nostos --version            # Show version
+```
+
+### Options
+```bash
+nostos --no-jit <file.nos>       # Disable JIT compilation (for debugging)
+nostos --json-errors <file.nos>  # Output errors as JSON (for debugger integration)
+```
+
+### JSON Error Format
+When `--json-errors` is enabled, runtime errors are output as JSON:
+```json
+{
+  "file": "/path/to/file.nos",
+  "error_type": "IndexOutOfBounds",
+  "message": "Index 10 out of bounds (length 3)",
+  "stack_trace": [
+    { "function": "inner", "line": 3 },
+    { "function": "middle", "line": 7 },
+    { "function": "main", "line": 12 }
+  ]
+}
+```
+
 ## Keywords
 
 The following are reserved keywords:
 - `if`, `then`, `else`
 - `match`, `end`
+- `while`, `for`, `to`, `break`, `continue`
 - `receive`
 - `spawn`, `spawn_link`, `spawn_monitor`
 - `self`
@@ -387,20 +491,3 @@ main() = {
 }
 ```
 
-### Block Statement Separators
-Statements in blocks MUST be separated by commas:
-```nos
-# Correct:
-main() = {
-    x = 10,
-    y = 20,
-    x + y
-}
-
-# INCORRECT (parser error or wrong behavior):
-main() = {
-    x = 10
-    y = 20
-    x + y
-}
-```
