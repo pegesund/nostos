@@ -46,6 +46,23 @@ impl<T> Spanned<T> {
 /// An identifier.
 pub type Ident = Spanned<String>;
 
+/// Visibility of an item in a module.
+/// Items are private by default and must be marked `pub` to be visible outside the module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Visibility {
+    /// Private to the current module (default)
+    #[default]
+    Private,
+    /// Publicly visible outside the module
+    Public,
+}
+
+impl Visibility {
+    pub fn is_public(&self) -> bool {
+        matches!(self, Visibility::Public)
+    }
+}
+
 /// A complete source file / module.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Module {
@@ -83,6 +100,7 @@ pub enum Item {
 /// A type definition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeDef {
+    pub visibility: Visibility,
     pub doc: Option<String>,
     pub mutable: bool,
     pub name: Ident,
@@ -162,6 +180,7 @@ pub enum TypeExpr {
 /// A function definition with one or more clauses.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FnDef {
+    pub visibility: Visibility,
     pub doc: Option<String>,
     pub name: Ident,
     pub clauses: Vec<FnClause>,
@@ -505,6 +524,7 @@ pub struct TraitImpl {
 /// A module definition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModuleDef {
+    pub visibility: Visibility,
     pub name: Ident,
     pub items: Vec<Item>,
     pub span: Span,

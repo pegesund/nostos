@@ -1,0 +1,12 @@
+# expect: 20
+# Trait on record type
+
+type Rectangle = { width: Int, height: Int }
+
+trait Area area(self) -> Int end
+Rectangle: Area area(self) = self.width * self.height end
+
+main() = {
+    r = Rectangle(4, 5)
+    r.area()
+}

@@ -1,0 +1,6 @@
+# expect: 2
+# Conditional expression
+
+describe(n) = if n == 1 then 1 else if n == 2 then 2 else 0
+
+main() = describe(2)

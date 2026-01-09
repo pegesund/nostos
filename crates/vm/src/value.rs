@@ -224,6 +224,9 @@ pub enum RuntimeError {
 
     #[error("Timeout")]
     Timeout,
+
+    #[error("I/O error: {0}")]
+    IOError(String),
 }
 
 /// A chunk of bytecode.
@@ -350,6 +353,8 @@ pub enum Instruction {
     GetTag(Reg, Reg),
     /// Get variant field: dst = variant.fields[idx]
     GetVariantField(Reg, Reg, u8),
+    /// Get variant named field: dst = variant.named_fields[name]
+    GetVariantFieldByName(Reg, Reg, ConstIdx),
 
     // === Control flow ===
     /// Unconditional jump

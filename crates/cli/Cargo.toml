@@ -1,0 +1,16 @@
+[package]
+name = "nostos-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Command-line interface for running Nostos programs"
+
+[[bin]]
+name = "nostos"
+path = "src/main.rs"
+
+[dependencies]
+nostos-syntax = { path = "../syntax" }
+nostos-compiler = { path = "../compiler" }
+nostos-vm = { path = "../vm" }

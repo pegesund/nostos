@@ -32,6 +32,18 @@ pub enum CompileError {
 
     #[error("Not implemented: {0}")]
     NotImplemented(String),
+
+    #[error("Cannot access private function '{function}' from outside module '{module}'")]
+    PrivateAccess { function: String, module: String },
+
+    #[error("Unknown trait: {0}")]
+    UnknownTrait(String),
+
+    #[error("Method '{method}' not implemented for type '{ty}' as required by trait '{trait_name}'")]
+    MissingTraitMethod { method: String, ty: String, trait_name: String },
+
+    #[error("Type '{ty}' does not implement trait '{trait_name}'")]
+    TraitNotImplemented { ty: String, trait_name: String },
 }
 
 /// Compilation context.
@@ -50,6 +62,20 @@ pub struct Compiler {
     types: HashMap<String, TypeInfo>,
     /// Current scope depth
     scope_depth: usize,
+    /// Current module path (e.g., ["Foo", "Bar"] for module Foo.Bar)
+    module_path: Vec<String>,
+    /// Imports: local name -> fully qualified name
+    imports: HashMap<String, String>,
+    /// Function visibility: qualified name -> Visibility
+    function_visibility: HashMap<String, Visibility>,
+    /// Trait definitions: trait name -> TraitInfo
+    trait_defs: HashMap<String, TraitInfo>,
+    /// Trait implementations: (type_name, trait_name) -> TraitImplInfo
+    trait_impls: HashMap<(String, String), TraitImplInfo>,
+    /// Types to their implemented traits: type_name -> [trait_name, ...]
+    type_traits: HashMap<String, Vec<String>>,
+    /// Local variable type tracking: variable name -> type name
+    local_types: HashMap<String, String>,
 }
 
 /// Type information for code generation.
@@ -65,6 +91,30 @@ pub enum TypeInfoKind {
     Variant { constructors: Vec<(String, usize)> }, // (name, field_count)
 }
 
+/// Trait definition information.
+#[derive(Clone)]
+pub struct TraitInfo {
+    pub name: String,
+    pub super_traits: Vec<String>,
+    pub methods: Vec<TraitMethodInfo>,
+}
+
+/// A method signature in a trait.
+#[derive(Clone)]
+pub struct TraitMethodInfo {
+    pub name: String,
+    pub param_count: usize,
+    pub has_default: bool,
+}
+
+/// Trait implementation information.
+#[derive(Clone)]
+pub struct TraitImplInfo {
+    pub type_name: String,
+    pub trait_name: String,
+    pub method_names: Vec<String>,  // Maps to qualified function names like "Point.Show.show"
+}
+
 impl Compiler {
     pub fn new() -> Self {
         Self {
@@ -75,7 +125,47 @@ impl Compiler {
             functions: HashMap::new(),
             types: HashMap::new(),
             scope_depth: 0,
+            module_path: Vec::new(),
+            imports: HashMap::new(),
+            function_visibility: HashMap::new(),
+            trait_defs: HashMap::new(),
+            trait_impls: HashMap::new(),
+            type_traits: HashMap::new(),
+            local_types: HashMap::new(),
         }
+    }
+
+    /// Get the fully qualified name with the current module path prefix.
+    fn qualify_name(&self, name: &str) -> String {
+        if self.module_path.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}.{}", self.module_path.join("."), name)
+        }
+    }
+
+    /// Resolve a name, checking imports and module path.
+    /// Returns the fully qualified name if found, or the original name.
+    fn resolve_name(&self, name: &str) -> String {
+        // First check imports
+        if let Some(qualified) = self.imports.get(name) {
+            return qualified.clone();
+        }
+        // If the name already contains '.', it's already qualified
+        if name.contains('.') {
+            return name.to_string();
+        }
+        // Otherwise, check if it's a known function in the current module
+        let qualified = self.qualify_name(name);
+        if self.functions.contains_key(&qualified) {
+            return qualified;
+        }
+        // Check if it's in the global scope
+        if self.functions.contains_key(name) {
+            return name.to_string();
+        }
+        // Return the original name (will error later if not found)
+        name.to_string()
     }
 
     /// Check if an expression is float-typed (for type-directed operator selection).
@@ -119,6 +209,12 @@ impl Compiler {
             Item::TypeDef(type_def) => {
                 self.compile_type_def(type_def)?;
             }
+            Item::TraitDef(trait_def) => {
+                self.compile_trait_def(trait_def)?;
+            }
+            Item::TraitImpl(trait_impl) => {
+                self.compile_trait_impl(trait_impl)?;
+            }
             _ => {
                 return Err(CompileError::NotImplemented(format!("item: {:?}", item)));
             }
@@ -128,7 +224,8 @@ impl Compiler {
 
     /// Compile a type definition.
     fn compile_type_def(&mut self, def: &TypeDef) -> Result<(), CompileError> {
-        let name = def.name.node.clone();
+        // Use qualified name (with module path prefix)
+        let name = self.qualify_name(&def.name.node);
 
         let kind = match &def.body {
             TypeBody::Record(fields) => {
@@ -164,6 +261,125 @@ impl Compiler {
         Ok(())
     }
 
+    /// Compile a trait definition.
+    fn compile_trait_def(&mut self, def: &TraitDef) -> Result<(), CompileError> {
+        let name = def.name.node.clone();
+
+        let super_traits: Vec<String> = def.super_traits
+            .iter()
+            .map(|t| t.node.clone())
+            .collect();
+
+        let methods: Vec<TraitMethodInfo> = def.methods
+            .iter()
+            .map(|m| TraitMethodInfo {
+                name: m.name.node.clone(),
+                param_count: m.params.len(),
+                has_default: m.default_impl.is_some(),
+            })
+            .collect();
+
+        self.trait_defs.insert(name.clone(), TraitInfo {
+            name,
+            super_traits,
+            methods,
+        });
+
+        Ok(())
+    }
+
+    /// Compile a trait implementation.
+    fn compile_trait_impl(&mut self, impl_def: &TraitImpl) -> Result<(), CompileError> {
+        // Get the type name from the type expression
+        let type_name = self.type_expr_to_string(&impl_def.ty);
+        let trait_name = impl_def.trait_name.node.clone();
+
+        // Check that the trait exists
+        if !self.trait_defs.contains_key(&trait_name) {
+            return Err(CompileError::UnknownTrait(trait_name));
+        }
+
+        // Compile each method as a function with a special qualified name: Type.Trait.method
+        let mut method_names = Vec::new();
+        for method in &impl_def.methods {
+            let method_name = method.name.node.clone();
+            let qualified_name = format!("{}.{}.{}", type_name, trait_name, method_name);
+
+            // Create a modified FnDef with the qualified name and public visibility
+            let mut modified_def = method.clone();
+            modified_def.name = Spanned::new(qualified_name.clone(), method.name.span);
+            modified_def.visibility = Visibility::Public; // Trait methods are always callable
+
+            self.compile_fn_def(&modified_def)?;
+            method_names.push(qualified_name);
+        }
+
+        // Register the trait implementation
+        let impl_info = TraitImplInfo {
+            type_name: type_name.clone(),
+            trait_name: trait_name.clone(),
+            method_names,
+        };
+        self.trait_impls.insert((type_name.clone(), trait_name.clone()), impl_info);
+
+        // Track which traits this type implements
+        self.type_traits
+            .entry(type_name)
+            .or_insert_with(Vec::new)
+            .push(trait_name);
+
+        Ok(())
+    }
+
+    /// Convert a type expression to a string representation.
+    fn type_expr_to_string(&self, ty: &TypeExpr) -> String {
+        match ty {
+            TypeExpr::Name(name) => name.node.clone(),
+            TypeExpr::Generic(name, params) => {
+                let params_str: Vec<String> = params.iter()
+                    .map(|p| self.type_expr_to_string(p))
+                    .collect();
+                format!("{}[{}]", name.node, params_str.join(", "))
+            }
+            TypeExpr::Tuple(elems) => {
+                let elems_str: Vec<String> = elems.iter()
+                    .map(|e| self.type_expr_to_string(e))
+                    .collect();
+                format!("({})", elems_str.join(", "))
+            }
+            TypeExpr::Function(params, ret) => {
+                let params_str: Vec<String> = params.iter()
+                    .map(|p| self.type_expr_to_string(p))
+                    .collect();
+                format!("({}) -> {}", params_str.join(", "), self.type_expr_to_string(ret))
+            }
+            TypeExpr::Record(fields) => {
+                let fields_str: Vec<String> = fields.iter()
+                    .map(|(name, ty)| format!("{}: {}", name.node, self.type_expr_to_string(ty)))
+                    .collect();
+                format!("{{{}}}", fields_str.join(", "))
+            }
+            TypeExpr::Unit => "()".to_string(),
+        }
+    }
+
+    /// Find the implementation of a trait method for a given type.
+    pub fn find_trait_method(&self, type_name: &str, method_name: &str) -> Option<String> {
+        // Look through all traits this type implements
+        if let Some(traits) = self.type_traits.get(type_name) {
+            for trait_name in traits {
+                // Check if this trait has the method
+                if let Some(trait_info) = self.trait_defs.get(trait_name) {
+                    if trait_info.methods.iter().any(|m| m.name == method_name) {
+                        // Return the qualified function name
+                        return Some(format!("{}.{}.{}", type_name, trait_name, method_name));
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Compile a function definition.
     fn compile_fn_def(&mut self, def: &FnDef) -> Result<(), CompileError> {
         // Save compiler state
@@ -176,29 +392,106 @@ impl Compiler {
         self.locals = HashMap::new();
         self.next_reg = 0;
 
-        let name = def.name.node.clone();
+        // Use qualified name (with module path prefix)
+        let name = self.qualify_name(&def.name.node);
 
-        // For now, just compile the first clause
-        // TODO: Compile all clauses with pattern matching dispatch
-        let clause = &def.clauses[0];
-        let arity = clause.params.len();
+        // Store the function's visibility
+        self.function_visibility.insert(name.clone(), def.visibility);
 
-        // Allocate registers for parameters
+        // Check if we need pattern matching dispatch
+        let needs_dispatch = def.clauses.len() > 1 || def.clauses.iter().any(|clause| {
+            clause.params.iter().any(|p| !self.is_simple_pattern(&p.pattern)) || clause.guard.is_some()
+        });
+
+        // Get arity from first clause (all clauses must have same arity)
+        let arity = def.clauses[0].params.len();
+
+        // Generate param names (used for debugging/introspection)
         let mut param_names: Vec<String> = Vec::new();
-
-        for (i, param) in clause.params.iter().enumerate() {
-            if let Some(name) = self.pattern_binding_name(&param.pattern) {
-                self.locals.insert(name.clone(), i as Reg);
-                param_names.push(name);
+        for (i, param) in def.clauses[0].params.iter().enumerate() {
+            if let Some(n) = self.pattern_binding_name(&param.pattern) {
+                param_names.push(n);
             } else {
                 param_names.push(format!("_arg{}", i));
             }
-            self.next_reg = (i + 1) as Reg;
         }
 
-        // Compile function body (in tail position)
-        let result_reg = self.compile_expr_tail(&clause.body, true)?;
-        self.chunk.emit(Instruction::Return(result_reg), 0);
+        // Allocate registers for parameters (0..arity)
+        self.next_reg = arity as Reg;
+
+        if needs_dispatch {
+            // Multi-clause dispatch: try each clause in order
+            let mut clause_jumps: Vec<usize> = Vec::new();
+
+            for (clause_idx, clause) in def.clauses.iter().enumerate() {
+                // Clear locals for this clause attempt
+                self.locals.clear();
+
+                // Track jump to skip to next clause on pattern failure
+                let mut next_clause_jumps: Vec<usize> = Vec::new();
+
+                // Test each parameter pattern
+                for (i, param) in clause.params.iter().enumerate() {
+                    let arg_reg = i as Reg;
+                    let (success_reg, bindings) = self.compile_pattern_test(&param.pattern, arg_reg)?;
+
+                    // Jump to next clause if pattern doesn't match
+                    next_clause_jumps.push(
+                        self.chunk.emit(Instruction::JumpIfFalse(success_reg, 0), 0)
+                    );
+
+                    // Add bindings to locals
+                    for (name, reg) in bindings {
+                        self.locals.insert(name, reg);
+                    }
+                }
+
+                // Compile guard if present
+                if let Some(guard) = &clause.guard {
+                    let guard_reg = self.compile_expr_tail(guard, false)?;
+                    next_clause_jumps.push(
+                        self.chunk.emit(Instruction::JumpIfFalse(guard_reg, 0), 0)
+                    );
+                }
+
+                // All patterns matched and guard passed - compile body
+                let result_reg = self.compile_expr_tail(&clause.body, true)?;
+                self.chunk.emit(Instruction::Return(result_reg), 0);
+
+                // Record where we need to patch for "matched" jumps
+                if clause_idx < def.clauses.len() - 1 {
+                    clause_jumps.push(self.chunk.code.len());
+                }
+
+                // Patch all the "skip to next clause" jumps to land here
+                let next_clause_addr = self.chunk.code.len();
+                for jump_addr in next_clause_jumps {
+                    self.chunk.patch_jump(jump_addr, next_clause_addr);
+                }
+            }
+
+            // If we get here, no clause matched - throw error
+            let error_idx = self.chunk.add_constant(Value::String(Rc::new(
+                format!("No clause matched for function '{}'", name)
+            )));
+            let error_reg = self.alloc_reg();
+            self.chunk.emit(Instruction::LoadConst(error_reg, error_idx), 0);
+            self.chunk.emit(Instruction::Throw(error_reg), 0);
+        } else {
+            // Simple case: single clause with only variable patterns
+            let clause = &def.clauses[0];
+
+            // Map parameter patterns to registers
+            for (i, param) in clause.params.iter().enumerate() {
+                if let Some(n) = self.pattern_binding_name(&param.pattern) {
+                    self.locals.insert(n, i as Reg);
+                }
+            }
+
+            // Compile function body (in tail position)
+            let result_reg = self.compile_expr_tail(&clause.body, true)?;
+            self.chunk.emit(Instruction::Return(result_reg), 0);
+        }
 
         self.chunk.register_count = self.next_reg as usize;
 
@@ -220,6 +513,11 @@ impl Compiler {
         self.next_reg = saved_next_reg;
 
         Ok(())
+    }
+
+    /// Check if a pattern is "simple" (just a variable or wildcard).
+    fn is_simple_pattern(&self, pattern: &Pattern) -> bool {
+        matches!(pattern, Pattern::Var(_) | Pattern::Wildcard(_))
     }
 
     /// Get binding name from a pattern (if it's a simple variable).
@@ -257,16 +555,17 @@ impl Compiler {
                 Ok(dst)
             }
             Expr::String(string_lit, _) => {
-                let s = match string_lit {
-                    StringLit::Plain(s) => s.clone(),
-                    StringLit::Interpolated(_) => {
-                        return Err(CompileError::NotImplemented("string interpolation".to_string()));
+                match string_lit {
+                    StringLit::Plain(s) => {
+                        let dst = self.alloc_reg();
+                        let idx = self.chunk.add_constant(Value::String(Rc::new(s.clone())));
+                        self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                        Ok(dst)
                     }
-                };
-                let dst = self.alloc_reg();
-                let idx = self.chunk.add_constant(Value::String(Rc::new(s)));
-                self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
-                Ok(dst)
+                    StringLit::Interpolated(parts) => {
+                        self.compile_interpolated_string(parts)
+                    }
+                }
             }
             Expr::Char(c, _) => {
                 let dst = self.alloc_reg();
@@ -395,17 +694,77 @@ impl Compiler {
 
             // Record construction
             Expr::Record(type_name, fields, _) => {
-                self.compile_record(&type_name.node, fields)
+                // Qualify type name with module path
+                let qualified_type = self.qualify_name(&type_name.node);
+                self.compile_record(&qualified_type, fields)
             }
 
             // Record update
             Expr::RecordUpdate(type_name, base, fields, _) => {
-                self.compile_record_update(&type_name.node, base, fields)
+                // Qualify type name with module path
+                let qualified_type = self.qualify_name(&type_name.node);
+                self.compile_record_update(&qualified_type, base, fields)
             }
 
-            // Method call (UFCS)
-            Expr::MethodCall(obj, method, args, _) => {
-                // Transform obj.method(args) to method(obj, args)
+            // Method call (UFCS) or module-qualified function call
+            Expr::MethodCall(obj, method, args, _span) => {
+                // Check if this is a module-qualified call (e.g., Math.add(1, 2))
+                // by checking if the object looks like a module path
+                if let Some(module_path) = self.extract_module_path(obj) {
+                    // It's a module-qualified call: Module.function(args)
+                    let qualified_name = format!("{}.{}", module_path, method.node);
+                    let resolved_name = self.resolve_name(&qualified_name);
+
+                    if self.functions.contains_key(&resolved_name) {
+                        // Check visibility before allowing the call
+                        self.check_visibility(&resolved_name)?;
+
+                        // Compile arguments
+                        let mut arg_regs = Vec::new();
+                        for arg in args {
+                            let reg = self.compile_expr_tail(arg, false)?;
+                            arg_regs.push(reg);
+                        }
+
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Rc::new(resolved_name)));
+                        if is_tail {
+                            self.chunk.emit(Instruction::TailCallByName(name_idx, arg_regs), 0);
+                            return Ok(0);
+                        } else {
+                            self.chunk.emit(Instruction::CallByName(dst, name_idx, arg_regs), 0);
+                            return Ok(dst);
+                        }
+                    }
+                }
+
+                // Try trait method dispatch if we can determine the type of obj
+                if let Some(type_name) = self.expr_type_name(obj) {
+                    if let Some(qualified_method) = self.find_trait_method(&type_name, &method.node) {
+                        // Found a trait method - compile as qualified function call
+                        let mut all_args = vec![obj.as_ref().clone()];
+                        all_args.extend(args.iter().cloned());
+
+                        // Compile arguments
+                        let mut arg_regs = Vec::new();
+                        for arg in &all_args {
+                            let reg = self.compile_expr_tail(arg, false)?;
+                            arg_regs.push(reg);
+                        }
+
+                        let dst = self.alloc_reg();
+                        let name_idx = self.chunk.add_constant(Value::String(Rc::new(qualified_method)));
+                        if is_tail {
+                            self.chunk.emit(Instruction::TailCallByName(name_idx, arg_regs), 0);
+                            return Ok(0);
+                        } else {
+                            self.chunk.emit(Instruction::CallByName(dst, name_idx, arg_regs), 0);
+                            return Ok(dst);
+                        }
+                    }
+                }
+
+                // Regular UFCS method call: obj.method(args) -> method(obj, args)
                 let mut all_args = vec![obj.as_ref().clone()];
                 all_args.extend(args.iter().cloned());
 
@@ -419,6 +778,31 @@ impl Compiler {
                 let idx_reg = self.compile_expr_tail(index, false)?;
                 let dst = self.alloc_reg();
                 self.chunk.emit(Instruction::Index(dst, coll_reg, idx_reg), 0);
+                Ok(dst)
+            }
+
+            // Map literal: %{"key": value, ...}
+            Expr::Map(pairs, _) => {
+                let mut pair_regs = Vec::new();
+                for (key, value) in pairs {
+                    let key_reg = self.compile_expr_tail(key, false)?;
+                    let val_reg = self.compile_expr_tail(value, false)?;
+                    pair_regs.push((key_reg, val_reg));
+                }
+                let dst = self.alloc_reg();
+                self.chunk.emit(Instruction::MakeMap(dst, pair_regs), 0);
+                Ok(dst)
+            }
+
+            // Set literal: #{elem, ...}
+            Expr::Set(elems, _) => {
+                let mut regs = Vec::new();
+                for elem in elems {
+                    let reg = self.compile_expr_tail(elem, false)?;
+                    regs.push(reg);
+                }
+                let dst = self.alloc_reg();
+                self.chunk.emit(Instruction::MakeSet(dst, regs), 0);
                 Ok(dst)
             }
 
@@ -595,25 +979,29 @@ impl Compiler {
             arg_regs.push(reg);
         }
 
-        // Check if it's a direct call to a known function
-        if let Expr::Var(ident) = func {
-            let name = &ident.node;
+        // Try to extract a qualified function name from the expression
+        let maybe_qualified_name = self.extract_qualified_name(func);
 
-            // Check for native functions
+        if let Some(qualified_name) = maybe_qualified_name {
+            // Check for native functions (only simple names)
             let native_names = ["println", "print", "length", "head", "tail", "isEmpty",
-                              "show", "toInt", "toFloat", "abs", "sqrt", "panic", "assert", "typeOf"];
+                              "show", "toInt", "toFloat", "abs", "sqrt", "panic", "assert", "typeOf",
+                              "readFile", "writeFile", "appendFile", "fileExists", "readLine", "getArgs", "getEnv"];
 
-            if native_names.contains(&name.as_str()) {
+            if !qualified_name.contains('.') && native_names.contains(&qualified_name.as_str()) {
                 let dst = self.alloc_reg();
-                let name_idx = self.chunk.add_constant(Value::String(Rc::new(name.clone())));
+                let name_idx = self.chunk.add_constant(Value::String(Rc::new(qualified_name)));
                 self.chunk.emit(Instruction::CallNative(dst, name_idx, arg_regs), 0);
                 return Ok(dst);
             }
 
-            // Check for user-defined function - use name lookup to support recursion
-            if self.functions.contains_key(name) {
+            // Resolve the name (handles imports and module path)
+            let resolved_name = self.resolve_name(&qualified_name);
+
+            // Check for user-defined function
+            if self.functions.contains_key(&resolved_name) {
                 let dst = self.alloc_reg();
-                let name_idx = self.chunk.add_constant(Value::String(Rc::new(name.clone())));
+                let name_idx = self.chunk.add_constant(Value::String(Rc::new(resolved_name)));
                 if is_tail {
                     // Tail call optimization using name lookup
                     self.chunk.emit(Instruction::TailCallByName(name_idx, arg_regs), 0);
@@ -625,7 +1013,7 @@ impl Compiler {
             }
         }
 
-        // Generic function call
+        // Generic function call (lambdas, higher-order functions)
         let func_reg = self.compile_expr_tail(func, false)?;
         let dst = self.alloc_reg();
 
@@ -636,6 +1024,173 @@ impl Compiler {
             self.chunk.emit(Instruction::Call(dst, func_reg, arg_regs), 0);
             Ok(dst)
         }
+    }
+
+    /// Extract a qualified function name from an expression.
+    /// Returns Some("Module.function") for field access on modules, Some("function") for simple vars.
+    fn extract_qualified_name(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Var(ident) => Some(ident.node.clone()),
+            Expr::FieldAccess(target, field, _) => {
+                // Try to build a qualified name like "Module.SubModule.function"
+                if let Some(base) = self.extract_qualified_name(target) {
+                    // Check if the base looks like a module name (starts with uppercase)
+                    if base.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                        Some(format!("{}.{}", base, field.node))
+                    } else {
+                        None // It's a field access on a value, not a module
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Try to determine the type name of an expression at compile time.
+    /// This is used for trait method dispatch.
+    fn expr_type_name(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            // Record construction: Point{x: 1, y: 2}
+            Expr::Record(type_name, _, _) => Some(type_name.node.clone()),
+            // Tuple
+            Expr::Tuple(_, _) => Some("Tuple".to_string()),
+            // List
+            Expr::List(_, _, _) => Some("List".to_string()),
+            // Literals
+            Expr::Int(_, _) => Some("Int".to_string()),
+            Expr::Float(_, _) => Some("Float".to_string()),
+            Expr::String(_, _) => Some("String".to_string()),
+            Expr::Char(_, _) => Some("Char".to_string()),
+            Expr::Bool(_, _) => Some("Bool".to_string()),
+            Expr::Unit(_) => Some("()".to_string()),
+            // Map
+            Expr::Map(_, _) => Some("Map".to_string()),
+            // Set
+            Expr::Set(_, _) => Some("Set".to_string()),
+            // For Call expressions on uppercase identifiers (variant constructors),
+            // check if it's a known type
+            Expr::Call(func, _, _) => {
+                if let Expr::Var(ident) = func.as_ref() {
+                    if ident.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                        // It's a variant constructor - the type is determined by checking
+                        // what type has this constructor
+                        for (type_name, info) in &self.types {
+                            if let TypeInfoKind::Variant { constructors } = &info.kind {
+                                if constructors.iter().any(|(name, _)| name == &ident.node) {
+                                    return Some(type_name.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                None
+            }
+            // For variables, look up tracked type
+            Expr::Var(ident) => {
+                // Check if we have tracked this variable's type
+                self.local_types.get(&ident.node).cloned()
+            }
+            _ => None,
+        }
+    }
+
+    /// Extract a module path from an expression.
+    /// Returns Some("Module") or Some("Outer.Inner") if the expression is a module reference.
+    fn extract_module_path(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Var(ident) => {
+                // Check if the identifier starts with uppercase (module name convention)
+                if ident.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                    Some(ident.node.clone())
+                } else {
+                    None
+                }
+            }
+            // Handle empty Record expressions as module references (e.g., Math in Math.add)
+            // The parser parses uppercase identifiers like `Math` as Record constructors
+            Expr::Record(type_name, fields, _) if fields.is_empty() => {
+                Some(type_name.node.clone())
+            }
+            Expr::FieldAccess(target, field, _) => {
+                // Check if we're building a nested module path like Outer.Inner
+                if let Some(base) = self.extract_module_path(target) {
+                    // Check if the field also looks like a module name
+                    if field.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                        Some(format!("{}.{}", base, field.node))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            // Handle MethodCall on modules for nested modules (e.g., Outer.Inner in Outer.Inner.func)
+            Expr::MethodCall(obj, method, args, _) if args.is_empty() => {
+                if let Some(base) = self.extract_module_path(obj) {
+                    if method.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                        Some(format!("{}.{}", base, method.node))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Check if a function can be accessed from the current module.
+    /// Returns Ok(()) if access is allowed, Err with PrivateAccess otherwise.
+    fn check_visibility(&self, qualified_name: &str) -> Result<(), CompileError> {
+        // Get the visibility of the function
+        let visibility = self.function_visibility.get(qualified_name);
+
+        // If we don't know about this function yet, assume it's accessible
+        // (it might be a built-in or will be an UnknownFunction error later)
+        let visibility = match visibility {
+            Some(v) => *v,
+            None => return Ok(()),
+        };
+
+        // Public functions are always accessible
+        if visibility.is_public() {
+            return Ok(());
+        }
+
+        // Private function - check if caller is in the same module
+        // Extract the module path from the qualified name (everything before the last dot)
+        let function_module: Vec<&str> = qualified_name.rsplitn(2, '.').collect();
+        let function_module = if function_module.len() > 1 {
+            function_module[1].split('.').collect::<Vec<_>>()
+        } else {
+            vec![] // Function is in root module
+        };
+
+        // Current module path
+        let current_module: Vec<&str> = self.module_path.iter().map(|s| s.as_str()).collect();
+
+        // Allow access if the current module is the same as or nested within the function's module
+        if current_module.len() >= function_module.len()
+            && current_module[..function_module.len()] == function_module[..]
+        {
+            return Ok(());
+        }
+
+        // Access denied
+        let function_name = qualified_name.rsplit('.').next().unwrap_or(qualified_name);
+        let module_name = if function_module.is_empty() {
+            "<root>".to_string()
+        } else {
+            function_module.join(".")
+        };
+
+        Err(CompileError::PrivateAccess {
+            function: function_name.to_string(),
+            module: module_name,
+        })
     }
 
     /// Compile an if expression.
@@ -781,8 +1336,36 @@ impl Compiler {
                         let after_extract = self.chunk.code.len();
                         self.chunk.patch_jump(skip_jump, after_extract);
                     }
-                    VariantPatternFields::Named(_) => {
-                        return Err(CompileError::NotImplemented("named variant patterns".to_string()));
+                    VariantPatternFields::Named(fields) => {
+                        // Jump past field extraction if tag doesn't match
+                        let skip_jump = self.chunk.emit(Instruction::JumpIfFalse(success_reg, 0), 0);
+
+                        for field in fields {
+                            match field {
+                                RecordPatternField::Punned(ident) => {
+                                    // {x} means bind field "x" to variable "x"
+                                    let field_reg = self.alloc_reg();
+                                    let name_idx = self.chunk.add_constant(Value::String(Rc::new(ident.node.clone())));
+                                    self.chunk.emit(Instruction::GetVariantFieldByName(field_reg, scrut_reg, name_idx), 0);
+                                    bindings.push((ident.node.clone(), field_reg));
+                                }
+                                RecordPatternField::Named(ident, pat) => {
+                                    // {name: n} means bind field "name" to the result of matching pattern
+                                    let field_reg = self.alloc_reg();
+                                    let name_idx = self.chunk.add_constant(Value::String(Rc::new(ident.node.clone())));
+                                    self.chunk.emit(Instruction::GetVariantFieldByName(field_reg, scrut_reg, name_idx), 0);
+                                    let (_, mut sub_bindings) = self.compile_pattern_test(pat, field_reg)?;
+                                    bindings.append(&mut sub_bindings);
+                                }
+                                RecordPatternField::Rest(_) => {
+                                    // Ignore rest pattern for now - it just matches remaining fields
+                                }
+                            }
+                        }
+
+                        // Patch the skip jump to land here
+                        let after_extract = self.chunk.code.len();
+                        self.chunk.patch_jump(skip_jump, after_extract);
                     }
                 }
             }
@@ -880,11 +1463,18 @@ impl Compiler {
 
     /// Compile a let binding.
     fn compile_binding(&mut self, binding: &Binding) -> Result<Reg, CompileError> {
+        // Try to determine the type of the value before compiling
+        let value_type = self.expr_type_name(&binding.value);
+
         let value_reg = self.compile_expr_tail(&binding.value, false)?;
 
         // For simple variable binding
         if let Pattern::Var(ident) = &binding.pattern {
             self.locals.insert(ident.node.clone(), value_reg);
+            // Record the type if we know it
+            if let Some(ty) = value_type {
+                self.local_types.insert(ident.node.clone(), ty);
+            }
             return Ok(value_reg);
         }
 
@@ -927,6 +1517,60 @@ impl Compiler {
         }
     }
 
+    /// Compile an interpolated string.
+    ///
+    /// For each part:
+    /// - Literal strings are loaded directly
+    /// - Expressions are compiled and converted to string using `show`
+    /// Then all parts are concatenated.
+    fn compile_interpolated_string(&mut self, parts: &[StringPart]) -> Result<Reg, CompileError> {
+        if parts.is_empty() {
+            // Empty string
+            let dst = self.alloc_reg();
+            let idx = self.chunk.add_constant(Value::String(Rc::new(String::new())));
+            self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+            return Ok(dst);
+        }
+
+        // Compile each part to a string register
+        let mut part_regs = Vec::new();
+        for part in parts {
+            let reg = match part {
+                StringPart::Lit(s) => {
+                    let dst = self.alloc_reg();
+                    let idx = self.chunk.add_constant(Value::String(Rc::new(s.clone())));
+                    self.chunk.emit(Instruction::LoadConst(dst, idx), 0);
+                    dst
+                }
+                StringPart::Expr(e) => {
+                    // Compile the expression
+                    let expr_reg = self.compile_expr_tail(e, false)?;
+                    // Call `show` to convert to string
+                    let dst = self.alloc_reg();
+                    let name_idx = self.chunk.add_constant(Value::String(Rc::new("show".to_string())));
+                    self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![expr_reg]), 0);
+                    dst
+                }
+            };
+            part_regs.push(reg);
+        }
+
+        // Concatenate all parts
+        if part_regs.len() == 1 {
+            return Ok(part_regs[0]);
+        }
+
+        // Fold concatenation: result = part0 ++ part1 ++ part2 ++ ...
+        let mut result = part_regs[0];
+        for &part_reg in &part_regs[1..] {
+            let dst = self.alloc_reg();
+            self.chunk.emit(Instruction::Concat(dst, result, part_reg), 0);
+            result = dst;
+        }
+
+        Ok(result)
+    }
+
     /// Compile a lambda expression.
     fn compile_lambda(&mut self, params: &[Pattern], body: &Expr) -> Result<Reg, CompileError> {
         use std::collections::HashSet;
@@ -961,11 +1605,13 @@ impl Compiler {
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_next_reg = self.next_reg;
         let saved_capture_indices = std::mem::take(&mut self.capture_indices);
+        let saved_local_types = std::mem::take(&mut self.local_types);
 
         // Step 4: Create new function for lambda
         self.chunk = Chunk::new();
         self.locals = HashMap::new();
         self.capture_indices = HashMap::new();
+        self.local_types = HashMap::new();
         self.next_reg = 0;
 
         let arity = params.len();
@@ -1000,6 +1646,7 @@ impl Compiler {
         self.locals = saved_locals;
         self.next_reg = saved_next_reg;
         self.capture_indices = saved_capture_indices;
+        self.local_types = saved_local_types;
 
         // Step 6: Create closure with captures
         let func = FunctionValue {
@@ -1089,6 +1736,55 @@ impl Compiler {
     /// Get all compiled functions.
     pub fn get_all_functions(&self) -> &HashMap<String, Rc<FunctionValue>> {
         &self.functions
+    }
+
+    /// Get all types for the VM.
+    pub fn get_vm_types(&self) -> HashMap<String, Rc<TypeValue>> {
+        use nostos_vm::value::{TypeValue, TypeKind, FieldInfo, ConstructorInfo};
+
+        let mut vm_types = HashMap::new();
+        for (name, type_info) in &self.types {
+            let type_value = match &type_info.kind {
+                TypeInfoKind::Record { fields, mutable } => {
+                    let field_infos: Vec<FieldInfo> = fields.iter()
+                        .map(|f| FieldInfo {
+                            name: f.clone(),
+                            type_name: "any".to_string(),
+                            mutable: *mutable,
+                            private: false,
+                        })
+                        .collect();
+                    TypeValue {
+                        name: name.clone(),
+                        kind: TypeKind::Record { mutable: *mutable },
+                        fields: field_infos,
+                        constructors: vec![],
+                        traits: vec![],
+                    }
+                }
+                TypeInfoKind::Variant { constructors } => {
+                    TypeValue {
+                        name: name.clone(),
+                        kind: TypeKind::Variant,
+                        fields: vec![],
+                        constructors: constructors.iter()
+                            .map(|(n, field_count)| ConstructorInfo {
+                                name: n.clone(),
+                                fields: (0..*field_count).map(|i| FieldInfo {
+                                    name: format!("_{}", i),
+                                    type_name: "any".to_string(),
+                                    mutable: false,
+                                    private: false,
+                                }).collect(),
+                            })
+                            .collect(),
+                        traits: vec![],
+                    }
+                }
+            };
+            vm_types.insert(name.clone(), Rc::new(type_value));
+        }
+        vm_types
     }
 }
 
@@ -1326,41 +2022,147 @@ impl Default for Compiler {
 /// Compile a complete module.
 pub fn compile_module(module: &Module) -> Result<Compiler, CompileError> {
     let mut compiler = Compiler::new();
+    compiler.compile_items(&module.items)?;
+    Ok(compiler)
+}
 
-    // First pass: collect type definitions
-    for item in &module.items {
-        if let Item::TypeDef(type_def) = item {
-            compiler.compile_type_def(type_def)?;
+impl Compiler {
+    /// Compile a list of items (can be called recursively for nested modules).
+    fn compile_items(&mut self, items: &[Item]) -> Result<(), CompileError> {
+        // First pass: process use statements to set up imports
+        for item in items {
+            if let Item::Use(use_stmt) = item {
+                self.compile_use_stmt(use_stmt)?;
+            }
         }
-    }
 
-    // Second pass: forward declare all functions (for recursion)
-    for item in &module.items {
-        if let Item::FnDef(fn_def) = item {
-            let name = fn_def.name.node.clone();
-            let arity = fn_def.clauses[0].params.len();
+        // Second pass: collect type definitions
+        for item in items {
+            if let Item::TypeDef(type_def) = item {
+                self.compile_type_def(type_def)?;
+            }
+        }
+
+        // Third pass: compile trait definitions
+        for item in items {
+            if let Item::TraitDef(trait_def) = item {
+                self.compile_trait_def(trait_def)?;
+            }
+        }
+
+        // Fourth pass: compile trait implementations (after trait defs)
+        for item in items {
+            if let Item::TraitImpl(trait_impl) = item {
+                self.compile_trait_impl(trait_impl)?;
+            }
+        }
+
+        // Fifth pass: process nested modules (before functions so they're available)
+        for item in items {
+            if let Item::ModuleDef(module_def) = item {
+                self.compile_module_def(module_def)?;
+            }
+        }
+
+        // Collect and merge function definitions by name
+        let mut fn_clauses: std::collections::HashMap<String, Vec<FnClause>> = std::collections::HashMap::new();
+        let mut fn_order: Vec<String> = Vec::new();
+        let mut fn_spans: std::collections::HashMap<String, Span> = std::collections::HashMap::new();
+        let mut fn_visibility: std::collections::HashMap<String, Visibility> = std::collections::HashMap::new();
+
+        for item in items {
+            if let Item::FnDef(fn_def) = item {
+                let qualified_name = self.qualify_name(&fn_def.name.node);
+                if !fn_clauses.contains_key(&qualified_name) {
+                    fn_order.push(qualified_name.clone());
+                    fn_spans.insert(qualified_name.clone(), fn_def.span);
+                    // Use visibility from first definition
+                    fn_visibility.insert(qualified_name.clone(), fn_def.visibility);
+                }
+                fn_clauses.entry(qualified_name).or_default().extend(fn_def.clauses.iter().cloned());
+            }
+        }
+
+        // Fourth pass: forward declare all functions (for recursion)
+        for name in &fn_order {
+            let clauses = fn_clauses.get(name).unwrap();
+            let arity = clauses[0].params.len();
             // Insert a placeholder function for forward reference
             let placeholder = FunctionValue {
                 name: name.clone(),
                 arity,
                 param_names: vec![],
                 code: Rc::new(Chunk::new()),
-                module: None,
+                module: if self.module_path.is_empty() { None } else { Some(self.module_path.join(".")) },
                 source_span: None,
                 jit_code: None,
             };
-            compiler.functions.insert(name, Rc::new(placeholder));
+            self.functions.insert(name.clone(), Rc::new(placeholder));
         }
+
+        // Fifth pass: compile functions with merged clauses
+        for name in &fn_order {
+            let clauses = fn_clauses.get(name).unwrap();
+            let span = fn_spans.get(name).copied().unwrap_or_default();
+            // Extract the local name (without module prefix)
+            let local_name = if name.contains('.') {
+                name.rsplit('.').next().unwrap_or(name)
+            } else {
+                name.as_str()
+            };
+            let merged_fn = FnDef {
+                visibility: *fn_visibility.get(name).unwrap_or(&Visibility::Private),
+                doc: None,
+                name: Spanned::new(local_name.to_string(), span),
+                clauses: clauses.clone(),
+                span,
+            };
+            self.compile_fn_def(&merged_fn)?;
+        }
+
+        Ok(())
     }
 
-    // Third pass: compile functions (they can now reference each other)
-    for item in &module.items {
-        if let Item::FnDef(fn_def) = item {
-            compiler.compile_fn_def(fn_def)?;
-        }
+    /// Compile a nested module definition.
+    fn compile_module_def(&mut self, module_def: &ModuleDef) -> Result<(), CompileError> {
+        // Push the module name onto the path
+        self.module_path.push(module_def.name.node.clone());
+
+        // Compile the module's items
+        self.compile_items(&module_def.items)?;
+
+        // Pop the module name from the path
+        self.module_path.pop();
+
+        Ok(())
     }
 
-    Ok(compiler)
+    /// Compile a use statement (import).
+    fn compile_use_stmt(&mut self, use_stmt: &UseStmt) -> Result<(), CompileError> {
+        // Build the module path from the use statement
+        let module_path: String = use_stmt.path.iter()
+            .map(|ident| ident.node.as_str())
+            .collect::<Vec<_>>()
+            .join(".");
+
+        match &use_stmt.imports {
+            UseImports::All => {
+                // `use Foo.*` - we can't easily support this without module introspection
+                // For now, we'll skip it (would need to know all exports from the module)
+            }
+            UseImports::Named(items) => {
+                for item in items {
+                    let local_name = item.alias.as_ref()
+                        .map(|a| a.node.clone())
+                        .unwrap_or_else(|| item.name.node.clone());
+                    let qualified_name = format!("{}.{}", module_path, item.name.node);
+                    self.imports.insert(local_name, qualified_name);
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1379,6 +2181,9 @@ mod tests {
         let mut vm = VM::new();
         for (name, func) in compiler.get_all_functions() {
             vm.functions.insert(name.clone(), func.clone());
+        }
+        for (name, type_val) in compiler.get_vm_types() {
+            vm.types.insert(name, type_val);
         }
 
         // Look for a main function
@@ -1831,19 +2636,12 @@ mod tests {
 
     #[test]
     fn test_e2e_record_field_access() {
+        // Test with positional field access which uses synthetic names
         let source = "
-            main() = {
-                p = Point(3, 4)
-                p.x + p.y
-            }
-        ";
-        // This test will fail if the VM doesn't have type info for Point
-        // Let's test with positional field access which uses synthetic names
-        let source2 = "
             getX(p) = p._0
             main() = getX(Point(42, 100))
         ";
-        let result = compile_and_run(source2);
+        let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int(42)));
     }
 
@@ -2342,5 +3140,724 @@ mod tests {
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int(17)));
+    }
+
+    // =========================================================================
+    // Map/Set literal tests
+    // =========================================================================
+
+    #[test]
+    fn test_e2e_map_literal_empty() {
+        let source = "
+            main() = %{}
+        ";
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::Map(m)) => {
+                assert!(m.is_empty());
+            }
+            other => panic!("Expected empty map, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_literal_simple() {
+        let source = r#"
+            main() = %{"a": 1, "b": 2}
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::Map(m)) => {
+                assert_eq!(m.len(), 2);
+            }
+            other => panic!("Expected map with 2 entries, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_set_literal_empty() {
+        let source = "
+            main() = #{}
+        ";
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::Set(s)) => {
+                assert!(s.is_empty());
+            }
+            other => panic!("Expected empty set, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_set_literal_simple() {
+        let source = "
+            main() = #{1, 2, 3}
+        ";
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::Set(s)) => {
+                assert_eq!(s.len(), 3);
+            }
+            other => panic!("Expected set with 3 elements, got {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // Multi-clause function dispatch tests
+    // =========================================================================
+
+    #[test]
+    fn test_e2e_multiclause_factorial() {
+        let source = "
+            factorial(0) = 1
+            factorial(n) = n * factorial(n - 1)
+            main() = factorial(5)
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(120)));
+    }
+
+    #[test]
+    fn test_e2e_multiclause_fibonacci() {
+        let source = "
+            fib(0) = 0
+            fib(1) = 1
+            fib(n) = fib(n - 1) + fib(n - 2)
+            main() = fib(10)
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(55)));
+    }
+
+    #[test]
+    fn test_e2e_multiclause_with_patterns() {
+        let source = "
+            len([]) = 0
+            len([_ | t]) = 1 + len(t)
+            main() = len([1, 2, 3, 4, 5])
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(5)));
+    }
+
+    #[test]
+    fn test_e2e_multiclause_sum_list() {
+        let source = "
+            sum([]) = 0
+            sum([h | t]) = h + sum(t)
+            main() = sum([1, 2, 3, 4, 5])
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(15)));
+    }
+
+    #[test]
+    fn test_e2e_multiclause_reverse() {
+        let source = "
+            reverse_acc([], acc) = acc
+            reverse_acc([h | t], acc) = reverse_acc(t, [h | acc])
+            reverse(xs) = reverse_acc(xs, [])
+            len([]) = 0
+            len([_ | t]) = 1 + len(t)
+            main() = len(reverse([1, 2, 3, 4, 5]))
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(5)));
+    }
+
+    #[test]
+    fn test_e2e_multiclause_variant_dispatch() {
+        let source = "
+            unwrap(None) = 0
+            unwrap(Some(x)) = x
+            main() = unwrap(Some(42)) + unwrap(None)
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_e2e_multiclause_either() {
+        let source = "
+            getValue(Left(x)) = x
+            getValue(Right(x)) = x
+            main() = getValue(Left(10)) + getValue(Right(32))
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_e2e_multiclause_tuple_pattern() {
+        let source = "
+            fst((a, _)) = a
+            snd((_, b)) = b
+            main() = fst((1, 2)) + snd((3, 4))
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(5)));
+    }
+
+    #[test]
+    fn test_e2e_multiclause_literal_match() {
+        let source = r#"
+            describe(0) = "zero"
+            describe(1) = "one"
+            describe(_) = "other"
+            main() = describe(1)
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(s.as_ref(), "one"),
+            other => panic!("Expected string 'one', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_multiclause_mixed_patterns() {
+        let source = "
+            classify(0, _) = 0
+            classify(_, 0) = 1
+            classify(a, b) = a + b
+            main() = classify(0, 5) + classify(5, 0) * 10 + classify(2, 3) * 100
+        ";
+        // 0 + 10 + 500 = 510
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(510)));
+    }
+
+    // =========================================================================
+    // Function with guards tests
+    // =========================================================================
+
+    #[test]
+    fn test_e2e_function_with_guard() {
+        let source = "
+            abs(n) when n < 0 = -n
+            abs(n) = n
+            main() = abs(-5) + abs(3)
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(8)));
+    }
+
+    #[test]
+    fn test_e2e_function_multiple_guards() {
+        let source = "
+            sign(n) when n < 0 = -1
+            sign(n) when n > 0 = 1
+            sign(_) = 0
+            main() = sign(-5) + sign(5) + sign(0)
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(0)));
+    }
+
+    #[test]
+    fn test_e2e_function_guard_with_pattern() {
+        let source = "
+            first_positive([]) = 0
+            first_positive([h | t]) when h > 0 = h
+            first_positive([_ | t]) = first_positive(t)
+            main() = first_positive([-3, -2, 5, 10])
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(5)));
+    }
+
+    // ===== String Interpolation Tests =====
+
+    #[test]
+    fn test_e2e_string_interpolation_simple() {
+        let source = r#"
+            main() = {
+                name = "World"
+                "Hello, ${name}!"
+            }
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "Hello, World!"),
+            other => panic!("Expected 'Hello, World!', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_interpolation_integer() {
+        let source = r#"
+            main() = {
+                x = 42
+                "The answer is ${x}"
+            }
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "The answer is 42"),
+            other => panic!("Expected 'The answer is 42', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_interpolation_expression() {
+        let source = r#"
+            main() = "Sum: ${1 + 2 + 3}"
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "Sum: 6"),
+            other => panic!("Expected 'Sum: 6', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_interpolation_multiple() {
+        let source = r#"
+            main() = {
+                a = 10
+                b = 20
+                "${a} + ${b} = ${a + b}"
+            }
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "10 + 20 = 30"),
+            other => panic!("Expected '10 + 20 = 30', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_interpolation_with_function_call() {
+        let source = r#"
+            double(x) = x * 2
+            main() = "Double of 21 is ${double(21)}"
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "Double of 21 is 42"),
+            other => panic!("Expected 'Double of 21 is 42', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_interpolation_nested_expr() {
+        let source = r#"
+            main() = "Result: ${if true then 1 else 0}"
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "Result: 1"),
+            other => panic!("Expected 'Result: 1', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_interpolation_no_interpolation() {
+        let source = r#"
+            main() = "Plain string without interpolation"
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "Plain string without interpolation"),
+            other => panic!("Expected plain string, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_interpolation_at_start() {
+        let source = r#"
+            main() = {
+                x = 42
+                "${x} is the answer"
+            }
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "42 is the answer"),
+            other => panic!("Expected '42 is the answer', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_interpolation_at_end() {
+        let source = r#"
+            main() = {
+                x = 42
+                "Answer: ${x}"
+            }
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "Answer: 42"),
+            other => panic!("Expected 'Answer: 42', got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_interpolation_only_expr() {
+        let source = r#"
+            main() = "${42}"
+        "#;
+        let result = compile_and_run(source);
+        match result {
+            Ok(Value::String(s)) => assert_eq!(&*s, "42"),
+            other => panic!("Expected '42', got {:?}", other),
+        }
+    }
+
+    // ===== Module System Tests =====
+
+    #[test]
+    fn test_e2e_module_nested_function() {
+        let source = "
+            module Math
+                pub add(a, b) = a + b
+                pub double(x) = x * 2
+            end
+
+            main() = Math.add(10, Math.double(16))
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_e2e_module_nested_module() {
+        let source = "
+            module Outer
+                pub module Inner
+                    pub value() = 21
+                end
+            end
+
+            main() = Outer.Inner.value() * 2
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_e2e_module_use_import() {
+        let source = "
+            module Math
+                pub add(a, b) = a + b
+            end
+
+            use Math.{add}
+
+            main() = add(20, 22)
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_e2e_module_use_alias() {
+        let source = "
+            module Math
+                pub multiply(a, b) = a * b
+            end
+
+            use Math.{multiply as mul}
+
+            main() = mul(6, 7)
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_e2e_module_multiple_functions() {
+        let source = "
+            module Utils
+                pub inc(x) = x + 1
+                dec(x) = x - 1
+                pub triple(x) = x * 3
+            end
+
+            main() = Utils.triple(Utils.inc(13))
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_e2e_module_recursive_function() {
+        let source = "
+            module Math
+                pub factorial(0) = 1
+                pub factorial(n) = n * factorial(n - 1)
+            end
+
+            main() = Math.factorial(5)
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(120)));
+    }
+
+    // ===== Visibility Tests =====
+
+    #[test]
+    fn test_e2e_visibility_private_access_denied() {
+        let source = "
+            module Secret
+                private_fn() = 42
+            end
+
+            main() = Secret.private_fn()
+        ";
+        let result = compile_and_run(source);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("PrivateAccess"), "Expected PrivateAccess error, got: {}", err);
+    }
+
+    #[test]
+    fn test_e2e_visibility_public_access_allowed() {
+        let source = "
+            module Public
+                pub public_fn() = 42
+            end
+
+            main() = Public.public_fn()
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_e2e_visibility_private_internal_call() {
+        // Private functions can call each other within the same module
+        let source = "
+            module Math
+                helper(x) = x * 2
+                pub double_plus_one(x) = helper(x) + 1
+            end
+
+            main() = Math.double_plus_one(20)
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(41)));
+    }
+
+    #[test]
+    fn test_e2e_visibility_nested_module_private() {
+        // Private nested module function should not be accessible
+        let source = "
+            module Outer
+                pub module Inner
+                    secret() = 42  // private in Inner
+                end
+            end
+
+            main() = Outer.Inner.secret()
+        ";
+        let result = compile_and_run(source);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_e2e_visibility_pub_type_and_function() {
+        // Test that pub works for both types and functions
+        let source = "
+            module Shapes
+                pub type Point = { x: Int, y: Int }
+                pub origin() = Point(0, 0)
+            end
+
+            main() = {
+                p = Shapes.origin()
+                p.x + p.y
+            }
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(0)));
+    }
+
+    // ===== Trait Tests =====
+
+    #[test]
+    fn test_e2e_trait_basic_parse_and_compile() {
+        // Test that the basic trait syntax parses and compiles (no method call yet)
+        // Based on working parser tests:
+        // parse_ok("trait Eq ==(self, other) -> Bool !=(self, other) = !(self == other) end");
+        // parse_ok("Point: Show show(self) = self.x end");
+        let source = "
+            type Point = { x: Int, y: Int }
+            trait Show show(self) -> Int end
+            Point: Show show(self) = self.x end
+            main() = 42
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_e2e_trait_explicit_qualified_call() {
+        // Test trait dispatch on record type
+        let source = "
+            type Point = { x: Int, y: Int }
+            trait GetX getX(self) -> Int end
+            Point: GetX getX(self) = self.x end
+            main() = Point(42, 10).getX()
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_e2e_trait_method_with_self_reference() {
+        // Test trait methods that use self
+        let source = "
+            type Counter = { value: Int }
+            trait Doubled doubled(self) -> Int end
+            Counter: Doubled doubled(self) = self.value * 2 end
+            main() = Counter(21).doubled()
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_e2e_trait_multiple_methods() {
+        // Test trait with multiple methods
+        let source = "
+            type Num = { value: Int }
+            trait Math add(self, n) -> Int sub(self, n) -> Int end
+            Num: Math add(self, n) = self.value + n sub(self, n) = self.value - n end
+            main() = Num(10).add(5) + Num(10).sub(3)
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(22))); // (10+5) + (10-3) = 15 + 7 = 22
+    }
+
+    #[test]
+    fn test_e2e_trait_method_dispatch_on_record_literal() {
+        // Test that method dispatch works on record constructors
+        let source = "
+            type Rectangle = { width: Int, height: Int }
+            trait Area area(self) -> Int end
+            Rectangle: Area area(self) = self.width * self.height end
+            main() = { r = Rectangle(4, 5) r.area() }
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(20)));
+    }
+
+    #[test]
+    fn test_e2e_trait_unknown_trait_error() {
+        // Test that implementing an unknown trait produces an error
+        let source = "
+            type Point = { x: Int, y: Int }
+            Point: NonExistent foo(self) = 42 end
+            main() = 1
+        ";
+        let result = compile_and_run(source);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("UnknownTrait"), "Expected UnknownTrait error, got: {}", err);
+    }
+
+    #[test]
+    fn test_e2e_trait_dispatch_on_int_literal() {
+        // Test trait method dispatch on Int literals
+        let source = "
+            trait Triple triple(self) -> Int end
+            Int: Triple triple(self) = self * 3 end
+            main() = 7.triple()
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(21)));
+    }
+
+    #[test]
+    fn test_e2e_trait_dispatch_on_string_literal() {
+        // Test trait method dispatch on String literals
+        let source = "
+            trait Greeting greet(self) -> String end
+            String: Greeting greet(self) = \"Hello, \" ++ self end
+            main() = \"World\".greet()
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::String(std::rc::Rc::new("Hello, World".to_string()))));
+    }
+
+    #[test]
+    fn test_e2e_trait_multiple_impls() {
+        // Test same trait implemented for multiple types
+        let source = "
+            type Point = { x: Int, y: Int }
+            type Rectangle = { w: Int, h: Int }
+            trait Size size(self) -> Int end
+            Point: Size size(self) = 2 end
+            Rectangle: Size size(self) = 4 end
+            main() = { p = Point(0, 0) r = Rectangle(5, 10) p.size() + r.size() }
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(6))); // 2 + 4 = 6
+    }
+
+    #[test]
+    fn test_e2e_trait_explicit_call() {
+        // Test explicit trait method call: Type.Trait.method(obj)
+        let source = "
+            type Box = { value: Int }
+            trait Doubler doubler(self) -> Int end
+            Box: Doubler doubler(self) = self.value * 2 end
+            main() = { b = Box(10) Box.Doubler.doubler(b) }
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(20)));
+    }
+
+    #[test]
+    fn test_e2e_trait_method_chaining() {
+        // Test calling trait methods on multiple values
+        // Note: True chaining like `a = 5.inc(); a.inc()` would require tracking
+        // return types of method calls, which is not yet implemented.
+        let source = "
+            trait Inc inc(self) -> Int end
+            Int: Inc inc(self) = self + 1 end
+            main() = 5.inc() + 6.inc()
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(13))); // 6 + 7 = 13
+    }
+
+    #[test]
+    fn test_e2e_trait_bool_impl() {
+        // Test trait implementation for Bool
+        let source = "
+            trait Toggle toggle(self) -> Bool end
+            Bool: Toggle toggle(self) = !self end
+            main() = if true.toggle() then 0 else 1
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(1))); // true.toggle() = false, so else branch
+    }
+
+    #[test]
+    fn test_e2e_trait_with_record_return() {
+        // Test trait methods that return records
+        let source = "
+            type Point = { x: Int, y: Int }
+            trait Cloner cloner(self) -> Point end
+            Point: Cloner cloner(self) = Point(self.x, self.y) end
+            main() = { p = Point(3, 4) p2 = p.cloner() p2.x + p2.y }
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(7)));
+    }
+
+    #[test]
+    fn test_e2e_trait_with_multiple_args() {
+        // Test trait methods with multiple arguments
+        let source = "
+            type Base = { value: Int }
+            trait Adder adder(self, x, y) -> Int end
+            Base: Adder adder(self, x, y) = self.value + x + y end
+            main() = { b = Base(10) b.adder(20, 30) }
+        ";
+        let result = compile_and_run(source);
+        assert_eq!(result, Ok(Value::Int(60)));
     }
 }

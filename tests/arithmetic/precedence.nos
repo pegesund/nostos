@@ -1,0 +1,4 @@
+# expect: 14
+# Operator precedence: multiplication before addition
+
+main() = 2 + 3 * 4

@@ -718,18 +718,57 @@ use Geometry.{Point, distance}
 
 ### Visibility
 
+Module items (functions, types, nested modules) are **private by default** and can be made public with the `pub` keyword:
+
+```
+module Math
+
+  # Private helper (not accessible outside module)
+  square(x) = x * x
+
+  # Public function (accessible from outside)
+  pub hypotenuse(a, b) = sqrt(square(a) + square(b))
+
+  # Public type
+  pub type Point = {x: Float, y: Float}
+
+  # Public nested module
+  pub module Trig
+    pub sin(x) = ...
+    cos(x) = ...                   # private within Trig
+  end
+
+end
+
+# Usage from outside
+Math.hypotenuse(3.0, 4.0)          # ok - pub function
+Math.square(5)                      # ERROR - private function
+p = Math.Point(1.0, 2.0)           # ok - pub type
+Math.Trig.sin(0.5)                 # ok - pub function in pub module
+Math.Trig.cos(0.5)                 # ERROR - cos is private
+```
+
+#### Private Record Fields
+
+Record fields can also be marked as private:
+
 ```
 module Account
 
   # Private field
   type T = {private balance: Float, name: String}
-  
-  # Public functions
-  new(name, initial) = T(balance: initial, name: name)
-  deposit(self: T, amount) = T(self, balance: self.balance + amount)
-  balance(self: T) = self.balance
+
+  # Public functions provide controlled access
+  pub new(name, initial) = T(balance: initial, name: name)
+  pub deposit(self: T, amount) = T(self, balance: self.balance + amount)
+  pub balance(self: T) = self.balance
 
 end
+
+# Usage
+acc = Account.new("Alice", 100.0)
+acc.balance()                      # ok - uses public accessor
+acc.balance                        # ERROR - field is private
 ```
 
 ### Operators
@@ -1242,6 +1281,7 @@ nostos/
 | Polymorphism | Traits (no inheritance) |
 | Methods | UFCS (dot syntax on any function) |
 | Mutation | `var` for bindings, `var type` for records |
+| Visibility | Private by default, `pub` for public |
 | Concurrency | Actors, message passing, supervision |
 | Metaprogramming | Full introspection, eval, quote, live modification |
 | VM | Register-based, typed bytecode |

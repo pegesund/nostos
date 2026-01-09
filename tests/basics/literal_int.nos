@@ -1,0 +1,4 @@
+# expect: 42
+# Basic integer literal
+
+main() = 42

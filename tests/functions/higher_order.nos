@@ -1,0 +1,8 @@
+# expect: 15
+# Higher-order function with lambda
+
+apply(f, x) = f(x)
+
+triple(n) = n * 3
+
+main() = apply(triple, 5)

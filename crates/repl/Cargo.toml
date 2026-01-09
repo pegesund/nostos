@@ -1,0 +1,13 @@
+[package]
+name = "nostos-repl"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nostos-syntax.workspace = true
+nostos-compiler.workspace = true
+nostos-vm.workspace = true
+nostos-types.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]

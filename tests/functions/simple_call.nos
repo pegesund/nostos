@@ -1,0 +1,6 @@
+# expect: 10
+# Simple function call
+
+double(x) = x * 2
+
+main() = double(5)
