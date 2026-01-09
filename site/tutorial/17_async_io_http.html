@@ -158,43 +158,23 @@ main() = {
                 <p class="text-slate-400 mb-4">Build scalable web services with Nostos's non-blocking HTTP server. The <strong>spawn-per-request</strong> pattern spawns a lightweight process for each incoming request, enabling high concurrency.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">
+use stdlib.server.{serve}
+
 handle(req) = {
     match req.path {
-        "/" -> Server.respond(req.id, 200, [("Content-Type", "text/plain")],
-            "Hello from Nostos!")
-        "/echo" -> Server.respond(req.id, 200, [("Content-Type", "text/plain")],
-            req.body)
-        _ -> Server.respond(req.id, 404, [("Content-Type", "text/plain")],
-            "Not Found: " ++ req.path)
+        "/" -> Server.respond(req.id, 200, [], "Hello from Nostos!")
+        "/echo" -> Server.respond(req.id, 200, [], req.body)
+        _ -> Server.respond(req.id, 404, [], "Not Found: " ++ req.path)
     }
 }
 
-acceptLoop(server) = {
-    ok = try {
-        req = Server.accept(server)
-        spawn { handle(req) }
-        true
-    } catch { _ -> false }
-
-    if ok then acceptLoop(server) else ()
-}
-
 main() = {
-    server = Server.bind(8080)
     println("Server running on http://localhost:8080")
-    acceptLoop(server)
+    serve(8080, handle)
 }
 </code></pre>
                 </div>
-                <div class="bg-yellow-900/30 border border-yellow-500/30 rounded-lg p-4 mb-8">
-                    <p class="text-yellow-200"><strong>Why spawn-per-request?</strong></p>
-                    <ul class="list-disc list-inside text-yellow-200 mt-2 space-y-1">
-                        <li>Each request runs in its own lightweight process</li>
-                        <li>Blocking operations (database, file I/O) only block that request</li>
-                        <li>Tail recursion OUTSIDE try enables proper optimization</li>
-                        <li>Memory-efficient: no stack growth over time</li>
-                    </ul>
-                </div>
+                <p class="text-slate-400 mb-4">The <code>serve(port, handler)</code> function handles the accept loop internally, spawning a new lightweight process for each request.</p>
 
 
                 <!-- Query Parameters -->
@@ -331,6 +311,8 @@ route(req) = {
                 <p class="text-slate-400 mb-4">Nostos supports WebSocket connections for real-time bidirectional communication. Check if a request is a WebSocket upgrade with <code>req.isWebSocket</code>, then use the WebSocket functions to communicate.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">
+use stdlib.server.{serve}
+
 wsEchoLoop(ws) = {
     ok = try {
         msg = WebSocket.recv(ws)
@@ -364,20 +346,9 @@ route(req) = {
     }
 }
 
-acceptLoop(server) = {
-    ok = try {
-        req = Server.accept(server)
-        spawn { route(req) }
-        true
-    } catch { _ -> false }
-    if ok then acceptLoop(server) else ()
-}
-
 main() = {
-    server = Server.bind(8080)
-    println("Server running on http://localhost:8080")
     println("WebSocket echo at ws://localhost:8080/echo")
-    acceptLoop(server)
+    serve(8080, route)
 }
 </code></pre>
                 </div>

@@ -1,14 +1,12 @@
 # Web Server with HTML Templating
 #
-# Demonstrates combining the HTTP server with Html(...) templating.
-# Uses spawn-per-request pattern for concurrent handling.
-#
 # Test:
 #   curl http://localhost:8080/
 #   curl http://localhost:8080/users
 #   curl http://localhost:8080/users/42
 
 use stdlib.html.{Html, render}
+use stdlib.server.{serve}
 
 # --- HTML Components ---
 
@@ -122,17 +120,12 @@ handle404(req) = {
     Server.respond(req.id, 404, [("Content-Type", "text/html")], html)
 }
 
-# --- Router ---
-
 route(req) = {
     path = req.path
 
-    # Static routes
     if path == "/" then handleHome(req)
     else if path == "/users" then handleUsers(req)
     else if path == "/about" then handleAbout(req)
-
-    # Dynamic routes with Server.matchPath
     else {
         params = Server.matchPath(path, "/users/:id")
         if length(params) > 0 then {
@@ -143,24 +136,7 @@ route(req) = {
     }
 }
 
-# --- Server ---
-
-acceptLoop(server) = {
-    ok = try {
-        req = Server.accept(server)
-        spawn { route(req) }
-        true
-    } catch { _ -> false }
-
-    if ok then acceptLoop(server) else ()
-}
-
 main() = {
-    server = Server.bind(8080)
     println("HTML Server running on http://localhost:8080")
-    println("  /         - Home page")
-    println("  /users    - User list")
-    println("  /users/42 - User detail")
-    println("  /about    - About page")
-    acceptLoop(server)
+    serve(8080, route)
 }
