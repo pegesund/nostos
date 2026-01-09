@@ -4578,7 +4578,7 @@ impl AsyncProcess {
                         }
                         Err(e) => {
                             // Throw catchable exception
-                            self.throw_exception(format!("Pg.connect: {}", e))?;
+                            self.throw_exception("connection_error", format!("{}", e))?;
                         }
                     }
                 } else {
@@ -4632,7 +4632,7 @@ impl AsyncProcess {
                         }
                         Err(e) => {
                             // Throw catchable exception
-                            self.throw_exception(format!("Pg.query: {}", e))?;
+                            self.throw_exception("query_error", format!("{}", e))?;
                         }
                     }
                 } else {
@@ -4686,7 +4686,7 @@ impl AsyncProcess {
                         }
                         Err(e) => {
                             // Throw catchable exception
-                            self.throw_exception(format!("Pg.execute: {}", e))?;
+                            self.throw_exception("execute_error", format!("{}", e))?;
                         }
                     }
                 } else {
@@ -4933,9 +4933,14 @@ impl AsyncProcess {
         false
     }
 
-    /// Throw a catchable exception. Returns Ok(true) if caught, Err if uncaught.
-    fn throw_exception(&mut self, message: String) -> Result<bool, RuntimeError> {
-        let exception = GcValue::String(self.heap.alloc_string(message.clone()));
+    /// Throw a catchable exception as a (kind, message) tuple.
+    /// Returns Ok(true) if caught, Err if uncaught.
+    fn throw_exception(&mut self, kind: &str, message: String) -> Result<bool, RuntimeError> {
+        // Create a tuple (kind, message) for pattern matching
+        let kind_val = GcValue::String(self.heap.alloc_string(kind.to_string()));
+        let msg_val = GcValue::String(self.heap.alloc_string(message.clone()));
+        let tuple_ptr = self.heap.alloc_tuple(vec![kind_val, msg_val]);
+        let exception = GcValue::Tuple(tuple_ptr);
         self.current_exception = Some(exception);
 
         // Find the most recent handler
@@ -4949,7 +4954,7 @@ impl AsyncProcess {
             Ok(true)
         } else {
             // No handler - propagate as runtime error
-            Err(RuntimeError::Panic(format!("Uncaught exception: {}", message)))
+            Err(RuntimeError::Panic(format!("Uncaught exception: ({}, {})", kind, message)))
         }
     }
 }
