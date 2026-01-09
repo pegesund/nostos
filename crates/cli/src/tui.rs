@@ -1966,8 +1966,28 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                     StyledString::plain(format!("📁 {}", name))
                 }
             }
-            BrowserItem::Type { name } => StyledString::plain(format!("📦 {}", name)),
-            BrowserItem::Trait { name } => StyledString::plain(format!("🔷 {}", name)),
+            BrowserItem::Type { name, eval_created } => {
+                let eval_prefix = if *eval_created { "[eval] " } else { "" };
+                let mut styled = StyledString::plain(format!("📦 {}{}", eval_prefix, name));
+                if *eval_created {
+                    styled = StyledString::styled(
+                        styled.source(),
+                        Style::from(Color::Rgb(100, 180, 200))  // Muted cyan for eval
+                    );
+                }
+                styled
+            }
+            BrowserItem::Trait { name, eval_created } => {
+                let eval_prefix = if *eval_created { "[eval] " } else { "" };
+                let mut styled = StyledString::plain(format!("🔷 {}{}", eval_prefix, name));
+                if *eval_created {
+                    styled = StyledString::styled(
+                        styled.source(),
+                        Style::from(Color::Rgb(100, 180, 200))  // Muted cyan for eval
+                    );
+                }
+                styled
+            }
             BrowserItem::Function { name, signature, doc, eval_created } => {
                 // Check compile status for this function
                 let qualified_name = format!("{}{}", module_prefix, name);
@@ -2002,12 +2022,21 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 }
                 styled
             }
-            BrowserItem::Variable { name, mutable } => {
-                if *mutable {
-                    StyledString::plain(format!("⚡ var {}", name))
+            BrowserItem::Variable { name, mutable, eval_created } => {
+                let eval_prefix = if *eval_created { "[eval] " } else { "" };
+                let text = if *mutable {
+                    format!("⚡ var {}{}", eval_prefix, name)
                 } else {
-                    StyledString::plain(format!("📌 {}", name))
+                    format!("📌 {}{}", eval_prefix, name)
+                };
+                let mut styled = StyledString::plain(text);
+                if *eval_created {
+                    styled = StyledString::styled(
+                        styled.source(),
+                        Style::from(Color::Rgb(100, 180, 200))  // Muted cyan for eval
+                    );
                 }
+                styled
             }
             BrowserItem::Metadata { .. } => StyledString::plain("⚙  _meta (together directives)"),
         };
@@ -2108,21 +2137,21 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 s.pop_layer();
                 open_editor(s, &full_name);
             }
-            BrowserItem::Type { name } => {
+            BrowserItem::Type { name, .. } => {
                 // Open type in editor directly (preview pane shows info)
                 let full_name = engine.borrow().get_full_name(&new_path, item);
                 debug_log(&format!("Browser: selected Type: {} -> full_name: {}", name, full_name));
                 s.pop_layer();
                 open_editor(s, &full_name);
             }
-            BrowserItem::Trait { name } => {
+            BrowserItem::Trait { name, .. } => {
                 // Open trait in editor directly (preview pane shows info)
                 let full_name = engine.borrow().get_full_name(&new_path, item);
                 debug_log(&format!("Browser: selected Trait: {} -> full_name: {}", name, full_name));
                 s.pop_layer();
                 open_editor(s, &full_name);
             }
-            BrowserItem::Variable { name, mutable: _ } => {
+            BrowserItem::Variable { name, .. } => {
                 // Get variable value and open in inspector
                 // Try REPL binding first, then mvar with qualified name
                 let var_name = name.clone();
@@ -2370,8 +2399,8 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 // Only allow deleting functions, types, traits, variables
                 let (name, kind) = match &item {
                     BrowserItem::Function { name, .. } => (name.clone(), "function"),
-                    BrowserItem::Type { name } => (name.clone(), "type"),
-                    BrowserItem::Trait { name } => (name.clone(), "trait"),
+                    BrowserItem::Type { name, .. } => (name.clone(), "type"),
+                    BrowserItem::Trait { name, .. } => (name.clone(), "trait"),
                     BrowserItem::Variable { name, .. } => (name.clone(), "variable"),
                     _ => return, // Can't delete modules or metadata
                 };

@@ -197,8 +197,12 @@ pub struct SharedState {
     pub eval_callback: Arc<RwLock<Option<Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>>>>,
     /// Dynamically added functions (from eval) - can be modified at runtime
     pub dynamic_functions: Arc<RwLock<HashMap<String, Arc<FunctionValue>>>>,
+    /// Dynamically added types (from eval) - can be modified at runtime
+    pub dynamic_types: Arc<RwLock<HashMap<String, Arc<TypeValue>>>>,
     /// Stdlib functions (from main compiler) - available to eval
     pub stdlib_functions: Arc<RwLock<HashMap<String, Arc<FunctionValue>>>>,
+    /// Stdlib types (from main compiler) - available to eval
+    pub stdlib_types: Arc<RwLock<HashMap<String, Arc<TypeValue>>>>,
     /// Stdlib function list (ordered names) - preserves indices for CallDirect
     pub stdlib_function_list: Arc<RwLock<Vec<String>>>,
     /// Prelude imports (local name -> qualified name) - for eval to resolve unqualified function names
@@ -679,7 +683,9 @@ impl ParallelVM {
             panel_command_sender: None,
             eval_callback: Arc::new(RwLock::new(None)),
             dynamic_functions: Arc::new(RwLock::new(HashMap::new())),
+            dynamic_types: Arc::new(RwLock::new(HashMap::new())),
             stdlib_functions: Arc::new(RwLock::new(HashMap::new())),
+            stdlib_types: Arc::new(RwLock::new(HashMap::new())),
             stdlib_function_list: Arc::new(RwLock::new(Vec::new())),
             prelude_imports: Arc::new(RwLock::new(HashMap::new())),
             mvars: HashMap::new(),
@@ -797,6 +803,25 @@ impl ParallelVM {
     pub fn set_stdlib_functions(&self, functions: HashMap<String, Arc<FunctionValue>>) {
         let mut stdlib = self.shared.stdlib_functions.write();
         *stdlib = functions;
+    }
+
+    /// Get a clone of the dynamic_types Arc for runtime type registration.
+    /// This is used by eval() to add types that persist during the VM run.
+    pub fn get_dynamic_types(&self) -> Arc<RwLock<HashMap<String, Arc<TypeValue>>>> {
+        self.shared.dynamic_types.clone()
+    }
+
+    /// Get a clone of the stdlib_types Arc.
+    /// This allows eval() to access types from the main compiler (stdlib).
+    pub fn get_stdlib_types(&self) -> Arc<RwLock<HashMap<String, Arc<TypeValue>>>> {
+        self.shared.stdlib_types.clone()
+    }
+
+    /// Set the stdlib types from the main compiler.
+    /// This should be called after the main compiler has loaded stdlib.
+    pub fn set_stdlib_types(&self, types: HashMap<String, Arc<TypeValue>>) {
+        let mut stdlib = self.shared.stdlib_types.write();
+        *stdlib = types;
     }
 
     /// Get a clone of the stdlib_function_list Arc.
