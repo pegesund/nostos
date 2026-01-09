@@ -497,6 +497,38 @@ impl<'a> InferCtx<'a> {
             // IO
             (Type::IO(inner1), Type::IO(inner2)) => self.unify_types(inner1, inner2),
 
+            // Typed arrays are compatible with List for type inference purposes
+            // Int64Array <-> List[Int] or List[Int64]
+            (Type::Named { name, args }, Type::List(elem))
+            | (Type::List(elem), Type::Named { name, args })
+                if name == "Int64Array" && args.is_empty() =>
+            {
+                // Int64Array is compatible with List[Int] or List[Int64]
+                match elem.as_ref() {
+                    Type::Int | Type::Int64 => Ok(()),
+                    Type::Var(_) => {
+                        // Constrain the element type to Int
+                        self.unify_types(elem, &Type::Int)
+                    }
+                    _ => Err(TypeError::UnificationFailed(t1.display(), t2.display())),
+                }
+            }
+            // Float64Array <-> List[Float] or List[Float64]
+            (Type::Named { name, args }, Type::List(elem))
+            | (Type::List(elem), Type::Named { name, args })
+                if name == "Float64Array" && args.is_empty() =>
+            {
+                // Float64Array is compatible with List[Float] or List[Float64]
+                match elem.as_ref() {
+                    Type::Float | Type::Float64 => Ok(()),
+                    Type::Var(_) => {
+                        // Constrain the element type to Float
+                        self.unify_types(elem, &Type::Float)
+                    }
+                    _ => Err(TypeError::UnificationFailed(t1.display(), t2.display())),
+                }
+            }
+
             // Mismatch
             _ => Err(TypeError::UnificationFailed(t1.display(), t2.display())),
         }
