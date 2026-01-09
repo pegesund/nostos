@@ -342,6 +342,16 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "makeRecordByName", signature: "String -> Map[String, Json] -> a", doc: "Construct record by type name string: makeRecordByName(\"Person\", fields)" },
     BuiltinInfo { name: "makeVariantByName", signature: "String -> String -> Map[String, Json] -> a", doc: "Construct variant by type name: makeVariantByName(\"Result\", \"Ok\", fields)" },
     BuiltinInfo { name: "jsonToTypeByName", signature: "String -> Json -> a", doc: "Convert Json to typed value by type name: jsonToTypeByName(\"Person\", json)" },
+
+    // === Runtime Stats ===
+    BuiltinInfo { name: "Runtime.threadCount", signature: "() -> Int", doc: "Get number of available CPU threads" },
+    BuiltinInfo { name: "Runtime.uptimeMs", signature: "() -> Int", doc: "Get milliseconds since program started" },
+    BuiltinInfo { name: "Runtime.memoryKb", signature: "() -> Int", doc: "Get current process memory usage in KB (Linux only)" },
+    BuiltinInfo { name: "Runtime.pid", signature: "() -> Int", doc: "Get current process ID" },
+    BuiltinInfo { name: "Runtime.loadAvg", signature: "() -> (Float, Float, Float)", doc: "Get 1, 5, 15 minute load averages (Linux only)" },
+    BuiltinInfo { name: "Runtime.numThreads", signature: "() -> Int", doc: "Get number of OS threads in process (Linux only)" },
+    BuiltinInfo { name: "Runtime.tokioWorkers", signature: "() -> Int", doc: "Get number of tokio worker threads (Linux only)" },
+    BuiltinInfo { name: "Runtime.blockingThreads", signature: "() -> Int", doc: "Get number of tokio blocking threads (Linux only)" },
 ];
 
 /// Extract doc comment immediately preceding a definition at the given span start.
@@ -819,6 +829,7 @@ impl Compiler {
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
             "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array", "Buffer",
+            "Runtime",
         ].iter().map(|s| s.to_string()).collect();
 
         let mut this = Self {
@@ -1273,6 +1284,7 @@ impl Compiler {
             "Channel", "Regex", "Json", "Http", "Net", "Sys", "Env", "Process",
             "Base64", "Url", "Encoding", "Server", "Exec", "Random", "Path", "Panel",
             "Pg", "Uuid", "Crypto", "Float64Array", "Int64Array", "Float32Array", "Buffer",
+            "Runtime",
         ].iter().map(|s| s.to_string()).collect();
 
         Self {
@@ -4141,6 +4153,13 @@ impl Compiler {
                         }
                         // Random functions (0 args)
                         "Random.float" | "Random.bool" if args.is_empty() => {
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![].into()), line);
+                            return Ok(dst);
+                        }
+                        // Runtime stats functions (0 args)
+                        "Runtime.threadCount" | "Runtime.uptimeMs" | "Runtime.memoryKb" | "Runtime.pid" | "Runtime.loadAvg" | "Runtime.numThreads" | "Runtime.tokioWorkers" | "Runtime.blockingThreads" if args.is_empty() => {
                             let dst = self.alloc_reg();
                             let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
                             self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![].into()), line);
