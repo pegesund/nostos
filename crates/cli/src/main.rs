@@ -427,10 +427,11 @@ fn run_with_async_vm(
     }
     }
 
-    // Set up Ctrl+C handler for interrupting running code
-    let interrupt_handle = vm.get_interrupt_handle();
+    // Set up Ctrl+C handler - exit immediately since IO operations may block
+    // and not check the interrupt flag
     if let Err(e) = ctrlc::set_handler(move || {
-        interrupt_handle.interrupt.store(true, Ordering::SeqCst);
+        eprintln!("\nInterrupted");
+        std::process::exit(130); // 128 + SIGINT(2)
     }) {
         eprintln!("Warning: Could not set Ctrl+C handler: {}", e);
     }
