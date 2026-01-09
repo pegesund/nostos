@@ -126,6 +126,7 @@ pub struct TypeDef {
     pub visibility: Visibility,
     pub doc: Option<String>,
     pub mutable: bool,
+    pub reactive: bool,
     pub name: Ident,
     pub type_params: Vec<TypeParam>,
     pub body: TypeBody,

@@ -398,6 +398,7 @@ fn format_value_short(value: &GcValue) -> String {
         GcValue::Pointer(p) => format!("<Pointer 0x{:x}>", p),
         GcValue::Buffer(_) => "<Buffer>".to_string(),
         GcValue::NativeHandle(_) => "<NativeHandle>".to_string(),
+        GcValue::ReactiveRecord(r) => format!("<ReactiveRecord {}>", r.type_name),
     }
 }
 

@@ -20,6 +20,8 @@ pub enum Token {
     // === Keywords ===
     #[token("type")]
     Type,
+    #[token("reactive")]
+    Reactive,
     #[token("var")]
     Var,
     #[token("mvar")]
@@ -432,6 +434,7 @@ impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Token::Type => write!(f, "type"),
+            Token::Reactive => write!(f, "reactive"),
             Token::Var => write!(f, "var"),
             Token::Mvar => write!(f, "mvar"),
             Token::If => write!(f, "if"),

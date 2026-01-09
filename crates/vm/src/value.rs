@@ -67,6 +67,7 @@ pub enum Value {
 
     // === Structured values ===
     Record(Arc<RecordValue>),
+    ReactiveRecord(Arc<ReactiveRecordValue>),
     Variant(Arc<VariantValue>),
 
     // === Callable values ===
@@ -199,6 +200,107 @@ pub struct RecordValue {
     pub fields: Vec<Value>,
     /// Which fields are mutable
     pub mutable_fields: Vec<bool>,
+}
+
+/// A reactive record with parent tracking for automatic update propagation.
+/// Field assignments propagate to all parent containers automatically.
+#[derive(Clone)]
+pub struct ReactiveRecordValue {
+    /// Type name (e.g., "Point")
+    pub type_name: String,
+    /// Field names in order
+    pub field_names: Vec<String>,
+    /// Field values (parallel to field_names) - wrapped in RwLock for mutation
+    pub fields: Arc<std::sync::RwLock<Vec<Value>>>,
+    /// Bitmask of which fields contain reactive records (for .children)
+    pub reactive_field_mask: u64,
+    /// Parent references: (weak_parent, field_index_in_parent)
+    /// Uses Weak to avoid reference cycles
+    pub parents: Arc<std::sync::RwLock<Vec<(std::sync::Weak<ReactiveRecordValue>, u16)>>>,
+}
+
+impl ReactiveRecordValue {
+    /// Create a new reactive record
+    pub fn new(type_name: String, field_names: Vec<String>, fields: Vec<Value>, reactive_field_mask: u64) -> Self {
+        ReactiveRecordValue {
+            type_name,
+            field_names,
+            fields: Arc::new(std::sync::RwLock::new(fields)),
+            reactive_field_mask,
+            parents: Arc::new(std::sync::RwLock::new(Vec::new())),
+        }
+    }
+
+    /// Get a field value by index
+    pub fn get_field(&self, index: usize) -> Option<Value> {
+        self.fields.read().ok()?.get(index).cloned()
+    }
+
+    /// Set a field value by index and propagate to parents
+    pub fn set_field(&self, index: usize, value: Value) -> bool {
+        if let Ok(mut fields) = self.fields.write() {
+            if index < fields.len() {
+                fields[index] = value;
+                // Note: parent propagation is handled by the VM instruction
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Add a parent reference
+    pub fn add_parent(&self, parent: std::sync::Weak<ReactiveRecordValue>, field_index: u16) {
+        if let Ok(mut parents) = self.parents.write() {
+            parents.push((parent, field_index));
+        }
+    }
+
+    /// Remove a specific parent reference
+    pub fn remove_parent(&self, parent_ptr: *const ReactiveRecordValue) {
+        if let Ok(mut parents) = self.parents.write() {
+            parents.retain(|(weak, _)| {
+                weak.upgrade().map_or(true, |arc| Arc::as_ptr(&arc) != parent_ptr)
+            });
+        }
+    }
+
+    /// Clean up expired weak references
+    pub fn cleanup_parents(&self) {
+        if let Ok(mut parents) = self.parents.write() {
+            parents.retain(|(weak, _)| weak.strong_count() > 0);
+        }
+    }
+
+    /// Get list of (parent, field_name) pairs for introspection
+    pub fn get_parents(&self) -> Vec<(Arc<ReactiveRecordValue>, String)> {
+        let mut result = Vec::new();
+        if let Ok(parents) = self.parents.read() {
+            for (weak, field_idx) in parents.iter() {
+                if let Some(parent) = weak.upgrade() {
+                    let field_name = parent.field_names.get(*field_idx as usize)
+                        .cloned()
+                        .unwrap_or_default();
+                    result.push((parent, field_name));
+                }
+            }
+        }
+        result
+    }
+
+    /// Get list of reactive children for introspection
+    pub fn get_children(&self) -> Vec<Arc<ReactiveRecordValue>> {
+        let mut result = Vec::new();
+        if let Ok(fields) = self.fields.read() {
+            for (i, field) in fields.iter().enumerate() {
+                if (self.reactive_field_mask & (1 << i)) != 0 {
+                    if let Value::ReactiveRecord(child) = field {
+                        result.push(child.clone());
+                    }
+                }
+            }
+        }
+        result
+    }
 }
 
 /// A variant value (tagged union).
@@ -374,6 +476,7 @@ pub struct TypeValue {
 pub enum TypeKind {
     Primitive,
     Record { mutable: bool },
+    Reactive,
     Variant,
     Alias { target: String },
 }
@@ -681,6 +784,8 @@ pub enum Instruction {
     // === Records ===
     /// Create record: dst = TypeName{fields...}
     MakeRecord(Reg, ConstIdx, RegList),
+    /// Create reactive record: dst = reactive TypeName{fields...}
+    MakeReactiveRecord(Reg, ConstIdx, RegList),
     /// Get field: dst = record.field
     GetField(Reg, Reg, ConstIdx),
     /// Set field: record.field = value
@@ -1226,6 +1331,7 @@ impl Value {
             Value::Map(_) => "Map",
             Value::Set(_) => "Set",
             Value::Record(r) => &r.type_name,
+            Value::ReactiveRecord(r) => &r.type_name,
             Value::Variant(v) => &v.type_name,
             Value::Function(_) => "Function",
             Value::Closure(_) => "Closure",
@@ -1315,6 +1421,16 @@ impl fmt::Debug for Value {
                 for (i, (name, val)) in r.field_names.iter().zip(r.fields.iter()).enumerate() {
                     if i > 0 { write!(f, ", ")?; }
                     write!(f, "{}: {:?}", name, val)?;
+                }
+                write!(f, "}}")
+            }
+            Value::ReactiveRecord(r) => {
+                write!(f, "reactive {}{{", r.type_name)?;
+                if let Ok(fields) = r.fields.read() {
+                    for (i, (name, val)) in r.field_names.iter().zip(fields.iter()).enumerate() {
+                        if i > 0 { write!(f, ", ")?; }
+                        write!(f, "{}: {:?}", name, val)?;
+                    }
                 }
                 write!(f, "}}")
             }

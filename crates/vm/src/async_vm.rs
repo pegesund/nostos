@@ -62,7 +62,7 @@ pub enum HeldMvarLock {
 // - ThreadSafeValue is designed to be Send + Sync (only contains primitives, String, Arc)
 unsafe impl Send for HeldMvarLock {}
 use crate::process::{CallFrame, ExceptionHandler, ProcessState, ThreadSafeValue, ProfileData};
-use crate::value::{FunctionValue, Pid, TypeValue, RefId, RuntimeError, Value};
+use crate::value::{FunctionValue, Pid, TypeValue, RefId, RuntimeError, Value, ReactiveRecordValue};
 use crate::shared_types::SendableValue;
 use crate::io_runtime::{IoRequest, IoRuntime};
 use crate::process::IoResponseValue;
@@ -3117,7 +3117,16 @@ impl AsyncProcess {
                             .clone();
                         set_reg!(dst, value);
                     }
-                    _ => return Err(RuntimeError::Panic("GetField expects record, variant, or tuple".into())),
+                    GcValue::ReactiveRecord(rec) => {
+                        let idx = rec.field_names.iter().position(|n| n == &field_name)
+                            .ok_or_else(|| RuntimeError::Panic(format!("Unknown field: {}", field_name)))?;
+                        let value = rec.get_field(idx)
+                            .ok_or_else(|| RuntimeError::Panic("Failed to read reactive record field".into()))?;
+                        // Convert Value to GcValue
+                        let gc_value = self.heap.value_to_gc(&value);
+                        set_reg!(dst, gc_value);
+                    }
+                    _ => return Err(RuntimeError::Panic("GetField expects record, variant, tuple, or reactive record".into())),
                 }
             }
 
@@ -4045,6 +4054,42 @@ impl AsyncProcess {
                     .unwrap_or_else(|| vec![false; fields.len()]);
                 let ptr = self.heap.alloc_record(type_name, field_names, fields, mutable_fields);
                 set_reg!(dst, GcValue::Record(ptr));
+            }
+
+            MakeReactiveRecord(dst, type_idx, ref field_regs) => {
+                let type_name = match get_const!(type_idx) {
+                    Value::String(s) => (*s).clone(),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let gc_fields: Vec<GcValue> = field_regs.iter().map(|&r| reg!(r)).collect();
+                // Look up type in static types first, then dynamic_types (eval-defined)
+                let type_info = self.shared.types.read().unwrap().get(&type_name).cloned()
+                    .or_else(|| self.shared.dynamic_types.read().unwrap().get(&type_name).cloned());
+                let field_names: Vec<String> = type_info
+                    .as_ref()
+                    .map(|t| t.fields.iter().map(|f| f.name.clone()).collect())
+                    .unwrap_or_else(|| (0..gc_fields.len()).map(|i| format!("_{}", i)).collect());
+
+                // Convert GcValue fields to Value fields and compute reactive field mask
+                let mut reactive_mask: u64 = 0;
+                let fields: Vec<Value> = gc_fields.iter().enumerate().map(|(i, gv)| {
+                    // Check if this field is a reactive record
+                    if matches!(gv, GcValue::ReactiveRecord(_)) {
+                        reactive_mask |= 1 << i;
+                    }
+                    self.heap.gc_to_value(gv)
+                }).collect();
+
+                let reactive_record = Arc::new(ReactiveRecordValue::new(
+                    type_name,
+                    field_names,
+                    fields,
+                    reactive_mask,
+                ));
+                set_reg!(dst, GcValue::ReactiveRecord(reactive_record));
             }
 
             GetVariantField(dst, src, idx) => {
@@ -6799,6 +6844,7 @@ impl AsyncProcess {
                     GcValue::Float32Array(_) => "Float32Array",
                     GcValue::Buffer(_) => "Buffer",
                     GcValue::NativeHandle(_) => "NativeHandle",
+                    GcValue::ReactiveRecord(_) => "ReactiveRecord",
                 }.to_string();
                 let str_ptr = self.heap.alloc_string(type_name);
                 set_reg!(dst, GcValue::String(str_ptr));
@@ -7816,6 +7862,21 @@ impl AsyncProcess {
                 let ptr = self.heap.alloc_variant(json_type, Arc::new("String".to_string()), vec![GcValue::String(str_ptr)]);
                 Ok(GcValue::Variant(ptr))
             }
+            GcValue::ReactiveRecord(rec) => {
+                // Convert reactive record to JSON object
+                let fields = rec.fields.read().map_err(|_| RuntimeError::Panic("Failed to read reactive record".to_string()))?;
+                let mut pairs = Vec::new();
+                for (name, value) in rec.field_names.iter().zip(fields.iter()) {
+                    let gc_value = self.heap.value_to_gc(value);
+                    let json_value = self.value_to_json(gc_value)?;
+                    let name_ptr = self.heap.alloc_string(name.clone());
+                    let tuple_ptr = self.heap.alloc_tuple(vec![GcValue::String(name_ptr), json_value]);
+                    pairs.push(GcValue::Tuple(tuple_ptr));
+                }
+                let list = GcList::from_vec(pairs);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Object".to_string()), vec![GcValue::List(list)]);
+                Ok(GcValue::Variant(ptr))
+            }
         }
     }
 
@@ -7847,6 +7908,7 @@ impl AsyncProcess {
         let kind_str = match &type_val.kind {
             crate::value::TypeKind::Primitive => "primitive",
             crate::value::TypeKind::Record { .. } => "record",
+            crate::value::TypeKind::Reactive => "reactive",
             crate::value::TypeKind::Variant => "variant",
             crate::value::TypeKind::Alias { .. } => "alias",
         };
