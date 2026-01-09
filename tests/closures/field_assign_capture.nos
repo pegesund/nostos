@@ -1,0 +1,16 @@
+# Test that closures properly capture variables used in field assignment targets
+# This was a bug where `obj.field = value` didn't capture `obj`
+# expect: 42
+
+reactive Counter = { value: Int }
+
+main() = {
+    c = Counter(0)
+    
+    # This closure only writes to c.value (doesn't read it first)
+    # The compiler must capture `c` even though it's only in write position
+    setter = (n) => { c.value = n }
+    
+    setter(42)
+    c.value
+}
