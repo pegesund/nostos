@@ -42,7 +42,13 @@ fn syntax_highlight_code(source: &str) -> StyledString {
     let mut styled = StyledString::new();
 
     for line in source.lines() {
+        let mut pos = 0;  // Track position to preserve whitespace
         for (token, span) in lex(line) {
+            // Add any whitespace/characters between previous token and this one
+            if span.start > pos {
+                styled.append_plain(&line[pos..span.start]);
+            }
+
             let color = match token {
                 Token::Type | Token::Var | Token::If | Token::Then | Token::Else |
                 Token::Match | Token::When | Token::Trait | Token::Module | Token::End |
@@ -82,6 +88,11 @@ fn syntax_highlight_code(source: &str) -> StyledString {
 
             let text = &line[span.start..span.end];
             styled.append_styled(text, Style::from(color));
+            pos = span.end;
+        }
+        // Add any trailing content on the line
+        if pos < line.len() {
+            styled.append_plain(&line[pos..]);
         }
         styled.append_plain("\n");
     }
