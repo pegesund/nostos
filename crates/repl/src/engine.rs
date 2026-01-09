@@ -1800,7 +1800,77 @@ impl ReplEngine {
 
             return output;
         }
+
+        // Check dynamic_types (eval-created types)
+        {
+            let dyn_types = self.dynamic_types.read();
+            if let Some(type_val) = dyn_types.get(name) {
+                if let Some(ref source) = type_val.source_code {
+                    return source.clone();
+                }
+                // Reconstruct from TypeValue if no source
+                return self.reconstruct_type_source(type_val);
+            }
+        }
+
         format!("Not found: {}", name)
+    }
+
+    /// Reconstruct type source from TypeValue (for eval-created types without source)
+    fn reconstruct_type_source(&self, type_val: &nostos_vm::value::TypeValue) -> String {
+        use nostos_vm::value::TypeKind;
+
+        let mut output = String::new();
+        output.push_str("type ");
+        output.push_str(&type_val.name);
+
+        // Add type parameters if any
+        if !type_val.type_params.is_empty() {
+            output.push('[');
+            output.push_str(&type_val.type_params.join(", "));
+            output.push(']');
+        }
+
+        output.push_str(" = ");
+
+        match &type_val.kind {
+            TypeKind::Record { .. } => {
+                output.push_str("{ ");
+                let fields: Vec<String> = type_val.fields.iter()
+                    .map(|f| format!("{}: {}", f.name, f.type_name))
+                    .collect();
+                output.push_str(&fields.join(", "));
+                output.push_str(" }");
+            }
+            TypeKind::Variant => {
+                let variants: Vec<String> = type_val.constructors.iter()
+                    .map(|c| {
+                        if c.fields.is_empty() {
+                            c.name.clone()
+                        } else {
+                            let fields: Vec<String> = c.fields.iter()
+                                .map(|f| f.type_name.clone())
+                                .collect();
+                            format!("{}({})", c.name, fields.join(", "))
+                        }
+                    })
+                    .collect();
+                output.push_str(&variants.join(" | "));
+            }
+            TypeKind::Alias { target } => {
+                output.push_str(target);
+            }
+            TypeKind::Primitive => {
+                output.push_str("# primitive type");
+            }
+        }
+
+        if !type_val.traits.is_empty() {
+            output.push_str(" deriving ");
+            output.push_str(&type_val.traits.join(", "));
+        }
+
+        output
     }
 
     /// Get all source code for a module
@@ -2733,7 +2803,7 @@ impl ReplEngine {
             }
         }
 
-        // Process types
+        // Process types from compiler
         for name in self.compiler.get_type_names() {
             let is_eval = self.is_eval_type(name);
             if prefix.is_empty() {
@@ -2748,6 +2818,27 @@ impl ReplEngine {
                     modules.insert(rest[..dot_pos].to_string());
                 } else {
                     types.insert((rest.to_string(), is_eval));
+                }
+            }
+        }
+
+        // Process types from dynamic_types (eval-created, not in compiler)
+        {
+            let dyn_types = self.dynamic_types.read();
+            for name in dyn_types.keys() {
+                if prefix.is_empty() {
+                    if let Some(dot_pos) = name.find('.') {
+                        modules.insert(name[..dot_pos].to_string());
+                    } else {
+                        types.insert((name.to_string(), true)); // Always eval_created
+                    }
+                } else if name.starts_with(&prefix) {
+                    let rest = &name[prefix_len..];
+                    if let Some(dot_pos) = rest.find('.') {
+                        modules.insert(rest[..dot_pos].to_string());
+                    } else {
+                        types.insert((rest.to_string(), true));
+                    }
                 }
             }
         }
