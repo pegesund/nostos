@@ -1486,6 +1486,9 @@ impl ThreadWorker {
                             GcValue::BigInt(proc.heap.alloc_bigint(result))
                         }
                         (GcValue::Decimal(a), GcValue::Decimal(b)) => GcValue::Decimal(*a + *b),
+                        // Handle floats (type may not be known at compile time for pattern bindings)
+                        (GcValue::Float64(a), GcValue::Float64(b)) => GcValue::Float64(a + b),
+                        (GcValue::Float32(a), GcValue::Float32(b)) => GcValue::Float32(a + b),
                         _ => return Err(RuntimeError::TypeError { expected: "numeric".into(), found: "other".into() }),
                     };
                     fast_set!(*dst, result);
@@ -1508,6 +1511,9 @@ impl ThreadWorker {
                             GcValue::BigInt(proc.heap.alloc_bigint(result))
                         }
                         (GcValue::Decimal(a), GcValue::Decimal(b)) => GcValue::Decimal(*a - *b),
+                        // Handle floats (type may not be known at compile time for pattern bindings)
+                        (GcValue::Float64(a), GcValue::Float64(b)) => GcValue::Float64(a - b),
+                        (GcValue::Float32(a), GcValue::Float32(b)) => GcValue::Float32(a - b),
                         _ => return Err(RuntimeError::TypeError { expected: "numeric".into(), found: "other".into() }),
                     };
                     fast_set!(*dst, result);
@@ -1530,6 +1536,9 @@ impl ThreadWorker {
                             GcValue::BigInt(proc.heap.alloc_bigint(result))
                         }
                         (GcValue::Decimal(a), GcValue::Decimal(b)) => GcValue::Decimal(*a * *b),
+                        // Handle floats (type may not be known at compile time for pattern bindings)
+                        (GcValue::Float64(a), GcValue::Float64(b)) => GcValue::Float64(a * b),
+                        (GcValue::Float32(a), GcValue::Float32(b)) => GcValue::Float32(a * b),
                         _ => return Err(RuntimeError::TypeError { expected: "numeric".into(), found: "other".into() }),
                     };
                     fast_set!(*dst, result);
