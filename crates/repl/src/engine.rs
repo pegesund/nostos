@@ -7508,6 +7508,99 @@ mod call_graph_tests {
         let _ = fs::remove_dir_all(&temp_dir);
     }
 
+    #[test]
+    fn test_load_directory_multifile_with_args() {
+        // Test that functions with arguments from different files can see each other
+        // This matches the bench/array_write_loop structure more closely
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir().join(format!("nostos_test_multifile_args_{}", std::process::id()));
+        let defs_dir = temp_dir.join(".nostos").join("defs").join("mymodule");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&defs_dir).expect("Failed to create defs dir");
+
+        // Create compute.nos that takes an argument
+        fs::write(defs_dir.join("compute.nos"), "compute(n) = n * 2").expect("Failed to write compute.nos");
+
+        // Create process.nos that calls compute
+        fs::write(defs_dir.join("process.nos"), "process(x) = compute(x) + 1").expect("Failed to write process.nos");
+
+        // Create main.nos that calls process
+        fs::write(defs_dir.join("main.nos"), "main() = process(10)").expect("Failed to write main.nos");
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        let result = engine.load_directory(temp_dir.to_str().unwrap());
+        assert!(result.is_ok(), "Should load directory successfully: {:?}", result);
+
+        // Check compile status for all functions
+        let main_status = engine.get_compile_status("mymodule.main");
+        let process_status = engine.get_compile_status("mymodule.process");
+        let compute_status = engine.get_compile_status("mymodule.compute");
+
+        assert!(main_status.map(|s| s.is_ok()).unwrap_or(false), "main should be compiled: {:?}", main_status);
+        assert!(process_status.map(|s| s.is_ok()).unwrap_or(false), "process should be compiled: {:?}", process_status);
+        assert!(compute_status.map(|s| s.is_ok()).unwrap_or(false), "compute should be compiled: {:?}", compute_status);
+
+        // Evaluate main
+        let result = engine.eval("mymodule.main()");
+        assert!(result.is_ok(), "Should evaluate mymodule.main(): {:?}", result);
+        assert_eq!(result.unwrap(), "21", "main() should return 21 (10*2 + 1)");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_load_directory_multiple_modules_same_function_names() {
+        // Test that multiple modules with same function names work correctly
+        // This is critical for the bench directory which has main() in every module
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir().join(format!("nostos_test_multi_modules_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        // Create module A with main and helper
+        let defs_a = temp_dir.join(".nostos").join("defs").join("moduleA");
+        fs::create_dir_all(&defs_a).expect("Failed to create moduleA defs dir");
+        fs::write(defs_a.join("helper.nos"), "helper(x) = x * 2").unwrap();
+        fs::write(defs_a.join("main.nos"), "main() = helper(10)").unwrap();
+
+        // Create module B with main and helper (same function names!)
+        let defs_b = temp_dir.join(".nostos").join("defs").join("moduleB");
+        fs::create_dir_all(&defs_b).expect("Failed to create moduleB defs dir");
+        fs::write(defs_b.join("helper.nos"), "helper(x) = x + 100").unwrap();
+        fs::write(defs_b.join("main.nos"), "main() = helper(5)").unwrap();
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        let result = engine.load_directory(temp_dir.to_str().unwrap());
+        assert!(result.is_ok(), "Should load directory successfully: {:?}", result);
+
+        // Check compile status for all functions
+        let status_a_main = engine.get_compile_status("moduleA.main");
+        let status_a_helper = engine.get_compile_status("moduleA.helper");
+        let status_b_main = engine.get_compile_status("moduleB.main");
+        let status_b_helper = engine.get_compile_status("moduleB.helper");
+
+        assert!(status_a_main.map(|s| s.is_ok()).unwrap_or(false), "moduleA.main should compile: {:?}", status_a_main);
+        assert!(status_a_helper.map(|s| s.is_ok()).unwrap_or(false), "moduleA.helper should compile: {:?}", status_a_helper);
+        assert!(status_b_main.map(|s| s.is_ok()).unwrap_or(false), "moduleB.main should compile: {:?}", status_b_main);
+        assert!(status_b_helper.map(|s| s.is_ok()).unwrap_or(false), "moduleB.helper should compile: {:?}", status_b_helper);
+
+        // Evaluate both mains - they should return different results
+        let result_a = engine.eval("moduleA.main()");
+        assert!(result_a.is_ok(), "Should evaluate moduleA.main(): {:?}", result_a);
+        assert_eq!(result_a.unwrap(), "20", "moduleA.main() should return 20 (10 * 2)");
+
+        let result_b = engine.eval("moduleB.main()");
+        assert!(result_b.is_ok(), "Should evaluate moduleB.main(): {:?}", result_b);
+        assert_eq!(result_b.unwrap(), "105", "moduleB.main() should return 105 (5 + 100)");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
 }
 
 
