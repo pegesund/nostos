@@ -3005,7 +3005,9 @@ impl Compiler {
                 for (i, pat) in patterns.iter().enumerate() {
                     let elem_reg = self.alloc_reg();
                     self.chunk.emit(Instruction::GetTupleField(elem_reg, scrut_reg, i as u8), 0);
-                    let (_, mut sub_bindings) = self.compile_pattern_test(pat, elem_reg)?;
+                    let (sub_success, mut sub_bindings) = self.compile_pattern_test(pat, elem_reg)?;
+                    // AND the sub-pattern's success with our overall success
+                    self.chunk.emit(Instruction::And(success_reg, success_reg, sub_success), 0);
                     bindings.append(&mut sub_bindings);
                 }
             }
@@ -3022,17 +3024,26 @@ impl Compiler {
 
     /// Compile a block.
     fn compile_block(&mut self, stmts: &[Stmt], is_tail: bool) -> Result<Reg, CompileError> {
+        // --- BEGIN SCOPE ---
+        let saved_locals = self.locals.clone();
+        let saved_local_types = self.local_types.clone();
+
+        let mut last_reg = 0;
         if stmts.is_empty() {
             let dst = self.alloc_reg();
             self.chunk.emit(Instruction::LoadUnit(dst), 0);
-            return Ok(dst);
+            last_reg = dst;
+        } else {
+            for (i, stmt) in stmts.iter().enumerate() {
+                let is_last = i == stmts.len() - 1;
+                last_reg = self.compile_stmt(stmt, is_tail && is_last)?;
+            }
         }
 
-        let mut last_reg = 0;
-        for (i, stmt) in stmts.iter().enumerate() {
-            let is_last = i == stmts.len() - 1;
-            last_reg = self.compile_stmt(stmt, is_tail && is_last)?;
-        }
+        // --- END SCOPE ---
+        self.locals = saved_locals;
+        self.local_types = saved_local_types;
+
         Ok(last_reg)
     }
 
@@ -3061,22 +3072,21 @@ impl Compiler {
                 if existing_reg != value_reg {
                     self.chunk.emit(Instruction::Move(existing_reg, value_reg), 0);
                 }
-                return Ok(existing_reg);
+            } else {
+                // New binding - track if value is float
+                let is_float = self.is_float_expr(&binding.value);
+                self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float });
+                // Record the type if we know it
+                if let Some(ty) = value_type {
+                    self.local_types.insert(ident.node.clone(), ty);
+                }
             }
-            // New binding - track if value is float
-            let is_float = self.is_float_expr(&binding.value);
-            self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float });
-            // Record the type if we know it
-            if let Some(ty) = value_type {
-                self.local_types.insert(ident.node.clone(), ty);
+        } else {
+            // For complex patterns, we need to deconstruct
+            let (_, bindings) = self.compile_pattern_test(&binding.pattern, value_reg)?;
+            for (name, reg, is_float) in bindings {
+                self.locals.insert(name, LocalInfo { reg, is_float });
             }
-            return Ok(value_reg);
-        }
-
-        // For complex patterns, we need to deconstruct
-        let (_, bindings) = self.compile_pattern_test(&binding.pattern, value_reg)?;
-        for (name, reg, is_float) in bindings {
-            self.locals.insert(name, LocalInfo { reg, is_float });
         }
 
         let dst = self.alloc_reg();
@@ -3093,27 +3103,27 @@ impl Compiler {
                 if let Some(info) = self.locals.get(&ident.node) {
                     let var_reg = info.reg;
                     self.chunk.emit(Instruction::Move(var_reg, value_reg), 0);
-                    Ok(var_reg)
                 } else {
-                    Err(CompileError::UnknownVariable {
+                    return Err(CompileError::UnknownVariable {
                         name: ident.node.clone(),
                         span: ident.span,
-                    })
+                    });
                 }
             }
             AssignTarget::Field(obj, field) => {
                 let obj_reg = self.compile_expr_tail(obj, false)?;
                 let field_idx = self.chunk.add_constant(Value::String(Arc::new(field.node.clone())));
                 self.chunk.emit(Instruction::SetField(obj_reg, field_idx, value_reg), 0);
-                Ok(value_reg)
             }
             AssignTarget::Index(coll, idx) => {
                 let coll_reg = self.compile_expr_tail(coll, false)?;
                 let idx_reg = self.compile_expr_tail(idx, false)?;
                 self.chunk.emit(Instruction::IndexSet(coll_reg, idx_reg, value_reg), 0);
-                Ok(value_reg)
             }
         }
+        let dst = self.alloc_reg();
+        self.chunk.emit(Instruction::LoadUnit(dst), 0);
+        Ok(dst)
     }
 
     /// Compile an interpolated string.
