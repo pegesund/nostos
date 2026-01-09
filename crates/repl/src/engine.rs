@@ -3053,6 +3053,42 @@ impl ReplEngine {
         self.source_manager.is_some()
     }
 
+    /// Get git history for a definition
+    pub fn get_definition_history(&self, name: &str) -> Result<Vec<nostos_source::CommitInfo>, String> {
+        if let Some(ref sm) = self.source_manager {
+            sm.get_definition_history(name)
+        } else {
+            Err("No project loaded".to_string())
+        }
+    }
+
+    /// Get git history for a module
+    pub fn get_module_history(&self, module: &str) -> Result<Vec<nostos_source::CommitInfo>, String> {
+        if let Some(ref sm) = self.source_manager {
+            sm.get_module_history(module)
+        } else {
+            Err("No project loaded".to_string())
+        }
+    }
+
+    /// Get definition source at a specific commit
+    pub fn get_definition_at_commit(&self, name: &str, commit: &str) -> Result<String, String> {
+        if let Some(ref sm) = self.source_manager {
+            sm.get_definition_at_commit(name, commit)
+        } else {
+            Err("No project loaded".to_string())
+        }
+    }
+
+    /// Get diff for a definition at a specific commit
+    pub fn get_definition_diff(&self, name: &str, commit: &str) -> Result<String, String> {
+        if let Some(ref sm) = self.source_manager {
+            sm.get_definition_diff(name, commit)
+        } else {
+            Err("No project loaded".to_string())
+        }
+    }
+
     // ========== Compile Status Methods ==========
 
     /// Set the compile status for a definition
