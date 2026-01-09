@@ -2310,18 +2310,22 @@ fn show_nostlet_picker(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>) {
         .map(|n| n.clone().clone())
         .collect::<Vec<_>>();
 
-    if nostlets.is_empty() {
-        // No nostlets available - show info message
-        let dialog = Dialog::text("No nostlets found.\n\nCreate nostlets in the 'nostlets/' directory.\n\nExample nostlet:\n  nostlet_name() = \"My Nostlet\"\n  nostlet_description() = \"Description\"\n  render() = \"Content here\"\n  onKey(key) = ()")
-            .title("Nostlets")
-            .button("OK", |s| { s.pop_layer(); })
-            .fixed_width(50);
-        s.add_layer(dialog);
-        return;
-    }
-
-    // Create select view with nostlets
+    // Create select view with nostlets and built-in panels
     let mut select = SelectView::<NostletInfo>::new();
+
+    // Add Tutorial as first item (special built-in panel)
+    select.add_item(
+        "Tutorial - Interactive Nostos language tutorial",
+        NostletInfo {
+            name: "Tutorial".to_string(),
+            description: "Interactive Nostos language tutorial".to_string(),
+            module_name: "__tutorial__".to_string(),
+            render_fn: String::new(),
+            key_handler_fn: String::new(),
+        }
+    );
+
+    // Add user nostlets
     for nostlet in nostlets {
         let label = format!("{} - {}", nostlet.name, nostlet.description);
         select.add_item(label, nostlet);
@@ -2331,7 +2335,12 @@ fn show_nostlet_picker(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>) {
     let engine_for_select = engine.clone();
     select.set_on_submit(move |s, nostlet: &NostletInfo| {
         s.pop_layer();
-        open_nostlet_panel(s, engine_for_select.clone(), nostlet.clone());
+        if nostlet.module_name == "__tutorial__" {
+            // Open built-in tutorial panel
+            open_tutorial_panel(s);
+        } else {
+            open_nostlet_panel(s, engine_for_select.clone(), nostlet.clone());
+        }
     });
 
     let dialog = Dialog::around(
