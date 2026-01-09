@@ -569,6 +569,11 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         toggle_console(s);
     });
 
+    // Global Ctrl+H to show help
+    siv.set_on_pre_event(Event::CtrlChar('h'), |s| {
+        show_help_dialog(s);
+    });
+
     siv.run();
     ExitCode::SUCCESS
 }
@@ -885,6 +890,119 @@ fn toggle_inspector(s: &mut Cursive) {
         s.focus_name("repl_log").ok();
         log_to_repl(s, "Inspector panel closed");
     }
+}
+
+/// Show help dialog with all keybindings
+fn show_help_dialog(s: &mut Cursive) {
+    use cursive::theme::{Effect, Style, ColorStyle, BaseColor, Color};
+
+    let mut styled = StyledString::new();
+    let bold = Style::from(Effect::Bold);
+    let header_style = Style::from(ColorStyle::new(
+        Color::Light(BaseColor::Yellow),
+        Color::TerminalDefault,
+    )).combine(Effect::Bold);
+    let key_style = Style::from(ColorStyle::new(
+        Color::Light(BaseColor::Cyan),
+        Color::TerminalDefault,
+    ));
+
+    // Title
+    styled.append_plain("\n");
+    styled.append_styled("                 NOSTOS KEYBINDINGS\n", header_style);
+    styled.append_plain("\n");
+
+    // Helper to add a section
+    fn add_section(styled: &mut StyledString, title: &str, bindings: &[(&str, &str)],
+                   header_style: Style, key_style: Style) {
+        styled.append_styled(format!("  {}\n", title), header_style);
+        styled.append_plain("  ─────────────────────────────────────────────\n");
+        for (key, desc) in bindings {
+            styled.append_plain("  ");
+            styled.append_styled(format!("{:<14}", key), key_style);
+            styled.append_plain(format!("  {}\n", desc));
+        }
+        styled.append_plain("\n");
+    }
+
+    add_section(&mut styled, "GLOBAL", &[
+        ("Ctrl+H", "Show this help"),
+        ("Ctrl+B", "Open file browser"),
+        ("Ctrl+R", "Open new REPL panel"),
+        ("Alt+I / F9", "Toggle inspector panel"),
+        ("Alt+C", "Toggle console"),
+        ("Shift+Tab", "Cycle focus between windows"),
+    ], header_style, key_style);
+
+    add_section(&mut styled, "REPL PANEL", &[
+        ("Enter", "Execute code"),
+        ("Alt+Enter", "Insert newline (multiline)"),
+        ("Tab", "Autocomplete / cycle suggestions"),
+        ("Shift+Tab", "Cycle suggestions backward"),
+        ("Ctrl+Space", "Show autocomplete menu"),
+        ("Ctrl+S", "Save session to file"),
+        ("Ctrl+Y", "Copy output to clipboard"),
+        ("Ctrl+W", "Close REPL panel"),
+        ("Up/Down", "Navigate history / autocomplete"),
+        ("PageUp/Down", "Scroll output"),
+        ("Esc", "Cancel autocomplete"),
+    ], header_style, key_style);
+
+    add_section(&mut styled, "CODE EDITOR", &[
+        ("Ctrl+S", "Save file"),
+        ("Ctrl+G", "Go to definition"),
+        ("Ctrl+F", "Search in file"),
+        ("Ctrl+Y", "Copy to clipboard"),
+        ("Ctrl+W", "Close editor"),
+        ("Tab", "Indent / autocomplete"),
+        ("Shift+Tab", "Dedent / cycle backward"),
+        ("Ctrl+Space", "Show autocomplete menu"),
+        ("PageUp/Down", "Scroll"),
+        ("Esc", "Cancel autocomplete / close"),
+    ], header_style, key_style);
+
+    add_section(&mut styled, "CONSOLE", &[
+        ("Ctrl+Y", "Copy content to clipboard"),
+        ("Ctrl+W", "Close console"),
+    ], header_style, key_style);
+
+    add_section(&mut styled, "INSPECTOR PANEL", &[
+        ("Tab", "Switch between tabs"),
+        ("Up/Down", "Navigate values"),
+        ("Enter/Right", "Drill into value"),
+        ("Left/Bksp", "Go up one level"),
+        ("PageUp/Down", "Scroll list"),
+        ("Ctrl+Y", "Copy value to clipboard"),
+    ], header_style, key_style);
+
+    add_section(&mut styled, "FILE BROWSER (Ctrl+B)", &[
+        ("Enter", "Open selected file"),
+        ("n", "Create new file"),
+        ("r", "Rename file"),
+        ("d", "Delete file"),
+        ("e", "Show compile errors"),
+        ("g", "Show call graph"),
+        ("Left/Right", "Navigate lists"),
+        ("Esc", "Close browser"),
+    ], header_style, key_style);
+
+    styled.append_plain("          Press Esc or Enter to close\n");
+
+    let text_view = TextView::new(styled);
+    let scroll_view = ScrollView::new(text_view)
+        .scroll_x(false)
+        .scroll_y(true);
+
+    let dialog = Dialog::around(scroll_view)
+        .title("Help")
+        .fixed_size((52, 32));
+
+    let dialog_with_keys = OnEventView::new(dialog)
+        .on_event(Key::Esc, |s| { s.pop_layer(); })
+        .on_event(Key::Enter, |s| { s.pop_layer(); })
+        .on_event(Event::CtrlChar('h'), |s| { s.pop_layer(); });
+
+    s.add_layer(dialog_with_keys);
 }
 
 /// Create the inspector panel view
