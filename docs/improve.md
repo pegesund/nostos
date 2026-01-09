@@ -49,21 +49,6 @@ type App = {
 
 **Priority**: Low - cosmetic, single-line works
 
-### Forward Declarations
-Enable mutual recursion between functions.
-
-```nostos
-# Current: order matters, mutual recursion tricky
-# Desired: declare before define
-declare isEven: Int -> Bool
-declare isOdd: Int -> Bool
-
-isEven(n) = if n == 0 then true else isOdd(n - 1)
-isOdd(n) = if n == 0 then false else isEven(n - 1)
-```
-
-**Priority**: Low - rarely needed, workarounds exist
-
 ## Standard Library
 
 ### Set Type
@@ -155,3 +140,4 @@ Some callback patterns in the VM may have stale frame references.
 - ✅ PostgreSQL with connection pooling
 - ✅ String.split and String.join
 - ✅ String.drop and String.take
+- ✅ Mutual recursion (two-phase compilation - no forward declarations needed)
