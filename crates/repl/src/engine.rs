@@ -4540,12 +4540,19 @@ impl ReplEngine {
                     if self.debug_breakpoints.is_empty() {
                         Ok("No breakpoints set. Usage: :debug <function_name>".to_string())
                     } else {
-                        let bps: Vec<_> = self.debug_breakpoints.iter().cloned().collect();
+                        let mut bps: Vec<_> = self.debug_breakpoints.iter().cloned().collect();
+                        bps.sort();
                         Ok(format!("Breakpoints: {}", bps.join(", ")))
                     }
                 } else {
-                    self.debug_breakpoints.insert(args.to_string());
-                    Ok(format!("Breakpoint set on: {}", args))
+                    // Toggle behavior: add if not present, remove if present
+                    if self.debug_breakpoints.contains(args) {
+                        self.debug_breakpoints.remove(args);
+                        Ok(format!("Breakpoint removed from: {}", args))
+                    } else {
+                        self.debug_breakpoints.insert(args.to_string());
+                        Ok(format!("Breakpoint set on: {}", args))
+                    }
                 }
             }
             ":undebug" | ":udbg" => {

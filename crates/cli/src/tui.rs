@@ -729,6 +729,8 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         poll_repl_evals(s);
         poll_debug_events(s);
         poll_debug_panel_commands(s);
+        // Sync breakpoints from engine to debug panel
+        sync_debug_panel_breakpoints(s);
         // Poll for println output and show in REPL panels during debugging
         poll_debug_output(s);
     });
@@ -829,6 +831,22 @@ fn poll_inspect_entries(s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>) {
     }
     // If inspector is closed, entries are simply discarded
     // (they were already drained from the queue)
+}
+
+/// Sync breakpoints from engine to debug panel.
+fn sync_debug_panel_breakpoints(s: &mut Cursive) {
+    // Get engine breakpoints
+    let breakpoints = match s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        state.borrow().engine.borrow().get_breakpoints()
+    }) {
+        Some(bps) => bps,
+        None => return,
+    };
+
+    // Update debug panel
+    s.call_on_name("debug_panel", |panel: &mut DebugPanel| {
+        panel.sync_breakpoints(breakpoints);
+    });
 }
 
 /// Poll for debug panel commands (from pending_command field set by key events).
