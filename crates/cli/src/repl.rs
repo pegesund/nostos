@@ -74,7 +74,7 @@ impl Highlighter for NostosHighlighter {
                     Style::new().fg(Color::Yellow),
 
                 // String/Char literals
-                Token::String(_) | Token::Char(_) => Style::new().fg(Color::Green),
+                Token::String(_) | Token::SingleQuoteString(_) | Token::Char(_) => Style::new().fg(Color::Green),
 
                 // Comments (Hash is start of set literal or comment? Lexer handles comments separately in logos skip)
                 // Wait, logos skips comments, so `lex` iterator won't yield them as tokens?

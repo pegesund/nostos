@@ -442,7 +442,15 @@ impl Autocomplete {
                 }
             } else if c == '"' {
                 // String literal - find matching opening quote
-                if let Some(open) = self.find_string_start(&chars, i) {
+                if let Some(open) = self.find_string_start(&chars, i, '"') {
+                    start = open;
+                    i = open;
+                } else {
+                    break;
+                }
+            } else if c == '\'' {
+                // Single-quoted string literal - find matching opening quote
+                if let Some(open) = self.find_string_start(&chars, i, '\'') {
                     start = open;
                     i = open;
                 } else {
@@ -482,12 +490,12 @@ impl Autocomplete {
     }
 
     /// Find the opening quote for a string literal ending at position `close`
-    fn find_string_start(&self, chars: &[char], close: usize) -> Option<usize> {
+    fn find_string_start(&self, chars: &[char], close: usize, quote_char: char) -> Option<usize> {
         let mut i = close;
 
         while i > 0 {
             i -= 1;
-            if chars[i] == '"' {
+            if chars[i] == quote_char {
                 // Check if escaped
                 let mut backslashes = 0;
                 let mut j = i;
@@ -948,8 +956,8 @@ impl Autocomplete {
     fn detect_literal_type(expr: &str) -> Option<&'static str> {
         let trimmed = expr.trim();
 
-        // String literal: "..." or starts with "
-        if trimmed.starts_with('"') {
+        // String literal: "..." or '...'
+        if trimmed.starts_with('"') || trimmed.starts_with('\'') {
             return Some("String");
         }
 
