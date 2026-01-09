@@ -740,14 +740,14 @@ impl ReplEngine {
 
         let (module_opt, errors) = parse(&source);
         if !errors.is_empty() {
-            // Format errors to string
-            let _source_errors = parse_errors_to_source_errors(&errors);
-            // eprint_errors writes to stderr. We want to capture it or return error string.
-            // For now, return generic error, but ideally we should format it.
-            // But source_errors.eprint prints.
-            // Let's just return "Parse errors". The UI can't easily see details unless we change API.
-            // Note: `Repl` in CLI printed errors.
-            return Err("Parse errors (check console/logs)".to_string());
+            // Format errors to string for display in REPL
+            use nostos_syntax::offset_to_line_col;
+            let source_errors = parse_errors_to_source_errors(&errors);
+            let error_msgs: Vec<String> = source_errors.iter().map(|e| {
+                let (line, _col) = offset_to_line_col(&source, e.span.start);
+                format!("Line {}: {}", line, e.message)
+            }).collect();
+            return Err(format!("Parse errors:\n  {}", error_msgs.join("\n  ")));
         }
 
         let module = module_opt.ok_or("Failed to parse file")?;
@@ -4619,7 +4619,13 @@ impl ReplEngine {
 
         let (module_opt, errors) = parse(&source);
         if !errors.is_empty() {
-            return Err("Parse errors (check console/logs)".to_string());
+            use nostos_syntax::offset_to_line_col;
+            let source_errors = parse_errors_to_source_errors(&errors);
+            let error_msgs: Vec<String> = source_errors.iter().map(|e| {
+                let (line, _col) = offset_to_line_col(&source, e.span.start);
+                format!("Line {}: {}", line, e.message)
+            }).collect();
+            return Err(format!("Parse errors:\n  {}", error_msgs.join("\n  ")));
         }
 
         let module = module_opt.ok_or("Failed to parse file")?;
