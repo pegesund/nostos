@@ -1,0 +1,23 @@
+# expect: 25
+# Test type inference through match arms
+
+type Container[T] = Boxed(T) | EmptyContainer
+
+trait Extract
+    extractVal(self) -> Int
+end
+
+Int: Extract
+    extractVal(self) = self
+end
+
+getValue[T: Extract](c: Container[T]) -> Int =
+    match c {
+        Boxed(v) -> v.extractVal()
+        EmptyContainer -> 0
+    }
+
+main() = {
+    container: Container[Int] = Boxed(25)
+    getValue(container)
+}

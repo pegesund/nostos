@@ -1,0 +1,22 @@
+# expect: 116
+# Test same generic function called with different types
+
+trait Convertible
+    convert(self) -> Int
+end
+
+Int: Convertible
+    convert(self) = self
+end
+
+String: Convertible
+    convert(self) = self.length()
+end
+
+genericConvert[T: Convertible](x: T) -> Int = x.convert()
+
+main() = {
+    a = genericConvert(100)
+    b = genericConvert("hello world !!!")
+    a + b + 1
+}

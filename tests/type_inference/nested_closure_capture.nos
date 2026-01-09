@@ -1,0 +1,19 @@
+# expect: 18
+# Test nested closures with captures
+
+trait Weight
+    weight(self) -> Int
+end
+
+Int: Weight
+    weight(self) = self
+end
+
+nestedProcess[T: Weight](w: T, matrix: List[List[Int]]) -> Int = {
+    baseWeight = w.weight()
+    matrix.map(row =>
+        row.map(x => x + baseWeight).fold(0, (a, b) => a + b)
+    ).fold(0, (a, b) => a + b)
+}
+
+main() = nestedProcess(2, [[1, 2], [3, 4]])

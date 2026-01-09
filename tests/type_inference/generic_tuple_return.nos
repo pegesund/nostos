@@ -1,0 +1,20 @@
+# expect: 15
+# Test generic function returning tuple
+
+trait Splittable
+    split(self) -> (Int, Int)
+end
+
+Int: Splittable
+    split(self) = (self, self)
+end
+
+splitAndSum[T: Splittable](x: T) -> Int = {
+    (a, b) = x.split()
+    a + b
+}
+
+main() = {
+    result = splitAndSum(7)
+    result + 1
+}

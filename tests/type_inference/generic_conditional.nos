@@ -1,0 +1,17 @@
+# expect: 100
+# Test generic with conditional logic
+
+trait Evaluable
+    eval(self) -> Int
+end
+
+Int: Evaluable
+    eval(self) = self
+end
+
+processConditional[T: Evaluable](x: T, useDouble: Bool) -> Int = {
+    base = x.eval()
+    if useDouble then base * 2 else base
+}
+
+main() = processConditional(50, true)

@@ -1,0 +1,18 @@
+# expect: 12
+# Test closure that uses result of another closure
+
+trait Factor
+    factor(self) -> Int
+end
+
+Int: Factor
+    factor(self) = self
+end
+
+applyFactored[T: Factor](f: T, nums: List[Int]) -> Int = {
+    mult = f.factor()
+    doubled = nums.map(x => x * 2)
+    doubled.map(x => x * mult).fold(0, (a, b) => a + b)
+}
+
+main() = applyFactored(1, [1, 2, 3])

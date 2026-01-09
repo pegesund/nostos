@@ -1,0 +1,14 @@
+# expect: 100
+# Test trait with implementation
+
+trait Scalable
+    scale(self) -> Int
+end
+
+Int: Scalable
+    scale(self) = self * 10
+end
+
+applyScale[T: Scalable](x: T) -> Int = x.scale()
+
+main() = applyScale(10)

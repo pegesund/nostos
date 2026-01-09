@@ -1,0 +1,19 @@
+# expect: 42
+# Test nested Option type inference
+
+type Option[T] = Some(T) | None
+
+unwrapOr[T](opt: Option[T], default: T) -> T =
+    match opt {
+        Some(x) -> x
+        None -> default
+    }
+
+main() = {
+    outer: Option[Option[Int]] = Some(Some(42))
+    inner = match outer {
+        Some(x) -> x
+        None -> None
+    }
+    unwrapOr(inner, 0)
+}

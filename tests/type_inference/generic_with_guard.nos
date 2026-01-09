@@ -1,0 +1,20 @@
+# expect: 200
+# Test generic function with guard clauses
+
+trait Magnitude
+    magnitude(self) -> Int
+end
+
+Int: Magnitude
+    magnitude(self) = if self < 0 then -self else self
+end
+
+checkMagnitude[T: Magnitude](x: T) -> Int = {
+    m = x.magnitude()
+    match m {
+        n when n > 50 -> n * 2
+        n -> n
+    }
+}
+
+main() = checkMagnitude(100)

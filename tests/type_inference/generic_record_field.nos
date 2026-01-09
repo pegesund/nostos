@@ -1,0 +1,22 @@
+# expect: 77
+# Test generic function with record containing generic field
+
+type Wrapper[T] = Wrapper(T)
+
+trait Unwrap
+    unwrapVal(self) -> Int
+end
+
+Int: Unwrap
+    unwrapVal(self) = self
+end
+
+extractData[T: Unwrap](w: Wrapper[T]) -> Int =
+    match w {
+        Wrapper(d) -> d.unwrapVal()
+    }
+
+main() = {
+    wrapped: Wrapper[Int] = Wrapper(77)
+    extractData(wrapped)
+}

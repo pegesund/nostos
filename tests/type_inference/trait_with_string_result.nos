@@ -1,0 +1,17 @@
+# expect: 11
+# Test trait method returning String, then using length
+
+trait Stringify
+    stringify(self) -> String
+end
+
+Int: Stringify
+    stringify(self) = "hello world"
+end
+
+getLengthViaStringify[T: Stringify](x: T) -> Int = {
+    s = x.stringify()
+    s.length()
+}
+
+main() = getLengthViaStringify(42)

@@ -1,0 +1,23 @@
+# expect: 50
+# Test generic function with Result type
+
+type MyResult[T] = MyOk(T) | MyErr(String)
+
+trait Valuable
+    worth(self) -> Int
+end
+
+Int: Valuable
+    worth(self) = self
+end
+
+processResult[T: Valuable](r: MyResult[T]) -> Int =
+    match r {
+        MyOk(v) -> v.worth()
+        MyErr(_) -> -1
+    }
+
+main() = {
+    result: MyResult[Int] = MyOk(50)
+    processResult(result)
+}

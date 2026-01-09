@@ -1,0 +1,19 @@
+# expect: 125
+# Test generic result in arithmetic expression
+
+trait Computable
+    compute(self) -> Int
+end
+
+Int: Computable
+    compute(self) = self
+end
+
+arithmeticGeneric[T: Computable](a: T, b: T, c: T) -> Int = {
+    x = a.compute()
+    y = b.compute()
+    z = c.compute()
+    x * y + z
+}
+
+main() = arithmeticGeneric(10, 12, 5)

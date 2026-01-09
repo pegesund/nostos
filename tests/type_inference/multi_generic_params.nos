@@ -1,0 +1,27 @@
+# expect: 35
+# Test function with multiple generic params and traits
+
+trait First
+    first(self) -> Int
+end
+
+trait Second
+    second(self) -> Int
+end
+
+Int: First
+    first(self) = self
+end
+
+Int: Second
+    second(self) = self * 2
+end
+
+combine[A: First, B: Second](a: A, b: B) -> Int =
+    a.first() + b.second()
+
+main() = {
+    x = 5
+    y = 15
+    combine(x, y)
+}

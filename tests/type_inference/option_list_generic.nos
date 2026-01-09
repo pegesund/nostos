@@ -1,0 +1,16 @@
+# expect: 30
+# Test Option containing list - tests type inference through Option
+
+type Option[T] = Some(T) | None
+
+# Test that Option with list works
+sumOptionList(opt: Option[List[Int]]) -> Int =
+    match opt {
+        Some(items) -> items.fold(0, (a, b) => a + b)
+        None -> 0
+    }
+
+main() = {
+    items: Option[List[Int]] = Some([10, 20])
+    sumOptionList(items)
+}

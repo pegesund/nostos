@@ -1,0 +1,19 @@
+# expect: 20
+# Test chaining multiple generic function calls
+
+trait Numeric
+    asNum(self) -> Int
+end
+
+Int: Numeric
+    asNum(self) = self
+end
+
+addOne[T: Numeric](x: T) -> Int = x.asNum() + 1
+
+doubleIt(x: Int) -> Int = x * 2
+
+main() = {
+    val = 9
+    doubleIt(addOne(val))
+}

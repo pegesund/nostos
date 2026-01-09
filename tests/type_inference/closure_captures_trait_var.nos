@@ -1,0 +1,17 @@
+# expect: 30
+# Test closure capturing variable with trait bound
+
+trait Scorable
+    score(self) -> Int
+end
+
+Int: Scorable
+    score(self) = self
+end
+
+processWithCaptured[T: Scorable](base: T, items: List[Int]) -> Int = {
+    baseScore = base.score()
+    items.map(x => x + baseScore).fold(0, (a, b) => a + b)
+}
+
+main() = processWithCaptured(5, [1, 2, 3, 4])

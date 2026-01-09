@@ -1,0 +1,25 @@
+# expect: 100
+# Test generic function with default value pattern
+
+type Option[T] = Some(T) | None
+
+type Val = Val(Int)
+
+trait HasDefault
+    defaultVal(self) -> Int
+end
+
+Val: HasDefault
+    defaultVal(self) = 0
+end
+
+getOrDefault[T: HasDefault](opt: Option[T], sample: T) -> Int =
+    match opt {
+        Some(x) -> x.defaultVal() + 100
+        None -> sample.defaultVal()
+    }
+
+main() = {
+    val: Option[Val] = Some(Val(0))
+    getOrDefault(val, Val(0))
+}

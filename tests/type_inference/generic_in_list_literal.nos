@@ -1,0 +1,17 @@
+# expect: 60
+# Test generic function results used in list
+
+trait Valued
+    val(self) -> Int
+end
+
+Int: Valued
+    val(self) = self
+end
+
+makeVal[T: Valued](x: T) -> Int = x.val()
+
+main() = {
+    results = [makeVal(10), makeVal(20), makeVal(30)]
+    results.fold(0, (a, b) => a + b)
+}

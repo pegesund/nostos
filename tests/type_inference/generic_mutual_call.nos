@@ -1,0 +1,16 @@
+# expect: 30
+# Test two generic functions calling each other
+
+trait Processable
+    proc(self) -> Int
+end
+
+Int: Processable
+    proc(self) = self
+end
+
+helper[T: Processable](x: T) -> Int = x.proc() * 2
+
+caller[T: Processable](x: T) -> Int = helper(x) + x.proc()
+
+main() = caller(10)

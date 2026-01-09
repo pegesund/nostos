@@ -1,0 +1,18 @@
+# expect: 42
+# Test generic with local binding shadowing
+
+trait Fetchable
+    fetch(self) -> Int
+end
+
+Int: Fetchable
+    fetch(self) = self
+end
+
+processWithShadow[T: Fetchable](x: T) -> Int = {
+    temp = x.fetch()
+    temp2 = temp + 1
+    temp2 + temp - 1
+}
+
+main() = processWithShadow(21)

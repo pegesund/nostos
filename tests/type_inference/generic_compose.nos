@@ -1,0 +1,17 @@
+# expect: 24
+# Test composing generic functions
+
+trait Transform
+    transform(self) -> Int
+end
+
+Int: Transform
+    transform(self) = self + 1
+end
+
+applyTwice[T: Transform](x: T) -> Int = {
+    first = x.transform()
+    first + first
+}
+
+main() = applyTwice(11)

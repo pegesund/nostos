@@ -1,0 +1,17 @@
+# expect: 6
+# Test generic function that builds a list
+
+trait Listable
+    toItem(self) -> Int
+end
+
+Int: Listable
+    toItem(self) = self
+end
+
+countAfterAppend[T: Listable](items: List[T], extra: T) -> Int = {
+    extended = items ++ [extra]
+    extended.length()
+}
+
+main() = countAfterAppend([1, 2, 3, 4, 5], 6)

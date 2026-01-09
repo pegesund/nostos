@@ -1,0 +1,20 @@
+# expect: 200
+# Test trait method in nested if expressions
+
+trait Amplifier
+    amplify(self) -> Int
+end
+
+Int: Amplifier
+    amplify(self) = self * 10
+end
+
+nestedAmplify[T: Amplifier](x: T, cond1: Bool, cond2: Bool) -> Int = {
+    base = x.amplify()
+    if cond1 then
+        if cond2 then base * 2 else base
+    else
+        0
+}
+
+main() = nestedAmplify(10, true, true)

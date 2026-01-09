@@ -1,0 +1,20 @@
+# expect: 0
+# Test generic function with empty list
+
+type Val = Val(Int)
+
+trait Countable
+    count(self) -> Int
+end
+
+Val: Countable
+    count(self) = 1
+end
+
+processItems[T: Countable](items: List[T]) -> Int =
+    items.map(x => x.count()).fold(0, (a, b) => a + b)
+
+main() = {
+    empty: List[Val] = []
+    processItems(empty)
+}

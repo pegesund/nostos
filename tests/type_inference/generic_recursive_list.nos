@@ -1,0 +1,11 @@
+# expect: 15
+# Test recursive list processing with pattern matching
+
+# Recursive function on list using pattern match
+sumAll(items: List[Int]) -> Int =
+    match items {
+        [] -> 0
+        [x | rest] -> x + sumAll(rest)
+    }
+
+main() = sumAll([1, 2, 3, 4, 5])
