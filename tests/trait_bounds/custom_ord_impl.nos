@@ -1,0 +1,58 @@
+# expect: 0
+# Test custom types implementing Ord trait
+
+type Age = { years: Int }
+
+Age: Ord
+    lt(self, other: Age) -> Bool = self.years < other.years
+    lte(self, other: Age) -> Bool = self.years <= other.years
+    gt(self, other: Age) -> Bool = self.years > other.years
+    gte(self, other: Age) -> Bool = self.years >= other.years
+end
+
+type Point = { x: Int, y: Int }
+
+# Ord by distance from origin (simplified: just sum of coords)
+Point: Ord
+    lt(self, other: Point) -> Bool = (self.x + self.y) < (other.x + other.y)
+    lte(self, other: Point) -> Bool = (self.x + self.y) <= (other.x + other.y)
+    gt(self, other: Point) -> Bool = (self.x + self.y) > (other.x + other.y)
+    gte(self, other: Point) -> Bool = (self.x + self.y) >= (other.x + other.y)
+end
+
+# Generic functions with Ord bound
+maxOf[T: Ord](a: T, b: T) -> T = if a > b then a else b
+minOf[T: Ord](a: T, b: T) -> T = if a < b then a else b
+
+main() = {
+    # Test Age with direct operators
+    young = Age(25)
+    old = Age(30)
+
+    assert_eq(true, young < old)
+    assert_eq(false, young > old)
+    assert_eq(true, young <= old)
+    assert_eq(false, young >= old)
+    assert_eq(true, old > young)
+    assert_eq(true, old >= old)
+    assert_eq(true, young <= young)
+
+    # Test Age with generic functions
+    assert_eq(30, maxOf(young, old).years)
+    assert_eq(25, minOf(young, old).years)
+
+    # Test Point with direct operators
+    p1 = Point(1, 2)  # sum = 3
+    p2 = Point(2, 3)  # sum = 5
+
+    assert_eq(true, p1 < p2)
+    assert_eq(false, p1 > p2)
+    assert_eq(true, p1 <= p2)
+    assert_eq(false, p1 >= p2)
+
+    # Test Point with generic functions
+    assert_eq(5, maxOf(p1, p2).x + maxOf(p1, p2).y)
+    assert_eq(3, minOf(p1, p2).x + minOf(p1, p2).y)
+
+    0
+}
