@@ -126,10 +126,12 @@ impl DebugPanel {
         self.state = DebugState::Paused { function, file, line };
         self.source_code = source;
         self.source_scroll = 0;
-        // Auto-request locals for frame 0 if not cached
-        if !self.frame_locals.contains_key(&0) {
-            self.pending_locals_request = Some(0);
-        }
+        // Clear cached locals (values may have changed after stepping)
+        self.frame_locals.clear();
+        self.selected_frame = 0;
+        self.locals_scroll = 0;
+        // Request locals for frame 0
+        self.pending_locals_request = Some(0);
     }
 
     /// Update state when running
