@@ -17,6 +17,7 @@ use std::time::Instant;
 
 use parking_lot::{Mutex, RwLock};
 
+use crate::extensions::ExtensionManager;
 use crate::gc::{GcConfig, GcNativeFn, GcValue};
 use crate::process::{ExitReason, Process, ProcessState, ThreadSafeValue};
 use crate::shared_types::{JitIntFn, JitLoopArrayFn};
@@ -327,6 +328,10 @@ pub struct Scheduler {
     /// Claimed processes (being executed by a worker).
     /// Prevents race conditions where a process is added to a queue while already executing.
     claimed: Mutex<HashSet<u64>>,
+
+    /// Extension manager for native library functions.
+    /// Set via `set_extension_manager` after construction.
+    pub extensions: RwLock<Option<Arc<ExtensionManager>>>,
 }
 
 impl Scheduler {
@@ -355,7 +360,13 @@ impl Scheduler {
             active_process_count: AtomicUsize::new(0),
             timer_heap: Mutex::new(BinaryHeap::new()),
             claimed: Mutex::new(HashSet::new()),
+            extensions: RwLock::new(None),
         }
+    }
+
+    /// Set the extension manager for native library functions.
+    pub fn set_extension_manager(&self, manager: Arc<ExtensionManager>) {
+        *self.extensions.write() = Some(manager);
     }
 
     /// Get the active process count (fast, no locking).

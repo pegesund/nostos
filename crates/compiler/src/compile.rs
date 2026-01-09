@@ -6500,6 +6500,33 @@ impl Compiler {
                 self.chunk.emit(Instruction::LoadUnit(dst), line);
                 return Ok(dst);
             }
+            // Handle __native__ - call extension function by name
+            // Syntax: __native__("FunctionName", arg1, arg2, ...)
+            if name == "__native__" && !args.is_empty() {
+                // First argument must be a string literal with the function name
+                let ext_func_name = match &args[0] {
+                    Expr::String(StringLit::Plain(s), _) => s.clone(),
+                    _ => {
+                        return Err(CompileError::TypeError {
+                            message: "__native__ first argument must be a plain string literal".to_string(),
+                            span: args[0].span(),
+                        });
+                    }
+                };
+
+                // Compile remaining arguments
+                let mut arg_regs = Vec::new();
+                for arg in &args[1..] {
+                    let reg = self.compile_expr_tail(arg, false)?;
+                    arg_regs.push(reg);
+                }
+
+                // Emit CallExtension instruction
+                let dst = self.alloc_reg();
+                let name_idx = self.chunk.add_constant(Value::String(Arc::new(ext_func_name)));
+                self.chunk.emit(Instruction::CallExtension(dst, name_idx, arg_regs.into()), line);
+                return Ok(dst);
+            }
             // Handle self() - get current process ID
             if name == "self" && args.is_empty() {
                 let dst = self.alloc_reg();

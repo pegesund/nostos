@@ -47,6 +47,7 @@ impl<F: Future> Future for AssertSend<F> {
     }
 }
 
+use crate::extensions::{ext_value_to_vm, vm_value_to_ext, ExtensionManager};
 use crate::gc::{GcConfig, GcInt64List, GcList, GcMapKey, GcValue, Heap, GcNativeFn};
 
 /// Held mvar lock guard (owned so it can be stored).
@@ -186,6 +187,9 @@ pub struct AsyncSharedState {
 
     /// Whether profiling is enabled.
     pub profiling_enabled: bool,
+
+    /// Extension manager for native library functions.
+    pub extensions: RwLock<Option<Arc<ExtensionManager>>>,
 }
 
 impl AsyncSharedState {
@@ -2943,6 +2947,43 @@ impl AsyncProcess {
                 let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r)).collect();
                 let result = (native.func)(&arg_values, &mut self.heap)?;
                 set_reg!(dst, result);
+            }
+
+            // === Extension function calls ===
+            CallExtension(dst, name_idx, ref args) => {
+                let name = match get_const!(name_idx) {
+                    Value::String(s) => s.to_string(),
+                    _ => return Err(RuntimeError::Panic("CallExtension: expected string constant".into())),
+                };
+
+                // Convert GcValues to extension Values
+                let arg_values: Vec<nostos_extension::Value> = args.iter().map(|r| {
+                    let gc_val = reg!(*r);
+                    let vm_val = self.heap.gc_to_value(&gc_val);
+                    vm_value_to_ext(&vm_val)
+                }).collect();
+
+                // Get extension manager and call function
+                let extensions_guard = self.shared.extensions.read().unwrap();
+                let result = if let Some(ref ext_mgr) = *extensions_guard {
+                    ext_mgr.call(&name, &arg_values, nostos_extension::Pid(self.pid.0))
+                } else {
+                    Err(format!("No extension manager configured"))
+                };
+                drop(extensions_guard);
+
+                match result {
+                    Ok(ext_val) => {
+                        // Convert extension Value back to VM Value
+                        let vm_val = ext_value_to_vm(&ext_val);
+                        // Allocate on process heap
+                        let gc_val = self.heap.value_to_gc(&vm_val);
+                        set_reg!(dst, gc_val);
+                    }
+                    Err(e) => {
+                        return Err(RuntimeError::Panic(format!("Extension call failed: {}", e)));
+                    }
+                }
             }
 
             // === Closures ===
@@ -8548,6 +8589,7 @@ impl AsyncVM {
             panel_command_sender: None,
             next_pid: AtomicU64::new(1),
             profiling_enabled: config.profiling_enabled,
+            extensions: RwLock::new(None),
         });
 
         Self {
