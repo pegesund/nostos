@@ -481,6 +481,11 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         cycle_window(s);
     });
 
+    // Global Ctrl+B to open browser from anywhere
+    siv.set_on_pre_event(Event::CtrlChar('b'), |s| {
+        open_browser(s);
+    });
+
     siv.run();
     ExitCode::SUCCESS
 }
