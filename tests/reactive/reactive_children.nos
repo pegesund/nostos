@@ -1,0 +1,15 @@
+# expect: 2
+# Test .children introspection on reactive records
+
+reactive Point = { x: Int, y: Int }
+reactive Line = { p1: Point, p2: Point }
+
+main() = {
+    start = Point(x: 0, y: 0)
+    finish = Point(x: 10, y: 10)
+    line = Line(p1: start, p2: finish)
+
+    # Get children of line - should have 2 reactive children (p1 and p2)
+    children = line.children
+    length(children)
+}

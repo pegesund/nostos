@@ -217,6 +217,8 @@ pub struct ReactiveRecordValue {
     /// Parent references: (weak_parent, field_index_in_parent)
     /// Uses Weak to avoid reference cycles
     pub parents: Arc<std::sync::RwLock<Vec<(std::sync::Weak<ReactiveRecordValue>, u16)>>>,
+    /// Registered onChange callbacks - called with (fieldName: String, newValue: Value)
+    pub callbacks: Arc<std::sync::RwLock<Vec<Value>>>,
 }
 
 impl ReactiveRecordValue {
@@ -228,7 +230,22 @@ impl ReactiveRecordValue {
             fields: Arc::new(std::sync::RwLock::new(fields)),
             reactive_field_mask,
             parents: Arc::new(std::sync::RwLock::new(Vec::new())),
+            callbacks: Arc::new(std::sync::RwLock::new(Vec::new())),
         }
+    }
+
+    /// Register an onChange callback (should be a closure taking fieldName and newValue)
+    pub fn add_callback(&self, callback: Value) {
+        if let Ok(mut callbacks) = self.callbacks.write() {
+            callbacks.push(callback);
+        }
+    }
+
+    /// Get all registered callbacks
+    pub fn get_callbacks(&self) -> Vec<Value> {
+        self.callbacks.read()
+            .map(|cbs| cbs.clone())
+            .unwrap_or_default()
     }
 
     /// Get a field value by index
@@ -790,6 +807,8 @@ pub enum Instruction {
     GetField(Reg, Reg, ConstIdx),
     /// Set field: record.field = value
     SetField(Reg, ConstIdx, Reg),
+    /// Register onChange callback on reactive record: record.onChange(callback)
+    ReactiveAddCallback(Reg, Reg),
     /// Update record: dst = base with new field values
     UpdateRecord(Reg, Reg, ConstIdx, RegList),
 

@@ -5724,6 +5724,26 @@ impl Compiler {
                             "toList" => Some("Float32Array.toList"),
                             _ => None,
                         }
+                    } else if self.types.get(&type_name)
+                        .map(|info| matches!(&info.kind, TypeInfoKind::Reactive { .. }))
+                        .unwrap_or(false)
+                    {
+                        // Reactive record special methods
+                        match method.node.as_str() {
+                            "onChange" => {
+                                if args.len() == 1 {
+                                    let obj_reg = self.compile_expr_tail(obj, false)?;
+                                    let callback_reg = self.compile_expr_tail(&args[0], false)?;
+                                    self.chunk.emit(Instruction::ReactiveAddCallback(obj_reg, callback_reg), line);
+                                    // Return unit
+                                    let dst = self.alloc_reg();
+                                    self.chunk.emit(Instruction::LoadUnit(dst), line);
+                                    return Ok(dst);
+                                }
+                                None
+                            }
+                            _ => None,
+                        }
                     } else {
                         None
                     };
