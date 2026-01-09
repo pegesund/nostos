@@ -8241,45 +8241,36 @@ impl Compiler {
             if fn_val.signature.is_none() {
                 continue;
             }
-            let param_types: Vec<nostos_types::Type> = fn_val.param_types
-                .iter()
-                .map(|ty| {
-                    // For unknown types ("_" or "?"), use a fresh type variable
-                    // Each param needs its own distinct type variable
-                    if ty == "_" || ty == "?" {
-                        env.fresh_var()
-                    } else {
-                        self.type_name_to_type(ty)
-                    }
-                })
-                .collect();
 
-            // Use declared return type if available, otherwise try to parse from inferred signature
-            let ret_ty = if let Some(ty) = fn_val.return_type.as_ref() {
-                self.type_name_to_type(ty)
-            } else if let Some(sig) = fn_val.signature.as_ref() {
-                // Parse return type from signature string (e.g., "Int -> Int" -> "Int", or just "Int")
-                // Handle constraint syntax: "Show a => a -> String" -> "String"
-                let sig_without_constraints = if let Some(idx) = sig.find("=>") {
-                    sig[idx + 2..].trim()
+            // IMPORTANT: Parse from the signature string to preserve type variable relationships
+            // For example, "a -> List(a) -> a" should have the same Var ID for all occurrences of 'a'
+            // Using param_types separately would create independent type variables
+            let func_type = if let Some(sig) = fn_val.signature.as_ref() {
+                if let Some(ft) = self.parse_signature_string(sig) {
+                    ft
                 } else {
-                    sig.as_str()
-                };
-                // Return type is after the last "->"
-                let ret_str = sig_without_constraints
-                    .rsplit("->")
-                    .next()
-                    .map(|s| s.trim())
-                    .unwrap_or(sig_without_constraints);
-                self.type_name_to_type(ret_str)
+                    // Fallback: construct from param_types if signature parsing fails
+                    let param_types: Vec<nostos_types::Type> = fn_val.param_types
+                        .iter()
+                        .map(|ty| {
+                            if ty == "_" || ty == "?" {
+                                env.fresh_var()
+                            } else {
+                                self.type_name_to_type(ty)
+                            }
+                        })
+                        .collect();
+                    let ret_ty = fn_val.return_type.as_ref()
+                        .map(|ty| self.type_name_to_type(ty))
+                        .unwrap_or_else(|| env.fresh_var());
+                    nostos_types::FunctionType {
+                        type_params: vec![],
+                        params: param_types,
+                        ret: Box::new(ret_ty),
+                    }
+                }
             } else {
-                env.fresh_var()
-            };
-
-            let func_type = nostos_types::FunctionType {
-                type_params: vec![],
-                params: param_types,
-                ret: Box::new(ret_ty.clone()),
+                continue; // No signature available
             };
 
             // Insert with full name (e.g., "bar/")
@@ -8361,7 +8352,7 @@ impl Compiler {
         let resolved_ret = ctx.env.apply_subst(&func_ty.ret);
 
         // Debug: uncomment to see resolved types
-        // eprintln!("DEBUG: {} resolved_ret = {:?}", def.name.node, resolved_ret);
+        // eprintln!("DEBUG: {} params={:?} ret={:?}", def.name.node, resolved_params, resolved_ret);
 
         // Collect all type variable IDs in order of first appearance
         let mut var_order: Vec<u32> = Vec::new();

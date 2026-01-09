@@ -33,6 +33,8 @@ pub struct InferCtx<'a> {
     pub constraints: Vec<Constraint>,
     /// Trait bounds on type variables: maps type var ID to set of required traits
     pub trait_bounds: HashMap<u32, Vec<String>>,
+    /// Name of the function currently being inferred (for handling recursive calls)
+    current_function: Option<String>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -41,6 +43,7 @@ impl<'a> InferCtx<'a> {
             env,
             constraints: Vec::new(),
             trait_bounds: HashMap::new(),
+            current_function: None,
         }
     }
 
@@ -623,9 +626,15 @@ impl<'a> InferCtx<'a> {
                 if let Some((ty, _)) = self.env.lookup(name) {
                     Ok(ty.clone())
                 } else if let Some(sig) = self.env.functions.get(name).cloned() {
-                    // Instantiate polymorphic functions with fresh type variables
-                    // and record trait constraints
-                    Ok(self.instantiate_function(&sig))
+                    // For recursive calls (calling the function being inferred),
+                    // DON'T instantiate - use the same type variables to preserve constraints
+                    let is_recursive = self.current_function.as_ref() == Some(name);
+                    if is_recursive {
+                        Ok(Type::Function(sig))
+                    } else {
+                        // Instantiate polymorphic functions with fresh type variables
+                        Ok(self.instantiate_function(&sig))
+                    }
                 } else {
                     Err(TypeError::UnknownIdent(name.clone()))
                 }
@@ -1728,8 +1737,31 @@ impl<'a> InferCtx<'a> {
             });
         }
 
-        // Infer the first clause to establish the base types
-        let (mut param_types, mut ret_ty) = self.infer_clause(&func.clauses[0])?;
+        // Set current function for recursive call detection
+        let saved_current = self.current_function.take();
+        self.current_function = Some(name.clone());
+
+        // Get pre-registered type if available (for recursive calls to use the same vars)
+        let pre_registered = self.env.functions.get(name).cloned();
+
+        // Infer the first clause
+        let (clause_params, clause_ret) = self.infer_clause(&func.clauses[0])?;
+
+        // If we have a pre-registered type, unify with its vars to connect recursive calls
+        let (mut param_types, mut ret_ty) = if let Some(ref pre_reg) = pre_registered {
+            // Unify clause params with pre-registered params
+            if clause_params.len() == pre_reg.params.len() {
+                for (cp, pp) in clause_params.iter().zip(pre_reg.params.iter()) {
+                    self.unify(cp.clone(), pp.clone());
+                }
+            }
+            // Unify clause return with pre-registered return
+            self.unify(clause_ret.clone(), (*pre_reg.ret).clone());
+            // Use pre-registered types (they're now unified)
+            (pre_reg.params.clone(), (*pre_reg.ret).clone())
+        } else {
+            (clause_params, clause_ret)
+        };
 
         // Infer remaining clauses and unify their types with the first
         for clause in func.clauses.iter().skip(1) {
@@ -1763,6 +1795,9 @@ impl<'a> InferCtx<'a> {
 
         // Register function in environment
         self.env.functions.insert(name.clone(), func_ty.clone());
+
+        // Restore previous current function
+        self.current_function = saved_current;
 
         Ok(func_ty)
     }
