@@ -2022,12 +2022,17 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 }
                 styled
             }
-            BrowserItem::Variable { name, mutable, eval_created } => {
+            BrowserItem::Variable { name, mutable, eval_created, is_mvar, type_name } => {
                 let eval_prefix = if *eval_created { "[eval] " } else { "" };
-                let text = if *mutable {
-                    format!("⚡ var {}{}", eval_prefix, name)
+                let type_suffix = type_name.as_ref()
+                    .map(|t| format!(": {}", t))
+                    .unwrap_or_default();
+                let text = if *is_mvar {
+                    format!("⚡ mvar {}{}{}", eval_prefix, name, type_suffix)
+                } else if *mutable {
+                    format!("⚡ var {}{}{}", eval_prefix, name, type_suffix)
                 } else {
-                    format!("📌 {}{}", eval_prefix, name)
+                    format!("📌 {}{}{}", eval_prefix, name, type_suffix)
                 };
                 let mut styled = StyledString::plain(text);
                 if *eval_created {
