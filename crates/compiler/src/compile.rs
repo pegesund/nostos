@@ -171,6 +171,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Server.accept", signature: "Int -> HttpRequest", doc: "Accept next request on server handle, throws on error" },
     BuiltinInfo { name: "Server.respond", signature: "Int -> Int -> [(String, String)] -> String -> ()", doc: "Send response: respond(reqId, status, headers, body), throws on error" },
     BuiltinInfo { name: "Server.close", signature: "Int -> ()", doc: "Close server handle" },
+    BuiltinInfo { name: "Server.matchPath", signature: "String -> String -> [(String, String)]", doc: "Match path against pattern with :params, returns params list or empty if no match" },
 
     // === Process Introspection ===
     BuiltinInfo { name: "Process.all", signature: "() -> [Pid]", doc: "Get list of all process IDs on this thread" },
@@ -949,6 +950,9 @@ impl Compiler {
                         ("path".to_string(), "String".to_string()),
                         ("headers".to_string(), "List".to_string()),
                         ("body".to_string(), "String".to_string()),
+                        ("queryParams".to_string(), "List".to_string()),
+                        ("cookies".to_string(), "List".to_string()),
+                        ("formParams".to_string(), "List".to_string()),
                     ],
                     mutable: false,
                 },
@@ -3846,6 +3850,14 @@ impl Compiler {
                             self.chunk.emit(Instruction::ServerClose(dst, handle_reg), line);
                             return Ok(dst);
                         }
+                        "Server.matchPath" if args.len() == 2 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let pattern_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![path_reg, pattern_reg].into()), line);
+                            return Ok(dst);
+                        }
                         // PostgreSQL functions
                         "Pg.connect" if args.len() == 1 => {
                             let conn_str_reg = self.compile_expr_tail(&args[0], false)?;
@@ -4630,6 +4642,14 @@ impl Compiler {
                             let server_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::ServerClose(dst, server_reg), line);
+                            return Ok(dst);
+                        }
+                        "Server.matchPath" if args.len() == 2 => {
+                            let path_reg = self.compile_expr_tail(&args[0], false)?;
+                            let pattern_reg = self.compile_expr_tail(&args[1], false)?;
+                            let dst = self.alloc_reg();
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
+                            self.chunk.emit(Instruction::CallNative(dst, name_idx, vec![path_reg, pattern_reg].into()), line);
                             return Ok(dst);
                         }
                         // === PostgreSQL operations ===

@@ -598,8 +598,8 @@ impl IoRuntime {
         let mut next_handle: u64 = 1;
 
         // HTTP Server state
-        // Request type: (request_id, method, path, headers, body)
-        type ServerRequest = (u64, String, String, Vec<(String, String)>, Vec<u8>);
+        // Request type: (request_id, method, path, headers, body, query_params, cookies, form_params)
+        type ServerRequest = (u64, String, String, Vec<(String, String)>, Vec<u8>, Vec<(String, String)>, Vec<(String, String)>, Vec<(String, String)>);
         #[allow(dead_code)]
         type ServerRequestTx = mpsc::UnboundedSender<ServerRequest>;
         type ServerRequestRx = mpsc::UnboundedReceiver<ServerRequest>;
@@ -948,6 +948,27 @@ impl IoRuntime {
                             // Extract request parts
                             let method = request.method().to_string();
                             let path = request.uri().path().to_string();
+
+                            // Parse query parameters
+                            let query_params: Vec<(String, String)> = request
+                                .uri()
+                                .query()
+                                .map(|q| {
+                                    q.split('&')
+                                        .filter_map(|pair| {
+                                            let mut parts = pair.splitn(2, '=');
+                                            let key = parts.next()?;
+                                            let value = parts.next().unwrap_or("");
+                                            // URL decode key and value
+                                            use percent_encoding::percent_decode_str;
+                                            let key = percent_decode_str(key).decode_utf8_lossy().into_owned();
+                                            let value = percent_decode_str(value).decode_utf8_lossy().into_owned();
+                                            Some((key, value))
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+
                             let headers: Vec<(String, String)> = request
                                 .headers()
                                 .iter()
@@ -956,10 +977,57 @@ impl IoRuntime {
                                 })
                                 .collect();
 
+                            // Parse cookies from Cookie header
+                            let cookies: Vec<(String, String)> = headers
+                                .iter()
+                                .filter(|(k, _)| k.eq_ignore_ascii_case("cookie"))
+                                .flat_map(|(_, v)| {
+                                    v.split(';').filter_map(|cookie| {
+                                        let cookie = cookie.trim();
+                                        let mut parts = cookie.splitn(2, '=');
+                                        let name = parts.next()?.trim();
+                                        let value = parts.next().unwrap_or("").trim();
+                                        if name.is_empty() {
+                                            None
+                                        } else {
+                                            Some((name.to_string(), value.to_string()))
+                                        }
+                                    })
+                                })
+                                .collect();
+
                             // Read body
                             let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
                                 Ok(bytes) => bytes.to_vec(),
                                 Err(_) => vec![],
+                            };
+
+                            // Parse form body if Content-Type is application/x-www-form-urlencoded
+                            let form_params: Vec<(String, String)> = {
+                                let content_type = headers.iter()
+                                    .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+                                    .map(|(_, v)| v.as_str())
+                                    .unwrap_or("");
+
+                                if content_type.starts_with("application/x-www-form-urlencoded") {
+                                    if let Ok(body_str) = std::str::from_utf8(&body) {
+                                        use percent_encoding::percent_decode_str;
+                                        body_str.split('&')
+                                            .filter_map(|pair| {
+                                                let mut parts = pair.splitn(2, '=');
+                                                let key = parts.next()?;
+                                                let value = parts.next().unwrap_or("");
+                                                let key = percent_decode_str(key).decode_utf8_lossy().into_owned();
+                                                let value = percent_decode_str(value).decode_utf8_lossy().into_owned();
+                                                Some((key, value))
+                                            })
+                                            .collect()
+                                    } else {
+                                        vec![]
+                                    }
+                                } else {
+                                    vec![]
+                                }
                             };
 
                             // Generate request ID and create response channel
@@ -970,7 +1038,7 @@ impl IoRuntime {
                             pending.lock().await.insert(request_id, resp_tx);
 
                             // Send request to the Nostos process
-                            let _ = req_tx.send((request_id, method, path, headers, body));
+                            let _ = req_tx.send((request_id, method, path, headers, body, query_params, cookies, form_params));
 
                             // Wait for response from Nostos
                             match resp_rx.await {
@@ -1029,13 +1097,16 @@ impl IoRuntime {
                                 // Only one waiter at a time can hold this lock
                                 let result = rx.lock().await.recv().await;
                                 match result {
-                                    Some((request_id, method, path, headers, body)) => {
+                                    Some((request_id, method, path, headers, body, query_params, cookies, form_params)) => {
                                         let _ = response.send(Ok(IoResponseValue::ServerRequest {
                                             request_id,
                                             method,
                                             path,
                                             headers,
                                             body,
+                                            query_params,
+                                            cookies,
+                                            form_params,
                                         }));
                                     }
                                     None => {

@@ -211,6 +211,9 @@ pub enum IoResponseValue {
         path: String,
         headers: Vec<(String, String)>,
         body: Vec<u8>,
+        query_params: Vec<(String, String)>,
+        cookies: Vec<(String, String)>,
+        form_params: Vec<(String, String)>,
     },
     /// Process execution result (from Exec.run)
     ExecResult {
