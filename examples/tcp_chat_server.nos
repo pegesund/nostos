@@ -1,0 +1,62 @@
+# TCP Chat Server Example
+# A simple multi-client chat server using MVars for shared state
+# Connect multiple clients with: nc localhost 5000
+
+mvar clients: List[Int] = []
+
+broadcast(message, senderSock) = {
+    clientList = clients
+    clientList.each(sock => {
+        if sock != senderSock then {
+            try { Tcp.write(sock, message ++ "\n") } catch { _ -> () }
+        } else ()
+    })
+}
+
+handleClient(sock, clientId) = {
+    # Add to client list
+    clients = clients ++ [sock]
+    println("Client " ++ show(clientId) ++ " joined. Total: " ++ show(length(clients)))
+
+    try { Tcp.write(sock, "Welcome to the chat! Type messages and press Enter.\n") } catch { _ -> () }
+    broadcast("*** Client " ++ show(clientId) ++ " joined ***", sock)
+
+    try {
+        loop {
+            data = Tcp.read(sock, 1024)
+            if data == "" then throw("disconnect")
+            else {
+                # Remove trailing newlines
+                message = data.trim()
+                if message != "" then {
+                    println("Client " ++ show(clientId) ++ ": " ++ message)
+                    broadcast("[" ++ show(clientId) ++ "] " ++ message, sock)
+                } else ()
+            }
+        }
+    } catch { _ ->
+        # Remove from client list
+        clients = clients.filter(s => s != sock)
+        Tcp.close(sock)
+        println("Client " ++ show(clientId) ++ " left. Total: " ++ show(length(clients)))
+        broadcast("*** Client " ++ show(clientId) ++ " left ***", 0 - 1)
+    }
+}
+
+main() = {
+    port = 5000
+    println("=== TCP Chat Server ===")
+    println("Listening on port " ++ show(port))
+    println("Connect with: nc localhost " ++ show(port))
+    println("")
+
+    listener = Tcp.listen(port)
+    mvar nextId: Int = 1
+
+    loop {
+        client = Tcp.accept(listener)
+        id = nextId
+        nextId = nextId + 1
+        spawn { handleClient(client, id) }
+    }
+}

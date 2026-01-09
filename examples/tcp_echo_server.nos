@@ -1,0 +1,36 @@
+# TCP Echo Server Example
+# Run this in one terminal, then run tcp_echo_client.nos in another
+
+handleClient(sock) = {
+    println("Client connected")
+
+    try {
+        loop {
+            data = Tcp.read(sock, 4096)
+            if data == "" then {
+                println("Client disconnected")
+                throw("disconnect")
+            } else {
+                println("Received: " ++ data)
+                Tcp.write(sock, "Echo: " ++ data)
+                println("Sent response")
+            }
+        }
+    } catch { _ -> () }
+
+    Tcp.close(sock)
+}
+
+main() = {
+    port = 9999
+    println("Starting TCP echo server on port " ++ show(port))
+
+    listener = Tcp.listen(port)
+    println("Listening for connections...")
+
+    # Accept loop - spawn a process for each client
+    loop {
+        client = Tcp.accept(listener)
+        spawn { handleClient(client) }
+    }
+}

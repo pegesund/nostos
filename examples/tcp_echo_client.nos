@@ -1,0 +1,32 @@
+# TCP Echo Client Example
+# First run tcp_echo_server.nos in another terminal
+
+main() = {
+    host = "localhost"
+    port = 9999
+
+    println("Connecting to " ++ host ++ ":" ++ show(port) ++ "...")
+
+    try {
+        sock = Tcp.connect(host, port)
+        println("Connected!")
+
+        # Send a few messages
+        messages = ["Hello", "World", "From Nostos TCP"]
+
+        messages.each(msg => {
+            println("Sending: " ++ msg)
+            Tcp.write(sock, msg)
+
+            response = Tcp.read(sock, 1024)
+            println("Response: " ++ response)
+        })
+
+        Tcp.close(sock)
+        println("Connection closed")
+        0
+    } catch { e ->
+        println("Error: " ++ e)
+        1
+    }
+}
