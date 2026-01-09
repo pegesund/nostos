@@ -3422,11 +3422,17 @@ impl ReplEngine {
             ":help" | ":h" | ":?" => Ok(self.help_text()),
             ":load" | ":l" => {
                 if args.is_empty() {
-                    Err("Usage: :load <file.nos>".to_string())
+                    Err("Usage: :load <file.nos or directory>".to_string())
                 } else {
                     // Strip surrounding quotes if present
                     let path = args.trim_matches('"').trim_matches('\'');
-                    self.load_file(path).map(|_| format!("Loaded {}", path))
+                    let path_buf = PathBuf::from(path);
+                    if path_buf.is_dir() {
+                        // Load entire project directory
+                        self.load_directory(path).map(|_| format!("Loaded project: {}", path))
+                    } else {
+                        self.load_file(path).map(|_| format!("Loaded {}", path))
+                    }
                 }
             }
             ":profile" | ":prof" => {
