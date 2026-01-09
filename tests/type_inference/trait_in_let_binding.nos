@@ -1,0 +1,25 @@
+# expect: 15
+# Test: trait method result bound to let variable
+
+trait Computable
+    compute(self) -> Int
+end
+
+type Formula = Formula(Int, Int)
+
+Formula: Computable
+    compute(self) = match self {
+        Formula(a, b) -> a + b
+    }
+end
+
+processFormula[T: Computable](f: T) -> Int = {
+    result = f.compute()
+    doubled = result * 2
+    doubled - result
+}
+
+main() = {
+    formula = Formula(10, 5)
+    processFormula(formula)
+}

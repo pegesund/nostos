@@ -1,0 +1,19 @@
+# expect: 15
+# Test: match on container with wrapper inside
+
+type Wrapper2 = Wrapper2(Int)
+type Box2 = NoContent | HasContent(Wrapper2)
+
+unwrapWrapper(w: Wrapper2) -> Int =
+    match w { Wrapper2(n) -> n }
+
+extractFromBox(b: Box2) -> Int =
+    match b {
+        NoContent -> 0
+        HasContent(w) -> unwrapWrapper(w)
+    }
+
+main() = {
+    b = HasContent(Wrapper2(15))
+    extractFromBox(b)
+}

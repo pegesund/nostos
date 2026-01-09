@@ -1,0 +1,20 @@
+# expect: 100
+# Test: list containing items and fold with trait
+
+trait Prioritizable
+    priority(self) -> Int
+end
+
+type Task = Task(Int, String)
+
+Task: Prioritizable
+    priority(self) = match self { Task(p, _) -> p }
+end
+
+getPriorities[T: Prioritizable](items: List[T]) -> List[Int] =
+    map(items, (item) => item.priority())
+
+main() = {
+    tasks = [Task(10, "a"), Task(100, "b"), Task(50, "c")]
+    maximum(getPriorities(tasks))
+}

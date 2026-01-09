@@ -1,0 +1,23 @@
+# expect: true
+# Test: trait method in closure passed to any
+
+trait Checkable
+    check(self) -> Bool
+end
+
+type Flag = On | Off
+
+Flag: Checkable
+    check(self) = match self {
+        On -> true
+        Off -> false
+    }
+end
+
+hasAnyTrue[T: Checkable](items: List[T]) -> Bool =
+    any(items, (x) => x.check())
+
+main() = {
+    flags = [Off, Off, On, Off]
+    hasAnyTrue(flags)
+}

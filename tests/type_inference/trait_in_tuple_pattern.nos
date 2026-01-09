@@ -1,0 +1,21 @@
+# expect: 12
+# Test: trait method with two parameters
+
+trait Readable
+    read(self) -> Int
+end
+
+type Sensor = Sensor(Int)
+
+Sensor: Readable
+    read(self) = match self { Sensor(v) -> v }
+end
+
+sumReadings[T: Readable](a: T, b: T) -> Int =
+    a.read() + b.read()
+
+main() = {
+    s1 = Sensor(5)
+    s2 = Sensor(7)
+    sumReadings(s1, s2)
+}

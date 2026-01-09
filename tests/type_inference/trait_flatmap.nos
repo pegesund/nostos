@@ -1,0 +1,20 @@
+# expect: 9
+# Test: trait method in flatMap closure
+
+trait Replicable
+    replicate(self) -> List[Int]
+end
+
+type Item2 = Item2(Int)
+
+Item2: Replicable
+    replicate(self) = match self { Item2(n) -> [n, n, n] }
+end
+
+replicateAll[T: Replicable](items: List[T]) -> List[Int] =
+    flatten(map(items, (x) => x.replicate()))
+
+main() = {
+    items = [Item2(1), Item2(2), Item2(3)]
+    length(replicateAll(items))
+}

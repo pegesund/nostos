@@ -1,0 +1,23 @@
+# expect: 27
+# Test: nested closures with trait methods
+
+trait Tripler
+    triple(self) -> Self
+end
+
+type Num = Num(Int)
+
+Num: Tripler
+    triple(self) = match self { Num(n) -> Num(n * 3) }
+end
+
+applyTwice[T: Tripler](items: List[T]) -> List[T] = {
+    firstPass = map(items, (x) => x.triple())
+    map(firstPass, (x) => x.triple())
+}
+
+main() = {
+    nums = [Num(1), Num(2)]
+    results = applyTwice(nums)
+    fold(results, 0, (acc, n) => match n { Num(v) -> acc + v })
+}

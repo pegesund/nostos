@@ -1,0 +1,21 @@
+# expect: 6
+# Test: using stdlib concat with trait-based transformation
+
+trait Expandable2
+    expand2(self) -> List[Int]
+end
+
+type Single = Single(Int)
+
+Single: Expandable2
+    expand2(self) = match self { Single(n) -> [n, n] }
+end
+
+expandAll[T: Expandable2](items: List[T]) -> List[List[Int]] =
+    map(items, (item) => item.expand2())
+
+main() = {
+    singles = [Single(1), Single(2), Single(3)]
+    result = flatten(expandAll(singles))
+    length(result)
+}

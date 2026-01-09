@@ -1,0 +1,22 @@
+# expect: 2
+# Test: generic function using partition with trait method
+
+trait Checkable2
+    passes(self) -> Bool
+end
+
+type Test = Test(Bool)
+
+Test: Checkable2
+    passes(self) = match self { Test(b) -> b }
+end
+
+countPassing[T: Checkable2](items: List[T]) -> Int = {
+    results = partition(items, (x) => x.passes())
+    match results { (passing, _) -> length(passing) }
+}
+
+main() = {
+    tests = [Test(true), Test(false), Test(true), Test(false)]
+    countPassing(tests)
+}

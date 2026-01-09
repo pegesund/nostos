@@ -1,0 +1,26 @@
+# expect: 15
+# Test: generic function with two type parameters using trait methods
+
+trait Measurable
+    measure(self) -> Int
+end
+
+type Width = Width(Int)
+type Height = Height(Int)
+
+Width: Measurable
+    measure(self) = match self { Width(w) -> w }
+end
+
+Height: Measurable
+    measure(self) = match self { Height(h) -> h }
+end
+
+combineMeasures[A: Measurable, B: Measurable](a: A, b: B) -> Int =
+    a.measure() + b.measure()
+
+main() = {
+    w = Width(10)
+    h = Height(5)
+    combineMeasures(w, h)
+}

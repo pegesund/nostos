@@ -1,0 +1,26 @@
+# expect: 42
+# Test: using trait method after match extraction
+
+trait Extractable
+    extractVal(self) -> Int
+end
+
+type Wrapper = Wrapper(Int)
+type Choice = LeftW(Wrapper) | RightW(Wrapper)
+
+Wrapper: Extractable
+    extractVal(self) = match self { Wrapper(n) -> n }
+end
+
+extractWrapper(w: Wrapper) -> Int = w.extractVal()
+
+extractFromChoice(choice: Choice) -> Int =
+    match choice {
+        LeftW(w) -> extractWrapper(w)
+        RightW(w) -> extractWrapper(w) * 2
+    }
+
+main() = {
+    c = LeftW(Wrapper(42))
+    extractFromChoice(c)
+}

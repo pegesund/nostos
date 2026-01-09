@@ -1,0 +1,23 @@
+# expect: 10
+# Test: generic function using head/tail on list
+
+trait Valuable
+    value2(self) -> Int
+end
+
+type Token2 = Token2(Int)
+
+Token2: Valuable
+    value2(self) = match self { Token2(n) -> n }
+end
+
+firstValue[T: Valuable](items: List[T]) -> Int =
+    match items {
+        [] -> 0
+        [x | _] -> x.value2()
+    }
+
+main() = {
+    tokens = [Token2(10), Token2(20), Token2(30)]
+    firstValue(tokens)
+}

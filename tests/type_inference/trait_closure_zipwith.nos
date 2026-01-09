@@ -1,0 +1,24 @@
+# expect: 36
+# Test: trait method in closure used with zipWith
+
+trait Addable
+    add(self, other: Self) -> Self
+end
+
+type Val = Val(Int)
+
+Val: Addable
+    add(self, other) = match (self, other) {
+        (Val(a), Val(b)) -> Val(a + b)
+    }
+end
+
+sumPairwise[T: Addable](xs: List[T], ys: List[T]) -> List[T] =
+    zipWith(xs, ys, (a, b) => a.add(b))
+
+main() = {
+    list1 = [Val(1), Val(2), Val(3), Val(4)]
+    list2 = [Val(5), Val(6), Val(7), Val(8)]
+    results = sumPairwise(list1, list2)
+    fold(results, 0, (acc, v) => match v { Val(n) -> acc + n })
+}

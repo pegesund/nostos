@@ -1,0 +1,23 @@
+# expect: 30
+# Test: generic function using reverse and trait methods
+
+trait Scoreable
+    score(self) -> Int
+end
+
+type Player = Player(Int)
+
+Player: Scoreable
+    score(self) = match self { Player(s) -> s }
+end
+
+lastScore[T: Scoreable](items: List[T]) -> Int =
+    match reverse(items) {
+        [] -> 0
+        [last | _] -> last.score()
+    }
+
+main() = {
+    players = [Player(10), Player(20), Player(30)]
+    lastScore(players)
+}

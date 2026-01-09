@@ -1,0 +1,22 @@
+# expect: 16
+# Test: deeply nested generic function calls
+
+trait Doubable
+    double3(self) -> Self
+end
+
+type Val2 = Val2(Int)
+
+Val2: Doubable
+    double3(self) = match self { Val2(n) -> Val2(n * 2) }
+end
+
+double1[T: Doubable](x: T) -> T = x.double3()
+double2[T: Doubable](x: T) -> T = double1(double1(x))
+double4[T: Doubable](x: T) -> T = double2(double2(x))
+
+main() = {
+    v = Val2(1)
+    result = double4(v)
+    match result { Val2(n) -> n }
+}

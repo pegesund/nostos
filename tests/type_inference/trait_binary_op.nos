@@ -1,0 +1,25 @@
+# expect: 14
+# Test: trait with binary operation between two generic values
+
+trait Combinable
+    combine(self, other: Self) -> Self
+end
+
+type Concat = Concat(Int)
+
+Concat: Combinable
+    combine(self, other) = match (self, other) {
+        (Concat(a), Concat(b)) -> Concat(a + b)
+    }
+end
+
+combineThree[T: Combinable](a: T, b: T, c: T) -> T =
+    a.combine(b).combine(c)
+
+main() = {
+    x = Concat(2)
+    y = Concat(5)
+    z = Concat(7)
+    result = combineThree(x, y, z)
+    match result { Concat(n) -> n }
+}

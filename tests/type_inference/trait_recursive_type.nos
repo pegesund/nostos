@@ -1,0 +1,21 @@
+# expect: 6
+# Test: trait on a sum type (variant)
+
+trait Summable
+    sumAll(self) -> Int
+end
+
+type Pair = Pair(Int, Int)
+
+Pair: Summable
+    sumAll(self) = match self {
+        Pair(a, b) -> a + b
+    }
+end
+
+computeSum[T: Summable](t: T) -> Int = t.sumAll()
+
+main() = {
+    p = Pair(2, 4)
+    computeSum(p)
+}

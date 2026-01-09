@@ -1,0 +1,23 @@
+# expect: 42
+# Test: generic function returning a value of the same generic type
+
+trait Transformable
+    transform(self) -> Self
+end
+
+type Data = Data(Int)
+
+Data: Transformable
+    transform(self) = match self { Data(n) -> Data(n + 1) }
+end
+
+transformTwice[T: Transformable](x: T) -> T = {
+    first = x.transform()
+    first.transform()
+}
+
+main() = {
+    d = Data(40)
+    result = transformTwice(d)
+    match result { Data(n) -> n }
+}

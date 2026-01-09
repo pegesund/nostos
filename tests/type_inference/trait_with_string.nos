@@ -1,0 +1,20 @@
+# expect: 5
+# Test: trait method returning a string, with length check
+
+trait Describable
+    describe(self) -> String
+end
+
+type Item = Item(String)
+
+Item: Describable
+    describe(self) = match self { Item(name) -> name }
+end
+
+descriptionLength[T: Describable](item: T) -> Int =
+    length(item.describe())
+
+main() = {
+    i = Item("hello")
+    descriptionLength(i)
+}

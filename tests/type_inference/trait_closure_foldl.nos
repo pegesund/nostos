@@ -1,0 +1,23 @@
+# expect: 10
+# Test: trait method in closure passed to stdlib foldl
+
+trait Semigroup
+    combine(self, other: Self) -> Self
+end
+
+type Product = Product(Int)
+
+Product: Semigroup
+    combine(self, other) = match (self, other) {
+        (Product(a), Product(b)) -> Product(a + b)
+    }
+end
+
+sumAll[T: Semigroup](list: List[T], zero: T) -> T =
+    fold(list, zero, (acc, x) => acc.combine(x))
+
+main() = {
+    items = [Product(1), Product(2), Product(3), Product(4)]
+    result = sumAll(items, Product(0))
+    match result { Product(n) -> n }
+}

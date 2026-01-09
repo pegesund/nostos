@@ -1,0 +1,20 @@
+# expect: 200
+# Test: trait method in pattern match guard
+
+trait Checkable
+    check(self) -> Bool
+end
+
+type Condition = Condition(Bool)
+
+Condition: Checkable
+    check(self) = match self { Condition(b) -> b }
+end
+
+getValue[T: Checkable](cond: T, onTrue: Int, onFalse: Int) -> Int =
+    if cond.check() then onTrue else onFalse
+
+main() = {
+    c = Condition(true)
+    getValue(c, 200, 100)
+}

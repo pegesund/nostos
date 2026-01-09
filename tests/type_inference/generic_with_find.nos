@@ -1,0 +1,23 @@
+# expect: 30
+# Test: generic function using stdlib find with trait method
+
+trait HasId
+    getId(self) -> Int
+end
+
+type Entity = Entity(Int, String)
+
+Entity: HasId
+    getId(self) = match self { Entity(id, _) -> id }
+end
+
+findById[T: HasId](items: List[T], targetId: Int) -> Int =
+    match find(items, (x) => x.getId() == targetId) {
+        Some(found) -> found.getId()
+        None -> -1
+    }
+
+main() = {
+    entities = [Entity(10, "a"), Entity(20, "b"), Entity(30, "c")]
+    findById(entities, 30)
+}

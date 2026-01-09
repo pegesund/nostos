@@ -1,0 +1,23 @@
+# expect: 50
+# Test: trait method returning Self in generic function
+
+trait Scalable
+    scale(self, factor: Int) -> Self
+end
+
+type Point = Point(Int, Int)
+
+Point: Scalable
+    scale(self, factor) = match self {
+        Point(x, y) -> Point(x * factor, y * factor)
+    }
+end
+
+scaleUp[T: Scalable](item: T) -> T =
+    item.scale(10)
+
+main() = {
+    p = Point(2, 3)
+    scaled = scaleUp(p)
+    match scaled { Point(x, y) -> x + y }
+}

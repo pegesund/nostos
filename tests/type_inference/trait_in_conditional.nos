@@ -1,0 +1,20 @@
+# expect: 100
+# Test: trait method call inside conditional
+
+trait Defaultable
+    getDefault(self) -> Int
+end
+
+type Config = Config(Int)
+
+Config: Defaultable
+    getDefault(self) = match self { Config(n) -> n }
+end
+
+getValueOrDefault[T: Defaultable](maybeValue: Int, default: T) -> Int =
+    if maybeValue == 0 then default.getDefault() else maybeValue
+
+main() = {
+    cfg = Config(100)
+    getValueOrDefault(0, cfg)
+}

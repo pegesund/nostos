@@ -1,0 +1,28 @@
+# expect: 7
+# Test: function with multiple trait bounds (if supported)
+
+trait HasX
+    getX(self) -> Int
+end
+
+trait HasY
+    getY(self) -> Int
+end
+
+type Coord = Coord(Int, Int)
+
+Coord: HasX
+    getX(self) = match self { Coord(x, _) -> x }
+end
+
+Coord: HasY
+    getY(self) = match self { Coord(_, y) -> y }
+end
+
+# Single trait bound but call both methods (should work since Coord implements both)
+sumCoords(c: Coord) -> Int = c.getX() + c.getY()
+
+main() = {
+    c = Coord(3, 4)
+    sumCoords(c)
+}

@@ -1,0 +1,20 @@
+# expect: 35
+# Test: trait method result used in arithmetic
+
+trait Quantifiable
+    quantity(self) -> Int
+end
+
+type Stock = Stock(Int)
+
+Stock: Quantifiable
+    quantity(self) = match self { Stock(q) -> q }
+end
+
+getQuantities[T: Quantifiable](items: List[T]) -> List[Int] =
+    map(items, (item) => item.quantity())
+
+main() = {
+    stocks = [Stock(10), Stock(15), Stock(10)]
+    sum(getQuantities(stocks))
+}

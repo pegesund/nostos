@@ -1,0 +1,22 @@
+# expect: false
+# Test: trait method in closure passed to all
+
+trait Positive
+    isPositive(self) -> Bool
+end
+
+type Amount = Amount(Int)
+
+Amount: Positive
+    isPositive(self) = match self {
+        Amount(n) -> n > 0
+    }
+end
+
+allPositive[T: Positive](items: List[T]) -> Bool =
+    all(items, (x) => x.isPositive())
+
+main() = {
+    amounts = [Amount(5), Amount(-3), Amount(10)]
+    allPositive(amounts)
+}

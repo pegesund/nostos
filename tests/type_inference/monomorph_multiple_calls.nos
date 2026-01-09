@@ -1,0 +1,25 @@
+# expect: 30
+# Test: calling same generic function with different types
+
+trait Countable
+    count(self) -> Int
+end
+
+type Apples = Apples(Int)
+type Oranges = Oranges(Int)
+
+Apples: Countable
+    count(self) = match self { Apples(n) -> n }
+end
+
+Oranges: Countable
+    count(self) = match self { Oranges(n) -> n }
+end
+
+getCount[T: Countable](item: T) -> Int = item.count()
+
+main() = {
+    a = Apples(10)
+    o = Oranges(20)
+    getCount(a) + getCount(o)
+}

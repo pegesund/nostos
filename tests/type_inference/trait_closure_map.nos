@@ -1,0 +1,23 @@
+# expect: 4
+# Test: trait method in closure passed to map
+
+trait Sizeable
+    size(self) -> Int
+end
+
+type Box = Box(Int, Int)
+
+Box: Sizeable
+    size(self) = match self {
+        Box(w, h) -> w * h
+    }
+end
+
+getSizes[T: Sizeable](items: List[T]) -> List[Int] =
+    map(items, (x) => x.size())
+
+main() = {
+    boxes = [Box(2, 3), Box(4, 5), Box(1, 1), Box(10, 10)]
+    sizes = getSizes(boxes)
+    length(sizes)
+}

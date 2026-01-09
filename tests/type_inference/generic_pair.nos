@@ -1,0 +1,21 @@
+# expect: 30
+# Test: trait method on pair components
+
+trait Numeric
+    toNum(self) -> Int
+end
+
+type Value = Value(Int)
+
+Value: Numeric
+    toNum(self) = match self { Value(n) -> n }
+end
+
+sumTwoValues[T: Numeric](a: T, b: T) -> Int =
+    a.toNum() + b.toNum()
+
+main() = {
+    v1 = Value(10)
+    v2 = Value(20)
+    sumTwoValues(v1, v2)
+}

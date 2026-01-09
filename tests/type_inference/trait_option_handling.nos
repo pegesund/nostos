@@ -1,0 +1,26 @@
+# expect: 42
+# Test: trait method with option type handling
+
+trait Fetchable
+    fetch(self) -> Option[Int]
+end
+
+type Cache = Hit(Int) | Miss
+
+Cache: Fetchable
+    fetch(self) = match self {
+        Hit(v) -> Some(v)
+        Miss -> None
+    }
+end
+
+getOrZero[T: Fetchable](item: T) -> Int =
+    match item.fetch() {
+        Some(v) -> v
+        None -> 0
+    }
+
+main() = {
+    cache = Hit(42)
+    getOrZero(cache)
+}

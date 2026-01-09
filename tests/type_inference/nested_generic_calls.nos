@@ -1,0 +1,22 @@
+# expect: 20
+# Test: nested generic function calls
+
+trait Doubled
+    doubled(self) -> Self
+end
+
+type Num = Num(Int)
+
+Num: Doubled
+    doubled(self) = match self { Num(n) -> Num(n * 2) }
+end
+
+doubleOnce[T: Doubled](x: T) -> T = x.doubled()
+
+doubleTwice[T: Doubled](x: T) -> T = doubleOnce(doubleOnce(x))
+
+main() = {
+    n = Num(5)
+    result = doubleTwice(n)
+    match result { Num(v) -> v }
+}

@@ -1,0 +1,20 @@
+# expect: 70
+# Test: generic function using drop and trait methods
+
+trait Rateable
+    rating(self) -> Int
+end
+
+type Review = Review(Int)
+
+Review: Rateable
+    rating(self) = match self { Review(r) -> r }
+end
+
+skipAndSum[T: Rateable](items: List[T], n: Int) -> Int =
+    fold(drop(items, n), 0, (sum, item) => sum + item.rating())
+
+main() = {
+    reviews = [Review(10), Review(20), Review(30), Review(40)]
+    skipAndSum(reviews, 2)
+}

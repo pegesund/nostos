@@ -9094,8 +9094,40 @@ impl Compiler {
             }
             // Tuple
             Expr::Tuple(_, _) => Some("Tuple".to_string()),
-            // List
-            Expr::List(_, _, _) => Some("List".to_string()),
+            // List - try to infer element type for monomorphization
+            // Only infer for simple cases (records/variants) to avoid non-deterministic behavior
+            Expr::List(elements, _, _) => {
+                if let Some(first_elem) = elements.first() {
+                    // Only infer type for Record expressions (which include variant constructors)
+                    // This avoids calling expr_type_name on function calls which can have
+                    // non-deterministic results due to HashMap iteration order
+                    if let Expr::Record(type_name, _, _) = first_elem {
+                        let name = &type_name.node;
+                        // Check if it's a known type
+                        if self.types.contains_key(name) {
+                            return Some(format!("List[{}]", name));
+                        }
+                        // Try resolving the name
+                        let resolved = self.resolve_name(name);
+                        if self.types.contains_key(&resolved) {
+                            return Some(format!("List[{}]", resolved));
+                        }
+                        // Check if it's a variant constructor - but use sorted iteration for determinism
+                        let mut type_names: Vec<_> = self.types.keys().collect();
+                        type_names.sort();
+                        for ty_name in type_names {
+                            if let Some(info) = self.types.get(ty_name) {
+                                if let TypeInfoKind::Variant { constructors } = &info.kind {
+                                    if constructors.iter().any(|(ctor, _)| ctor == name) {
+                                        return Some(format!("List[{}]", ty_name));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Some("List".to_string())
+            }
             // Literals
             Expr::Int(_, _) => Some("Int".to_string()),
             Expr::Int8(_, _) => Some("Int8".to_string()),
@@ -9689,10 +9721,8 @@ impl Compiler {
                 if i < arg_type_names.len() {
                     // Replace the type annotation with the concrete type
                     let concrete_type_name = &arg_type_names[i];
-                    param.ty = Some(TypeExpr::Name(Spanned::new(
-                        concrete_type_name.clone(),
-                        Span::default(),
-                    )));
+                    // Parse parameterized types like "List[Box]" into proper TypeExpr::Generic
+                    param.ty = Some(Self::parse_type_string_to_type_expr(concrete_type_name));
                 }
             }
         }
@@ -9717,13 +9747,37 @@ impl Compiler {
         if let Some(first_clause) = fn_def.clauses.first() {
             for (i, param) in first_clause.params.iter().enumerate() {
                 if i < arg_type_names.len() {
-                    if let Some(TypeExpr::Name(type_ident)) = &param.ty {
-                        // If the parameter type is a type parameter (matches one in type_params)
-                        let param_type_name = &type_ident.node;
-                        let is_type_param = fn_def.type_params.iter().any(|tp| tp.name.node == *param_type_name);
-                        if is_type_param {
-                            self.current_type_bindings.insert(param_type_name.clone(), arg_type_names[i].clone());
+                    let arg_type = &arg_type_names[i];
+                    match &param.ty {
+                        // Direct type parameter: T
+                        Some(TypeExpr::Name(type_ident)) => {
+                            let param_type_name = &type_ident.node;
+                            let is_type_param = fn_def.type_params.iter().any(|tp| tp.name.node == *param_type_name);
+                            if is_type_param {
+                                self.current_type_bindings.insert(param_type_name.clone(), arg_type.clone());
+                            }
                         }
+                        // Parameterized type: List[T], Option[T], etc.
+                        // Match List[T] with List[Box] to extract T = Box
+                        Some(TypeExpr::Generic(container_ident, type_args)) => {
+                            let container_name = &container_ident.node;
+                            // Check if arg_type is Container[Elem] format
+                            if arg_type.starts_with(&format!("{}[", container_name)) && arg_type.ends_with(']') {
+                                // Extract element types from arg_type: "List[Box]" -> "Box"
+                                let inner = &arg_type[container_name.len() + 1..arg_type.len() - 1];
+                                // For single type parameter (most common case)
+                                if type_args.len() == 1 {
+                                    if let TypeExpr::Name(type_param_ident) = &type_args[0] {
+                                        let type_param_name = &type_param_ident.node;
+                                        let is_type_param = fn_def.type_params.iter().any(|tp| tp.name.node == *type_param_name);
+                                        if is_type_param {
+                                            self.current_type_bindings.insert(type_param_name.clone(), inner.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -9760,7 +9814,15 @@ impl Compiler {
         }
 
         // Compile the specialized function in the original module context
-        self.compile_fn_def(&specialized_def)?;
+        if let Err(e) = self.compile_fn_def(&specialized_def) {
+            // Remove the placeholder to avoid runtime crash on empty code
+            self.functions.remove(&mangled_name);
+            self.function_indices.remove(&mangled_name);
+            if let Some(pos) = self.function_list.iter().position(|n| n == &mangled_name) {
+                self.function_list.remove(pos);
+            }
+            return Err(e);
+        }
 
         // Restore context
         self.param_types = saved_param_types;
@@ -9826,6 +9888,71 @@ impl Compiler {
             }
         }
         vec![]
+    }
+
+    /// Parse a type string like "List[Box]" into a TypeExpr.
+    /// Handles simple types (Int, Box) and parameterized types (List[T], Map[K,V]).
+    fn parse_type_string_to_type_expr(type_str: &str) -> TypeExpr {
+        // Check for parameterized type: Container[Arg1, Arg2, ...]
+        if let Some(bracket_pos) = type_str.find('[') {
+            if type_str.ends_with(']') {
+                let container = &type_str[..bracket_pos];
+                let args_str = &type_str[bracket_pos + 1..type_str.len() - 1];
+
+                // Parse type arguments (handle nested brackets)
+                let type_args = Self::split_type_args(args_str)
+                    .into_iter()
+                    .map(|arg| Self::parse_type_string_to_type_expr(&arg))
+                    .collect();
+
+                return TypeExpr::Generic(
+                    Spanned::new(container.to_string(), Span::default()),
+                    type_args,
+                );
+            }
+        }
+
+        // Simple type
+        TypeExpr::Name(Spanned::new(type_str.to_string(), Span::default()))
+    }
+
+    /// Split type arguments by comma, respecting nested brackets.
+    /// "A, B" -> ["A", "B"]
+    /// "List[A], B" -> ["List[A]", "B"]
+    fn split_type_args(args_str: &str) -> Vec<String> {
+        let mut result = Vec::new();
+        let mut current = String::new();
+        let mut bracket_depth = 0;
+
+        for c in args_str.chars() {
+            match c {
+                '[' => {
+                    bracket_depth += 1;
+                    current.push(c);
+                }
+                ']' => {
+                    bracket_depth -= 1;
+                    current.push(c);
+                }
+                ',' if bracket_depth == 0 => {
+                    let trimmed = current.trim().to_string();
+                    if !trimmed.is_empty() {
+                        result.push(trimmed);
+                    }
+                    current.clear();
+                }
+                _ => {
+                    current.push(c);
+                }
+            }
+        }
+
+        let trimmed = current.trim().to_string();
+        if !trimmed.is_empty() {
+            result.push(trimmed);
+        }
+
+        result
     }
 
     /// Compile an argument expression with knowledge of the expected parameter type.

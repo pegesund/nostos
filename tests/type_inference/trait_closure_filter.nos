@@ -1,0 +1,23 @@
+# expect: 2
+# Test: trait method in closure passed to filter
+
+trait Validatable
+    isValid(self) -> Bool
+end
+
+type Score = Score(Int)
+
+Score: Validatable
+    isValid(self) = match self {
+        Score(n) -> n >= 50
+    }
+end
+
+filterValid[T: Validatable](items: List[T]) -> List[T] =
+    filter(items, (x) => x.isValid())
+
+main() = {
+    scores = [Score(30), Score(70), Score(45), Score(90)]
+    valid = filterValid(scores)
+    length(valid)
+}

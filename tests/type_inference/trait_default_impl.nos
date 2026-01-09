@@ -1,0 +1,23 @@
+# expect: 100
+# Test: simple trait without generic, to ensure basic trait inference works
+
+trait Evaluator
+    evaluate(self) -> Int
+end
+
+type Expr = Literal(Int) | Add(Int, Int) | Mul(Int, Int)
+
+Expr: Evaluator
+    evaluate(self) = match self {
+        Literal(n) -> n
+        Add(a, b) -> a + b
+        Mul(a, b) -> a * b
+    }
+end
+
+compute(e: Expr) -> Int = e.evaluate()
+
+main() = {
+    expr = Mul(10, 10)
+    compute(expr)
+}

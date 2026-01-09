@@ -1,0 +1,24 @@
+# expect: 7
+# Test: trait method returning a tuple
+
+trait Decomposable
+    decompose(self) -> (Int, Int)
+end
+
+type Pair = Pair(Int, Int)
+
+Pair: Decomposable
+    decompose(self) = match self {
+        Pair(a, b) -> (a, b)
+    }
+end
+
+sumParts[T: Decomposable](item: T) -> Int = {
+    parts = item.decompose()
+    match parts { (a, b) -> a + b }
+}
+
+main() = {
+    p = Pair(3, 4)
+    sumParts(p)
+}

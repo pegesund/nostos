@@ -1,0 +1,21 @@
+# expect: 8
+# Test: chaining multiple trait method calls
+
+trait Incrementable
+    inc(self) -> Self
+end
+
+type Counter = Counter(Int)
+
+Counter: Incrementable
+    inc(self) = match self { Counter(n) -> Counter(n + 1) }
+end
+
+increment3Times[T: Incrementable](x: T) -> T =
+    x.inc().inc().inc()
+
+main() = {
+    c = Counter(5)
+    result = increment3Times(c)
+    match result { Counter(n) -> n }
+}

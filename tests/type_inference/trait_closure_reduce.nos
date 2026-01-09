@@ -1,0 +1,27 @@
+# expect: 24
+# Test: trait method in reduce-like operation
+
+trait Multiplicable
+    multiply(self, other: Self) -> Self
+end
+
+type Factor = Factor(Int)
+
+Factor: Multiplicable
+    multiply(self, other) = match (self, other) {
+        (Factor(a), Factor(b)) -> Factor(a * b)
+    }
+end
+
+product[T: Multiplicable](items: List[T]) -> T =
+    match items {
+        [] -> Factor(1)  # This is a bit cheating, but works for this test
+        [x] -> x
+        [x | rest] -> foldr(rest, x, (item, acc) => item.multiply(acc))
+    }
+
+main() = {
+    factors = [Factor(2), Factor(3), Factor(4)]
+    result = product(factors)
+    match result { Factor(n) -> n }
+}

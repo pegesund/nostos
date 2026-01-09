@@ -1,0 +1,22 @@
+# expect: 77
+# Test: trait with method that returns simple value, used in sequence
+
+trait Initializable
+    init(self) -> Int
+end
+
+type Config2 = Config2(Int)
+
+Config2: Initializable
+    init(self) = match self { Config2(n) -> n }
+end
+
+initialize[T: Initializable](item: T) -> Int = {
+    value = item.init()
+    value
+}
+
+main() = {
+    cfg = Config2(77)
+    initialize(cfg)
+}

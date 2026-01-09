@@ -1,0 +1,20 @@
+# expect: 60
+# Test: generic function using take and trait methods
+
+trait Pointable
+    points(self) -> Int
+end
+
+type Score2 = Score2(Int)
+
+Score2: Pointable
+    points(self) = match self { Score2(p) -> p }
+end
+
+topNPoints[T: Pointable](items: List[T], n: Int) -> Int =
+    fold(take(items, n), 0, (sum, item) => sum + item.points())
+
+main() = {
+    scores = [Score2(10), Score2(20), Score2(30), Score2(40)]
+    topNPoints(scores, 3)
+}

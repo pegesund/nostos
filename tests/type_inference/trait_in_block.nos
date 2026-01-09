@@ -1,0 +1,24 @@
+# expect: 18
+# Test: trait method call inside a block expression
+
+trait Processor
+    process(self) -> Int
+end
+
+type Input = Input(Int)
+
+Input: Processor
+    process(self) = match self { Input(n) -> n * 2 }
+end
+
+runProcess[T: Processor](item: T) -> Int = {
+    step1 = item.process()
+    step2 = step1 + 1
+    step3 = step2 - 1
+    step3
+}
+
+main() = {
+    i = Input(9)
+    runProcess(i)
+}

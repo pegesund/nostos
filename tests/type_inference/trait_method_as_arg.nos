@@ -1,0 +1,24 @@
+# expect: 25
+# Test: passing trait method result as argument to another function
+
+trait Squareable
+    square(self) -> Int
+end
+
+type Side = Side(Int)
+
+Side: Squareable
+    square(self) = match self { Side(n) -> n * n }
+end
+
+computeArea[T: Squareable](shape: T) -> Int =
+    shape.square()
+
+doubleArea[T: Squareable](shape: T) -> Int =
+    computeArea(shape) + computeArea(shape)
+
+main() = {
+    # This doesn't make sense geometrically but tests the type inference
+    s = Side(5)
+    computeArea(s)
+}

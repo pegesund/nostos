@@ -1,0 +1,21 @@
+# expect: 27
+# Test: chaining three trait method calls
+
+trait Tripleable
+    triple2(self) -> Self
+end
+
+type Num3 = Num3(Int)
+
+Num3: Tripleable
+    triple2(self) = match self { Num3(n) -> Num3(n * 3) }
+end
+
+tripleThrice[T: Tripleable](x: T) -> T =
+    x.triple2().triple2().triple2()
+
+main() = {
+    n = Num3(1)
+    result = tripleThrice(n)
+    match result { Num3(v) -> v }
+}

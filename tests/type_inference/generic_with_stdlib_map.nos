@@ -1,0 +1,20 @@
+# expect: 6
+# Test: generic function using map with trait method
+
+trait CountableItem
+    itemCount(self) -> Int
+end
+
+type CountedItem = CountedItem(Int)
+
+CountedItem: CountableItem
+    itemCount(self) = match self { CountedItem(n) -> n }
+end
+
+getCounts[T: CountableItem](items: List[T]) -> List[Int] =
+    map(items, (x) => x.itemCount())
+
+main() = {
+    items = [CountedItem(1), CountedItem(2), CountedItem(3)]
+    sum(getCounts(items))
+}

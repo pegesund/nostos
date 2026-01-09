@@ -1,0 +1,21 @@
+# expect: true
+# Test: comparing results of trait method calls
+
+trait Weighable
+    weight(self) -> Int
+end
+
+type Package = Package(Int)
+
+Package: Weighable
+    weight(self) = match self { Package(w) -> w }
+end
+
+isHeavier[T: Weighable](a: T, b: T) -> Bool =
+    a.weight() > b.weight()
+
+main() = {
+    p1 = Package(100)
+    p2 = Package(50)
+    isHeavier(p1, p2)
+}

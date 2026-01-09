@@ -1,0 +1,20 @@
+# expect: 20
+# Test: calling the same trait method twice on same value
+
+trait Gettable
+    get2(self) -> Int
+end
+
+type Box2 = Box2(Int)
+
+Box2: Gettable
+    get2(self) = match self { Box2(n) -> n }
+end
+
+doubleGet[T: Gettable](x: T) -> Int =
+    x.get2() + x.get2()
+
+main() = {
+    b = Box2(10)
+    doubleGet(b)
+}

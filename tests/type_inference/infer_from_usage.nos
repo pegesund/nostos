@@ -1,0 +1,12 @@
+# expect: 5
+# Test: type inference from how the value is used
+
+makeList[T](x: T) -> List[T] = [x]
+
+main() = {
+    nums = makeList(5)
+    match nums {
+        [n] -> n
+        _ -> 0
+    }
+}

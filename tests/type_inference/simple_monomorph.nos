@@ -1,0 +1,9 @@
+# expect: 99
+# Test: simple monomorphization without trait methods
+
+identity[T](x: T) -> T = x
+
+main() = {
+    n = identity(99)
+    n
+}

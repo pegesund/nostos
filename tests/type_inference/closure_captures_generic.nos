@@ -1,0 +1,21 @@
+# expect: 36
+# Test: closure capturing a value of generic type
+
+trait Valued
+    getValue(self) -> Int
+end
+
+type Token = Token(Int)
+
+Token: Valued
+    getValue(self) = match self { Token(n) -> n }
+end
+
+applyToList[T: Valued](base: T, nums: List[Int]) -> List[Int] =
+    map(nums, (n) => n + base.getValue())
+
+main() = {
+    t = Token(10)
+    results = applyToList(t, [1, 2, 3])
+    fold(results, 0, (a, b) => a + b)
+}

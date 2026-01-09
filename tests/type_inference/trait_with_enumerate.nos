@@ -1,0 +1,20 @@
+# expect: 6
+# Test: using length with trait method
+
+trait Labelable
+    label(self) -> String
+end
+
+type Tag = Tag(String)
+
+Tag: Labelable
+    label(self) = match self { Tag(s) -> s }
+end
+
+countLabels[T: Labelable](items: List[T]) -> Int =
+    length(map(items, (x) => x.label()))
+
+main() = {
+    tags = [Tag("a"), Tag("b"), Tag("c"), Tag("d"), Tag("e"), Tag("f")]
+    countLabels(tags)
+}

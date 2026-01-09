@@ -1,0 +1,23 @@
+# expect: 3
+# Test: trait method returning a list, used in generic context
+
+trait Expandable
+    expand(self) -> List[Int]
+end
+
+type Range = Range(Int, Int)
+
+Range: Expandable
+    expand(self) = match self {
+        Range(start, stop) -> [start, start + 1, stop]
+    }
+end
+
+expandAll[T: Expandable](items: List[T]) -> List[Int] =
+    flatten(map(items, (x) => x.expand()))
+
+main() = {
+    ranges = [Range(1, 3)]
+    expanded = expandAll(ranges)
+    length(expanded)
+}

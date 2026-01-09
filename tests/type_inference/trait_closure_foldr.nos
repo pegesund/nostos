@@ -1,0 +1,23 @@
+# expect: 10
+# Test: trait method in closure passed to stdlib foldr
+
+trait Semigroup
+    combine(self, other: Self) -> Self
+end
+
+type Sum = Sum(Int)
+
+Sum: Semigroup
+    combine(self, other) = match (self, other) {
+        (Sum(a), Sum(b)) -> Sum(a + b)
+    }
+end
+
+combineAll[T: Semigroup](list: List[T], zero: T) -> T =
+    foldr(list, zero, (x, acc) => x.combine(acc))
+
+main() = {
+    sums = [Sum(1), Sum(2), Sum(3), Sum(4)]
+    result = combineAll(sums, Sum(0))
+    match result { Sum(n) -> n }
+}
