@@ -652,3 +652,21 @@ pub startRWebWithRoutes(port, title, reactiveResolver, plainResolver) = {
     println("WebSocket endpoint: ws://localhost:" ++ show(port) ++ "/ws?path=<path>")
     serve(port, req => rwebHandleRequestWithRoutes(req, title, reactiveResolver, plainResolver))
 }
+
+# --- REPL-friendly Background Server ---
+
+# Start server in background process
+# Returns the process ID which can be used with Process.kill() to stop it
+#
+# Usage in REPL (user manages the pid):
+#   server = startRWebBackground(8080, "My App", session)
+#   # ... test in browser, modify code ...
+#   Process.kill(server)  # stop old server
+#   server = startRWebBackground(8080, "My App", session)  # start new
+#
+pub startRWebBackground(port, title, sessionSetup) =
+    spawn { startRWeb(port, title, sessionSetup) }
+
+# Same for routes-based servers
+pub startRWebWithRoutesBackground(port, title, reactiveResolver, plainResolver) =
+    spawn { startRWebWithRoutes(port, title, reactiveResolver, plainResolver) }
