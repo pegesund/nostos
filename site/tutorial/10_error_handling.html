@@ -94,10 +94,7 @@
 <pre><code class="language-nostos">
 type Option[T] = Some(T) | None
 
-find_item(list, target) =
-    if list.contains?(target) then Some(target)
-    else None
-end
+find_item(list, target) = if list.contains?(target) then Some(target) else None
 
 main() = {
     my_list = [1, 2, 3]
@@ -130,10 +127,10 @@ type Result[T, E] = Ok(T) | Err(E)
 # Custom error type
 type DivideByZeroError = DivideByZeroError{message: String}
 
-safe_divide(numerator, denominator) =
+safe_divide(numerator, denominator) = {
     if denominator == 0 then Err(DivideByZeroError{message: "Cannot divide by zero"})
     else Ok(numerator / denominator)
-end
+}
 
 main() = {
     division_ok = safe_divide(10, 2)
@@ -240,7 +237,6 @@ main() = {
 risky_operation(should_panic) =
     if should_panic then panic("Something went really wrong!")
     else "Operation successful"
-end
 
 main() = {
     result1 = try {
