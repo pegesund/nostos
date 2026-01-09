@@ -1,0 +1,82 @@
+# Selenium test for RWeb Todo app
+# To run:
+#   1. Start ChromeDriver: chromedriver --port=4444
+#   2. Start the todo app: ./target/release/nostos tests-selenium/rweb_todo_test.nos
+#   3. Run this test: ./target/release/nostos tests-selenium/todo_test.nos
+
+runTest(name, got, expected) = {
+    println("Test: " ++ name)
+    println("  Got: " ++ got)
+    result = String.contains(got, expected)
+    if result then println("  [PASS]") else println("  [FAIL] Expected: " ++ expected)
+    if result then 1 else 0
+}
+
+main() = {
+    println("=== Nostos Selenium Test: Todo App ===")
+    println("")
+
+    # Connect to ChromeDriver
+    println("Connecting to ChromeDriver...")
+    driver = Selenium.connect("http://localhost:4444")
+    println("Connected!")
+
+    # Navigate to the todo app
+    println("Navigating to todo app...")
+    Selenium.goto(driver, "http://localhost:8096")
+
+    # Wait for page to load
+    Selenium.waitFor(driver, "[data-testid='total-count']", 5000)
+    println("Page loaded!")
+    println("")
+
+    # Test 1: Initial count should be 0
+    text1 = Selenium.text(driver, "[data-testid='total-count']")
+    t1 = runTest("Initial total count", text1, "Total: 0")
+
+    # Test 2: Add first item
+    println("")
+    Selenium.click(driver, "[data-testid='add-1']")
+    sleep(500)
+    text2 = Selenium.text(driver, "[data-testid='total-count']")
+    t2 = runTest("After adding first item", text2, "Total: 1")
+
+    # Test 3: Add second item
+    println("")
+    Selenium.click(driver, "[data-testid='add-2']")
+    sleep(500)
+    text3 = Selenium.text(driver, "[data-testid='total-count']")
+    t3 = runTest("After adding second item", text3, "Total: 2")
+
+    # Test 4: Toggle done on first item
+    println("")
+    Selenium.click(driver, "[data-testid='toggle-1']")
+    sleep(500)
+    text4 = Selenium.text(driver, "[data-testid='completed-count']")
+    t4 = runTest("Completed count after toggle", text4, "Done: 1")
+
+    # Test 5: Check item shows [DONE]
+    println("")
+    text5 = Selenium.text(driver, "[data-testid='item-1']")
+    t5 = runTest("Item 1 shows done marker", text5, "[DONE]")
+
+    # Test 6: Filter to show only done items
+    println("")
+    Selenium.click(driver, "[data-testid='filter-done']")
+    sleep(800)
+    text6 = Selenium.text(driver, "[data-testid='current-filter']")
+    t6 = runTest("Filter changed to done", text6, "Filter: done")
+
+    # Close the browser
+    println("")
+    println("Closing browser...")
+    Selenium.close(driver)
+
+    # Summary
+    passed = t1 + t2 + t3 + t4 + t5 + t6
+    println("")
+    println("=== Test Summary ===")
+    println("Passed: " ++ show(passed) ++ " / 6")
+
+    if passed == 6 then 0 else 1
+}

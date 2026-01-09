@@ -1,0 +1,117 @@
+# Selenium test for RWeb Multi-Counter app
+# To run:
+#   1. Start ChromeDriver: chromedriver --port=4444
+#   2. Start the app: ./target/release/nostos tests-selenium/rweb_multi_counter_test.nos
+#   3. Run this test: ./target/release/nostos tests-selenium/multi_counter_test.nos
+
+runTest(name, got, expected) = {
+    println("Test: " ++ name)
+    println("  Got: " ++ got)
+    result = String.contains(got, expected)
+    if result then println("  [PASS]") else println("  [FAIL] Expected: " ++ expected)
+    if result then 1 else 0
+}
+
+main() = {
+    println("=== Nostos Selenium Test: Multi-Counter App ===")
+    println("")
+
+    # Connect to ChromeDriver
+    println("Connecting to ChromeDriver...")
+    driver = Selenium.connect("http://localhost:4444")
+    println("Connected!")
+
+    # Navigate to the multi-counter app
+    println("Navigating to multi-counter app...")
+    Selenium.goto(driver, "http://localhost:8098")
+
+    # Wait for page to load
+    Selenium.waitFor(driver, "[data-testid='value-a']", 5000)
+    println("Page loaded!")
+    println("")
+
+    # Test 1: Increment A twice
+    println("Incrementing A twice...")
+    Selenium.click(driver, "[data-testid='inc-a']")
+    sleep(300)
+    Selenium.click(driver, "[data-testid='inc-a']")
+    sleep(300)
+    text1 = Selenium.text(driver, "[data-testid='value-a']")
+    t1 = runTest("Counter A after 2 increments", text1, "2")
+
+    # Test 2: Increment B three times
+    println("")
+    println("Incrementing B three times...")
+    Selenium.click(driver, "[data-testid='inc-b']")
+    sleep(300)
+    Selenium.click(driver, "[data-testid='inc-b']")
+    sleep(300)
+    Selenium.click(driver, "[data-testid='inc-b']")
+    sleep(300)
+    text2 = Selenium.text(driver, "[data-testid='value-b']")
+    t2 = runTest("Counter B after 3 increments", text2, "3")
+
+    # Test 3: Check computed total (A=2, B=3, C=0 -> Total: 5)
+    println("")
+    text3 = Selenium.text(driver, "[data-testid='computed-total']")
+    t3 = runTest("Computed total (2+3+0)", text3, "Total: 5")
+
+    # Test 4: Copy A to B (A=2, so B becomes 2)
+    println("")
+    Selenium.click(driver, "[data-testid='copy-a-to-b']")
+    sleep(500)
+    text4 = Selenium.text(driver, "[data-testid='value-b']")
+    t4 = runTest("B after copy from A", text4, "2")
+
+    # Test 5: Copy B to C (B=2, so C becomes 2)
+    println("")
+    Selenium.click(driver, "[data-testid='copy-b-to-c']")
+    sleep(500)
+    text5 = Selenium.text(driver, "[data-testid='value-c']")
+    t5 = runTest("C after copy from B", text5, "2")
+
+    # Test 6: Sum B+C to A (2+2=4)
+    println("")
+    Selenium.click(driver, "[data-testid='sum-to-a']")
+    sleep(500)
+    text6 = Selenium.text(driver, "[data-testid='value-a']")
+    t6 = runTest("A after sum of B+C", text6, "4")
+
+    # Test 7: Check summary shows correct values
+    println("")
+    text7 = Selenium.text(driver, "[data-testid='summary']")
+    t7a = if String.contains(text7, "A=4") then 1 else 0
+    t7b = if String.contains(text7, "B=2") then 1 else 0
+    t7c = if String.contains(text7, "C=2") then 1 else 0
+    t7 = if t7a + t7b + t7c == 3 then {
+        println("Test: Summary shows A=4 B=2 C=2")
+        println("  Got: " ++ text7)
+        println("  [PASS]")
+        1
+    } else {
+        println("Test: Summary shows A=4 B=2 C=2")
+        println("  Got: " ++ text7)
+        println("  [FAIL] Expected A=4 B=2 C=2")
+        0
+    }
+
+    # Test 8: Reset all
+    println("")
+    Selenium.click(driver, "[data-testid='reset-all']")
+    sleep(500)
+    text8 = Selenium.text(driver, "[data-testid='computed-total']")
+    t8 = runTest("Total after reset", text8, "Total: 0")
+
+    # Close the browser
+    println("")
+    println("Closing browser...")
+    Selenium.close(driver)
+
+    # Summary
+    passed = t1 + t2 + t3 + t4 + t5 + t6 + t7 + t8
+    println("")
+    println("=== Test Summary ===")
+    println("Passed: " ++ show(passed) ++ " / 8")
+
+    if passed == 8 then 0 else 1
+}

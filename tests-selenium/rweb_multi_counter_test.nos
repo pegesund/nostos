@@ -1,0 +1,85 @@
+# RWeb Multi-Counter for Selenium Testing
+# Tests: multiple independent reactive records, cross-component interactions
+
+use stdlib.rweb
+use stdlib.rhtml
+
+reactive CounterA = { value: Int }
+reactive CounterB = { value: Int }
+reactive CounterC = { value: Int }
+
+session() = {
+    counterA = CounterA(0)
+    counterB = CounterB(0)
+    counterC = CounterC(0)
+
+    (
+        # renderPage
+        () => RHtml(div([
+            h1("Multi-Counter Test"),
+
+            component("counter-a", () => RHtml(
+                div([attr("data-testid", "counter-a")], [
+                    h3("Counter A"),
+                    button([attr("data-action", "dec-a"), attr("data-testid", "dec-a")], "-"),
+                    span([attr("data-testid", "value-a")], " " ++ show(counterA.value) ++ " "),
+                    button([attr("data-action", "inc-a"), attr("data-testid", "inc-a")], "+")
+                ])
+            )),
+
+            component("counter-b", () => RHtml(
+                div([attr("data-testid", "counter-b")], [
+                    h3("Counter B"),
+                    button([attr("data-action", "dec-b"), attr("data-testid", "dec-b")], "-"),
+                    span([attr("data-testid", "value-b")], " " ++ show(counterB.value) ++ " "),
+                    button([attr("data-action", "inc-b"), attr("data-testid", "inc-b")], "+")
+                ])
+            )),
+
+            component("counter-c", () => RHtml(
+                div([attr("data-testid", "counter-c")], [
+                    h3("Counter C"),
+                    button([attr("data-action", "dec-c"), attr("data-testid", "dec-c")], "-"),
+                    span([attr("data-testid", "value-c")], " " ++ show(counterC.value) ++ " "),
+                    button([attr("data-action", "inc-c"), attr("data-testid", "inc-c")], "+")
+                ])
+            )),
+
+            component("total", () => RHtml(
+                div([attr("data-testid", "total-section")], [
+                    div([attr("data-testid", "computed-total")], "Total: " ++ show(counterA.value + counterB.value + counterC.value))
+                ])
+            )),
+
+            div([attr("data-testid", "cross-ops")], [
+                button([attr("data-action", "copy-a-to-b"), attr("data-testid", "copy-a-to-b")], "A->B"),
+                button([attr("data-action", "copy-b-to-c"), attr("data-testid", "copy-b-to-c")], "B->C"),
+                button([attr("data-action", "sum-to-a"), attr("data-testid", "sum-to-a")], "B+C->A"),
+                button([attr("data-action", "reset-all"), attr("data-testid", "reset-all")], "Reset")
+            ]),
+
+            component("summary", () => RHtml(
+                div([attr("data-testid", "summary")], [
+                    span("A=" ++ show(counterA.value) ++ " B=" ++ show(counterB.value) ++ " C=" ++ show(counterC.value))
+                ])
+            ))
+        ])),
+
+        # onAction
+        (action, params) => match action {
+            "inc-a" -> { counterA.value = counterA.value + 1 }
+            "dec-a" -> { counterA.value = counterA.value - 1 }
+            "inc-b" -> { counterB.value = counterB.value + 1 }
+            "dec-b" -> { counterB.value = counterB.value - 1 }
+            "inc-c" -> { counterC.value = counterC.value + 1 }
+            "dec-c" -> { counterC.value = counterC.value - 1 }
+            "copy-a-to-b" -> { counterB.value = counterA.value }
+            "copy-b-to-c" -> { counterC.value = counterB.value }
+            "sum-to-a" -> { counterA.value = counterB.value + counterC.value }
+            "reset-all" -> { counterA.value = 0; counterB.value = 0; counterC.value = 0 }
+            _ -> ()
+        }
+    )
+}
+
+main() = startRWeb(8098, "RWeb Multi-Counter Test", session)

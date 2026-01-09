@@ -1,0 +1,121 @@
+# Reactive Counter Example for Selenium Testing
+#
+# A counter app with increment/decrement buttons
+# Uses HTMX for automatic form submission and idiomorph for smooth updates
+#
+# Run: /path/to/nostos reactive_counter.nos
+# Visit: http://localhost:8095
+
+use stdlib.server.{serve, respondHtml, Request, getParam}
+use stdlib.html.{Element, Text, render}
+use stdlib.reactiveWeb.{reactiveLayout}
+
+# Check if this is an HTMX request
+isHtmxRequest(req: Request) = getParam(req.headers, "HX-Request") == "true"
+
+# Session-based counter storage: sessionId -> count
+mvar counters: List[(String, Int)] = []
+
+# Get counter for session, default to 0
+getCounter(sessionId: String) = getCounterFrom(sessionId, counters)
+
+getCounterFrom(sessionId: String, list: List[(String, Int)]) = match list {
+    [] -> 0
+    [(sid, count) | rest] -> if sid == sessionId then count else getCounterFrom(sessionId, rest)
+}
+
+# Set counter for session
+setCounter(sessionId: String, value: Int) = {
+    counters = updateCounter(sessionId, value, counters)
+}
+
+updateCounter(sessionId: String, value: Int, list: List[(String, Int)]) = match list {
+    [] -> [(sessionId, value)]
+    [(sid, count) | rest] ->
+        if sid == sessionId
+        then [(sid, value)] ++ rest
+        else [(sid, count)] ++ updateCounter(sessionId, value, rest)
+}
+
+# Render just the body content (for HTMX partial updates)
+renderBody(count: Int) = Element("body", [
+    ("hx-boost", "true")
+], [
+    Element("div", [("id", "counter-app")], [
+        Element("h1", [], [Text("Reactive Counter")]),
+        Element("div", [("id", "count-display"), ("data-testid", "count")], [
+            Text("Count: " ++ show(count))
+        ]),
+        Element("div", [("class", "buttons")], [
+            Element("form", [("action", "/decrement"), ("method", "post"), ("hx-post", "/decrement"), ("hx-target", "body"), ("hx-swap", "outerHTML"), ("style", "display: inline")], [
+                Element("button", [("type", "submit"), ("data-testid", "decrement")], [Text("-")])
+            ]),
+            Element("form", [("action", "/increment"), ("method", "post"), ("hx-post", "/increment"), ("hx-target", "body"), ("hx-swap", "outerHTML"), ("style", "display: inline")], [
+                Element("button", [("type", "submit"), ("data-testid", "increment")], [Text("+")])
+            ]),
+            Element("form", [("action", "/reset"), ("method", "post"), ("hx-post", "/reset"), ("hx-target", "body"), ("hx-swap", "outerHTML"), ("style", "display: inline")], [
+                Element("button", [("type", "submit"), ("data-testid", "reset")], [Text("Reset")])
+            ])
+        ])
+    ])
+])
+
+# Render the full page (for initial load)
+renderFullPage(count: Int) = {
+    content = Element("div", [("id", "counter-app")], [
+        Element("h1", [], [Text("Reactive Counter")]),
+        Element("div", [("id", "count-display"), ("data-testid", "count")], [
+            Text("Count: " ++ show(count))
+        ]),
+        Element("div", [("class", "buttons")], [
+            Element("form", [("action", "/decrement"), ("method", "post"), ("hx-post", "/decrement"), ("hx-target", "body"), ("hx-swap", "outerHTML"), ("style", "display: inline")], [
+                Element("button", [("type", "submit"), ("data-testid", "decrement")], [Text("-")])
+            ]),
+            Element("form", [("action", "/increment"), ("method", "post"), ("hx-post", "/increment"), ("hx-target", "body"), ("hx-swap", "outerHTML"), ("style", "display: inline")], [
+                Element("button", [("type", "submit"), ("data-testid", "increment")], [Text("+")])
+            ]),
+            Element("form", [("action", "/reset"), ("method", "post"), ("hx-post", "/reset"), ("hx-target", "body"), ("hx-swap", "outerHTML"), ("style", "display: inline")], [
+                Element("button", [("type", "submit"), ("data-testid", "reset")], [Text("Reset")])
+            ])
+        ])
+    ])
+    reactiveLayout("Counter Test", content)
+}
+
+# Get session ID from request (simplified - just use a fixed ID for testing)
+getSessionId(req: Request) = "test-session"
+
+# Handle requests
+handleRequest(req: Request) = {
+    sessionId = getSessionId(req)
+    path = req.path
+    println("REQUEST: " ++ req.method ++ " " ++ path)
+
+    # Handle increment
+    newCount = if String.startsWith(path, "/increment") then {
+        count = getCounter(sessionId)
+        newVal = count + 1
+        setCounter(sessionId, newVal)
+        newVal
+    } else if String.startsWith(path, "/decrement") then {
+        count = getCounter(sessionId)
+        newVal = count - 1
+        setCounter(sessionId, newVal)
+        newVal
+    } else if String.startsWith(path, "/reset") then {
+        setCounter(sessionId, 0)
+        0
+    } else {
+        getCounter(sessionId)
+    }
+
+    println("RESPONSE: count=" ++ show(newCount) ++ " htmx=" ++ show(isHtmxRequest(req)))
+    # Return just body for HTMX requests, full page for initial load
+    html = if isHtmxRequest(req) then renderBody(newCount) else renderFullPage(newCount)
+    respondHtml(req, render(html))
+}
+
+main() = {
+    println("Reactive Counter Test Server: http://localhost:8095")
+    serve(8095, handleRequest)
+}

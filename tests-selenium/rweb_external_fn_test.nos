@@ -1,0 +1,42 @@
+# RWeb Counter with External Functions
+# Tests that reactive records can be passed to and mutated by external functions
+
+use stdlib.rweb
+use stdlib.rhtml
+
+reactive Counter = { value: Int }
+
+# External helper functions that take reactive record as parameter
+increment(c) = { c.value = c.value + 1 }
+decrement(c) = { c.value = c.value - 1 }
+addAmount(c, n) = { c.value = c.value + n }
+resetTo(c, n) = { c.value = n }
+
+session() = {
+    counter = Counter(0)
+
+    (
+        () => RHtml(div([
+            h1("External Function Test"),
+            component("display", () => RHtml(
+                div([attr("data-testid", "count")], "Count: " ++ show(counter.value))
+            )),
+            div([
+                button([attr("data-action", "inc"), attr("data-testid", "inc")], "+"),
+                button([attr("data-action", "dec"), attr("data-testid", "dec")], "-"),
+                button([attr("data-action", "add5"), attr("data-testid", "add5")], "+5"),
+                button([attr("data-action", "reset"), attr("data-testid", "reset")], "Reset")
+            ])
+        ])),
+
+        (action, params) => match action {
+            "inc" -> increment(counter)
+            "dec" -> decrement(counter)
+            "add5" -> addAmount(counter, 5)
+            "reset" -> resetTo(counter, 0)
+            _ -> ()
+        }
+    )
+}
+
+main() = startRWeb(8099, "External Function Test", session)
