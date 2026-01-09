@@ -20,7 +20,7 @@ use imbl::{HashMap as ImblHashMap, HashSet as ImblHashSet};
 use tokio::sync::{mpsc, RwLock as TokioRwLock, OwnedRwLockReadGuard, OwnedRwLockWriteGuard};
 use tokio::task::LocalSet;
 
-use crate::gc::{GcConfig, GcValue, Heap, GcNativeFn};
+use crate::gc::{GcConfig, GcList, GcValue, Heap, GcNativeFn};
 
 /// Held mvar lock guard (owned so it can be stored).
 pub enum HeldMvarLock {
@@ -30,7 +30,8 @@ pub enum HeldMvarLock {
 use crate::process::{CallFrame, ExceptionHandler, ProcessState, ThreadSafeValue};
 use crate::value::{FunctionValue, Pid, TypeValue, RefId, RuntimeError, Value};
 use crate::parallel::SendableValue;
-use crate::io_runtime::IoRuntime;
+use crate::io_runtime::{IoRequest, IoRuntime};
+use crate::process::IoResponseValue;
 
 /// Reductions per yield (how often we call yield_now for fairness).
 const REDUCTIONS_PER_YIELD: usize = 100; // Reduced for better fairness under lock contention
@@ -185,6 +186,31 @@ impl AsyncProcess {
     /// Create a new async process.
     pub fn new(pid: Pid, shared: Arc<AsyncSharedState>) -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
+        Self {
+            pid,
+            heap: Heap::with_config(GcConfig::default()),
+            frames: Vec::new(),
+            register_pool: Vec::new(),
+            mailbox: receiver,
+            mailbox_sender: sender,
+            state: ProcessState::Running,
+            instructions_since_yield: 0,
+            links: Vec::new(),
+            monitors: HashMap::new(),
+            monitored_by: HashMap::new(),
+            handlers: Vec::new(),
+            current_exception: None,
+            exit_value: None,
+            output: Vec::new(),
+            started_at: Instant::now(),
+            shared,
+            held_mvar_locks: HashMap::new(),
+        }
+    }
+
+    /// Create a new async process with a pre-created mailbox.
+    /// Used when the mailbox must be registered BEFORE the process starts (to avoid race conditions).
+    pub fn new_with_mailbox(pid: Pid, shared: Arc<AsyncSharedState>, sender: MailboxSender, receiver: MailboxReceiver) -> Self {
         Self {
             pid,
             heap: Heap::with_config(GcConfig::default()),
@@ -1926,16 +1952,22 @@ impl AsyncProcess {
                 let child_pid = self.shared.alloc_pid();
                 let shared_clone = self.shared.clone();
 
+                // Create mailbox channel BEFORE spawning to avoid race condition
+                // The child process will receive messages through this channel
+                let (mailbox_sender, mailbox_receiver) = tokio::sync::mpsc::unbounded_channel();
+
+                // Register the process BEFORE spawning - this ensures messages can be
+                // delivered immediately after spawn returns
+                self.shared.register_process(child_pid, mailbox_sender.clone()).await;
+
                 // Spawn as local tokio task
                 let func_name = func.name.clone();
                 tokio::task::spawn_local(async move {
                     if std::env::var("ASYNC_VM_DEBUG").is_ok() {
                         eprintln!("[AsyncVM] Spawned process {} running function: {}", child_pid.0, func_name);
                     }
-                    // Create new process
-                    let mut process = AsyncProcess::new(child_pid, shared_clone.clone());
-                    let sender = process.mailbox_sender.clone();
-                    shared_clone.register_process(child_pid, sender).await;
+                    // Create new process with pre-created mailbox
+                    let mut process = AsyncProcess::new_with_mailbox(child_pid, shared_clone.clone(), mailbox_sender, mailbox_receiver);
 
                     // Convert thread-safe values back to GcValues in new heap
                     let gc_args: Vec<GcValue> = safe_args.iter()
@@ -2425,6 +2457,251 @@ impl AsyncProcess {
 
             Nop => {}
 
+            // === External process execution ===
+            ExecRun(dst, cmd_reg, args_reg) => {
+                // Get command string
+                let cmd = match reg!(cmd_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid command string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                // Get args list
+                let args = match reg!(args_reg) {
+                    GcValue::List(list) => {
+                        let mut result = Vec::new();
+                        for item in list.items() {
+                            if let GcValue::String(s_ptr) = item {
+                                if let Some(s) = self.heap.get_string(*s_ptr) {
+                                    result.push(s.data.clone());
+                                }
+                            }
+                        }
+                        result
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "List".to_string(),
+                        found: "non-list".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::ExecRun {
+                        command: cmd,
+                        args,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    // Await the result (async!)
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ExecSpawn(dst, cmd_reg, args_reg) => {
+                let cmd = match reg!(cmd_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid command string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let args = match reg!(args_reg) {
+                    GcValue::List(list) => {
+                        let mut result = Vec::new();
+                        for item in list.items() {
+                            if let GcValue::String(s_ptr) = item {
+                                if let Some(s) = self.heap.get_string(*s_ptr) {
+                                    result.push(s.data.clone());
+                                }
+                            }
+                        }
+                        result
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "List".to_string(),
+                        found: "non-list".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::ExecSpawn {
+                        command: cmd,
+                        args,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ExecReadLine(dst, handle_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(h) => h as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::ExecReadLine {
+                        handle,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ExecReadStderr(dst, handle_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(h) => h as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::ExecReadStderr {
+                        handle,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ExecWrite(dst, handle_reg, data_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(h) => h as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+
+                let data = match reg!(data_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr)
+                            .map(|s| s.data.as_bytes().to_vec())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid string pointer".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::ExecWrite {
+                        handle,
+                        data,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ExecWait(dst, handle_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(h) => h as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::ExecWait {
+                        handle,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            ExecKill(dst, handle_reg) => {
+                let handle = match reg!(handle_reg) {
+                    GcValue::Int64(h) => h as u64,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "non-int".to_string(),
+                    }),
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::ExecKill {
+                        handle,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    let gc_value = self.io_result_to_gc_value(result);
+                    set_reg!(dst, gc_value);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
             // Unimplemented instructions - add as needed
             _ => {
                 eprintln!("[AsyncVM] Unimplemented instruction: {:?}", instruction);
@@ -2436,6 +2713,138 @@ impl AsyncProcess {
         }
 
         Ok(StepResult::Continue)
+    }
+
+    /// Convert an IO result to a GcValue.
+    /// Results are wrapped in ("ok", value) or ("error", message) tuples.
+    fn io_result_to_gc_value(&mut self, result: Result<IoResponseValue, crate::io_runtime::IoError>) -> GcValue {
+        match result {
+            Ok(response) => {
+                let value = self.io_response_to_gc_value(response);
+                let ok_str = GcValue::String(self.heap.alloc_string("ok".to_string()));
+                GcValue::Tuple(self.heap.alloc_tuple(vec![ok_str, value]))
+            }
+            Err(e) => {
+                let err_str = GcValue::String(self.heap.alloc_string("error".to_string()));
+                let msg = GcValue::String(self.heap.alloc_string(e.to_string()));
+                GcValue::Tuple(self.heap.alloc_tuple(vec![err_str, msg]))
+            }
+        }
+    }
+
+    /// Convert an IO response value to a GcValue.
+    fn io_response_to_gc_value(&mut self, response: IoResponseValue) -> GcValue {
+        match response {
+            IoResponseValue::Unit => GcValue::Unit,
+            IoResponseValue::Bytes(bytes) => {
+                match std::string::String::from_utf8(bytes.clone()) {
+                    Ok(s) => GcValue::String(self.heap.alloc_string(s)),
+                    Err(_) => {
+                        let values: Vec<GcValue> = bytes.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
+                        GcValue::List(GcList { data: Arc::new(values), start: 0 })
+                    }
+                }
+            }
+            IoResponseValue::String(s) => GcValue::String(self.heap.alloc_string(s)),
+            IoResponseValue::FileHandle(handle_id) => GcValue::Int64(handle_id as i64),
+            IoResponseValue::Int(n) => GcValue::Int64(n),
+            IoResponseValue::Bool(b) => GcValue::Bool(b),
+            IoResponseValue::StringList(strings) => {
+                let values: Vec<GcValue> = strings
+                    .into_iter()
+                    .map(|s| GcValue::String(self.heap.alloc_string(s)))
+                    .collect();
+                GcValue::List(GcList { data: Arc::new(values), start: 0 })
+            }
+            IoResponseValue::HttpResponse { status, headers, body } => {
+                let header_tuples: Vec<GcValue> = headers
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let key = GcValue::String(self.heap.alloc_string(k));
+                        let val = GcValue::String(self.heap.alloc_string(v));
+                        GcValue::Tuple(self.heap.alloc_tuple(vec![key, val]))
+                    })
+                    .collect();
+                let headers_list = GcValue::List(GcList { data: Arc::new(header_tuples), start: 0 });
+
+                let body_value = match std::string::String::from_utf8(body.clone()) {
+                    Ok(s) => GcValue::String(self.heap.alloc_string(s)),
+                    Err(_) => {
+                        let bytes: Vec<GcValue> = body.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
+                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                    }
+                };
+
+                GcValue::Record(self.heap.alloc_record(
+                    "HttpResponse".to_string(),
+                    vec!["status".to_string(), "headers".to_string(), "body".to_string()],
+                    vec![GcValue::Int64(status as i64), headers_list, body_value],
+                    vec![false, false, false],
+                ))
+            }
+            IoResponseValue::OptionString(opt) => {
+                match opt {
+                    Some(s) => GcValue::String(self.heap.alloc_string(s)),
+                    None => GcValue::String(self.heap.alloc_string("eof".to_string())),
+                }
+            }
+            IoResponseValue::ServerHandle(handle_id) => GcValue::Int64(handle_id as i64),
+            IoResponseValue::ServerRequest { request_id, method, path, headers, body } => {
+                let header_tuples: Vec<GcValue> = headers
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let key = GcValue::String(self.heap.alloc_string(k));
+                        let val = GcValue::String(self.heap.alloc_string(v));
+                        GcValue::Tuple(self.heap.alloc_tuple(vec![key, val]))
+                    })
+                    .collect();
+                let headers_list = GcValue::List(GcList { data: Arc::new(header_tuples), start: 0 });
+
+                let body_value = match std::string::String::from_utf8(body.clone()) {
+                    Ok(s) => GcValue::String(self.heap.alloc_string(s)),
+                    Err(_) => {
+                        let bytes: Vec<GcValue> = body.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
+                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                    }
+                };
+
+                let method_str = GcValue::String(self.heap.alloc_string(method));
+                let path_str = GcValue::String(self.heap.alloc_string(path));
+
+                GcValue::Record(self.heap.alloc_record(
+                    "HttpRequest".to_string(),
+                    vec!["id".to_string(), "method".to_string(), "path".to_string(), "headers".to_string(), "body".to_string()],
+                    vec![GcValue::Int64(request_id as i64), method_str, path_str, headers_list, body_value],
+                    vec![false, false, false, false, false],
+                ))
+            }
+            IoResponseValue::ExecResult { exit_code, stdout, stderr } => {
+                let stdout_value = match std::string::String::from_utf8(stdout.clone()) {
+                    Ok(s) => GcValue::String(self.heap.alloc_string(s)),
+                    Err(_) => {
+                        let bytes: Vec<GcValue> = stdout.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
+                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                    }
+                };
+
+                let stderr_value = match std::string::String::from_utf8(stderr.clone()) {
+                    Ok(s) => GcValue::String(self.heap.alloc_string(s)),
+                    Err(_) => {
+                        let bytes: Vec<GcValue> = stderr.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
+                        GcValue::List(GcList { data: Arc::new(bytes), start: 0 })
+                    }
+                };
+
+                GcValue::Record(self.heap.alloc_record(
+                    "ExecResult".to_string(),
+                    vec!["exitCode".to_string(), "stdout".to_string(), "stderr".to_string()],
+                    vec![GcValue::Int64(exit_code as i64), stdout_value, stderr_value],
+                    vec![false, false, false],
+                ))
+            }
+            IoResponseValue::ExecHandle(handle_id) => GcValue::Int64(handle_id as i64),
+            IoResponseValue::ExitCode(code) => GcValue::Int64(code as i64),
+        }
     }
 
     /// Try to handle an exception with registered handlers.
