@@ -7,39 +7,39 @@
 # The background pusher will automatically update the page every 2 seconds!
 
 use stdlib.rweb
-use stdlib.rweb.{onSessionStartCallback, onSessionEndCallback}
+use stdlib.rweb.{onSessionStartCallback, onSessionEndCallback, rwebTrigger}
 use stdlib.rhtml
 
 # Shared MVar to store active writerIds
 mvar activeWriters: List[Int] = []
 
+# Shared MVar for the latest push message (all sessions read from this)
+mvar latestPushMsg: String = ""
+
 reactive State = { counter: Int, lastPush: String }
 
-# Background pusher - runs independently and pushes to all connected clients
+# Background pusher - runs independently and sends actions to all connected clients
 backgroundPusher(n) = {
     sleep(2000)
 
     # Get current list of active writers
     writers = activeWriters
-    println("[Pusher] Check #" ++ show(n) ++ " - found " ++ show(length(writers)) ++ " writer(s)")
 
-    # Push update to each connected client
-    writers.each(writerId => {
+    if length(writers) > 0 then {
+        # Update the shared message MVar
         msg = "Push #" ++ show(n) ++ " at " ++ show(Time.now())
-        println("[Pusher] Sending to writerId=" ++ show(writerId))
-        rwebPushComponent(writerId, "push-status",
-            "<div style='color: lime; font-weight: bold;'>✓ " ++ msg ++ "</div>")
-    })
+        latestPushMsg = msg
 
-    if length(writers) > 0 then
-        println("[Pusher] Sent update #" ++ show(n) ++ " to " ++ show(length(writers)) ++ " client(s)")
-    else ()
+        # Send trigger to each connected client (they'll respond with _external action)
+        writers.each(writerId => rwebTrigger(writerId))
+        println("[Pusher] Sent push #" ++ show(n) ++ " to " ++ show(length(writers)) ++ " client(s)")
+    } else ()
 
     backgroundPusher(n + 1)
 }
 
 session() = {
-    state = State(counter: 0, lastPush: "None yet")
+    state = State(counter: 0, lastPush: "Waiting for background pusher...")
     (
         () => RHtml(div([
             h1("RWeb External Push Demo"),
@@ -52,16 +52,21 @@ session() = {
 
             div([
                 h3("External Push Status:"),
-                component("push-status", () => RHtml(
-                    div("Waiting for background pusher...", style: "color: gray;")
-                ))
+                p(state.lastPush, style: if state.lastPush == "Waiting for background pusher..." then "color: gray;" else "color: lime; font-weight: bold;")
             ], style: "padding: 10px; border: 1px solid #ccc; background: #111;"),
 
-            p("The background process pushes updates every 2 seconds!",
+            p("The background process sends 'push' actions every 2 seconds!",
               style: "margin-top: 20px; font-style: italic;")
         ])),
         (action, params) => match action {
             "increment" -> { state.counter = state.counter + 1 }
+            "_external" -> {
+                # External trigger - read latest message from shared MVar
+                msg = latestPushMsg
+                if msg != "" then {
+                    state.lastPush = "✓ " ++ msg
+                } else ()
+            }
             _ -> ()
         }
     )
@@ -75,12 +80,10 @@ main() = {
     # Set up callbacks to track writerIds for external push
     onSessionStartCallback = Some(writerId => {
         activeWriters = activeWriters ++ [writerId]
-        println("[Callback] Registered writerId=" ++ show(writerId))
     })
 
     onSessionEndCallback = Some(writerId => {
         activeWriters = activeWriters.filter(w => w != writerId)
-        println("[Callback] Unregistered writerId=" ++ show(writerId))
     })
 
     # Start background pusher

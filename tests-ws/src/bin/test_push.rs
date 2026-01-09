@@ -2,7 +2,7 @@
 // Run with: cargo run --release -p tests-ws --bin test_push
 // Requires: ./target/release/nostos examples/rweb_external_push.nos
 
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
@@ -48,9 +48,8 @@ async fn test_external_push() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(initial["type"], "full", "Expected initial 'full' message");
     println!("Got initial page (type=full)");
 
-    // Send an action to the server to test two-way communication and get response
-    println!("Sending action to server...");
-    use futures_util::SinkExt;
+    // Send an action to the server to test two-way communication
+    println!("Sending 'increment' action to server...");
     ws.send(Message::Text(r#"{"action":"increment","params":{}}"#.to_string())).await?;
 
     // Wait for the action response
@@ -66,41 +65,61 @@ async fn test_external_push() -> Result<(), Box<dyn std::error::Error>> {
         _ => return Err("Expected text message for action response".into()),
     }
 
-    // Now wait for the background pusher (runs every 2 seconds)
-    println!("Waiting for background push (up to 5 seconds)...");
-    let push_result = timeout(Duration::from_secs(5), ws.next()).await;
+    // Now wait for the background pusher's trigger message
+    // When we receive "trigger", we need to respond with "_external" action
+    // just like the browser JavaScript does
+    println!("Waiting for background push trigger (up to 5 seconds)...");
 
-    match push_result {
-        Ok(Some(Ok(Message::Text(text)))) => {
-            let msg: Value = serde_json::from_str(&text)?;
-            println!("Received push: type={}", msg["type"]);
+    let start = std::time::Instant::now();
+    let timeout_duration = Duration::from_secs(5);
 
-            let msg_type = msg["type"].as_str().unwrap_or("");
-            if msg_type != "update" && msg_type != "full" {
-                return Err(format!("Expected 'update' or 'full', got '{}'", msg_type).into());
-            }
+    loop {
+        if start.elapsed() > timeout_duration {
+            return Err("Timeout: No background push received within 5 seconds".into());
+        }
 
-            if let Some(html) = msg["html"].as_str() {
-                if html.contains("Push #") || html.contains("push-status") {
-                    println!("Push contains expected content!");
-                } else {
-                    println!("Push HTML: {}...", &html[..html.len().min(100)]);
+        let msg_result = timeout(timeout_duration - start.elapsed(), ws.next()).await;
+
+        match msg_result {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let msg: Value = serde_json::from_str(&text)?;
+                let msg_type = msg["type"].as_str().unwrap_or("");
+                println!("Received message: type={}", msg_type);
+
+                if msg_type == "trigger" {
+                    // Respond like browser JavaScript would
+                    println!("Responding with _external action...");
+                    ws.send(Message::Text(r#"{"action":"_external","params":{}}"#.to_string())).await?;
+                    // Continue waiting for the actual update
+                    continue;
                 }
-            }
 
-            Ok(())
-        }
-        Ok(Some(Ok(other))) => {
-            Err(format!("Unexpected message type: {:?}", other).into())
-        }
-        Ok(Some(Err(e))) => {
-            Err(format!("WebSocket error: {}", e).into())
-        }
-        Ok(None) => {
-            Err("Connection closed before receiving push".into())
-        }
-        Err(_) => {
-            Err("Timeout: No background push received within 5 seconds".into())
+                if msg_type == "full" || msg_type == "update" {
+                    if let Some(html) = msg["html"].as_str() {
+                        // Check if this is the push update (contains push message)
+                        if html.contains("Push #") || html.contains("✓") {
+                            println!("Push contains expected content!");
+                            return Ok(());
+                        }
+                    }
+                    // This might be a response to our _external, continue waiting
+                    continue;
+                }
+
+                return Err(format!("Unexpected message type: '{}'", msg_type).into());
+            }
+            Ok(Some(Ok(other))) => {
+                return Err(format!("Unexpected message type: {:?}", other).into());
+            }
+            Ok(Some(Err(e))) => {
+                return Err(format!("WebSocket error: {}", e).into());
+            }
+            Ok(None) => {
+                return Err("Connection closed before receiving push".into());
+            }
+            Err(_) => {
+                return Err("Timeout: No background push received within 5 seconds".into());
+            }
         }
     }
 }

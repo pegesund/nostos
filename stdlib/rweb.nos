@@ -67,6 +67,9 @@ clientJs() = "
                 // Full page update
                 document.getElementById('rweb-root').innerHTML = data.html;
                 bindEvents();
+            } else if (data.type === 'trigger') {
+                // Server wants to inject an action - send back to trigger processing
+                sendAction('_external', {});
             }
         };
 
@@ -203,6 +206,7 @@ sessionLoop(requestId, writerId, renderResult: RHtmlResult, renderPage, onAction
         (action, params) = parseActionMessage(msgJson)
 
         # Call user's action handler - just mutates reactive records
+        # "_external" is passed through so user can handle trigger from background pusher
         onAction(action, params)
 
         # Get record IDs that were modified during action handler
@@ -227,9 +231,6 @@ sessionLoop(requestId, writerId, renderResult: RHtmlResult, renderPage, onAction
 
         (true, newRenderResult)
     } catch { (kind, msg) -> {
-        # DEBUG: print all errors
-        println("[sessionLoop] Caught error: kind=" ++ kind ++ " msg=" ++ msg)
-
         # WebSocket connection errors include:
         # - kind == "websocket" or "websocket_error" for connection-related errors
         # - kind == "io_error" with "closed" or "not found" messages
@@ -805,3 +806,11 @@ pub rwebPushComponent(writerId, componentId, html) = {
 # jsonMsg: the raw JSON string to send
 pub rwebPushRaw(writerId, jsonMsg) =
     WebSocket.sendShared(writerId, jsonMsg)
+
+# --- External Trigger API ---
+# Send a trigger to a session from an external process
+# This causes the client to send "_external" action, which the session's action handler receives
+# The action handler can then read from shared MVars to get the update data
+# writerId: the writer ID for the session
+pub rwebTrigger(writerId) =
+    WebSocket.sendShared(writerId, "{\"type\":\"trigger\"}")
