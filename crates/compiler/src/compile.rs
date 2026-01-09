@@ -364,6 +364,9 @@ pub enum CompileError {
 
     #[error("nested write to mvar `{mvar_name}` would cause deadlock")]
     NestedMvarWrite { mvar_name: String, span: Span },
+
+    #[error("function `{fn_name}` blocks while holding mvar lock on `{mvar_name}`")]
+    BlockingWithMvarLock { fn_name: String, mvar_name: String, span: Span },
 }
 
 impl CompileError {
@@ -387,6 +390,7 @@ impl CompileError {
             CompileError::TypeError { span, .. } => *span,
             CompileError::MvarSafetyViolation { span, .. } => *span,
             CompileError::NestedMvarWrite { span, .. } => *span,
+            CompileError::BlockingWithMvarLock { span, .. } => *span,
         }
     }
 
@@ -459,6 +463,12 @@ impl CompileError {
             CompileError::NestedMvarWrite { mvar_name, .. } => {
                 SourceError::compile(
                     format!("nested write to mvar `{}` would cause deadlock - cannot write to the same mvar being assigned", mvar_name),
+                    span
+                )
+            }
+            CompileError::BlockingWithMvarLock { fn_name, mvar_name, .. } => {
+                SourceError::compile(
+                    format!("function `{}` reads and writes mvar `{}` but also blocks (receive) - this would cause deadlock. Restructure to avoid blocking while holding mvar lock.", fn_name, mvar_name),
                     span
                 )
             }
@@ -576,6 +586,8 @@ pub struct Compiler {
     current_fn_calls: HashSet<String>,
     /// Current function's mvar locks: (mvar_name, const_idx, is_write) - sorted for ordered locking
     current_fn_mvar_locks: Vec<(String, u16, bool)>,
+    /// Whether current function has blocking operations (receive, etc.)
+    current_fn_has_blocking: bool,
 }
 
 /// Information about a module-level mutable variable (mvar).
@@ -612,6 +624,7 @@ pub enum MvarInitValue {
 pub struct FnMvarAccess {
     pub reads: HashSet<String>,
     pub writes: HashSet<String>,
+    pub has_blocking: bool,
 }
 
 /// Context for a loop being compiled (for break/continue).
@@ -719,6 +732,7 @@ impl Compiler {
             current_fn_mvar_writes: HashSet::new(),
             current_fn_calls: HashSet::new(),
             current_fn_mvar_locks: Vec::new(),
+            current_fn_has_blocking: false,
         }
     }
 
@@ -1015,6 +1029,7 @@ impl Compiler {
             current_fn_mvar_writes: HashSet::new(),
             current_fn_calls: HashSet::new(),
             current_fn_mvar_locks: Vec::new(),
+            current_fn_has_blocking: false,
         }
     }
 
@@ -3054,6 +3069,7 @@ impl Compiler {
         let saved_mvar_reads = std::mem::take(&mut self.current_fn_mvar_reads);
         let saved_mvar_writes = std::mem::take(&mut self.current_fn_mvar_writes);
         let saved_fn_calls = std::mem::take(&mut self.current_fn_calls);
+        let saved_has_blocking = std::mem::replace(&mut self.current_fn_has_blocking, false);
 
         // Store the function's visibility
         self.function_visibility.insert(name.clone(), def.visibility);
@@ -3142,11 +3158,66 @@ impl Compiler {
         // Allocate registers for parameters (0..arity)
         self.next_reg = arity as Reg;
 
-        // Function-level locking is disabled because it causes deadlocks when functions
-        // block on receive while holding locks. Instead, we use per-access locking with
-        // special atomic handling for read-modify-write expressions like `counter = counter + 1`.
-        // The try_lock + mvar_waiting queue approach handles contention without deadlocks.
+        // Clear locals before analysis - this ensures we don't have stale entries from previous functions
+        // that could interfere with mvar detection
+        self.locals.clear();
+
+        // Pre-analyze function body to determine if function-level mvar locking is needed.
+        // If a function reads an mvar and later writes to it (even via a local variable),
+        // we need to hold a lock for the entire function to prevent race conditions.
+        let mut fn_mvar_reads: HashSet<String> = HashSet::new();
+        let mut fn_mvar_writes: HashSet<String> = HashSet::new();
+        let mut fn_has_blocking = false;
+
+        for clause in &def.clauses {
+            // Collect mvar refs (reads) from the body
+            let refs = self.collect_mvar_refs(&clause.body);
+            fn_mvar_reads.extend(refs);
+
+            // Collect mvar writes from the body
+            let writes = self.collect_mvar_writes(&clause.body);
+            fn_mvar_writes.extend(writes);
+
+            // Check for blocking operations
+            if self.expr_has_blocking(&clause.body) {
+                fn_has_blocking = true;
+            }
+
+            // Also check guard if present
+            if let Some(guard) = &clause.guard {
+                fn_mvar_reads.extend(self.collect_mvar_refs(guard));
+                fn_mvar_writes.extend(self.collect_mvar_writes(guard));
+                if self.expr_has_blocking(guard) {
+                    fn_has_blocking = true;
+                }
+            }
+        }
+
+        // Find mvars that are both read AND written - these need function-level locking
+        let mvars_needing_lock: Vec<String> = fn_mvar_reads
+            .intersection(&fn_mvar_writes)
+            .cloned()
+            .collect();
+
+        // If we have mvars needing locks AND the function has blocking operations, error
+        if !mvars_needing_lock.is_empty() && fn_has_blocking {
+            return Err(CompileError::BlockingWithMvarLock {
+                fn_name: name.clone(),
+                mvar_name: mvars_needing_lock[0].clone(),
+                span: def.span,
+            });
+        }
+
+        // Emit function-level locks if needed (sorted for consistent lock ordering)
         self.current_fn_mvar_locks.clear();
+        let mut sorted_locks: Vec<String> = mvars_needing_lock;
+        sorted_locks.sort(); // Consistent ordering prevents deadlocks between functions
+
+        for mvar_name in &sorted_locks {
+            let name_idx = self.chunk.add_constant(Value::String(Arc::new(mvar_name.clone())));
+            self.chunk.emit(Instruction::MvarLock(name_idx, true), 0); // write lock for read-modify-write
+            self.current_fn_mvar_locks.push((mvar_name.clone(), name_idx, true));
+        }
 
         if needs_dispatch {
             // Multi-clause dispatch: try each clause in order
@@ -3335,8 +3406,9 @@ impl Compiler {
         let fn_access = FnMvarAccess {
             reads: std::mem::take(&mut self.current_fn_mvar_reads),
             writes: std::mem::take(&mut self.current_fn_mvar_writes),
+            has_blocking: self.current_fn_has_blocking,
         };
-        if !fn_access.reads.is_empty() || !fn_access.writes.is_empty() {
+        if !fn_access.reads.is_empty() || !fn_access.writes.is_empty() || fn_access.has_blocking {
             self.fn_mvar_access.insert(name.clone(), fn_access);
         }
         let fn_calls_for_this_fn = std::mem::take(&mut self.current_fn_calls);
@@ -3356,6 +3428,7 @@ impl Compiler {
         self.current_fn_mvar_reads = saved_mvar_reads;
         self.current_fn_mvar_writes = saved_mvar_writes;
         self.current_fn_calls = saved_fn_calls;
+        self.current_fn_has_blocking = saved_has_blocking;
 
         Ok(())
     }
@@ -4394,6 +4467,10 @@ impl Compiler {
                             // Track function call for deadlock detection
                             self.current_fn_calls.insert(call_name.clone());
                             if is_tail {
+                                // Emit MvarUnlock for all held locks before tail call
+                                for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                                    self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                                }
                                 self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
                                 return Ok(0);
                             } else {
@@ -4454,6 +4531,10 @@ impl Compiler {
                             // Track function call for deadlock detection
                             self.current_fn_calls.insert(call_name.clone());
                             if is_tail {
+                                // Emit MvarUnlock for all held locks before tail call
+                                for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                                    self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                                }
                                 self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
                                 return Ok(0);
                             } else {
@@ -4571,6 +4652,9 @@ impl Compiler {
 
             // Receive: receive pattern -> body ... after timeout -> timeout_body end
             Expr::Receive(arms, after_clause, _) => {
+                // Mark function as having blocking operations
+                self.current_fn_has_blocking = true;
+
                 // Allocate a register for the received message
                 let msg_reg = self.alloc_reg();
 
@@ -5490,6 +5574,10 @@ impl Compiler {
                                         // Track function call for deadlock detection
                                         self.current_fn_calls.insert(resolved_method.clone());
                                         if is_tail {
+                                            // Emit MvarUnlock for all held locks before tail call
+                                            for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                                                self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                                            }
                                             self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
                                             return Ok(0);
                                         } else {
@@ -5751,6 +5839,10 @@ impl Compiler {
                         self.current_fn_calls.insert(fn_name.clone());
                     }
                     if is_tail {
+                        // Emit MvarUnlock for all held locks before tail call
+                        for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                            self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                        }
                         self.chunk.emit(Instruction::TailCallSelf(arg_regs.into()), line);
                         return Ok(0);
                     } else {
@@ -5762,6 +5854,10 @@ impl Compiler {
                     // Track function call for deadlock detection
                     self.current_fn_calls.insert(final_call_name.clone());
                     if is_tail {
+                        // Emit MvarUnlock for all held locks before tail call
+                        for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                            self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                        }
                         self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
                         return Ok(0);
                     } else {
@@ -7149,27 +7245,36 @@ impl Compiler {
         let value_type = explicit_type.clone().or(inferred_type);
 
         // For simple variable bindings, check if this is an mvar assignment that needs atomic locking
+        // BUT skip if we already have a function-level lock on this mvar
         let atomic_lock_info = if let Pattern::Var(ident) = &binding.pattern {
             if self.locals.get(&ident.node).is_none() {
                 let mvar_name = self.resolve_name(&ident.node);
                 if self.mvars.contains_key(&mvar_name) {
-                    // Check if RHS WRITES to the same mvar (would deadlock!)
-                    let mvar_writes = self.collect_mvar_writes(&binding.value);
-                    if mvar_writes.contains(&mvar_name) {
-                        return Err(CompileError::NestedMvarWrite {
-                            mvar_name: mvar_name.clone(),
-                            span: binding.span,
-                        });
-                    }
-                    // Check if RHS reads from the same mvar (needs atomic read-modify-write)
-                    let mvar_refs = self.collect_mvar_refs(&binding.value);
-                    if mvar_refs.contains(&mvar_name) {
-                        // Emit MvarLock before compiling the RHS
-                        let name_idx = self.chunk.add_constant(Value::String(Arc::new(mvar_name.clone())));
-                        self.chunk.emit(Instruction::MvarLock(name_idx, true), 0); // write lock
-                        Some((mvar_name, name_idx))
-                    } else {
+                    // Check if we already have a function-level lock on this mvar
+                    let has_fn_lock = self.current_fn_mvar_locks.iter()
+                        .any(|(name, _, _)| name == &mvar_name);
+                    if has_fn_lock {
+                        // Function-level lock already covers this mvar
                         None
+                    } else {
+                        // Check if RHS WRITES to the same mvar (would deadlock!)
+                        let mvar_writes = self.collect_mvar_writes(&binding.value);
+                        if mvar_writes.contains(&mvar_name) {
+                            return Err(CompileError::NestedMvarWrite {
+                                mvar_name: mvar_name.clone(),
+                                span: binding.span,
+                            });
+                        }
+                        // Check if RHS reads from the same mvar (needs atomic read-modify-write)
+                        let mvar_refs = self.collect_mvar_refs(&binding.value);
+                        if mvar_refs.contains(&mvar_name) {
+                            // Emit MvarLock before compiling the RHS
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(mvar_name.clone())));
+                            self.chunk.emit(Instruction::MvarLock(name_idx, true), 0); // write lock
+                            Some((mvar_name, name_idx))
+                        } else {
+                            None
+                        }
                     }
                 } else {
                     None
@@ -7418,24 +7523,107 @@ impl Compiler {
         }
     }
 
+    /// Check if an expression contains blocking operations (receive).
+    fn expr_has_blocking(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Receive(_, _, _) => true,
+            Expr::Block(stmts, _) => {
+                stmts.iter().any(|stmt| match stmt {
+                    Stmt::Expr(e) => self.expr_has_blocking(e),
+                    Stmt::Let(binding) => self.expr_has_blocking(&binding.value),
+                    Stmt::Assign(_, e, _) => self.expr_has_blocking(e),
+                })
+            }
+            Expr::If(cond, then_branch, else_branch, _) => {
+                self.expr_has_blocking(cond) || self.expr_has_blocking(then_branch) || self.expr_has_blocking(else_branch)
+            }
+            Expr::Match(scrutinee, arms, _) => {
+                self.expr_has_blocking(scrutinee) || arms.iter().any(|arm| self.expr_has_blocking(&arm.body))
+            }
+            Expr::BinOp(left, _, right, _) => {
+                self.expr_has_blocking(left) || self.expr_has_blocking(right)
+            }
+            Expr::UnaryOp(_, operand, _) => self.expr_has_blocking(operand),
+            Expr::Call(func, args, _) => {
+                self.expr_has_blocking(func) || args.iter().any(|a| self.expr_has_blocking(a))
+            }
+            Expr::Tuple(elems, _) | Expr::List(elems, None, _) => {
+                elems.iter().any(|e| self.expr_has_blocking(e))
+            }
+            Expr::List(elems, Some(tail), _) => {
+                elems.iter().any(|e| self.expr_has_blocking(e)) || self.expr_has_blocking(tail)
+            }
+            Expr::Lambda(_, body, _) => self.expr_has_blocking(body),
+            Expr::Index(coll, idx, _) => {
+                self.expr_has_blocking(coll) || self.expr_has_blocking(idx)
+            }
+            Expr::FieldAccess(obj, _, _) => self.expr_has_blocking(obj),
+            Expr::MethodCall(obj, _, args, _) => {
+                self.expr_has_blocking(obj) || args.iter().any(|a| self.expr_has_blocking(a))
+            }
+            Expr::Try(body, arms, finally_opt, _) => {
+                self.expr_has_blocking(body)
+                    || arms.iter().any(|arm| self.expr_has_blocking(&arm.body))
+                    || finally_opt.as_ref().map_or(false, |f| self.expr_has_blocking(f))
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a function transitively has blocking operations.
+    /// Uses fn_mvar_access which is populated after each function is compiled.
+    fn fn_has_transitive_blocking(&self, fn_name: &str, visited: &mut HashSet<String>) -> bool {
+        if visited.contains(fn_name) {
+            return false; // Already checked, avoid infinite recursion
+        }
+        visited.insert(fn_name.to_string());
+
+        // Check if this function directly has blocking
+        if let Some(access) = self.fn_mvar_access.get(fn_name) {
+            if access.has_blocking {
+                return true;
+            }
+        }
+
+        // Check transitively through called functions
+        if let Some(calls) = self.fn_calls.get(fn_name) {
+            for called in calls {
+                if self.fn_has_transitive_blocking(called, visited) {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
     /// Compile an assignment.
     fn compile_assign(&mut self, target: &AssignTarget, value: &Expr) -> Result<Reg, CompileError> {
         // Check if this is an mvar assignment that needs atomic locking
+        // BUT skip if we already have a function-level lock on this mvar
         let needs_atomic_lock = if let AssignTarget::Var(ident) = target {
             if self.locals.get(&ident.node).is_none() {
                 let mvar_name = self.resolve_name(&ident.node);
                 if self.mvars.contains_key(&mvar_name) {
-                    // Check if RHS WRITES to the same mvar (would deadlock!)
-                    let mvar_writes = self.collect_mvar_writes(value);
-                    if mvar_writes.contains(&mvar_name) {
-                        return Err(CompileError::NestedMvarWrite {
-                            mvar_name: mvar_name.clone(),
-                            span: ident.span,
-                        });
+                    // Check if we already have a function-level lock on this mvar
+                    let has_fn_lock = self.current_fn_mvar_locks.iter()
+                        .any(|(name, _, _)| name == &mvar_name);
+                    if has_fn_lock {
+                        // Function-level lock already covers this mvar
+                        false
+                    } else {
+                        // Check if RHS WRITES to the same mvar (would deadlock!)
+                        let mvar_writes = self.collect_mvar_writes(value);
+                        if mvar_writes.contains(&mvar_name) {
+                            return Err(CompileError::NestedMvarWrite {
+                                mvar_name: mvar_name.clone(),
+                                span: ident.span,
+                            });
+                        }
+                        // Check if the RHS reads from this same mvar
+                        let mvar_refs = self.collect_mvar_refs(value);
+                        mvar_refs.contains(&mvar_name)
                     }
-                    // Check if the RHS reads from this same mvar
-                    let mvar_refs = self.collect_mvar_refs(value);
-                    mvar_refs.contains(&mvar_name)
                 } else {
                     false
                 }

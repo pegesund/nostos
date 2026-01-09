@@ -178,8 +178,11 @@ pub struct AsyncProcess {
     /// Shared state reference.
     pub shared: Arc<AsyncSharedState>,
 
-    /// Held mvar locks (name -> stack of guards for reentrant locking).
-    pub held_mvar_locks: HashMap<String, Vec<HeldMvarLock>>,
+    /// Held mvar locks (name -> guard).
+    pub held_mvar_locks: HashMap<String, HeldMvarLock>,
+
+    /// Reentrant lock depth counters (name -> depth).
+    pub mvar_lock_depths: HashMap<String, usize>,
 }
 
 impl AsyncProcess {
@@ -205,6 +208,7 @@ impl AsyncProcess {
             started_at: Instant::now(),
             shared,
             held_mvar_locks: HashMap::new(),
+            mvar_lock_depths: HashMap::new(),
         }
     }
 
@@ -230,6 +234,7 @@ impl AsyncProcess {
             started_at: Instant::now(),
             shared,
             held_mvar_locks: HashMap::new(),
+            mvar_lock_depths: HashMap::new(),
         }
     }
 
@@ -247,16 +252,14 @@ impl AsyncProcess {
     /// Read from an mvar (async - yields if locked).
     pub async fn mvar_read(&mut self, name: &str) -> Result<GcValue, RuntimeError> {
         // Check if we already hold a lock on this mvar
-        if let Some(guards) = self.held_mvar_locks.get(name) {
-            if let Some(guard) = guards.last() {
-                // Read from held guard
-                let value: ThreadSafeValue = match guard {
-                    HeldMvarLock::Read(g) => (**g).clone(),
-                    HeldMvarLock::Write(g) => (**g).clone(),
-                };
-                let gc_value = value.to_gc_value(&mut self.heap);
-                return Ok(gc_value);
-            }
+        if let Some(guard) = self.held_mvar_locks.get(name) {
+            // Read from held guard
+            let value: ThreadSafeValue = match guard {
+                HeldMvarLock::Read(g) => (**g).clone(),
+                HeldMvarLock::Write(g) => (**g).clone(),
+            };
+            let gc_value = value.to_gc_value(&mut self.heap);
+            return Ok(gc_value);
         }
 
         let var = self.shared.mvars.get(name)
@@ -274,16 +277,14 @@ impl AsyncProcess {
             .ok_or_else(|| RuntimeError::Panic(format!("Cannot convert value for mvar: {}", name)))?;
 
         // Check if we already hold a WRITE lock on this mvar
-        if let Some(guards) = self.held_mvar_locks.get_mut(name) {
-            if let Some(guard) = guards.last_mut() {
-                match guard {
-                    HeldMvarLock::Write(g) => {
-                        **g = safe_value;
-                        return Ok(());
-                    }
-                    HeldMvarLock::Read(_) => {
-                        // Have read lock but need write - fall through to acquire
-                    }
+        if let Some(guard) = self.held_mvar_locks.get_mut(name) {
+            match guard {
+                HeldMvarLock::Write(g) => {
+                    **g = safe_value;
+                    return Ok(());
+                }
+                HeldMvarLock::Read(_) => {
+                    // Have read lock but need write - fall through to acquire
                 }
             }
         }
@@ -1210,25 +1211,30 @@ impl AsyncProcess {
                     _ => return Err(RuntimeError::Panic("MvarLock: expected string constant".into())),
                 };
 
-                // Get the mvar
-                let var = self.shared.mvars.get(&name)
-                    .ok_or_else(|| RuntimeError::Panic(format!("Unknown mvar: {}", name)))?
-                    .clone();
-
-                // Acquire lock (async - will yield if contended)
-                let guard = if is_write {
-                    HeldMvarLock::Write(var.write_owned().await)
+                // Check if we already hold this lock (reentrant locking)
+                if self.held_mvar_locks.contains_key(&name) {
+                    // Already holding the lock - just increment depth
+                    let depth = self.mvar_lock_depths.entry(name.clone()).or_insert(1);
+                    *depth += 1;
                 } else {
-                    HeldMvarLock::Read(var.read_owned().await)
-                };
+                    // Get the mvar
+                    let var = self.shared.mvars.get(&name)
+                        .ok_or_else(|| RuntimeError::Panic(format!("Unknown mvar: {}", name)))?
+                        .clone();
 
-                // Store the guard
-                self.held_mvar_locks
-                    .entry(name)
-                    .or_insert_with(Vec::new)
-                    .push(guard);
-                // Yield after acquiring lock to let other tasks notice
-                tokio::task::yield_now().await;
+                    // Acquire lock (async - will yield if contended)
+                    let guard = if is_write {
+                        HeldMvarLock::Write(var.write_owned().await)
+                    } else {
+                        HeldMvarLock::Read(var.read_owned().await)
+                    };
+
+                    // Store the guard and set initial depth
+                    self.held_mvar_locks.insert(name.clone(), guard);
+                    self.mvar_lock_depths.insert(name, 1);
+                    // Yield after acquiring lock to let other tasks notice
+                    tokio::task::yield_now().await;
+                }
             }
 
             MvarUnlock(name_idx, _is_write) => {
@@ -1237,28 +1243,22 @@ impl AsyncProcess {
                     _ => return Err(RuntimeError::Panic("MvarUnlock: expected string constant".into())),
                 };
 
-                // Pop and drop the guard to release the lock
-                if let Some(guards) = self.held_mvar_locks.get_mut(&name) {
-                    if guards.pop().is_none() {
-                        return Err(RuntimeError::Panic(format!(
-                            "MvarUnlock: no lock held on mvar: {}", name
-                        )));
-                    }
-                    // Clean up empty entry
-                    if guards.is_empty() {
-                        self.held_mvar_locks.remove(&name);
-                    }
-                } else {
-                    return Err(RuntimeError::Panic(format!(
-                        "MvarUnlock: no lock held on mvar: {}", name
-                    )));
+                // Decrement depth and release lock if depth reaches 0
+                let depth = self.mvar_lock_depths.get_mut(&name)
+                    .ok_or_else(|| RuntimeError::Panic(format!("MvarUnlock: no lock held on mvar: {}", name)))?;
+
+                *depth -= 1;
+                if *depth == 0 {
+                    // Release the actual lock
+                    self.mvar_lock_depths.remove(&name);
+                    self.held_mvar_locks.remove(&name);
+                    // Force multiple yields to give waiting tasks time to wake up and acquire
+                    // This helps prevent starvation under high contention (tokio RwLock is not fair)
+                    self.instructions_since_yield = REDUCTIONS_PER_YIELD;
+                    tokio::task::yield_now().await;
+                    tokio::task::yield_now().await;
+                    tokio::task::yield_now().await;
                 }
-                // Force multiple yields to give waiting tasks time to wake up and acquire
-                // This helps prevent starvation under high contention (tokio RwLock is not fair)
-                self.instructions_since_yield = REDUCTIONS_PER_YIELD;
-                tokio::task::yield_now().await;
-                tokio::task::yield_now().await;
-                tokio::task::yield_now().await;
             }
 
             // === Print ===
