@@ -11789,6 +11789,122 @@ impl Compiler {
         self.find_function(name).and_then(|f| f.signature.clone())
     }
 
+    /// Get function parameter details for signature help.
+    /// Returns Vec of (param_name, param_type, is_optional, default_value_preview).
+    pub fn get_function_params(&self, name: &str) -> Option<Vec<(String, String, bool, Option<String>)>> {
+        // Get compiled function for param types (inferred types are here)
+        let func = self.find_function(name)?;
+        let required_count = func.required_params.unwrap_or(func.arity);
+
+        // Parse parameter types from signature string (has inferred types)
+        // Signature format: "Type1 -> Type2 -> ... -> ReturnType"
+        let sig_param_types: Vec<String> = if let Some(sig) = &func.signature {
+            // Strip trait bounds prefix if present (e.g., "Num a => a -> a -> a")
+            let sig_core = if let Some(idx) = sig.find(" => ") {
+                &sig[idx + 4..]
+            } else {
+                sig.as_str()
+            };
+
+            // Split by " -> " and take all but the last (which is return type)
+            let parts: Vec<&str> = sig_core.split(" -> ").collect();
+            if parts.len() > 1 {
+                parts[..parts.len() - 1].iter().map(|s| s.to_string()).collect()
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        };
+
+        // Get AST for default value type inference
+        let fn_def = self.get_fn_def(name);
+        let defaults: Vec<Option<&Expr>> = fn_def
+            .and_then(|def| def.clauses.first())
+            .map(|clause| clause.params.iter().map(|p| p.default.as_ref()).collect())
+            .unwrap_or_default();
+
+        let mut params = Vec::new();
+        for (i, param_name) in func.param_names.iter().enumerate() {
+            // Get signature type
+            let mut param_type = sig_param_types.get(i)
+                .cloned()
+                .or_else(|| func.param_types.get(i).cloned())
+                .unwrap_or_else(|| "?".to_string());
+
+            // If type is a single lowercase letter (type variable) and we have a default,
+            // infer the type from the default expression
+            if param_type.len() == 1 && param_type.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) {
+                if let Some(Some(default_expr)) = defaults.get(i) {
+                    if let Some(inferred) = self.infer_literal_type(default_expr) {
+                        param_type = inferred;
+                    }
+                }
+            }
+
+            let is_optional = i >= required_count;
+            let default_preview = if is_optional { Some("...".to_string()) } else { None };
+            params.push((param_name.clone(), param_type, is_optional, default_preview));
+        }
+
+        Some(params)
+    }
+
+    /// Infer the type of a literal expression for signature help.
+    fn infer_literal_type(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Int(_, _) => Some("Int".to_string()),
+            Expr::Float(_, _) => Some("Float".to_string()),
+            Expr::String(_, _) => Some("String".to_string()),
+            Expr::Char(_, _) => Some("Char".to_string()),
+            Expr::Bool(_, _) => Some("Bool".to_string()),
+            Expr::Unit(_) => Some("()".to_string()),
+            Expr::List(items, _, _) if items.is_empty() => Some("List".to_string()),
+            Expr::List(items, _, _) => {
+                // Try to infer element type from first item
+                items.first()
+                    .and_then(|item| self.infer_literal_type(item))
+                    .map(|t| format!("[{}]", t))
+            }
+            _ => None,
+        }
+    }
+
+    /// Convert a pattern to a displayable parameter name.
+    fn pattern_to_name(&self, pattern: &nostos_syntax::Pattern) -> String {
+        use nostos_syntax::Pattern;
+        match pattern {
+            Pattern::Var(ident) => ident.node.clone(),
+            Pattern::Wildcard(_) => "_".to_string(),
+            Pattern::Tuple(pats, _) => {
+                let names: Vec<_> = pats.iter().map(|p| self.pattern_to_name(p)).collect();
+                format!("({})", names.join(", "))
+            }
+            Pattern::Record(fields, _) => {
+                use nostos_syntax::RecordPatternField;
+                let names: Vec<_> = fields.iter().map(|f| match f {
+                    RecordPatternField::Punned(ident) => ident.node.clone(),
+                    RecordPatternField::Named(ident, _) => ident.node.clone(),
+                    RecordPatternField::Rest(_) => "...".to_string(),
+                }).collect();
+                format!("{{{}}}", names.join(", "))
+            }
+            Pattern::Int(n, _) => n.to_string(),
+            Pattern::Float(f, _) => f.to_string(),
+            Pattern::String(s, _) => format!("\"{}\"", s),
+            Pattern::Char(c, _) => format!("'{}'", c),
+            Pattern::Bool(b, _) => b.to_string(),
+            Pattern::Unit(_) => "()".to_string(),
+            Pattern::List(_, _) => "[...]".to_string(),
+            Pattern::Or(pats, _) => {
+                let names: Vec<_> = pats.iter().map(|p| self.pattern_to_name(p)).collect();
+                names.join(" | ")
+            }
+            Pattern::Variant(name, _, _) => name.node.clone(),
+            _ => "?".to_string(),
+        }
+    }
+
     /// Get a function's return type directly.
     /// Falls back to inferring from the function body AST if no explicit type.
     pub fn get_function_return_type(&self, name: &str) -> Option<String> {
