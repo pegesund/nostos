@@ -1,0 +1,19 @@
+# Remove directory with contents
+# expect: true
+
+main() = {
+  dir = "/tmp/nostos_test_dir_remove_all"
+
+  (_, _) = Dir.createAll(dir ++ "/sub1/sub2")
+  (_, _) = File.writeAll(dir ++ "/file.txt", "test")
+  (_, _) = File.writeAll(dir ++ "/sub1/file.txt", "test")
+
+  (status, _) = Dir.removeAll(dir)
+
+  if status != "ok" then false
+  else {
+    (status2, exists) = Dir.exists(dir)
+    if status2 != "ok" then false
+    else exists == false
+  }
+}

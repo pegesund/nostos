@@ -1,0 +1,17 @@
+# Multiple appends to same file
+# expect: true
+
+main() = {
+  path = "/tmp/nostos_test_append_multi.txt"
+
+  (_, _) = File.writeAll(path, "A")
+  (_, _) = File.append(path, "B")
+  (_, _) = File.append(path, "C")
+  (_, _) = File.append(path, "D")
+
+  (status, data) = File.readAll(path)
+  (_, _) = File.remove(path)
+
+  if status != "ok" then false
+  else data == "ABCD"
+}

@@ -6,7 +6,7 @@
 use nostos_compiler::compile::{compile_module, MvarInitValue};
 use nostos_syntax::parse;
 use nostos_vm::value::Value;
-use nostos_vm::parallel::{ParallelVM, ParallelConfig};
+use nostos_vm::async_vm::{AsyncVM, AsyncConfig};
 use nostos_vm::process::ThreadSafeValue;
 use std::fs;
 use std::path::Path;
@@ -127,7 +127,7 @@ fn value_to_string(value: &Value) -> String {
     }
 }
 
-/// Compile and run a Nostos source file using ParallelVM, returning a Value.
+/// Compile and run a Nostos source file using AsyncVM, returning a Value.
 fn run_nos_source(source: &str) -> Result<Value, String> {
     // Parse
     let (module_opt, errors) = parse(source);
@@ -139,20 +139,17 @@ fn run_nos_source(source: &str) -> Result<Value, String> {
     // Compile
     let compiler = compile_module(&module, source).map_err(|e| format!("Compile error: {:?}", e))?;
 
-    // Create ParallelVM with single thread for deterministic tests
-    let config = ParallelConfig {
-        num_threads: 1,
-        ..Default::default()
-    };
-    let mut vm = ParallelVM::new(config);
+    // Create AsyncVM
+    let config = AsyncConfig::default();
+    let mut vm = AsyncVM::new(config);
     vm.register_default_natives();
 
-    for (name, func) in compiler.get_all_functions() {
+    for (name, func) in compiler.get_all_functions().iter() {
         vm.register_function(name, func.clone());
     }
     vm.set_function_list(compiler.get_function_list());
-    for (name, type_val) in compiler.get_vm_types() {
-        vm.register_type(&name, type_val);
+    for (name, type_val) in compiler.get_vm_types().iter() {
+        vm.register_type(name, type_val.clone());
     }
 
     // Register mvars (module-level mutable variables)
@@ -161,19 +158,14 @@ fn run_nos_source(source: &str) -> Result<Value, String> {
         vm.register_mvar(name, initial_value);
     }
 
-    // Get main function
-    let main_func = compiler.get_function("main")
-        .ok_or_else(|| "No main function".to_string())?;
-
-    // Run and convert result
-    let result = vm.run(main_func)
+    // Run and convert result (function names include signature suffix, e.g. "main/")
+    let result = vm.run("main/")
         .map_err(|e| format!("Runtime error: {:?}", e))?;
-    result.value
-        .map(|v| v.to_value())
-        .ok_or_else(|| "No result returned".to_string())
+
+    Ok(result.to_value())
 }
 
-/// Compile and run a Nostos source file using ParallelVM (returns string display).
+/// Compile and run a Nostos source file using AsyncVM (returns string display).
 fn run_nos_source_gc(source: &str) -> Result<String, String> {
     // Parse
     let (module_opt, errors) = parse(source);
@@ -185,20 +177,17 @@ fn run_nos_source_gc(source: &str) -> Result<String, String> {
     // Compile
     let compiler = compile_module(&module, source).map_err(|e| format!("Compile error: {:?}", e))?;
 
-    // Create ParallelVM with single thread for deterministic tests
-    let config = ParallelConfig {
-        num_threads: 1,
-        ..Default::default()
-    };
-    let mut vm = ParallelVM::new(config);
+    // Create AsyncVM
+    let config = AsyncConfig::default();
+    let mut vm = AsyncVM::new(config);
     vm.register_default_natives();
 
-    for (name, func) in compiler.get_all_functions() {
+    for (name, func) in compiler.get_all_functions().iter() {
         vm.register_function(name, func.clone());
     }
     vm.set_function_list(compiler.get_function_list());
-    for (name, type_val) in compiler.get_vm_types() {
-        vm.register_type(&name, type_val);
+    for (name, type_val) in compiler.get_vm_types().iter() {
+        vm.register_type(name, type_val.clone());
     }
 
     // Register mvars (module-level mutable variables)
@@ -207,25 +196,11 @@ fn run_nos_source_gc(source: &str) -> Result<String, String> {
         vm.register_mvar(name, initial_value);
     }
 
-    // Get main function
-    let main_func = compiler.get_function("main")
-        .ok_or_else(|| "No main function".to_string())?;
-
-    // Run and get display string
-    let result = vm.run(main_func)
+    // Run and get display string (function names include signature suffix, e.g. "main/")
+    let result = vm.run("main/")
         .map_err(|e| format!("Runtime error: {:?}", e))?;
 
-    // Get output from println and return value
-    let mut output = String::new();
-    for line in &result.output {
-        output.push_str(line);
-        output.push('\n');
-    }
-
-    match result.value {
-        Some(value) => Ok(output + &value.display()),
-        None => Ok(output + "()"),
-    }
+    Ok(result.display())
 }
 
 /// Run a single test file.
@@ -838,4 +813,93 @@ main() = describe([1,2,3])
         assert!(describe_source.contains("describe([x, y | rest])"),
             "Missing multiple elements clause. Source:\n{}", describe_source);
     }
+}
+
+mod file_io {
+    use super::*;
+
+    fn run_category_test(name: &str) {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let workspace_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
+        let file = workspace_root.join("tests").join("file_io").join(format!("{}.nos", name));
+
+        if let Err(e) = run_test_file(&file) {
+            panic!("{}", e);
+        }
+    }
+
+    #[test]
+    fn read_write_basic() { run_category_test("read_write_basic"); }
+
+    #[test]
+    fn read_write_unicode() { run_category_test("read_write_unicode"); }
+
+    #[test]
+    fn read_write_multiline() { run_category_test("read_write_multiline"); }
+
+    #[test]
+    fn read_write_empty() { run_category_test("read_write_empty"); }
+
+    #[test]
+    fn read_nonexistent() { run_category_test("read_nonexistent"); }
+
+    #[test]
+    fn append_basic() { run_category_test("append_basic"); }
+
+    #[test]
+    fn append_multiple() { run_category_test("append_multiple"); }
+
+    #[test]
+    fn append_creates_file() { run_category_test("append_creates_file"); }
+
+    #[test]
+    fn dir_create() { run_category_test("dir_create"); }
+
+    #[test]
+    fn dir_create_all() { run_category_test("dir_create_all"); }
+
+    #[test]
+    fn dir_list() { run_category_test("dir_list"); }
+
+    #[test]
+    fn dir_remove() { run_category_test("dir_remove"); }
+
+    #[test]
+    fn dir_remove_all() { run_category_test("dir_remove_all"); }
+
+    #[test]
+    fn dir_exists() { run_category_test("dir_exists"); }
+
+    #[test]
+    fn file_exists() { run_category_test("file_exists"); }
+
+    #[test]
+    fn file_size() { run_category_test("file_size"); }
+
+    #[test]
+    fn file_copy() { run_category_test("file_copy"); }
+
+    #[test]
+    fn file_rename() { run_category_test("file_rename"); }
+
+    #[test]
+    fn file_remove() { run_category_test("file_remove"); }
+
+    #[test]
+    fn handle_write_read() { run_category_test("handle_write_read"); }
+
+    #[test]
+    fn handle_read() { run_category_test("handle_read"); }
+
+    #[test]
+    fn handle_readline() { run_category_test("handle_readline"); }
+
+    #[test]
+    fn handle_seek() { run_category_test("handle_seek"); }
+
+    #[test]
+    fn handle_append_mode() { run_category_test("handle_append_mode"); }
+
+    #[test]
+    fn handle_flush() { run_category_test("handle_flush"); }
 }

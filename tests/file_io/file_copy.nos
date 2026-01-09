@@ -1,0 +1,21 @@
+# Copy file
+# expect: true
+
+main() = {
+  src = "/tmp/nostos_test_copy_src.txt"
+  dst = "/tmp/nostos_test_copy_dst.txt"
+  content = "Copy me!"
+
+  (_, _) = File.writeAll(src, content)
+  (status, _) = File.copy(src, dst)
+
+  if status != "ok" then false
+  else {
+    (status2, data) = File.readAll(dst)
+    (_, _) = File.remove(src)
+    (_, _) = File.remove(dst)
+
+    if status2 != "ok" then false
+    else data == content
+  }
+}

@@ -1,0 +1,25 @@
+# Rename/move file
+# expect: true
+
+main() = {
+  old = "/tmp/nostos_test_rename_old.txt"
+  new = "/tmp/nostos_test_rename_new.txt"
+  content = "Rename me!"
+
+  (_, _) = File.writeAll(old, content)
+  (status, _) = File.rename(old, new)
+
+  if status != "ok" then false
+  else {
+    # Old should not exist
+    (status1, oldExists) = File.exists(old)
+    # New should exist with content
+    (status2, data) = File.readAll(new)
+    (_, _) = File.remove(new)
+
+    if status1 != "ok" then false
+    else if status2 != "ok" then false
+    else if oldExists then false
+    else data == content
+  }
+}

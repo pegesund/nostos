@@ -1,0 +1,23 @@
+# List directory contents
+# expect: true
+
+main() = {
+  dir = "/tmp/nostos_test_dir_list"
+
+  (_, _) = Dir.createAll(dir)
+  (_, _) = File.writeAll(dir ++ "/file1.txt", "a")
+  (_, _) = File.writeAll(dir ++ "/file2.txt", "b")
+  (_, _) = Dir.create(dir ++ "/subdir")
+
+  (status, entries) = Dir.list(dir)
+  (_, _) = Dir.removeAll(dir)
+
+  if status != "ok" then false
+  else {
+    # Should have 3 entries
+    len(entries) == 3
+  }
+}
+
+len([]) = 0
+len([_ | rest]) = 1 + len(rest)

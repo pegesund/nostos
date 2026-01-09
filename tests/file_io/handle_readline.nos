@@ -1,0 +1,21 @@
+# File handle read line
+# expect: true
+
+main() = {
+  path = "/tmp/nostos_test_handle_readline.txt"
+
+  (_, _) = File.writeAll(path, "Line1\nLine2\nLine3\n")
+
+  (status1, handle) = File.open(path, "r")
+  if status1 != "ok" then false
+  else {
+    (status2, line1) = File.readLine(handle)
+    (status3, line2) = File.readLine(handle)
+    (_, _) = File.close(handle)
+    (_, _) = File.remove(path)
+
+    if status2 != "ok" then false
+    else if status3 != "ok" then false
+    else line1 == "Line1\n" && line2 == "Line2\n"
+  }
+}

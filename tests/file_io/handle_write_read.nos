@@ -1,0 +1,25 @@
+# File handle write and read
+# expect: true
+
+main() = {
+  path = "/tmp/nostos_test_handle_wr.txt"
+
+  # Open for writing
+  (status1, handle) = File.open(path, "w")
+  if status1 != "ok" then false
+  else {
+    (status2, _) = File.write(handle, "Hello")
+    (status3, _) = File.close(handle)
+
+    if status2 != "ok" then false
+    else if status3 != "ok" then false
+    else {
+      # Read back
+      (status4, data) = File.readAll(path)
+      (_, _) = File.remove(path)
+
+      if status4 != "ok" then false
+      else data == "Hello"
+    }
+  }
+}
