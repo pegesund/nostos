@@ -1,0 +1,18 @@
+# expect: 73
+# Type inference propagation through method call chains
+use stdlib.list.*
+
+main() = {
+    # Map type propagation
+    m = Map.fromList([("a", 10), ("b", 20)])
+    m2 = m.insert("c", 30)
+    m3 = m2.insert("d", 40)
+    v1 = m3.get("c") + m3.get("d")  # 30 + 40 = 70
+
+    # List type propagation
+    nums = [1, 2, 3]
+    doubled = nums.map(x => x * 2)
+    v2 = doubled.length()  # 3
+
+    v1 + v2
+}

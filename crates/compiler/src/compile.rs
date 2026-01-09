@@ -9912,8 +9912,8 @@ impl Compiler {
                 }
 
                 if let Some(obj_type) = self.expr_type_name(obj) {
-                    // Map methods
-                    if obj_type.starts_with("Map[") || obj_type == "Map" {
+                    // Map methods - handles "Map[K,V]", "Map", and "Map k v" (with type vars)
+                    if obj_type.starts_with("Map[") || obj_type == "Map" || obj_type.starts_with("Map ") {
                         return match method.node.as_str() {
                             // Methods that return Map
                             "insert" | "remove" | "merge" => Some(obj_type),
@@ -9927,8 +9927,8 @@ impl Compiler {
                             _ => None,
                         };
                     }
-                    // Set methods
-                    else if obj_type.starts_with("Set[") || obj_type == "Set" {
+                    // Set methods - handles "Set[K]", "Set", and "Set k" (with type vars)
+                    else if obj_type.starts_with("Set[") || obj_type == "Set" || obj_type.starts_with("Set ") {
                         return match method.node.as_str() {
                             // Methods that return Set
                             "insert" | "remove" | "union" | "intersection" | "difference" => Some(obj_type),
@@ -9957,8 +9957,8 @@ impl Compiler {
                             _ => None,
                         };
                     }
-                    // List methods (from stdlib)
-                    else if obj_type.starts_with("List[") || obj_type == "List" {
+                    // List methods (from stdlib) - handles "List[T]", "List", and "List t" (with type vars)
+                    else if obj_type.starts_with("List[") || obj_type == "List" || obj_type.starts_with("List ") {
                         return match method.node.as_str() {
                             // Methods that return List
                             "map" | "filter" | "take" | "drop" | "reverse" | "sort" |
