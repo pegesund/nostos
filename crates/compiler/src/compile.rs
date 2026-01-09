@@ -11697,4 +11697,49 @@ mod tests {
             other => panic!("Expected 'hello XXX world', got {:?}", other),
         }
     }
+
+    #[test]
+    fn test_builtin_names_include_stdlib_modules() {
+        let names = Compiler::get_builtin_names();
+
+        // Verify new stdlib modules are present
+        let modules = ["String", "Time", "Random", "Env", "Path", "Regex", "File", "Dir", "Exec"];
+        for module in modules {
+            let has_module = names.iter().any(|n| n.starts_with(&format!("{}.", module)));
+            assert!(has_module, "Module {} should have at least one builtin function", module);
+        }
+
+        // Verify some specific functions exist
+        assert!(names.contains(&"String.trim"), "String.trim should be in builtins");
+        assert!(names.contains(&"Time.now"), "Time.now should be in builtins");
+        assert!(names.contains(&"Random.int"), "Random.int should be in builtins");
+        assert!(names.contains(&"Env.get"), "Env.get should be in builtins");
+        assert!(names.contains(&"Path.join"), "Path.join should be in builtins");
+        assert!(names.contains(&"Regex.matches"), "Regex.matches should be in builtins");
+
+        // Verify top-level functions (not module-prefixed) also exist
+        assert!(names.contains(&"println"), "println should be in builtins");
+    }
+
+    #[test]
+    fn test_builtin_signatures_available() {
+        // Verify signatures are available for autocomplete
+        assert!(Compiler::get_builtin_signature("String.trim").is_some(), "String.trim signature should exist");
+        assert!(Compiler::get_builtin_signature("Time.now").is_some(), "Time.now signature should exist");
+        assert!(Compiler::get_builtin_signature("Random.int").is_some(), "Random.int signature should exist");
+        assert!(Compiler::get_builtin_signature("Env.get").is_some(), "Env.get signature should exist");
+        assert!(Compiler::get_builtin_signature("Path.join").is_some(), "Path.join signature should exist");
+        assert!(Compiler::get_builtin_signature("Regex.matches").is_some(), "Regex.matches signature should exist");
+    }
+
+    #[test]
+    fn test_builtin_docs_available() {
+        // Verify docs are available for autocomplete
+        assert!(Compiler::get_builtin_doc("String.trim").is_some(), "String.trim doc should exist");
+        assert!(Compiler::get_builtin_doc("Time.now").is_some(), "Time.now doc should exist");
+        assert!(Compiler::get_builtin_doc("Random.int").is_some(), "Random.int doc should exist");
+        assert!(Compiler::get_builtin_doc("Env.get").is_some(), "Env.get doc should exist");
+        assert!(Compiler::get_builtin_doc("Path.join").is_some(), "Path.join doc should exist");
+        assert!(Compiler::get_builtin_doc("Regex.matches").is_some(), "Regex.matches doc should exist");
+    }
 }
