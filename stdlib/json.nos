@@ -1,4 +1,10 @@
-type Json = Null | Bool(Bool) | Number(Int) | String(String)
+type Json =
+    | Null
+    | Bool(Bool)
+    | Number(Int)
+    | String(String)
+    | Array(List[Json])
+    | Object(List[(String, Json)])
 
 skip_ws(chars) = match chars
     [' ' | rest] -> skip_ws(rest)
@@ -36,9 +42,68 @@ parse_string(chars) = {
     (String(String.from_chars(content)), rest)
 }
 
+parse_array_items(chars) = {
+    chars = skip_ws(chars)
+    match chars
+        [']' | rest] -> ([], rest)
+        _ -> {
+            (val, rest1) = parse_value(chars)
+            rest2 = skip_ws(rest1)
+            match rest2
+                [',' | rest3] -> {
+                    (tail, rest4) = parse_array_items(rest3)
+                    ([val | tail], rest4)
+                }
+                [']' | rest3] -> ([val], rest3)
+                _ -> ([], rest2)
+        }
+}
+
+parse_array(chars) = {
+    (items, rest) = parse_array_items(chars)
+    (Array(items), rest)
+}
+
+get_string(json) = match json
+    String(s) -> s
+    _ -> ""
+
+parse_object_items(chars) = {
+    chars = skip_ws(chars)
+    match chars
+        ['}' | rest] -> ([], rest)
+        _ -> {
+            (key_json, rest1) = parse_value(chars)
+            rest2 = skip_ws(rest1)
+            match rest2
+                [':' | rest3] -> {
+                    (val, rest4) = parse_value(rest3)
+                    rest5 = skip_ws(rest4)
+                    key_str = get_string(key_json)
+                    match rest5
+                        [',' | rest6] -> {
+                            (tail, rest7) = parse_object_items(rest6)
+                            ([(key_str, val) | tail], rest7)
+                        }
+                        ['}' | rest6] -> {
+                            ([(key_str, val)], rest6)
+                        }
+                        _ -> ([], rest5)
+                }
+                _ -> ([], rest2)
+        }
+}
+
+parse_object(chars) = {
+    (items, rest) = parse_object_items(chars)
+    (Object(items), rest)
+}
+
 parse_value(chars) = {
     chars = skip_ws(chars)
     match chars
+        ['{' | rest] -> parse_object(rest)
+        ['[' | rest] -> parse_array(rest)
         ['"' | rest] -> parse_string(rest)
         ['t' | _] -> parse_bool(chars)
         ['f' | _] -> parse_bool(chars)
@@ -46,7 +111,7 @@ parse_value(chars) = {
         _ -> parse_number(chars)
 }
 
-parse(input) = {
+jsonParse(input) = {
     chars = String.chars(input)
     (val, _) = parse_value(chars)
     val

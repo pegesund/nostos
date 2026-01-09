@@ -2990,7 +2990,7 @@ impl ThreadWorker {
             }
 
             // === Function Calls ===
-            Call(callee_reg, args) => {
+            Call(dst, callee_reg, args) => {
                 let callee = reg!(*callee_reg).clone();
                 let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r).clone()).collect();
                 match callee {
@@ -3112,7 +3112,7 @@ impl ThreadWorker {
                     }
                     _ => return Err(RuntimeError::TypeError {
                         expected: "Function".to_string(),
-                        found: format!("{:?}", func_val),
+                        found: format!("{:?}", callee),
                     }),
                 }
             }
