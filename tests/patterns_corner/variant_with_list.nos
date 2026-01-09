@@ -6,13 +6,9 @@ type Container = NoItems | Items(List[Int])
 countItems(NoItems) = 0
 countItems(Items(lst)) = length(lst)
 
-firstItem(x) = match x {
-    Items(lst) -> match lst {
-        [h | _] -> h
-        [] -> 0
-    }
-    NoItems -> 0
-}
+# Now we can use nested patterns directly!
+firstItem(Items([h | _])) = h
+firstItem(_) = 0
 
 main() = {
     assert_eq(0, countItems(NoItems))

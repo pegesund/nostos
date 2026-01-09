@@ -12105,7 +12105,9 @@ impl Compiler {
                         for (i, pat) in patterns.iter().enumerate() {
                             let field_reg = self.alloc_reg();
                             self.chunk.emit(Instruction::GetVariantField(field_reg, scrut_reg, i as u8), 0);
-                            let (_, mut sub_bindings) = self.compile_pattern_test(pat, field_reg)?;
+                            let (sub_success, mut sub_bindings) = self.compile_pattern_test(pat, field_reg)?;
+                            // AND the sub-pattern's success with our overall success
+                            self.chunk.emit(Instruction::And(success_reg, success_reg, sub_success), 0);
 
                             // Update type info based on constructor's field type
                             let is_float = field_types.get(i)
@@ -12140,7 +12142,9 @@ impl Compiler {
                                     let field_reg = self.alloc_reg();
                                     let name_idx = self.chunk.add_constant(Value::String(Arc::new(ident.node.clone())));
                                     self.chunk.emit(Instruction::GetVariantFieldByName(field_reg, scrut_reg, name_idx), 0);
-                                    let (_, mut sub_bindings) = self.compile_pattern_test(pat, field_reg)?;
+                                    let (sub_success, mut sub_bindings) = self.compile_pattern_test(pat, field_reg)?;
+                                    // AND the sub-pattern's success with our overall success
+                                    self.chunk.emit(Instruction::And(success_reg, success_reg, sub_success), 0);
                                     bindings.append(&mut sub_bindings);
                                 }
                                 RecordPatternField::Rest(_) => {

@@ -1,12 +1,12 @@
 # expect: 42
-# Order of variant patterns matters (using guards for literal matching)
+# Order of variant patterns matters
 
 type Num = Zero | Pos(Int) | Neg(Int)
 
 classify(Zero) = "zero"
-classify(Pos(n)) when n == 1 = "one"
+classify(Pos(1)) = "one"
 classify(Pos(_)) = "positive"
-classify(Neg(n)) when n == -1 = "minus one"
+classify(Neg(-1)) = "minus one"
 classify(Neg(_)) = "negative"
 
 main() = {

@@ -30,6 +30,13 @@ fn expr_to_pattern(expr: Expr) -> Option<Pattern> {
         Expr::Bool(b, span) => Some(Pattern::Bool(b, span)),
         Expr::Unit(span) => Some(Pattern::Unit(span)),
         Expr::Wildcard(span) => Some(Pattern::Wildcard(span)),
+        // Negative integer literals: -1, -42, etc.
+        Expr::UnaryOp(UnaryOp::Neg, inner, span) => {
+            match *inner {
+                Expr::Int(n, _) => Some(Pattern::Int(-n, span)),
+                _ => None,
+            }
+        }
         Expr::Tuple(exprs, span) => {
             let pats: Option<Vec<Pattern>> = exprs.into_iter().map(expr_to_pattern).collect();
             pats.map(|p| Pattern::Tuple(p, span))
@@ -289,6 +296,26 @@ fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
             _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
         });
 
+        // Negative integer patterns: -1, -42, etc.
+        let neg_int = just(Token::Minus)
+            .ignore_then(filter_map(|span, tok| match tok {
+                Token::Int(n) => Ok(Pattern::Int(-n, to_span(span))),
+                Token::Int8(n) => Ok(Pattern::Int8(-n, to_span(span))),
+                Token::Int16(n) => Ok(Pattern::Int16(-n, to_span(span))),
+                Token::Int32(n) => Ok(Pattern::Int32(-n, to_span(span))),
+                _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+            }))
+            .map_with_span(|pat, span| {
+                // Adjust the span to include the minus sign
+                match pat {
+                    Pattern::Int(n, _) => Pattern::Int(n, to_span(span)),
+                    Pattern::Int8(n, _) => Pattern::Int8(n, to_span(span)),
+                    Pattern::Int16(n, _) => Pattern::Int16(n, to_span(span)),
+                    Pattern::Int32(n, _) => Pattern::Int32(n, to_span(span)),
+                    other => other,
+                }
+            });
+
         let float = filter_map(|span, tok| match tok {
             Token::Float(s) => Ok(Pattern::Float(s.parse().unwrap_or(0.0), to_span(span))),
             Token::Float32(s) => Ok(Pattern::Float32(s.parse().unwrap_or(0.0), to_span(span))),
@@ -417,19 +444,44 @@ fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
             .map_with_span(|elems, span| Pattern::Set(elems, to_span(span)));
 
         // Base patterns (without or and without list) - used for list element patterns
-        let literals = choice((wildcard.clone(), bool_pat.clone(), int.clone(), float.clone(), string.clone(), char_pat.clone())).boxed();
+        // Note: neg_int must come before int to properly parse negative literals
+        let literals = choice((wildcard.clone(), bool_pat.clone(), neg_int.clone(), int.clone(), float.clone(), string.clone(), char_pat.clone())).boxed();
         let base_containers = choice((unit.clone(), tuple.clone(), grouped.clone(), record.clone(), map_pat.clone(), set_pat.clone())).boxed();
         let variants_box = choice((pin.clone(), variant_positional.clone(), variant_named.clone(), variant_unit.clone(), var.clone())).boxed();
-        let base_no_list = choice((literals.clone(), base_containers, variants_box.clone()));
+        let base_no_list = choice((literals.clone(), base_containers.clone(), variants_box.clone())).boxed();
 
-        // List pattern: [], [h | t], [a, b, c]
+        // List pattern: [], [h | t], [a, b, c], [[nested | _] | _]
         // String cons pattern: ["prefix" | rest] - when all elements are strings and there's a tail
-        // Note: list elements use base_no_list to avoid Or pattern conflicts with | cons operator
+        // Note: list elements use base_with_list to include nested lists but not Or patterns
         let list_empty = just(Token::LBracket)
             .then(just(Token::RBracket))
             .map_with_span(|_, span| Pattern::List(ListPattern::Empty, to_span(span)));
 
-        let list_cons = base_no_list
+        // Nested empty list
+        let nested_list_empty = just(Token::LBracket)
+            .then(just(Token::RBracket))
+            .map_with_span(|_, span| Pattern::List(ListPattern::Empty, to_span(span)));
+
+        // Nested cons list - elements use base_no_list to avoid | being parsed as Or
+        let nested_list_cons = base_no_list.clone()
+            .separated_by(just(Token::Comma))
+            .at_least(1)
+            .then(just(Token::Pipe).ignore_then(pat.clone()).or_not())
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .map_with_span(|(elems, tail), span| {
+                Pattern::List(ListPattern::Cons(elems, tail.map(Box::new)), to_span(span))
+            });
+
+        // For list elements, we need to include nested list patterns
+        // But we need to be careful: nested list elements should also use base_no_list
+        // to avoid ambiguity with | operator
+        let list_element = choice((
+            base_no_list.clone(),
+            nested_list_empty,
+            nested_list_cons,
+        )).boxed();
+
+        let list_cons = list_element
             .clone()
             .separated_by(just(Token::Comma))
             .at_least(1)

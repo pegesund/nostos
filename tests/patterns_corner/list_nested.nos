@@ -1,13 +1,8 @@
 # expect: 42
-# Nested list patterns (using nested match)
+# Nested list patterns - now supported directly!
 
-getFirstOfFirst(lst) = match lst {
-    [inner | _] -> match inner {
-        [h | _] -> h
-        [] -> 0
-    }
-    [] -> 0
-}
+getFirstOfFirst([[x | _] | _]) = x
+getFirstOfFirst(_) = 0
 
 main() = {
     assert_eq(1, getFirstOfFirst([[1, 2], [3, 4]]))

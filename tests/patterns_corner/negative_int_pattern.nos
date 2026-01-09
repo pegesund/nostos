@@ -1,9 +1,9 @@
 # expect: 42
-# Negative integer literal patterns (using guards)
+# Negative integer literal patterns - now supported directly!
 
+sign(-1) = "minus one"
 sign(0) = "zero"
 sign(1) = "one"
-sign(n) when n == -1 = "minus one"
 sign(n) when n < 0 = "negative"
 sign(_) = "positive"
 
