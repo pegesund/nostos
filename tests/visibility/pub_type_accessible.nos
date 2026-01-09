@@ -1,0 +1,17 @@
+# expect: 15
+# Test that public types are accessible from other modules
+
+module Types
+    pub type Point = { x: Int, y: Int }
+    pub type Named = { name: String, value: Int }
+end
+
+use Types.*
+
+main() = {
+    # Public types can be constructed
+    p = Point(5, 10)
+    n = Named("test", 100)
+
+    p.x + p.y
+}

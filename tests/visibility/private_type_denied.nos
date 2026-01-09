@@ -1,0 +1,19 @@
+# expect_error: is private in module
+# Test that private types cannot be accessed from other modules
+
+module Secret
+    # Private type - not accessible outside this module
+    type Hidden = { data: Int }
+
+    # Public function can use private type internally
+    pub makeHidden(n: Int) = Hidden(n)
+    pub getValue(h: Hidden) = h.data
+end
+
+use Secret.*
+
+main() = {
+    # This should fail - trying to construct private type
+    h = Hidden(42)
+    getValue(h)
+}

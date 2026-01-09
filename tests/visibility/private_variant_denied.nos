@@ -1,0 +1,18 @@
+# expect_error: is private in module
+# Test that private variant types cannot be accessed from other modules
+
+module Internal
+    # Private variant type
+    type State = Running(Int) | Stopped
+
+    # Public function returns private type (allowed)
+    pub start() = Running(0)
+end
+
+use Internal.*
+
+main() = {
+    # This should fail - trying to construct private variant
+    s = Running(5)
+    0
+}

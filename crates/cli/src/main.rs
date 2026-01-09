@@ -487,6 +487,87 @@ fn run_nostlet_command(args: &[String]) -> ExitCode {
     }
 }
 
+/// Run the init subcommand - create a new project
+fn run_init_command(args: &[String]) -> ExitCode {
+    // Get project name from args or use current directory name
+    let (project_dir, project_name) = if args.is_empty() {
+        // Use current directory
+        let cwd = match env::current_dir() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("Error: Could not get current directory: {}", e);
+                return ExitCode::FAILURE;
+            }
+        };
+        let name = cwd.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("my-project")
+            .to_string();
+        (cwd, name)
+    } else {
+        // Create new directory with given name
+        let dir = std::path::PathBuf::from(&args[0]);
+        let name = dir.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&args[0])
+            .to_string();
+        (dir, name)
+    };
+
+    // Create directory if it doesn't exist
+    if !project_dir.exists() {
+        if let Err(e) = fs::create_dir_all(&project_dir) {
+            eprintln!("Error: Could not create directory '{}': {}", project_dir.display(), e);
+            return ExitCode::FAILURE;
+        }
+        println!("Created directory: {}", project_dir.display());
+    }
+
+    // Check if nostos.toml already exists
+    let config_path = project_dir.join("nostos.toml");
+    if config_path.exists() {
+        eprintln!("Error: nostos.toml already exists in {}", project_dir.display());
+        return ExitCode::FAILURE;
+    }
+
+    // Create nostos.toml
+    let config_content = format!(r#"[project]
+name = "{}"
+version = "0.1.0"
+"#, project_name);
+
+    if let Err(e) = fs::write(&config_path, &config_content) {
+        eprintln!("Error: Could not create nostos.toml: {}", e);
+        return ExitCode::FAILURE;
+    }
+    println!("Created: {}", config_path.display());
+
+    // Create main.nos
+    let main_path = project_dir.join("main.nos");
+    if !main_path.exists() {
+        let main_content = r#"# Main entry point
+
+main() = {
+    println("Hello from Nostos!")
+    0
+}
+"#;
+        if let Err(e) = fs::write(&main_path, main_content) {
+            eprintln!("Error: Could not create main.nos: {}", e);
+            return ExitCode::FAILURE;
+        }
+        println!("Created: {}", main_path.display());
+    }
+
+    println!();
+    println!("Project '{}' initialized!", project_name);
+    println!();
+    println!("Run your project with:");
+    println!("    nostos {}/", project_dir.display());
+
+    ExitCode::SUCCESS
+}
+
 /// Run the extension subcommand
 fn run_extension_command(args: &[String]) -> ExitCode {
     if args.is_empty() {
@@ -866,6 +947,7 @@ fn main() -> ExitCode {
         eprintln!("Usage: nostos [options] <command|file.nos> [args...]");
         eprintln!();
         eprintln!("Commands:");
+        eprintln!("  init        Create a new Nostos project");
         eprintln!("  repl        Start the interactive REPL");
         eprintln!("  tui         Start the TUI editor");
         eprintln!("  extension   Manage native Rust extensions");
@@ -886,6 +968,9 @@ fn main() -> ExitCode {
         }
         if args[1] == "tui" {
             return tui::run_tui(&args[2..]);
+        }
+        if args[1] == "init" {
+            return run_init_command(&args[2..]);
         }
         if args[1] == "nostlet" {
             return run_nostlet_command(&args[2..]);
@@ -957,6 +1042,7 @@ fn main() -> ExitCode {
                 println!("    --json-errors     Output errors as JSON (for IDE integration)");
                 println!();
                 println!("COMMANDS:");
+                println!("    init [name]       Create a new project (in current dir or new dir)");
                 println!("    repl              Start the interactive TUI with editor and REPL");
                 println!("    tui               Same as repl");
                 println!("    extension install Install a native extension from GitHub");

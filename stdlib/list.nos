@@ -5,7 +5,7 @@
 #   [1, 2, 3].map(x => x * 2).filter(x => x > 2)
 
 # Option type for functions that may not return a value
-type Option[T] = Some(T) | None
+pub type Option[T] = Some(T) | None
 
 # Get last element of a list
 last([x]) = x
