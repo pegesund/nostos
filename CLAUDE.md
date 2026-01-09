@@ -3,6 +3,50 @@
 - build release, not debug
 - remember that comments in nostos are with # and NOT with //
 
+## CRITICAL: Implement Features in Nostos, NOT Rust
+
+**READ THIS CAREFULLY - THIS HAS BEEN VIOLATED 4+ TIMES:**
+
+When asked to implement stdlib features or language functionality:
+1. ALWAYS implement in Nostos code (in `stdlib/*.nos` files)
+2. DO NOT implement in Rust unless there is absolutely no other option
+3. If Nostos lacks required language features, FIX THE LANGUAGE first
+4. Use existing builtins as building blocks
+
+**Available builtins for reflection/construction:**
+- `typeInfo(typeName)` - returns Map with type metadata (kind, fields, constructors)
+- `makeRecordByName(typeName, fieldsMap)` - construct record from Map of field values
+- `makeVariantByName(typeName, ctorName, fieldsMap)` - construct variant
+- `Map.get`, `Map.insert`, `Map.isEmpty` - Map operations
+
+**PENDING TASK - jsonToTypeByName in Nostos:**
+The function `jsonToTypeByName(typeName, json)` must be implemented in `stdlib/json.nos` using:
+1. `typeInfo(typeName)` to get type metadata
+2. Pattern match on kind ("record" or "variant")
+3. Extract field values from Json and convert to correct types
+4. Use `makeRecordByName` or `makeVariantByName` to construct the result
+
+DO NOT touch `crates/compiler/src/compile.rs` for this. Write Nostos code.
+
+**Common mistakes to AVOID:**
+- Adding new match arms in compile.rs for "jsonToTypeByName" - NO
+- Writing Rust functions that walk JSON and construct types - NO
+- Saying "I'll implement this as a builtin" - NO
+- Starting to write Rust code then asking if it's okay - NO
+
+**The correct approach:**
+- Open `stdlib/json.nos`
+- Write Nostos functions using existing builtins
+- Test with `./target/release/nostos testfile.nos`
+
+**If something doesn't work in stdlib (e.g., throw, Map.insert):**
+- First verify the builtin exists and works in regular .nos files
+- If it works in tests but not stdlib, fix the stdlib loading mechanism
+- If the builtin doesn't exist, add it as a minimal primitive
+- NEVER use "stdlib doesn't support X" as an excuse to implement in Rust
+
+**This is a new programming language. If a task requires features Nostos doesn't have, add those features to the language rather than falling back to Rust.**
+
 ## Test System
 
 ### Test File Format
