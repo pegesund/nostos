@@ -48,7 +48,7 @@ setupDatabase() = {
 layout(pageTitle: String, content: Html) = Html(
     el("html", [], [
         headEl([
-            meta([("charset", "UTF-8")]),
+            meta(charset: "UTF-8"),
             title(pageTitle ++ " - Nostos App"),
             el("style", [], [raw("
                 body { font-family: sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
@@ -61,21 +61,21 @@ layout(pageTitle: String, content: Html) = Html(
             ")])
         ]),
         body([
-            el("div", [("class", "container")], [
-                nav([a([("href", "/")], "Home"), a([("href", "/users")], "Users")]),
+            div([
+                nav([a("Home", href: "/"), a("Users", href: "/users")]),
                 content
-            ])
+            ], class: "container")
         ])
     ])
 )
 
 userCard(userId: Int, name: String, email: String, credits: Int) = Html(
-    el("div", [("class", "card")], [
+    div([
         h3(name),
         p("Email: " ++ email),
         p("Credits: " ++ show(credits)),
-        p([a([("href", "/users/" ++ show(userId))], "View Details")])
-    ])
+        p([a("View Details", href: "/users/" ++ show(userId))])
+    ], class: "card")
 )
 
 # --- Route Handlers ---
@@ -87,7 +87,7 @@ handleHome(req) = {
     content = Html(div([
         h1("Nostos Web App"),
         p("Users in database: " ++ show(userCount)),
-        p([a([("href", "/users")], "View All Users")])
+        p([a("View All Users", href: "/users")])
     ]))
     respondHtml(req, render(layout("Home", content)))
 }
@@ -101,19 +101,19 @@ handleUsers(req) = {
         div(cards),
         hr(),
         h2("Add New User"),
-        el("form", [("method", "POST"), ("action", "/users")], [
-            input([("type", "text"), ("name", "name"), ("placeholder", "Name")]),
-            input([("type", "email"), ("name", "email"), ("placeholder", "Email")]),
-            el("button", [("type", "submit")], [text("Add User")])
-        ]),
+        form([
+            input(inputType: "text", name: "name", placeholder: "Name"),
+            input(inputType: "email", name: "email", placeholder: "Email"),
+            button("Add User", btnType: "submit")
+        ], method: "POST", action: "/users"),
         hr(),
         h2("Transfer Credits"),
-        el("form", [("method", "POST"), ("action", "/transfer")], [
-            input([("type", "number"), ("name", "from"), ("placeholder", "From User ID")]),
-            input([("type", "number"), ("name", "to"), ("placeholder", "To User ID")]),
-            input([("type", "number"), ("name", "amount"), ("placeholder", "Amount")]),
-            el("button", [("type", "submit")], [text("Transfer")])
-        ])
+        form([
+            input(inputType: "number", name: "from", placeholder: "From User ID"),
+            input(inputType: "number", name: "to", placeholder: "To User ID"),
+            input(inputType: "number", name: "amount", placeholder: "Amount"),
+            button("Transfer", btnType: "submit")
+        ], method: "POST", action: "/transfer")
     ]))
     respondHtml(req, render(layout("Users", content)))
 }
@@ -125,17 +125,17 @@ handleUserDetail(req, userId: String) = {
     content = match rows {
         [] -> Html(div([
             h1("User Not Found"),
-            p([a([("href", "/users")], "Back to Users")])
+            p([a("Back to Users", href: "/users")])
         ]))
         [(id, name, email, credits) | _] -> Html(div([
             h1("User: " ++ name),
-            el("div", [("class", "card")], [
+            div([
                 p("ID: " ++ show(id)),
                 p("Name: " ++ name),
                 p("Email: " ++ email),
                 p("Credits: " ++ show(credits))
-            ]),
-            p([a([("href", "/users")], "Back to Users")])
+            ], class: "card"),
+            p([a("Back to Users", href: "/users")])
         ]))
     }
     respondHtml(req, render(layout("User " ++ userId, content)))
@@ -194,7 +194,7 @@ handleTransfer(req) = match req.method {
 handle404(req) = {
     content = Html(div([
         h1("404 - Not Found"),
-        p([a([("href", "/")], "Go Home")])
+        p([a("Go Home", href: "/")])
     ]))
     Server.respond(req.id, 404, [("Content-Type", "text/html")], render(layout("Not Found", content)))
 }

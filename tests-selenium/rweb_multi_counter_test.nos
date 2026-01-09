@@ -19,49 +19,49 @@ session() = {
             h1("Multi-Counter Test"),
 
             component("counter-a", () => RHtml(
-                div([attr("data-testid", "counter-a")], [
+                div([
                     h3("Counter A"),
-                    button([attr("data-action", "dec-a"), attr("data-testid", "dec-a")], "-"),
-                    span([attr("data-testid", "value-a")], " " ++ show(counterA.value) ++ " "),
-                    button([attr("data-action", "inc-a"), attr("data-testid", "inc-a")], "+")
-                ])
+                    button("-", dataAction: "dec-a", dataTestid: "dec-a"),
+                    span(" " ++ show(counterA.value) ++ " ", dataTestid: "value-a"),
+                    button("+", dataAction: "inc-a", dataTestid: "inc-a")
+                ], dataTestid: "counter-a")
             )),
 
             component("counter-b", () => RHtml(
-                div([attr("data-testid", "counter-b")], [
+                div([
                     h3("Counter B"),
-                    button([attr("data-action", "dec-b"), attr("data-testid", "dec-b")], "-"),
-                    span([attr("data-testid", "value-b")], " " ++ show(counterB.value) ++ " "),
-                    button([attr("data-action", "inc-b"), attr("data-testid", "inc-b")], "+")
-                ])
+                    button("-", dataAction: "dec-b", dataTestid: "dec-b"),
+                    span(" " ++ show(counterB.value) ++ " ", dataTestid: "value-b"),
+                    button("+", dataAction: "inc-b", dataTestid: "inc-b")
+                ], dataTestid: "counter-b")
             )),
 
             component("counter-c", () => RHtml(
-                div([attr("data-testid", "counter-c")], [
+                div([
                     h3("Counter C"),
-                    button([attr("data-action", "dec-c"), attr("data-testid", "dec-c")], "-"),
-                    span([attr("data-testid", "value-c")], " " ++ show(counterC.value) ++ " "),
-                    button([attr("data-action", "inc-c"), attr("data-testid", "inc-c")], "+")
-                ])
+                    button("-", dataAction: "dec-c", dataTestid: "dec-c"),
+                    span(" " ++ show(counterC.value) ++ " ", dataTestid: "value-c"),
+                    button("+", dataAction: "inc-c", dataTestid: "inc-c")
+                ], dataTestid: "counter-c")
             )),
 
             component("total", () => RHtml(
-                div([attr("data-testid", "total-section")], [
-                    div([attr("data-testid", "computed-total")], "Total: " ++ show(counterA.value + counterB.value + counterC.value))
-                ])
+                div([
+                    div("Total: " ++ show(counterA.value + counterB.value + counterC.value), dataTestid: "computed-total")
+                ], dataTestid: "total-section")
             )),
 
-            div([attr("data-testid", "cross-ops")], [
-                button([attr("data-action", "copy-a-to-b"), attr("data-testid", "copy-a-to-b")], "A->B"),
-                button([attr("data-action", "copy-b-to-c"), attr("data-testid", "copy-b-to-c")], "B->C"),
-                button([attr("data-action", "sum-to-a"), attr("data-testid", "sum-to-a")], "B+C->A"),
-                button([attr("data-action", "reset-all"), attr("data-testid", "reset-all")], "Reset")
-            ]),
+            div([
+                button("A->B", dataAction: "copy-a-to-b", dataTestid: "copy-a-to-b"),
+                button("B->C", dataAction: "copy-b-to-c", dataTestid: "copy-b-to-c"),
+                button("B+C->A", dataAction: "sum-to-a", dataTestid: "sum-to-a"),
+                button("Reset", dataAction: "reset-all", dataTestid: "reset-all")
+            ], dataTestid: "cross-ops"),
 
             component("summary", () => RHtml(
-                div([attr("data-testid", "summary")], [
+                div([
                     span("A=" ++ show(counterA.value) ++ " B=" ++ show(counterB.value) ++ " C=" ++ show(counterC.value))
-                ])
+                ], dataTestid: "summary")
             ))
         ])),
 

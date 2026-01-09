@@ -177,39 +177,72 @@ small("text")   # &lt;small&gt;text&lt;/small&gt;</code></pre>
 
                 <h3 class="text-xl font-semibold text-white mb-3">Self-Closing Tags</h3>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos"># Self-closing tags
-br()            # &lt;br /&gt;
-hr()            # &lt;hr /&gt;
-img(attrs)      # &lt;img ... /&gt;
-input(attrs)    # &lt;input ... /&gt;
-meta(attrs)     # &lt;meta ... /&gt;
-linkTag(attrs)  # &lt;link ... /&gt;</code></pre>
+<pre><code class="language-nostos"># Self-closing tags with named parameters
+br()                                        # &lt;br /&gt;
+hr(class: "divider")                        # &lt;hr class="divider" /&gt;
+img(src: "/img.png", alt: "Photo")          # &lt;img src="/img.png" alt="Photo" /&gt;
+input(inputType: "text", name: "email")     # &lt;input type="text" name="email" /&gt;
+meta(charset: "UTF-8")                      # &lt;meta charset="UTF-8" /&gt;
+linkTag(rel: "stylesheet", href: "/s.css")  # &lt;link rel="stylesheet" href="/s.css" /&gt;</code></pre>
                 </div>
 
                 <!-- Attributes -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Attributes</h2>
-                <p class="text-slate-400 mb-4">Attributes are passed as a list of <code>(name, value)</code> tuples.</p>
+                <h2 class="text-2xl font-semibold text-white mb-4">Attributes with Named Parameters</h2>
+                <p class="text-slate-400 mb-4">Tag functions support named parameters for common attributes like <code>class</code>, <code>id</code>, <code>href</code>, etc. This gives you clean, readable HTML building:</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">use stdlib.html.{Html, render}
 
 main() = {
     page = Html(
         div([
-            # Link with href attribute - a(attrs, text) is overloaded
-            a([("href", "https://example.com"), ("class", "link")], "Click here"),
+            # Named parameters for attributes - clean and readable!
+            a("Click here", href: "https://example.com", class: "link"),
 
-            # Image with attributes
-            img([("src", "/logo.png"), ("alt", "Logo"), ("width", "100")])
-        ])
+            # Image with named attributes
+            img(src: "/logo.png", alt: "Logo", width: "100"),
+
+            # Button with type and click handler
+            button("Submit", btnType: "submit", class: "btn-primary", onclick: "handleSubmit()")
+        ], class: "container", id: "main")
     )
 
     println(render(page))
-    # &lt;div&gt;&lt;a href="https://example.com" class="link"&gt;Click here&lt;/a&gt;&lt;img src="/logo.png" alt="Logo" width="100" /&gt;&lt;/div&gt;
+    # &lt;div class="container" id="main"&gt;&lt;a href="..." class="link"&gt;Click here&lt;/a&gt;...&lt;/div&gt;
 }</code></pre>
                 </div>
 
+                <h3 class="text-xl font-semibold text-white mb-3">Common Named Parameters</h3>
+                <p class="text-slate-400 mb-4">Most tags support these common attributes as named parameters:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Container elements
+div("content", class: "my-class", id: "my-id", style: "color: red")
+
+# Links
+a("Link text", href: "/path", target: "_blank", class: "link")
+
+# Images
+img(src: "/image.png", alt: "Description", width: "200", height: "100")
+
+# Form inputs
+input(inputType: "text", name: "username", placeholder: "Enter name")
+input(inputType: "checkbox", name: "agree", checked: "checked")
+
+# Buttons
+button("Click", btnType: "submit", onclick: "handleClick()", disabled: "")</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Custom Attributes with <code>attrs</code></h3>
+                <p class="text-slate-400 mb-4">For custom or less common attributes, use the <code>attrs</code> parameter with a list of tuples:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Add custom data attributes
+div("Content", class: "card", attrs: [("data-id", "123"), ("role", "button")])
+
+# Mix named and custom attributes
+a("Link", href: "/page", attrs: [("data-track", "click"), ("aria-label", "Go to page")])</code></pre>
+                </div>
+
                 <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
-                    <p class="text-slate-400 text-sm"><strong>Tip:</strong> For custom elements or elements with attributes and children, use <code>el(tag, attrs, children)</code>.</p>
+                    <p class="text-slate-400 text-sm"><strong>Tip:</strong> Named parameters work with optional defaults - empty strings are automatically filtered out, so <code>div("Hi", class: "")</code> renders as <code>&lt;div&gt;Hi&lt;/div&gt;</code> without an empty class attribute.</p>
                 </div>
 
                 <!-- HTML Escaping -->
@@ -319,27 +352,29 @@ main() = {
 
                 <!-- Full Page Example -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Full Page Example</h2>
-                <p class="text-slate-400 mb-4">Here's a complete example building a simple web page.</p>
+                <p class="text-slate-400 mb-4">Here's a complete example building a simple web page with named parameters.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre><code class="language-nostos">use stdlib.html.{Html, render}
 
 main() = {
     page = Html(
         el("html", [("lang", "en")], [
-            head([
-                meta([("charset", "UTF-8")]),
+            headEl([
+                meta(charset: "UTF-8"),
                 title("My Nostos Page")
             ]),
             body([
                 div([
-                    h1("Welcome to Nostos"),
+                    h1("Welcome to Nostos", class: "title"),
                     p("A functional programming language with HTML templating."),
-                    ul([
-                        li([a([("href", "/about")], "About")]),
-                        li([a([("href", "/docs")], "Documentation")]),
-                        li([a([("href", "/examples")], "Examples")])
-                    ])
-                ])
+                    nav([
+                        ul([
+                            li([a("About", href: "/about")]),
+                            li([a("Documentation", href: "/docs")]),
+                            li([a("Examples", href: "/examples")])
+                        ], class: "nav-list")
+                    ], class: "main-nav")
+                ], class: "container", id: "main")
             ])
         ])
     )

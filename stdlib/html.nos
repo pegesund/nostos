@@ -17,93 +17,208 @@ text(str: String) = Text(str)
 # Raw HTML (unescaped) - use with caution!
 raw(str: String) = Raw(str)
 
+# === Attribute helpers ===
+
+# Filter out empty attribute values and merge with extra attrs
+filterEmptyAttrs(attrs: List[(String, String)]) =
+    attrs.filter(attr => attr.1 != "")
+
+buildAttrs(named: List[(String, String)], extra: List[(String, String)]) =
+    filterEmptyAttrs(named) ++ extra
+
 # Generic element constructor
 el(tag: String, attrs: List[(String, String)], children: List[Html]) = Element(tag, attrs, children)
 
-# === Tag functions with overloading ===
-# Each tag has two variants:
-#   tag(children: List[Html]) - for nested elements
-#   tag(str: String) - for text content
+# === Tag functions with named parameters ===
+# Each tag supports:
+#   - Old style: tag(children) or tag(attrs, children)
+#   - New style: tag(children, class: "...", id: "...", ...)
 
-div(children: List[Html]) = Element("div", [], children)
-div(str: String) = Element("div", [], [Text(str)])
+# --- Container elements with common attrs ---
 
-span(children: List[Html]) = Element("span", [], children)
-span(str: String) = Element("span", [], [Text(str)])
+div(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("div", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+div(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("div", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-p(children: List[Html]) = Element("p", [], children)
-p(str: String) = Element("p", [], [Text(str)])
+span(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("span", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+span(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("span", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h1(children: List[Html]) = Element("h1", [], children)
-h1(str: String) = Element("h1", [], [Text(str)])
+p(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("p", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+p(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("p", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h2(children: List[Html]) = Element("h2", [], children)
-h2(str: String) = Element("h2", [], [Text(str)])
+# --- Headings ---
 
-h3(children: List[Html]) = Element("h3", [], children)
-h3(str: String) = Element("h3", [], [Text(str)])
+h1(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("h1", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+h1(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("h1", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h4(children: List[Html]) = Element("h4", [], children)
-h4(str: String) = Element("h4", [], [Text(str)])
+h2(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("h2", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+h2(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("h2", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h5(children: List[Html]) = Element("h5", [], children)
-h5(str: String) = Element("h5", [], [Text(str)])
+h3(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("h3", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+h3(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("h3", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h6(children: List[Html]) = Element("h6", [], children)
-h6(str: String) = Element("h6", [], [Text(str)])
+h4(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("h4", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+h4(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("h4", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-ul(children: List[Html]) = Element("ul", [], children)
-ol(children: List[Html]) = Element("ol", [], children)
+h5(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("h5", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+h5(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("h5", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-li(children: List[Html]) = Element("li", [], children)
-li(str: String) = Element("li", [], [Text(str)])
+h6(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("h6", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+h6(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("h6", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-table(children: List[Html]) = Element("table", [], children)
-thead(children: List[Html]) = Element("thead", [], children)
-tbody(children: List[Html]) = Element("tbody", [], children)
-tr(children: List[Html]) = Element("tr", [], children)
+# --- Lists ---
 
-th(children: List[Html]) = Element("th", [], children)
-th(str: String) = Element("th", [], [Text(str)])
+ul(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("ul", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+ol(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("ol", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
 
-td(children: List[Html]) = Element("td", [], children)
-td(str: String) = Element("td", [], [Text(str)])
+li(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("li", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+li(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("li", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-form(children: List[Html]) = Element("form", [], children)
-nav(children: List[Html]) = Element("nav", [], children)
-header(children: List[Html]) = Element("header", [], children)
-footer(children: List[Html]) = Element("footer", [], children)
-section(children: List[Html]) = Element("section", [], children)
-article(children: List[Html]) = Element("article", [], children)
-aside(children: List[Html]) = Element("aside", [], children)
+# --- Tables ---
+
+table(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("table", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+thead(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("thead", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+tbody(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("tbody", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+tr(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("tr", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+
+th(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("th", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+th(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("th", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
+
+td(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("td", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+td(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("td", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
+
+# --- Semantic elements ---
+
+nav(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("nav", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+header(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("header", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+footer(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("footer", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+section(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("section", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+article(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("article", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+aside(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("aside", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+main(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("main", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+
 # Note: Named headEl to avoid conflict with stdlib head() for lists
-headEl(children: List[Html]) = Element("head", [], children)
-body(children: List[Html]) = Element("body", [], children)
+headEl(children: List[Html], attrs = []) = Element("head", attrs, children)
+body(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("body", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
 
-button(children: List[Html]) = Element("button", [], children)
-button(str: String) = Element("button", [], [Text(str)])
+# --- Form elements ---
 
-label(children: List[Html]) = Element("label", [], children)
-label(str: String) = Element("label", [], [Text(str)])
+form(children: List[Html], action = "", method = "", class = "", id = "", attrs = []) =
+    Element("form", buildAttrs([("action", action), ("method", method), ("class", class), ("id", id)], attrs), children)
+
+button(children: List[Html], btnType = "", class = "", id = "", onclick = "", disabled = "", dataAction = "", dataTestid = "", attrs = []) =
+    Element("button", buildAttrs([("type", btnType), ("class", class), ("id", id), ("onclick", onclick), ("disabled", disabled), ("data-action", dataAction), ("data-testid", dataTestid)], attrs), children)
+button(str: String, btnType = "", class = "", id = "", onclick = "", disabled = "", dataAction = "", dataTestid = "", attrs = []) =
+    Element("button", buildAttrs([("type", btnType), ("class", class), ("id", id), ("onclick", onclick), ("disabled", disabled), ("data-action", dataAction), ("data-testid", dataTestid)], attrs), [Text(str)])
+
+label(children: List[Html], forId = "", class = "", id = "", attrs = []) =
+    Element("label", buildAttrs([("for", forId), ("class", class), ("id", id)], attrs), children)
+label(str: String, forId = "", class = "", id = "", attrs = []) =
+    Element("label", buildAttrs([("for", forId), ("class", class), ("id", id)], attrs), [Text(str)])
+
+textarea(str: String, name = "", placeholder = "", rows = "", cols = "", class = "", id = "", attrs = []) =
+    Element("textarea", buildAttrs([("name", name), ("placeholder", placeholder), ("rows", rows), ("cols", cols), ("class", class), ("id", id)], attrs), [Text(str)])
+
+select(children: List[Html], name = "", class = "", id = "", attrs = []) =
+    Element("select", buildAttrs([("name", name), ("class", class), ("id", id)], attrs), children)
+
+option(str: String, value = "", selected = "", attrs = []) =
+    Element("option", buildAttrs([("value", value), ("selected", selected)], attrs), [Text(str)])
+
+# --- Text formatting ---
 
 title(str: String) = Element("title", [], [Text(str)])
-strong(str: String) = Element("strong", [], [Text(str)])
-em(str: String) = Element("em", [], [Text(str)])
-code(str: String) = Element("code", [], [Text(str)])
-pre(str: String) = Element("pre", [], [Text(str)])
-small(str: String) = Element("small", [], [Text(str)])
+strong(str: String, class = "", id = "", attrs = []) =
+    Element("strong", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
+em(str: String, class = "", id = "", attrs = []) =
+    Element("em", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
+code(str: String, class = "", id = "", attrs = []) =
+    Element("code", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
+pre(str: String, class = "", id = "", attrs = []) =
+    Element("pre", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
+small(str: String, class = "", id = "", attrs = []) =
+    Element("small", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
 
-# Self-closing tags
+# --- Self-closing tags ---
+
 br() = Element("br", [], [])
-hr() = Element("hr", [], [])
-img(attrs: List[(String, String)]) = Element("img", attrs, [])
-input(attrs: List[(String, String)]) = Element("input", attrs, [])
-meta(attrs: List[(String, String)]) = Element("meta", attrs, [])
-linkTag(attrs: List[(String, String)]) = Element("link", attrs, [])
+hr(class = "", id = "", attrs = []) =
+    Element("hr", buildAttrs([("class", class), ("id", id)], attrs), [])
 
-# Elements with required attrs
-a(attrs: List[(String, String)], children: List[Html]) = Element("a", attrs, children)
-a(attrs: List[(String, String)], str: String) = Element("a", attrs, [Text(str)])
+img(src = "", alt = "", width = "", height = "", class = "", id = "", attrs = []) =
+    Element("img", buildAttrs([("src", src), ("alt", alt), ("width", width), ("height", height), ("class", class), ("id", id)], attrs), [])
+
+input(inputType = "", name = "", value = "", placeholder = "", class = "", id = "", checked = "", disabled = "", readonly = "", attrs = []) =
+    Element("input", buildAttrs([("type", inputType), ("name", name), ("value", value), ("placeholder", placeholder), ("class", class), ("id", id), ("checked", checked), ("disabled", disabled), ("readonly", readonly)], attrs), [])
+
+meta(name = "", content = "", charset = "", attrs = []) =
+    Element("meta", buildAttrs([("name", name), ("content", content), ("charset", charset)], attrs), [])
+
+linkTag(rel = "", href = "", linkType = "", attrs = []) =
+    Element("link", buildAttrs([("rel", rel), ("href", href), ("type", linkType)], attrs), [])
+
+# --- Links ---
+
+a(children: List[Html], href = "", target = "", class = "", id = "", attrs = []) =
+    Element("a", buildAttrs([("href", href), ("target", target), ("class", class), ("id", id)], attrs), children)
+a(str: String, href = "", target = "", class = "", id = "", attrs = []) =
+    Element("a", buildAttrs([("href", href), ("target", target), ("class", class), ("id", id)], attrs), [Text(str)])
+
+# Legacy support: a(attrs, children) and a(attrs, str)
+aWithAttrs(attrs: List[(String, String)], children: List[Html]) = Element("a", attrs, children)
+aWithAttrs(attrs: List[(String, String)], str: String) = Element("a", attrs, [Text(str)])
+
+# --- Script and style ---
+
+script(src = "", scriptType = "", attrs = []) =
+    Element("script", buildAttrs([("src", src), ("type", scriptType)], attrs), [])
+scriptInline(content: String, scriptType = "", attrs = []) =
+    Element("script", buildAttrs([("type", scriptType)], attrs), [Raw(content)])
+
+styleTag(content: String, attrs = []) =
+    Element("style", attrs, [Raw(content)])
+
+# --- iframe ---
+
+iframe(src = "", width = "", height = "", class = "", id = "", attrs = []) =
+    Element("iframe", buildAttrs([("src", src), ("width", width), ("height", height), ("class", class), ("id", id)], attrs), [])
 
 # === Rendering ===
 

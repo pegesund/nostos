@@ -13449,4 +13449,56 @@ end
 
         println!("\nReal nalgebra show test completed!");
     }
+
+    #[test]
+    fn test_repl_type_definition_constructor_available() {
+        // Bug: Types defined in REPL can be used in function signatures but
+        // the type constructor is not available for creating values
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // Define a variant type in the REPL
+        let result = engine.eval("type MString = MStr(String) | MNone");
+        println!("Type definition result: {:?}", result);
+        assert!(result.is_ok(), "Type definition should succeed");
+
+        // Try to use the constructor - THIS CURRENTLY FAILS
+        let result = engine.eval("MStr(\"hello\")");
+        println!("Constructor call result: {:?}", result);
+        assert!(result.is_ok(), "Constructor should be available after type definition: {:?}", result);
+
+        // Also test using None variant
+        let result = engine.eval("MNone");
+        println!("MNone result: {:?}", result);
+        assert!(result.is_ok(), "Variant constructor should be available: {:?}", result);
+    }
+
+    #[test]
+    fn test_repl_type_alias_user_scenario() {
+        // Test user's exact scenario: type MString = String | None
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        // User's exact input
+        let result = engine.eval("type MString = String | None");
+        println!("Type definition 'type MString = String | None': {:?}", result);
+
+        // User tried: MString("sdfdsf") - MString is the type name, not a constructor
+        let result = engine.eval("MString(\"test\")");
+        println!("MString(\"test\") result: {:?}", result);
+
+        // Using a function with the type should work
+        let result = engine.eval("f(x: MString) = x");
+        println!("Function definition f(x: MString) = x: {:?}", result);
+
+        // The user then tried f("oj") which failed
+        let result = engine.eval("f(\"oj\")");
+        println!("f(\"oj\") result: {:?}", result);
+
+        // The constructors should be String and None (variant names from the definition)
+        // But String shadows the builtin String type - this is the confusion
+        println!("\n--- Variant construction ---");
+        let result = engine.eval("x: MString = String");
+        println!("x: MString = String result: {:?}", result);
+    }
 }

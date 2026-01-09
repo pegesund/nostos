@@ -249,15 +249,16 @@ Selenium.type(driver, "input[name='email']", "user@example.com")</code></pre>
                 <div class="bg-gradient-to-r from-blue-900/20 to-emerald-900/20 rounded-lg p-6 mb-8 border border-blue-800/30">
                     <h3 class="text-lg font-semibold text-white mb-3">Best Practice: Use data-testid Attributes</h3>
                     <p class="text-slate-400 mb-4">
-                        For robust tests, add <code class="bg-slate-800 px-1 rounded">data-testid</code> attributes to your HTML elements. This decouples your tests from styling and structure changes:
+                        For robust tests, add <code class="bg-slate-800 px-1 rounded">data-testid</code> attributes to your HTML elements. This decouples your tests from styling and structure changes. Nostos provides convenient named parameters for this:
                     </p>
                     <div class="bg-nostos-code rounded-lg p-4 border border-slate-800 overflow-x-auto">
-<pre><code class="language-html">&lt;!-- In your HTML --&gt;
-&lt;button data-testid="submit-order"&gt;Place Order&lt;/button&gt;
-&lt;span data-testid="total-price"&gt;$99.99&lt;/span&gt;</code></pre>
+<pre><code class="language-nostos"># In your Nostos RWeb app - use dataTestid and dataAction parameters
+button("Place Order", dataAction: "submit", dataTestid: "submit-order")
+span("$99.99", dataTestid: "total-price")
+div([...], dataTestid: "cart-items")</code></pre>
                     </div>
                     <div class="bg-nostos-code rounded-lg p-4 mt-4 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos"># In your Nostos test
+<pre><code class="language-nostos"># In your Nostos test - select by data-testid
 Selenium.click(driver, "[data-testid='submit-order']")
 price = Selenium.text(driver, "[data-testid='total-price']")</code></pre>
                     </div>
@@ -313,18 +314,15 @@ session() = {
         () => RHtml(div([
             h1("Counter Demo"),
             component("display", () => RHtml(
-                div([attr("data-testid", "count")], [
+                div([
                     span("Count: "),
                     span(show(counter.value))
-                ])
+                ], dataTestid: "count")
             )),
             div([
-                button([attr("data-action", "decrement"),
-                        attr("data-testid", "decrement")], "-"),
-                button([attr("data-action", "increment"),
-                        attr("data-testid", "increment")], "+"),
-                button([attr("data-action", "reset"),
-                        attr("data-testid", "reset")], "Reset")
+                button("-", dataAction: "decrement", dataTestid: "decrement"),
+                button("+", dataAction: "increment", dataTestid: "increment"),
+                button("Reset", dataAction: "reset", dataTestid: "reset")
             ])
         ])),
 

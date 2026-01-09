@@ -2968,21 +2968,36 @@ impl Compiler {
         let mut candidates: Vec<String> = Vec::new();
 
         // Check compiled functions
-        for key in self.functions.keys() {
+        for (key, fn_info) in &self.functions {
             if let Some(suffix) = key.strip_prefix(&prefix) {
                 let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
                 if param_count == arity {
                     candidates.push(key.clone());
+                } else if param_count > arity {
+                    // Check if function accepts our arity via optional params
+                    if let Some(required_count) = fn_info.required_params {
+                        if arity >= required_count && arity <= param_count && !candidates.contains(key) {
+                            candidates.push(key.clone());
+                        }
+                    }
                 }
             }
         }
 
         // Check fn_asts (for functions being compiled or not yet compiled)
-        for key in self.fn_asts.keys() {
+        for (key, def) in &self.fn_asts {
             if let Some(suffix) = key.strip_prefix(&prefix) {
                 let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
                 if param_count == arity && !candidates.contains(key) {
                     candidates.push(key.clone());
+                } else if param_count > arity && !def.clauses.is_empty() {
+                    // Check if function accepts our arity via optional params
+                    let required_count = def.clauses[0].params.iter()
+                        .filter(|p| p.default.is_none())
+                        .count();
+                    if arity >= required_count && arity <= param_count && !candidates.contains(key) {
+                        candidates.push(key.clone());
+                    }
                 }
             }
         }
@@ -3015,11 +3030,15 @@ impl Compiler {
             let mut score = 0;
             let mut valid = true;
 
-            for (i, cand_type) in candidate_types.iter().enumerate() {
-                if i >= arg_types.len() {
+            // Only check types for provided arguments (extra candidate params have defaults)
+            for (i, arg_type) in arg_types.iter().enumerate() {
+                if i >= candidate_types.len() {
+                    // More args than candidate params - invalid unless already caught by arity check
                     valid = false;
                     break;
                 }
+
+                let cand_type = &candidate_types[i];
 
                 // Check if candidate type is a wildcard or type parameter
                 let is_type_param = cand_type.len() == 1 && cand_type.chars().next().unwrap().is_uppercase();
@@ -3027,7 +3046,7 @@ impl Compiler {
                 if *cand_type == "_" || is_type_param {
                     // Wildcard or type parameter accepts anything
                     score += 1;
-                } else if let Some(arg_type) = &arg_types[i] {
+                } else if let Some(arg_type) = arg_type {
                     // Check for exact match or module-qualified match
                     // e.g., "Vec" matches "nalgebra.Vec"
                     let types_match = cand_type == arg_type

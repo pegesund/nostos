@@ -15,7 +15,7 @@ use stdlib.server.{serve, respondHtml}
 layout(pageTitle: String, contentHtml: Html) = Html(
     el("html", [], [
         head([
-            meta([("charset", "UTF-8")]),
+            meta(charset: "UTF-8"),
             title(pageTitle),
             el("style", [], [raw("
                 body { font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
@@ -29,9 +29,9 @@ layout(pageTitle: String, contentHtml: Html) = Html(
 )
 
 navBar() = Html(nav([
-    a([("href", "/")], "Home"), raw(" | "),
-    a([("href", "/users")], "Users"), raw(" | "),
-    a([("href", "/about")], "About")
+    a("Home", href: "/"), raw(" | "),
+    a("Users", href: "/users"), raw(" | "),
+    a("About", href: "/about")
 ]))
 
 userCard(id: String, name: String, email: String) = Html(
@@ -54,7 +54,7 @@ handleHome(req) = {
         navBar(),
         h1("Welcome to Nostos Web Server"),
         p("Using Html(...) templating for type-safe HTML."),
-        p([a([("href", "/users")], "View all users")])
+        p([a("View all users", href: "/users")])
     ]))
     respondHtml(req, render(layout("Home", content)))
 }
@@ -76,7 +76,7 @@ handleUserDetail(req, userId: String) = {
         navBar(),
         h1("User Details"),
         userCard(userId, "User " ++ userId, "user" ++ userId ++ "@example.com"),
-        p([a([("href", "/users")], "Back to users")])
+        p([a("Back to users", href: "/users")])
     ]))
     respondHtml(req, render(layout("User " ++ userId, content)))
 }

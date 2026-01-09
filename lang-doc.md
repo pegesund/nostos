@@ -72,6 +72,105 @@ add = (a, b) => a + b
 apply = (f, x) => f(x)
 ```
 
+### Named Parameters
+Named parameters allow calling functions with arguments in any order by specifying parameter names:
+```nos
+# Define a function
+greet(name, greeting) = greeting ++ ", " ++ name ++ "!"
+
+# Call with named parameters (any order)
+greet(name: "World", greeting: "Hello")      # "Hello, World!"
+greet(greeting: "Hi", name: "Alice")         # "Hi, Alice!"
+
+# Mix positional and named (positional first)
+greet("Bob", greeting: "Hey")                # "Hey, Bob!"
+```
+
+Named parameters work with records too:
+```nos
+type Point = { x: Int, y: Int, z: Int }
+
+# Named args for record construction
+p = Point(x: 10, y: 20, z: 30)
+
+# Named args for record functions
+distance(p1, p2) = {
+    dx = p2.x - p1.x
+    dy = p2.y - p1.y
+    Math.sqrt(float(dx * dx + dy * dy))
+}
+
+# Call with named parameters
+d = distance(p1: origin, p2: target)
+```
+
+### Default Parameter Values
+Parameters can have default values, making them optional:
+```nos
+# Parameter with default value: param = defaultValue
+greet(name, greeting = "Hello", punctuation = "!") =
+    greeting ++ ", " ++ name ++ punctuation
+
+# Call with all defaults
+greet("World")                    # "Hello, World!"
+
+# Override some defaults positionally
+greet("World", "Hi")              # "Hi, World!"
+
+# Override all
+greet("World", "Hey", "?")        # "Hey, World?"
+```
+
+Default values can be any expression:
+```nos
+# Arithmetic expressions
+addWithDefault(a, b = 10 * 2) = a + b
+addWithDefault(5)           # 25 (b defaults to 20)
+
+# String defaults
+wrap(text, prefix = "[", suffix = "]") = prefix ++ text ++ suffix
+wrap("hello")               # "[hello]"
+
+# List defaults
+appendItem(lst, item = 0) = lst ++ [item]
+appendItem([1, 2, 3])       # [1, 2, 3, 0]
+
+# Boolean defaults
+check(value, invert = false) = if invert then !value else value
+check(true)                 # true
+check(true, true)           # false
+```
+
+### Combining Named and Default Parameters
+Named parameters and defaults work together powerfully:
+```nos
+greet(name, greeting = "Hello", punctuation = "!") =
+    greeting ++ ", " ++ name ++ punctuation
+
+# Skip middle param using named arg
+greet("World", punctuation: "?")     # "Hello, World?"
+
+# Use named arg to override specific default
+greet("World", greeting: "Hey")      # "Hey, World!"
+
+# Named args in any order, skipping optionals
+greet(punctuation: "!!!", name: "You", greeting: "Yo")  # "Yo, You!!!"
+
+# Only required arg, all defaults
+greet(name: "Friend")                # "Hello, Friend!"
+```
+
+Functions with all optional parameters:
+```nos
+makeRange(start = 0, stop = 10, step = 1) = (start, stop, step)
+
+makeRange()                          # (0, 10, 1)
+makeRange(5)                         # (5, 10, 1)
+makeRange(stop: 20)                  # (0, 20, 1)
+makeRange(step: 2, stop: 20)         # (0, 20, 2)
+makeRange(5, step: 3)                # (5, 10, 3)
+```
+
 ## Types
 
 ### Type Definitions
@@ -2153,8 +2252,8 @@ session() = {
             component("display", () => RHtml(
                 span("Count: " ++ show(counter.value))
             )),
-            button([attr("data-action", "inc")], "+"),
-            button([attr("data-action", "dec")], "-")
+            button("+", dataAction: "inc"),
+            button("-", dataAction: "dec")
         ])),
 
         # Action handler - mutates reactive state
@@ -2178,14 +2277,14 @@ component("user-info", () => RHtml(
 ))
 ```
 
-**Actions**: Buttons trigger actions via `data-action` attribute:
+**Actions**: Buttons trigger actions via `dataAction` parameter:
 ```nos
-button([attr("data-action", "save")], "Save")
+button("Save", dataAction: "save")
 ```
 
 **Action Parameters**: Pass data with `data-param-*` attributes:
 ```nos
-button([attr("data-action", "delete"), attr("data-param-id", "123")], "Delete")
+button("Delete", dataAction: "delete", attrs: [("data-param-id", "123")])
 # Handler receives: (action="delete", params={id: "123"})
 ```
 
@@ -2199,20 +2298,20 @@ div("content")
 span("text")
 h1("heading")
 p("paragraph")
-button([attr("data-action", "click")], "Click me")
+button("Click me", dataAction: "click")
 
-# With attributes
-div([attr("class", "container"), attr("id", "main")], [
+# With named parameters
+div([
     h1("Title"),
     p("Content")
-])
+], class: "container", id: "main")
 
 # Form elements
-input([attr("type", "text"), attr("name", "username")])
-form([attr("data-action", "submit")], [
-    input([attr("name", "email")]),
-    button([], "Submit")
-])
+input(inputType: "text", name: "username")
+form([
+    input(name: "email"),
+    button("Submit", btnType: "submit")
+], action: "/submit", method: "POST")
 ```
 
 ### Architecture
@@ -2254,8 +2353,8 @@ session() = {
             component("filter-display", () => RHtml(
                 div("Filter: " ++ filter.value)
             )),
-            button([attr("data-action", "filter-all")], "All"),
-            button([attr("data-action", "filter-done")], "Done"),
+            button("All", dataAction: "filter-all"),
+            button("Done", dataAction: "filter-done"),
 
             component("item1", () => RHtml({
                 show = item1.text != "" && (filter.value == "all" ||

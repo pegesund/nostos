@@ -645,7 +645,9 @@ mod tests {
 
     /// Helper to create a call expression.
     fn call_expr(name: &str, args: Vec<Expr>) -> Expr {
-        Expr::Call(Box::new(var_expr(name)), vec![], args, Span::default())
+        use nostos_syntax::ast::CallArg;
+        let call_args: Vec<CallArg> = args.into_iter().map(CallArg::Positional).collect();
+        Expr::Call(Box::new(var_expr(name)), vec![], call_args, Span::default())
     }
 
     /// Helper to create a binary operation.

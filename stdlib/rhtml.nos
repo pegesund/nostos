@@ -29,9 +29,16 @@ type RHtmlResult = { tree: RNode, deps: Map[Int, List[String]], components: List
 
 wrapNode(node: RNode) = RHtmlResult(tree: node, deps: %{}, components: [], renderers: %{}, changedIds: [])
 
-# === Attribute helper ===
+# === Attribute helpers ===
 
 attr(name: String, value: String) = (name, value)
+
+# Filter out empty attribute values and merge with extra attrs
+filterEmptyAttrs(attrs: List[(String, String)]) =
+    attrs.filter(attr => attr.1 != "")
+
+buildAttrs(named: List[(String, String)], extra: List[(String, String)]) =
+    filterEmptyAttrs(named) ++ extra
 
 # === Text and special ===
 
@@ -45,73 +52,179 @@ empty() = Empty
 # This stub is for type checking only
 component(name: String, renderFn: () -> RHtmlResult) = Component(name)
 
-# === Tag functions (same as Html) ===
+# === Tag functions with named parameters ===
+# Each tag supports:
+#   - Old style: tag(children) or tag(attrs, children)
+#   - New style: tag(children, class: "...", id: "...", ...)
 
-div(children: List[RNode]) = Element("div", [], children)
-div(str: String) = Element("div", [], [Text(str)])
-div(attrs: List[(String, String)], children: List[RNode]) = Element("div", attrs, children)
-div(attrs: List[(String, String)], str: String) = Element("div", attrs, [Text(str)])
+# --- Container elements with common attrs ---
 
-span(children: List[RNode]) = Element("span", [], children)
-span(str: String) = Element("span", [], [Text(str)])
-span(attrs: List[(String, String)], children: List[RNode]) = Element("span", attrs, children)
-span(attrs: List[(String, String)], str: String) = Element("span", attrs, [Text(str)])
+div(children: List[RNode], class = "", id = "", style = "", dataTestid = "", attrs = []) =
+    Element("div", buildAttrs([("class", class), ("id", id), ("style", style), ("data-testid", dataTestid)], attrs), children)
+div(str: String, class = "", id = "", style = "", dataTestid = "", attrs = []) =
+    Element("div", buildAttrs([("class", class), ("id", id), ("style", style), ("data-testid", dataTestid)], attrs), [Text(str)])
 
-p(children: List[RNode]) = Element("p", [], children)
-p(str: String) = Element("p", [], [Text(str)])
-p(attrs: List[(String, String)], children: List[RNode]) = Element("p", attrs, children)
-p(attrs: List[(String, String)], str: String) = Element("p", attrs, [Text(str)])
+span(children: List[RNode], class = "", id = "", style = "", dataTestid = "", attrs = []) =
+    Element("span", buildAttrs([("class", class), ("id", id), ("style", style), ("data-testid", dataTestid)], attrs), children)
+span(str: String, class = "", id = "", style = "", dataTestid = "", attrs = []) =
+    Element("span", buildAttrs([("class", class), ("id", id), ("style", style), ("data-testid", dataTestid)], attrs), [Text(str)])
 
-h1(children: List[RNode]) = Element("h1", [], children)
-h1(str: String) = Element("h1", [], [Text(str)])
+p(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("p", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+p(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("p", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h2(children: List[RNode]) = Element("h2", [], children)
-h2(str: String) = Element("h2", [], [Text(str)])
+# --- Headings ---
 
-h3(children: List[RNode]) = Element("h3", [], children)
-h3(str: String) = Element("h3", [], [Text(str)])
+h1(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("h1", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+h1(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("h1", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-button(children: List[RNode]) = Element("button", [], children)
-button(str: String) = Element("button", [], [Text(str)])
-button(attrs: List[(String, String)], children: List[RNode]) = Element("button", attrs, children)
-button(attrs: List[(String, String)], str: String) = Element("button", attrs, [Text(str)])
+h2(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("h2", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+h2(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("h2", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-ul(children: List[RNode]) = Element("ul", [], children)
-ol(children: List[RNode]) = Element("ol", [], children)
-li(children: List[RNode]) = Element("li", [], children)
-li(str: String) = Element("li", [], [Text(str)])
+h3(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("h3", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+h3(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("h3", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-table(children: List[RNode]) = Element("table", [], children)
-thead(children: List[RNode]) = Element("thead", [], children)
-tbody(children: List[RNode]) = Element("tbody", [], children)
-tr(children: List[RNode]) = Element("tr", [], children)
-th(children: List[RNode]) = Element("th", [], children)
-th(str: String) = Element("th", [], [Text(str)])
-td(children: List[RNode]) = Element("td", [], children)
-td(str: String) = Element("td", [], [Text(str)])
+h4(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("h4", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+h4(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("h4", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-nav(children: List[RNode]) = Element("nav", [], children)
-header(children: List[RNode]) = Element("header", [], children)
-footer(children: List[RNode]) = Element("footer", [], children)
-section(children: List[RNode]) = Element("section", [], children)
-article(children: List[RNode]) = Element("article", [], children)
-form(children: List[RNode]) = Element("form", [], children)
-form(attrs: List[(String, String)], children: List[RNode]) = Element("form", attrs, children)
+h5(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("h5", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+h5(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("h5", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-html(children: List[RNode]) = Element("html", [], children)
-headEl(children: List[RNode]) = Element("head", [], children)
-body(children: List[RNode]) = Element("body", [], children)
+h6(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("h6", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+h6(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("h6", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
+
+# --- Lists ---
+
+ul(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("ul", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+ol(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("ol", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+
+li(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("li", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+li(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("li", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
+
+# --- Tables ---
+
+table(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("table", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+thead(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("thead", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+tbody(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("tbody", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+tr(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("tr", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+
+th(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("th", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+th(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("th", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
+
+td(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("td", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+td(str: String, class = "", id = "", style = "", attrs = []) =
+    Element("td", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
+
+# --- Semantic elements ---
+
+nav(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("nav", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+header(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("header", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+footer(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("footer", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+section(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("section", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+article(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("article", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+aside(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("aside", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+main(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("main", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+
+html(children: List[RNode], attrs = []) = Element("html", attrs, children)
+headEl(children: List[RNode], attrs = []) = Element("head", attrs, children)
+body(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+    Element("body", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
+
+# --- Form elements ---
+
+form(children: List[RNode], action = "", method = "", class = "", id = "", attrs = []) =
+    Element("form", buildAttrs([("action", action), ("method", method), ("class", class), ("id", id)], attrs), children)
+
+button(children: List[RNode], btnType = "", class = "", id = "", onclick = "", disabled = "", dataAction = "", dataTestid = "", attrs = []) =
+    Element("button", buildAttrs([("type", btnType), ("class", class), ("id", id), ("onclick", onclick), ("disabled", disabled), ("data-action", dataAction), ("data-testid", dataTestid)], attrs), children)
+button(str: String, btnType = "", class = "", id = "", onclick = "", disabled = "", dataAction = "", dataTestid = "", attrs = []) =
+    Element("button", buildAttrs([("type", btnType), ("class", class), ("id", id), ("onclick", onclick), ("disabled", disabled), ("data-action", dataAction), ("data-testid", dataTestid)], attrs), [Text(str)])
+
+label(children: List[RNode], forId = "", class = "", id = "", attrs = []) =
+    Element("label", buildAttrs([("for", forId), ("class", class), ("id", id)], attrs), children)
+label(str: String, forId = "", class = "", id = "", attrs = []) =
+    Element("label", buildAttrs([("for", forId), ("class", class), ("id", id)], attrs), [Text(str)])
+
+textarea(str: String, name = "", placeholder = "", rows = "", cols = "", class = "", id = "", attrs = []) =
+    Element("textarea", buildAttrs([("name", name), ("placeholder", placeholder), ("rows", rows), ("cols", cols), ("class", class), ("id", id)], attrs), [Text(str)])
+
+select(children: List[RNode], name = "", class = "", id = "", attrs = []) =
+    Element("select", buildAttrs([("name", name), ("class", class), ("id", id)], attrs), children)
+
+option(str: String, value = "", selected = "", attrs = []) =
+    Element("option", buildAttrs([("value", value), ("selected", selected)], attrs), [Text(str)])
+
+# --- Text formatting ---
+
 title(str: String) = Element("title", [], [Text(str)])
+strong(str: String, class = "", id = "", attrs = []) =
+    Element("strong", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
+em(str: String, class = "", id = "", attrs = []) =
+    Element("em", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
+code(str: String, class = "", id = "", attrs = []) =
+    Element("code", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
+pre(str: String, class = "", id = "", attrs = []) =
+    Element("pre", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
+small(str: String, class = "", id = "", attrs = []) =
+    Element("small", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
 
-# Self-closing
+# --- Self-closing tags ---
+
 br() = Element("br", [], [])
-hr() = Element("hr", [], [])
-img(attrs: List[(String, String)]) = Element("img", attrs, [])
-input(attrs: List[(String, String)]) = Element("input", attrs, [])
+hr(class = "", id = "", attrs = []) =
+    Element("hr", buildAttrs([("class", class), ("id", id)], attrs), [])
 
-# With attributes
-a(attrs: List[(String, String)], children: List[RNode]) = Element("a", attrs, children)
-a(attrs: List[(String, String)], str: String) = Element("a", attrs, [Text(str)])
+img(src = "", alt = "", width = "", height = "", class = "", id = "", attrs = []) =
+    Element("img", buildAttrs([("src", src), ("alt", alt), ("width", width), ("height", height), ("class", class), ("id", id)], attrs), [])
+
+input(inputType = "", name = "", value = "", placeholder = "", class = "", id = "", checked = "", disabled = "", readonly = "", attrs = []) =
+    Element("input", buildAttrs([("type", inputType), ("name", name), ("value", value), ("placeholder", placeholder), ("class", class), ("id", id), ("checked", checked), ("disabled", disabled), ("readonly", readonly)], attrs), [])
+
+meta(name = "", content = "", charset = "", attrs = []) =
+    Element("meta", buildAttrs([("name", name), ("content", content), ("charset", charset)], attrs), [])
+
+linkTag(rel = "", href = "", linkType = "", attrs = []) =
+    Element("link", buildAttrs([("rel", rel), ("href", href), ("type", linkType)], attrs), [])
+
+# --- Links ---
+
+a(children: List[RNode], href = "", target = "", class = "", id = "", attrs = []) =
+    Element("a", buildAttrs([("href", href), ("target", target), ("class", class), ("id", id)], attrs), children)
+a(str: String, href = "", target = "", class = "", id = "", attrs = []) =
+    Element("a", buildAttrs([("href", href), ("target", target), ("class", class), ("id", id)], attrs), [Text(str)])
+
+# Generic element constructor
 el(tag: String, attrs: List[(String, String)], children: List[RNode]) = Element(tag, attrs, children)
 
 # === Rendering ===

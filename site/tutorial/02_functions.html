@@ -250,6 +250,130 @@ main() = {
                         <li>Use traditional function calls when order doesn't matter or for single operations</li>
                     </ul>
                 </div>
+
+                <!-- Named Parameters -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Named Parameters</h2>
+                <p class="text-slate-400 mb-4">
+                    Named parameters allow you to call functions with arguments in any order by specifying parameter names. This makes code more readable, especially for functions with many parameters.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Define a function
+greet(name, greeting) = greeting ++ ", " ++ name ++ "!"
+
+# Call with named parameters (any order)
+greet(name: "World", greeting: "Hello")      # "Hello, World!"
+greet(greeting: "Hi", name: "Alice")         # "Hi, Alice!"
+
+# Mix positional and named (positional must come first)
+greet("Bob", greeting: "Hey")                # "Hey, Bob!"
+</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">Named parameters work well with records:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">type Point = { x: Int, y: Int, z: Int }
+
+# Named args for record construction
+p = Point(x: 10, y: 20, z: 30)
+
+# Function with multiple point params
+midpoint(p1, p2) = Point(
+    x: (p1.x + p2.x) / 2,
+    y: (p1.y + p2.y) / 2,
+    z: (p1.z + p2.z) / 2
+)
+
+# Call with named parameters for clarity
+mid = midpoint(p1: origin, p2: target)
+</code></pre>
+                </div>
+
+                <!-- Default Parameter Values -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Default Parameter Values</h2>
+                <p class="text-slate-400 mb-4">
+                    Parameters can have default values, making them optional. Use the syntax <code>param = defaultValue</code> in the function definition.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Parameters with default values
+greet(name, greeting = "Hello", punctuation = "!") =
+    greeting ++ ", " ++ name ++ punctuation
+
+# Call with all defaults
+greet("World")                    # "Hello, World!"
+
+# Override some defaults positionally
+greet("World", "Hi")              # "Hi, World!"
+
+# Override all
+greet("World", "Hey", "?")        # "Hey, World?"
+</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">Default values can be any expression:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Arithmetic expressions
+addWithDefault(a, b = 10 * 2) = a + b
+addWithDefault(5)              # 25 (b defaults to 20)
+
+# String defaults
+wrap(text, prefix = "[", suffix = "]") = prefix ++ text ++ suffix
+wrap("hello")                  # "[hello]"
+
+# List defaults
+appendItem(lst, item = 0) = lst ++ [item]
+appendItem([1, 2, 3])          # [1, 2, 3, 0]
+
+# Boolean defaults
+check(value, invert = false) = if invert then !value else value
+check(true)                    # true
+check(true, true)              # false
+</code></pre>
+                </div>
+
+                <!-- Combining Named and Default Parameters -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Combining Named and Default Parameters</h2>
+                <p class="text-slate-400 mb-4">
+                    Named parameters and defaults work together powerfully - you can skip optional parameters and specify only the ones you need.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">greet(name, greeting = "Hello", punctuation = "!") =
+    greeting ++ ", " ++ name ++ punctuation
+
+# Skip middle param using named arg
+greet("World", punctuation: "?")          # "Hello, World?"
+
+# Use named arg to override specific default
+greet("World", greeting: "Hey")           # "Hey, World!"
+
+# Named args in any order, skipping optionals
+greet(punctuation: "!!!", name: "You", greeting: "Yo")  # "Yo, You!!!"
+
+# Only required arg, all defaults
+greet(name: "Friend")                     # "Hello, Friend!"
+</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">Functions with all optional parameters:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">makeRange(start = 0, stop = 10, step = 1) = (start, stop, step)
+
+makeRange()                       # (0, 10, 1)
+makeRange(5)                      # (5, 10, 1)
+makeRange(stop: 20)               # (0, 20, 1)
+makeRange(step: 2, stop: 20)      # (0, 20, 2)
+makeRange(5, step: 3)             # (5, 10, 3)
+</code></pre>
+                </div>
+
+                <div class="bg-gradient-to-r from-blue-900/20 to-emerald-900/20 rounded-lg p-6 mb-8 border border-blue-800/30">
+                    <h3 class="text-lg font-semibold text-white mb-3">Best Practices</h3>
+                    <ul class="list-disc list-inside text-slate-400 space-y-2">
+                        <li>Put required parameters before optional ones</li>
+                        <li>Use named parameters when calling functions with many arguments for clarity</li>
+                        <li>Use defaults for configuration options that have sensible common values</li>
+                        <li>Use named parameters to skip optional arguments you don't need</li>
+                    </ul>
+                </div>
             </div>
 
                         <!-- Navigation Buttons -->

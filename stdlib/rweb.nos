@@ -21,7 +21,7 @@
 #               component("display", () => RHtml(
 #                   span("Count: " ++ show(counter.value))
 #               )),
-#               button([attr("data-action", "increment")], "+1")
+#               button("+1", dataAction: "increment")
 #           ])),
 #           (action, params) => match action {
 #               "increment" -> { counter.value = counter.value + 1 }
