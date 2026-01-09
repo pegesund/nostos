@@ -1,0 +1,139 @@
+# HTML Standard Library
+# Functional HTML building for Nostos
+
+# The Html type - represents an HTML node tree
+type Html =
+    | Element(String, List[(String, String)], List[Html])
+    | Text(String)
+    | Raw(String)
+    | Empty
+
+# Empty node - renders to nothing, useful for conditionals
+empty() = Empty
+
+# Text node helper
+text(str) = Text(str)
+
+# Raw HTML (unescaped) - use with caution!
+raw(str) = Raw(str)
+
+# Generic element constructor
+el(tag, attrs, children) = Element(tag, attrs, children)
+
+# === Simple tag functions (children only) ===
+
+div(children) = Element("div", [], children)
+span(children) = Element("span", [], children)
+p(children) = Element("p", [], children)
+h1(children) = Element("h1", [], children)
+h2(children) = Element("h2", [], children)
+h3(children) = Element("h3", [], children)
+h4(children) = Element("h4", [], children)
+h5(children) = Element("h5", [], children)
+h6(children) = Element("h6", [], children)
+ul(children) = Element("ul", [], children)
+ol(children) = Element("ol", [], children)
+li(children) = Element("li", [], children)
+table(children) = Element("table", [], children)
+thead(children) = Element("thead", [], children)
+tbody(children) = Element("tbody", [], children)
+tr(children) = Element("tr", [], children)
+th(children) = Element("th", [], children)
+td(children) = Element("td", [], children)
+form(children) = Element("form", [], children)
+nav(children) = Element("nav", [], children)
+header(children) = Element("header", [], children)
+footer(children) = Element("footer", [], children)
+section(children) = Element("section", [], children)
+article(children) = Element("article", [], children)
+aside(children) = Element("aside", [], children)
+head(children) = Element("head", [], children)
+body(children) = Element("body", [], children)
+button(children) = Element("button", [], children)
+
+# Text content variants
+div_(str) = Element("div", [], [Text(str)])
+span_(str) = Element("span", [], [Text(str)])
+p_(str) = Element("p", [], [Text(str)])
+h1_(str) = Element("h1", [], [Text(str)])
+h2_(str) = Element("h2", [], [Text(str)])
+h3_(str) = Element("h3", [], [Text(str)])
+h4_(str) = Element("h4", [], [Text(str)])
+h5_(str) = Element("h5", [], [Text(str)])
+h6_(str) = Element("h6", [], [Text(str)])
+li_(str) = Element("li", [], [Text(str)])
+th_(str) = Element("th", [], [Text(str)])
+td_(str) = Element("td", [], [Text(str)])
+title_(str) = Element("title", [], [Text(str)])
+button_(str) = Element("button", [], [Text(str)])
+label_(str) = Element("label", [], [Text(str)])
+strong(str) = Element("strong", [], [Text(str)])
+em(str) = Element("em", [], [Text(str)])
+code_(str) = Element("code", [], [Text(str)])
+pre_(str) = Element("pre", [], [Text(str)])
+small_(str) = Element("small", [], [Text(str)])
+
+# Self-closing tags
+br() = Element("br", [], [])
+hr() = Element("hr", [], [])
+img(attrs) = Element("img", attrs, [])
+input(attrs) = Element("input", attrs, [])
+meta(attrs) = Element("meta", attrs, [])
+linkTag(attrs) = Element("link", attrs, [])
+
+# Elements with required attrs
+a(attrs, children) = Element("a", attrs, children)
+a_(attrs, str) = Element("a", attrs, [Text(str)])
+
+# === Rendering ===
+
+escapeChar(c) = match c {
+    '<' -> "&lt;"
+    '>' -> "&gt;"
+    '&' -> "&amp;"
+    '"' -> "&quot;"
+    '\'' -> "&#39;"
+    _ -> String.from_chars([c])
+}
+
+escapeHtml(str) = {
+    chars = String.chars(str)
+    escaped = chars.map(c => escapeChar(c))
+    escaped.fold("", (acc, s) => acc ++ s)
+}
+
+renderAttr((name, value)) = " " ++ name ++ "=\"" ++ escapeHtml(value) ++ "\""
+
+renderAttrs([]) = ""
+renderAttrs([attr | rest]) = renderAttr(attr) ++ renderAttrs(rest)
+
+isSelfClosing(tag) = match tag {
+    "area" -> true
+    "base" -> true
+    "br" -> true
+    "col" -> true
+    "embed" -> true
+    "hr" -> true
+    "img" -> true
+    "input" -> true
+    "link" -> true
+    "meta" -> true
+    "source" -> true
+    "track" -> true
+    "wbr" -> true
+    _ -> false
+}
+
+renderChildren([]) = ""
+renderChildren([child | rest]) = render(child) ++ renderChildren(rest)
+
+render(node) = match node {
+    Element(tag, attrs, children) ->
+        if isSelfClosing(tag) then
+            "<" ++ tag ++ renderAttrs(attrs) ++ " />"
+        else
+            "<" ++ tag ++ renderAttrs(attrs) ++ ">" ++ renderChildren(children) ++ "</" ++ tag ++ ">"
+    Text(str) -> escapeHtml(str)
+    Raw(str) -> str
+    Empty -> ""
+}
