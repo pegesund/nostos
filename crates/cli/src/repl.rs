@@ -1365,6 +1365,30 @@ impl Repl {
     fn infer_type_from_expr(expr: &str) -> Option<String> {
         let trimmed = expr.trim();
 
+        // Check for type conversion methods (e.g., 1.asInt32(), x.asFloat64())
+        // These have well-known return types based on the method name
+        let conversion_methods = [
+            (".asInt8()", "Int8"),
+            (".asInt16()", "Int16"),
+            (".asInt32()", "Int32"),
+            (".asInt64()", "Int64"),
+            (".asInt()", "Int"),
+            (".asUInt8()", "UInt8"),
+            (".asUInt16()", "UInt16"),
+            (".asUInt32()", "UInt32"),
+            (".asUInt64()", "UInt64"),
+            (".asFloat32()", "Float32"),
+            (".asFloat64()", "Float64"),
+            (".asFloat()", "Float"),
+            (".asBigInt()", "BigInt"),
+        ];
+
+        for (suffix, return_type) in conversion_methods {
+            if trimmed.ends_with(suffix) {
+                return Some(return_type.to_string());
+            }
+        }
+
         // Check for static module function calls
         if trimmed.starts_with("Buffer.new") {
             return Some("Buffer".to_string());
