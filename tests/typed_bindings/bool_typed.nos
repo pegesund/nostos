@@ -1,0 +1,7 @@
+# expect: true
+# Basic Bool typed binding
+
+main() = {
+    Bool b = true
+    b
+}

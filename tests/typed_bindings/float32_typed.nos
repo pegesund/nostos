@@ -1,0 +1,7 @@
+# expect: 1.5f32
+# Float32 typed binding
+
+main() = {
+    Float32 x = 1.5f32
+    x
+}

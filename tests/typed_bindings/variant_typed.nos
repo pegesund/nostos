@@ -1,0 +1,9 @@
+# expect: Some(42)
+# Variant type binding
+
+type Option[T] = Some(T) | None
+
+main() = {
+    Option[Int] maybe = Some(42)
+    maybe
+}

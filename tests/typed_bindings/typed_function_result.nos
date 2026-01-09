@@ -1,0 +1,9 @@
+# expect: 25
+# Typed binding from function call
+
+square(x) = x * x
+
+main() = {
+    Int result = square(5)
+    result
+}

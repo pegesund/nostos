@@ -1,0 +1,11 @@
+# expect: 30
+# Typed bindings in nested blocks
+
+main() = {
+    Int outer = 10
+    Int result = {
+        Int inner = 20
+        outer + inner
+    }
+    result
+}
