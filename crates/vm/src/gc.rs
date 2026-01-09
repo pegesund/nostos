@@ -936,6 +936,11 @@ impl Heap {
         self.objects.len()
     }
 
+    /// Get bytes allocated since last GC.
+    pub fn bytes_since_gc(&self) -> usize {
+        self.bytes_since_gc
+    }
+
     /// Allocate a new object on the heap.
     #[inline]
     fn alloc(&mut self, data: HeapData) -> RawGcPtr {

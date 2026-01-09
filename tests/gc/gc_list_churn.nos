@@ -1,0 +1,19 @@
+# expect: ()
+# GC List Churn Test - creates and discards many lists
+# Tests that the GC reclaims list nodes
+
+# Build a list of n elements, then discard it
+churn(0, kept) = kept
+churn(n, kept) = {
+    # Create a list that will become garbage after this iteration
+    temp_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    # Only keep the count, not the list
+    churn(n - 1, kept + 1)
+}
+
+main() = {
+    # 10000 iterations, each creating a 10-element list
+    # Without GC, this would allocate ~100k list nodes
+    result = churn(10000, 0)
+    assert_eq(10000, result)
+}

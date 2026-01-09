@@ -3,8 +3,6 @@
 use nostos_compiler::compile::compile_module;
 use nostos_jit::{JitCompiler, JitConfig};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
-use nostos_vm::gc::GcValue;
-use nostos_vm::runtime::Runtime;
 use nostos_vm::parallel::{ParallelVM, ParallelConfig};
 use nostos_vm::value::RuntimeError;
 use std::env;
@@ -178,7 +176,7 @@ fn main() -> ExitCode {
     let mut enable_jit = true;
     let mut json_errors = false;
     let mut debug_mode = false;
-    let mut parallel_affinity: Option<usize> = None;
+    let mut num_threads: usize = 0; // 0 = auto-detect
 
     let mut i = 1;
     while i < args.len() {
@@ -195,7 +193,7 @@ fn main() -> ExitCode {
                 println!("  --no-jit         Disable JIT compilation (for debugging)");
                 println!("  --debug          Show local variable values in stack traces");
                 println!("  --json-errors    Output errors as JSON (for debugger integration)");
-                println!("  --parallel [N]   Enable parallel execution with N threads (default: all CPUs)");
+                println!("  --threads N      Use N worker threads (default: all CPUs)");
                 return ExitCode::SUCCESS;
             }
             if arg == "--version" || arg == "-v" {
@@ -217,18 +215,15 @@ fn main() -> ExitCode {
                 i += 1;
                 continue;
             }
-            if arg == "--parallel" || arg == "--parallel-affinity" {
-                // Both flags now use ParallelVM (the fast lock-free implementation)
-                // Check if next arg is a number
+            if arg == "--threads" || arg == "--parallel" || arg == "--parallel-affinity" {
+                // Set number of worker threads
                 if i + 1 < args.len() {
                     if let Ok(n) = args[i + 1].parse::<usize>() {
-                        parallel_affinity = Some(n);
+                        num_threads = n;
                         i += 2;
                         continue;
                     }
                 }
-                // No number specified, use 0 (auto-detect)
-                parallel_affinity = Some(0);
                 i += 1;
                 continue;
             }
@@ -282,55 +277,7 @@ fn main() -> ExitCode {
     };
 
     // Create runtime and load functions/types
-    let mut runtime = Runtime::new();
-    runtime.set_debug_mode(debug_mode);
-
-    for (name, func) in compiler.get_all_functions() {
-        runtime.register_function(&name, func.clone());
-    }
     let function_list = compiler.get_function_list();
-    runtime.set_function_list(function_list.clone());
-    for (name, type_val) in compiler.get_vm_types() {
-        runtime.register_type(&name, type_val);
-    }
-
-    // JIT compile suitable functions (unless --no-jit was specified)
-    if enable_jit {
-        if let Ok(mut jit) = JitCompiler::new(JitConfig::default()) {
-            for idx in 0..function_list.len() {
-                // Queue all functions for JIT compilation
-                jit.queue_compilation(idx as u16);
-            }
-            // Process the queue
-            if let Ok(compiled) = jit.process_queue(&function_list) {
-                if compiled > 0 {
-                    // Register JIT functions with the runtime
-                    for (idx, _func) in function_list.iter().enumerate() {
-                        // Register pure numeric JIT functions by arity
-                        if let Some(jit_fn) = jit.get_int_function_0(idx as u16) {
-                            runtime.register_jit_int_function_0(idx as u16, jit_fn);
-                        }
-                        if let Some(jit_fn) = jit.get_int_function(idx as u16) {
-                            runtime.register_jit_int_function(idx as u16, jit_fn);
-                        }
-                        if let Some(jit_fn) = jit.get_int_function_2(idx as u16) {
-                            runtime.register_jit_int_function_2(idx as u16, jit_fn);
-                        }
-                        if let Some(jit_fn) = jit.get_int_function_3(idx as u16) {
-                            runtime.register_jit_int_function_3(idx as u16, jit_fn);
-                        }
-                        if let Some(jit_fn) = jit.get_int_function_4(idx as u16) {
-                            runtime.register_jit_int_function_4(idx as u16, jit_fn);
-                        }
-                        // Register loop-based array JIT functions
-                        if let Some(jit_fn) = jit.get_loop_int64_array_function(idx as u16) {
-                            runtime.register_jit_loop_array_function(idx as u16, jit_fn);
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     // Get main function
     let main_func = match compiler.get_all_functions().get("main") {
@@ -341,101 +288,74 @@ fn main() -> ExitCode {
         }
     };
 
-    // Run with either parallel WorkerPool, ParallelVM (affinity), or single-threaded Runtime
-    if let Some(num_threads) = parallel_affinity {
-        // Parallel execution with CPU affinity (new ParallelVM)
-        let config = ParallelConfig {
-            num_threads,
-            ..Default::default()
-        };
+    // Create ParallelVM (always use parallel execution)
+    let config = ParallelConfig {
+        num_threads,
+        ..Default::default()
+    };
 
-        let mut vm = ParallelVM::new(config);
+    let mut vm = ParallelVM::new(config);
 
-        // Register default native functions
-        vm.register_default_natives();
+    // Register default native functions
+    vm.register_default_natives();
 
-        // Register functions
-        for (name, func) in compiler.get_all_functions() {
-            vm.register_function(&name, func.clone());
-        }
+    // Register functions
+    for (name, func) in compiler.get_all_functions() {
+        vm.register_function(&name, func.clone());
+    }
 
-        // Set function list for CallDirect
-        vm.set_function_list(compiler.get_function_list());
+    // Set function list for CallDirect
+    vm.set_function_list(compiler.get_function_list());
 
-        // Register types
-        for (name, type_val) in compiler.get_vm_types() {
-            vm.register_type(&name, type_val);
-        }
+    // Register types
+    for (name, type_val) in compiler.get_vm_types() {
+        vm.register_type(&name, type_val);
+    }
 
-        // JIT compile suitable functions (unless --no-jit was specified)
-        if enable_jit {
-            if let Ok(mut jit) = JitCompiler::new(JitConfig::default()) {
-                for idx in 0..function_list.len() {
-                    jit.queue_compilation(idx as u16);
-                }
-                if let Ok(compiled) = jit.process_queue(&function_list) {
-                    if compiled > 0 {
-                        for (idx, _func) in function_list.iter().enumerate() {
-                            // Register pure numeric JIT functions by arity
-                            if let Some(jit_fn) = jit.get_int_function_0(idx as u16) {
-                                vm.register_jit_int_function_0(idx as u16, jit_fn);
-                            }
-                            if let Some(jit_fn) = jit.get_int_function(idx as u16) {
-                                vm.register_jit_int_function(idx as u16, jit_fn);
-                            }
-                            if let Some(jit_fn) = jit.get_int_function_2(idx as u16) {
-                                vm.register_jit_int_function_2(idx as u16, jit_fn);
-                            }
-                            if let Some(jit_fn) = jit.get_int_function_3(idx as u16) {
-                                vm.register_jit_int_function_3(idx as u16, jit_fn);
-                            }
-                            if let Some(jit_fn) = jit.get_int_function_4(idx as u16) {
-                                vm.register_jit_int_function_4(idx as u16, jit_fn);
-                            }
-                            // Register loop-based array JIT functions
-                            if let Some(jit_fn) = jit.get_loop_int64_array_function(idx as u16) {
-                                vm.register_jit_loop_array_function(idx as u16, jit_fn);
-                            }
+    // JIT compile suitable functions (unless --no-jit was specified)
+    if enable_jit {
+        if let Ok(mut jit) = JitCompiler::new(JitConfig::default()) {
+            for idx in 0..function_list.len() {
+                jit.queue_compilation(idx as u16);
+            }
+            if let Ok(compiled) = jit.process_queue(&function_list) {
+                if compiled > 0 {
+                    for (idx, _func) in function_list.iter().enumerate() {
+                        // Register pure numeric JIT functions by arity
+                        if let Some(jit_fn) = jit.get_int_function_0(idx as u16) {
+                            vm.register_jit_int_function_0(idx as u16, jit_fn);
+                        }
+                        if let Some(jit_fn) = jit.get_int_function(idx as u16) {
+                            vm.register_jit_int_function(idx as u16, jit_fn);
+                        }
+                        if let Some(jit_fn) = jit.get_int_function_2(idx as u16) {
+                            vm.register_jit_int_function_2(idx as u16, jit_fn);
+                        }
+                        if let Some(jit_fn) = jit.get_int_function_3(idx as u16) {
+                            vm.register_jit_int_function_3(idx as u16, jit_fn);
+                        }
+                        if let Some(jit_fn) = jit.get_int_function_4(idx as u16) {
+                            vm.register_jit_int_function_4(idx as u16, jit_fn);
+                        }
+                        // Register loop-based array JIT functions
+                        if let Some(jit_fn) = jit.get_loop_int64_array_function(idx as u16) {
+                            vm.register_jit_loop_array_function(idx as u16, jit_fn);
                         }
                     }
                 }
             }
         }
-
-        match vm.run(main_func) {
-            Ok(Some(val)) => {
-                if !val.is_unit() {
-                    println!("{}", val.display());
-                }
-                return ExitCode::SUCCESS;
-            }
-            Ok(None) => return ExitCode::SUCCESS,
-            Err(e) => {
-                if json_errors {
-                    println!("{}", format_error_json(&e, file_path));
-                } else {
-                    eprintln!("Runtime error in {}:", file_path);
-                    eprintln!("{}", e);
-                }
-                return ExitCode::FAILURE;
-            }
-        }
     }
 
-    // Single-threaded execution
-    runtime.spawn_initial(main_func);
-    let result = runtime.run();
-
-    match result {
-        Ok(result) => {
-            if let Some(val) = result {
-                if !matches!(val, GcValue::Unit) {
-                    // Use display_result to get human-readable output (matches ParallelVM)
-                    println!("{}", runtime.display_result(&val));
-                }
+    // Run the program
+    match vm.run(main_func) {
+        Ok(Some(val)) => {
+            if !val.is_unit() {
+                println!("{}", val.display());
             }
             ExitCode::SUCCESS
         }
+        Ok(None) => ExitCode::SUCCESS,
         Err(e) => {
             if json_errors {
                 println!("{}", format_error_json(&e, file_path));
