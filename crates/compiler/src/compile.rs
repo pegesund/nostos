@@ -6,7 +6,7 @@
 //! - Pattern match compilation
 //! - Type-directed code generation
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
@@ -49,6 +49,9 @@ pub enum CompileError {
 
     #[error("function `{name}` expects {expected} argument(s), but {found} were provided")]
     ArityMismatch { name: String, expected: usize, found: usize, span: Span },
+
+    #[error("cannot resolve trait method `{method}` without type information")]
+    UnresolvedTraitMethod { method: String, span: Span },
 }
 
 impl CompileError {
@@ -66,6 +69,7 @@ impl CompileError {
             CompileError::MissingTraitMethod { span, .. } => *span,
             CompileError::TraitNotImplemented { span, .. } => *span,
             CompileError::ArityMismatch { span, .. } => *span,
+            CompileError::UnresolvedTraitMethod { span, .. } => *span,
         }
     }
 
@@ -110,6 +114,12 @@ impl CompileError {
             }
             CompileError::ArityMismatch { name, expected, found, .. } => {
                 SourceError::arity_mismatch(name, *expected, *found, span)
+            }
+            CompileError::UnresolvedTraitMethod { method, .. } => {
+                SourceError::compile(
+                    format!("cannot resolve trait method `{}` without type information", method),
+                    span,
+                )
             }
         }
     }
@@ -164,6 +174,15 @@ pub struct Compiler {
     type_traits: HashMap<String, Vec<String>>,
     /// Local variable type tracking: variable name -> type name
     local_types: HashMap<String, String>,
+    /// Parameter types for specialized function variants (for monomorphization)
+    /// When compiling a specialized variant, parameter name -> concrete type name
+    param_types: HashMap<String, String>,
+    /// Function ASTs for monomorphization: function name -> FnDef
+    /// Used to recompile functions with different type contexts
+    fn_asts: HashMap<String, FnDef>,
+    /// Functions that need monomorphization (have untyped parameters calling trait methods)
+    /// These functions are not compiled normally; specialized variants are compiled at call sites
+    polymorphic_fns: HashSet<String>,
     /// Current function name being compiled (for self-recursion optimization)
     current_function_name: Option<String>,
     /// Loop context stack for break/continue
@@ -251,6 +270,9 @@ impl Compiler {
             trait_impls: HashMap::new(),
             type_traits: HashMap::new(),
             local_types: HashMap::new(),
+            param_types: HashMap::new(),
+            fn_asts: HashMap::new(),
+            polymorphic_fns: HashSet::new(),
             current_function_name: None,
             loop_stack: Vec::new(),
             line_starts,
@@ -560,6 +582,17 @@ impl Compiler {
         None
     }
 
+    /// Check if a method name belongs to any trait.
+    /// Used to detect when a method call on an untyped parameter might be a trait method.
+    fn is_known_trait_method(&self, method_name: &str) -> bool {
+        for trait_info in self.trait_defs.values() {
+            if trait_info.methods.iter().any(|m| m.name == method_name) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Compile a function definition.
     fn compile_fn_def(&mut self, def: &FnDef) -> Result<(), CompileError> {
         // Save compiler state
@@ -581,6 +614,9 @@ impl Compiler {
 
         // Store the function's visibility
         self.function_visibility.insert(name.clone(), def.visibility);
+
+        // Store AST for potential monomorphization
+        self.fn_asts.insert(name.clone(), def.clone());
 
         // Check if we need pattern matching dispatch
         let needs_dispatch = def.clauses.len() > 1 || def.clauses.iter().any(|clause| {
@@ -639,7 +675,20 @@ impl Compiler {
                 }
 
                 // All patterns matched and guard passed - compile body
-                let result_reg = self.compile_expr_tail(&clause.body, true)?;
+                let result_reg = match self.compile_expr_tail(&clause.body, true) {
+                    Ok(reg) => reg,
+                    Err(CompileError::UnresolvedTraitMethod { .. }) => {
+                        // Mark this function as needing monomorphization
+                        self.polymorphic_fns.insert(name.clone());
+                        // Restore state and return success
+                        self.chunk = saved_chunk;
+                        self.locals = saved_locals;
+                        self.next_reg = saved_next_reg;
+                        self.current_function_name = saved_function_name;
+                        return Ok(());
+                    }
+                    Err(e) => return Err(e),
+                };
                 self.chunk.emit(Instruction::Return(result_reg), 0);
 
                 // Record where we need to patch for "matched" jumps
@@ -682,7 +731,20 @@ impl Compiler {
             }
 
             // Compile function body (in tail position)
-            let result_reg = self.compile_expr_tail(&clause.body, true)?;
+            let result_reg = match self.compile_expr_tail(&clause.body, true) {
+                Ok(reg) => reg,
+                Err(CompileError::UnresolvedTraitMethod { .. }) => {
+                    // Mark this function as needing monomorphization
+                    self.polymorphic_fns.insert(name.clone());
+                    // Restore state and return success
+                    self.chunk = saved_chunk;
+                    self.locals = saved_locals;
+                    self.next_reg = saved_next_reg;
+                    self.current_function_name = saved_function_name;
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            };
             self.chunk.emit(Instruction::Return(result_reg), 0);
         }
 
@@ -1308,6 +1370,14 @@ impl Compiler {
                             self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
                             return Ok(dst);
                         }
+                    }
+                } else {
+                    // Type unknown - check if this is a trait method that needs monomorphization
+                    if self.is_known_trait_method(&method.node) {
+                        return Err(CompileError::UnresolvedTraitMethod {
+                            method: method.node.clone(),
+                            span: method.span,
+                        });
                     }
                 }
 
@@ -2106,8 +2176,48 @@ impl Compiler {
             // Resolve the name (handles imports and module path)
             let resolved_name = self.resolve_name(&qualified_name);
 
+            // Try monomorphization: if we know argument types, compile specialized variant
+            let call_name = if self.fn_asts.contains_key(&resolved_name) && !args.is_empty() {
+                // Get argument types
+                let arg_types: Vec<Option<String>> = args.iter()
+                    .map(|arg| self.expr_type_name(arg))
+                    .collect();
+
+                // If at least one argument type is known, try monomorphization
+                if arg_types.iter().any(|t| t.is_some()) {
+                    // Get param names from the function's AST
+                    let param_names: Vec<String> = if let Some(fn_def) = self.fn_asts.get(&resolved_name) {
+                        fn_def.clauses[0].params.iter().enumerate().map(|(i, param)| {
+                            self.pattern_binding_name(&param.pattern)
+                                .unwrap_or_else(|| format!("_arg{}", i))
+                        }).collect()
+                    } else {
+                        vec![]
+                    };
+
+                    // Convert to non-optional (use "?" for unknown types)
+                    let type_names: Vec<String> = arg_types.iter()
+                        .map(|t| t.clone().unwrap_or_else(|| "?".to_string()))
+                        .collect();
+
+                    // Only monomorphize if all types are known
+                    if !type_names.contains(&"?".to_string()) {
+                        match self.compile_monomorphized_variant(&resolved_name, &type_names, &param_names) {
+                            Ok(mangled) => mangled,
+                            Err(_) => resolved_name.clone(), // Fall back to original
+                        }
+                    } else {
+                        resolved_name.clone()
+                    }
+                } else {
+                    resolved_name.clone()
+                }
+            } else {
+                resolved_name.clone()
+            };
+
             // Check for user-defined function
-            if self.functions.contains_key(&resolved_name) {
+            if self.functions.contains_key(&call_name) {
                 // Self-recursion optimization: use CallSelf to avoid HashMap lookup
                 let is_self_call = self.current_function_name.as_ref() == Some(&resolved_name);
                 let dst = self.alloc_reg();
@@ -2123,7 +2233,7 @@ impl Compiler {
                     }
                 } else {
                     // Direct function call by index (no HashMap lookup at runtime!)
-                    let func_idx = *self.function_indices.get(&resolved_name)
+                    let func_idx = *self.function_indices.get(&call_name)
                         .expect("Function should have been assigned an index");
                     if is_tail {
                         self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
@@ -2212,11 +2322,86 @@ impl Compiler {
             }
             // For variables, look up tracked type
             Expr::Var(ident) => {
-                // Check if we have tracked this variable's type
+                // Check param_types first (for monomorphized function variants)
+                if let Some(ty) = self.param_types.get(&ident.node) {
+                    return Some(ty.clone());
+                }
+                // Then check local_types
                 self.local_types.get(&ident.node).cloned()
             }
             _ => None,
         }
+    }
+
+    /// Compile a monomorphized (type-specialized) variant of a function.
+    /// Returns the mangled function name if successful.
+    fn compile_monomorphized_variant(
+        &mut self,
+        base_name: &str,
+        arg_type_names: &[String],
+        param_names: &[String],
+    ) -> Result<String, CompileError> {
+        // Generate mangled name: base$Type1_Type2
+        let suffix = arg_type_names.join("_");
+        let mangled_name = format!("{}${}", base_name, suffix);
+
+        // If variant already exists, just return the name
+        if self.functions.contains_key(&mangled_name) {
+            return Ok(mangled_name);
+        }
+
+        // Get the original function's AST
+        let fn_def = match self.fn_asts.get(base_name) {
+            Some(def) => def.clone(),
+            None => return Err(CompileError::UnknownFunction {
+                name: base_name.to_string(),
+                span: Span::default(),
+            }),
+        };
+
+        // Create a new FnDef with the mangled name
+        let mut specialized_def = fn_def.clone();
+        specialized_def.name = Spanned::new(mangled_name.clone(), fn_def.name.span);
+
+        // Save current param_types
+        let saved_param_types = std::mem::take(&mut self.param_types);
+
+        // Set param_types for this specialization
+        for (i, param_name) in param_names.iter().enumerate() {
+            if i < arg_type_names.len() {
+                self.param_types.insert(param_name.clone(), arg_type_names[i].clone());
+            }
+        }
+
+        // Forward declare the function
+        let arity = fn_def.clauses[0].params.len();
+        let placeholder = FunctionValue {
+            name: mangled_name.clone(),
+            arity,
+            param_names: param_names.to_vec(),
+            code: Arc::new(Chunk::new()),
+            module: if self.module_path.is_empty() { None } else { Some(self.module_path.join(".")) },
+            source_span: None,
+            jit_code: None,
+            call_count: AtomicU32::new(0),
+            debug_symbols: vec![],
+        };
+        self.functions.insert(mangled_name.clone(), Arc::new(placeholder));
+
+        // Assign function index
+        if !self.function_indices.contains_key(&mangled_name) {
+            let idx = self.function_list.len() as u16;
+            self.function_indices.insert(mangled_name.clone(), idx);
+            self.function_list.push(mangled_name.clone());
+        }
+
+        // Compile the specialized function
+        self.compile_fn_def(&specialized_def)?;
+
+        // Restore param_types
+        self.param_types = saved_param_types;
+
+        Ok(mangled_name)
     }
 
     /// Extract a module path from an expression.

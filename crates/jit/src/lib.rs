@@ -449,6 +449,18 @@ impl JitCompiler {
             return Err(JitError::NotSuitable(format!("arity {} > 4 (max supported)", func.arity)));
         }
 
+        // Reject empty functions (e.g., placeholders that weren't properly compiled)
+        if func.code.code.is_empty() {
+            return Err(JitError::NotSuitable("empty function (no instructions)".to_string()));
+        }
+
+        // Ensure enough registers for parameters
+        if func.code.register_count < func.arity {
+            return Err(JitError::NotSuitable(
+                format!("insufficient registers: {} < arity {}", func.code.register_count, func.arity)
+            ));
+        }
+
         let mut detected_type: Option<NumericType> = None;
         let code = &func.code.code;
 
