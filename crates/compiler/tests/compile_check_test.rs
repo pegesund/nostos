@@ -1,10 +1,28 @@
 // Test for function call validation
-// Run with: cargo test --release -p nostos-compiler compile_check
+// Run with: cargo test --release -p nostos-compiler --test compile_check_test
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use nostos_syntax::{parse, offset_to_line_col};
-use nostos_syntax::ast::{Expr, Item, Stmt};
+use nostos_syntax::ast::{Expr, Item, Stmt, Pattern};
 use nostos_compiler::Compiler;
+
+/// Infer type from an expression
+fn infer_expr_type(expr: &Expr, local_types: &HashMap<String, String>) -> Option<String> {
+    match expr {
+        Expr::Int(_, _) => Some("Int".to_string()),
+        Expr::Float(_, _) => Some("Float".to_string()),
+        Expr::String(_, _) => Some("String".to_string()),
+        Expr::Bool(_, _) => Some("Bool".to_string()),
+        Expr::Char(_, _) => Some("Char".to_string()),
+        Expr::List(_, _, _) => Some("List".to_string()),
+        Expr::Map(_, _) => Some("Map".to_string()),
+        Expr::Set(_, _) => Some("Set".to_string()),
+        Expr::Var(ident) => local_types.get(&ident.node).cloned(),
+        Expr::Record(name, _, _) => Some(name.node.clone()),
+        _ => None,
+    }
+}
 
 fn check_module_compiles_standalone(content: &str) -> Result<(), String> {
     let (module_opt, errors) = parse(content);
@@ -44,63 +62,89 @@ fn check_module_compiles_standalone(content: &str) -> Result<(), String> {
         }
     }
 
-    fn collect_calls_stmt(stmt: &Stmt, calls: &mut Vec<(String, usize)>) {
+    // Collect calls with local type context
+    fn collect_calls_stmt(
+        stmt: &Stmt,
+        calls: &mut Vec<(String, usize)>,
+        local_types: &mut HashMap<String, String>,
+        known_functions: &HashSet<String>,
+    ) {
         match stmt {
-            Stmt::Expr(expr) => collect_calls(expr, calls),
-            Stmt::Let(binding) => collect_calls(&binding.value, calls),
-            Stmt::Assign(_, expr, _) => collect_calls(expr, calls),
+            Stmt::Expr(expr) => collect_calls(expr, calls, local_types, known_functions),
+            Stmt::Let(binding) => {
+                // Infer type from value and track it
+                if let Some(ty) = infer_expr_type(&binding.value, local_types) {
+                    if let Pattern::Var(ident) = &binding.pattern {
+                        local_types.insert(ident.node.clone(), ty);
+                    }
+                }
+                collect_calls(&binding.value, calls, local_types, known_functions);
+            }
+            Stmt::Assign(_, expr, _) => collect_calls(expr, calls, local_types, known_functions),
         }
     }
 
-    fn collect_calls(expr: &Expr, calls: &mut Vec<(String, usize)>) {
+    fn collect_calls(
+        expr: &Expr,
+        calls: &mut Vec<(String, usize)>,
+        local_types: &mut HashMap<String, String>,
+        known_functions: &HashSet<String>,
+    ) {
         match expr {
             Expr::Call(callee, _, args, span) => {
                 if let Some(name) = get_call_name(callee) {
                     calls.push((name, span.start));
                 }
-                collect_calls(callee, calls);
+                collect_calls(callee, calls, local_types, known_functions);
                 for arg in args {
-                    collect_calls(arg, calls);
+                    collect_calls(arg, calls, local_types, known_functions);
                 }
             }
             Expr::MethodCall(receiver, method, args, span) => {
-                // Check if receiver is a module/type name
-                let module_name = match receiver.as_ref() {
-                    Expr::Var(ident) => Some(&ident.node),
-                    Expr::Record(ident, fields, _) if fields.is_empty() => Some(&ident.node),
-                    _ => None,
-                };
-                if let Some(name) = module_name {
-                    if name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
-                        let call_name = format!("{}.{}", name, method.node);
-                        calls.push((call_name, span.start));
+                // First, try to get the receiver type
+                let receiver_type = match receiver.as_ref() {
+                    // Capitalized name with no fields = module/type name (e.g., Server)
+                    Expr::Record(ident, fields, _) if fields.is_empty() => {
+                        Some(ident.node.clone())
                     }
+                    // Variable - look up its type
+                    Expr::Var(ident) => {
+                        local_types.get(&ident.node).cloned()
+                    }
+                    // Try to infer from expression
+                    _ => infer_expr_type(receiver, local_types),
+                };
+
+                if let Some(recv_type) = receiver_type {
+                    let call_name = format!("{}.{}", recv_type, method.node);
+                    calls.push((call_name, span.start));
                 }
-                collect_calls(receiver, calls);
+
+                collect_calls(receiver, calls, local_types, known_functions);
                 for arg in args {
-                    collect_calls(arg, calls);
+                    collect_calls(arg, calls, local_types, known_functions);
                 }
             }
             Expr::BinOp(left, _, right, _) => {
-                collect_calls(left, calls);
-                collect_calls(right, calls);
+                collect_calls(left, calls, local_types, known_functions);
+                collect_calls(right, calls, local_types, known_functions);
             }
             Expr::If(cond, then_branch, else_branch, _) => {
-                collect_calls(cond, calls);
-                collect_calls(then_branch, calls);
-                collect_calls(else_branch, calls);
+                collect_calls(cond, calls, local_types, known_functions);
+                collect_calls(then_branch, calls, local_types, known_functions);
+                collect_calls(else_branch, calls, local_types, known_functions);
             }
             Expr::Block(stmts, _) => {
                 for stmt in stmts {
-                    collect_calls_stmt(stmt, calls);
+                    collect_calls_stmt(stmt, calls, local_types, known_functions);
                 }
             }
             Expr::Lambda(_, body, _) => {
-                collect_calls(body, calls);
+                collect_calls(body, calls, local_types, known_functions);
             }
             Expr::Tuple(exprs, _) => {
                 for e in exprs {
-                    collect_calls(e, calls);
+                    collect_calls(e, calls, local_types, known_functions);
                 }
             }
             _ => {}
@@ -108,14 +152,16 @@ fn check_module_compiles_standalone(content: &str) -> Result<(), String> {
     }
 
     let mut all_calls = Vec::new();
+    let mut local_types = HashMap::new();
     for item in &module.items {
         if let Item::FnDef(fn_def) = item {
             for clause in &fn_def.clauses {
-                collect_calls(&clause.body, &mut all_calls);
+                local_types.clear();
+                collect_calls(&clause.body, &mut all_calls, &mut local_types, &known_functions);
             }
         }
         if let Item::Binding(binding) = item {
-            collect_calls(&binding.value, &mut all_calls);
+            collect_calls(&binding.value, &mut all_calls, &mut local_types, &known_functions);
         }
     }
 
@@ -124,6 +170,7 @@ fn check_module_compiles_standalone(content: &str) -> Result<(), String> {
             continue;
         }
 
+        // Skip unqualified lowercase names (local function calls)
         if !call_name.contains('.') && call_name.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) {
             continue;
         }
@@ -174,4 +221,33 @@ fn test_builtins_include_server() {
     let builtins = Compiler::get_builtin_names();
     assert!(builtins.contains(&"Server.close"));
     assert!(builtins.contains(&"Server.bind"));
+}
+
+#[test]
+fn test_int_method_call_invalid() {
+    // me = 42 (Int), so me.xxx() should check for Int.xxx
+    let code = "main() = { me = 42; me.xxx() }";
+    let result = check_module_compiles_standalone(code);
+    println!("Result: {:?}", result);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("Int.xxx"));
+}
+
+#[test]
+fn test_string_method_call_valid() {
+    // s = "hello" (String), s.length() should check for String.length which exists
+    let code = r#"main() = { s = "hello"; s.length() }"#;
+    let result = check_module_compiles_standalone(code);
+    println!("Result: {:?}", result);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_string_method_call_invalid() {
+    // s = "hello" (String), s.xxx() should check for String.xxx which doesn't exist
+    let code = r#"main() = { s = "hello"; s.xxx() }"#;
+    let result = check_module_compiles_standalone(code);
+    println!("Result: {:?}", result);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("String.xxx"));
 }

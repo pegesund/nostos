@@ -3025,7 +3025,7 @@ impl ReplEngine {
     /// This is used for live compile status in the editor
     pub fn check_module_compiles(&self, module_name: &str, content: &str) -> Result<(), String> {
         use nostos_syntax::{parse, parse_errors_to_source_errors, offset_to_line_col};
-        use nostos_syntax::ast::{Expr, Item, Stmt, DoStmt, TypeBody};
+        use nostos_syntax::ast::{Expr, Item, Stmt, DoStmt, TypeBody, Pattern};
         use nostos_compiler::Compiler;
 
         // First do a quick parse check
@@ -3096,6 +3096,75 @@ impl ReplEngine {
             }
         }
 
+        // Helper to infer type from an expression (for method call validation)
+        fn infer_expr_type(expr: &Expr, local_types: &HashMap<String, String>) -> Option<String> {
+            match expr {
+                Expr::Int(_, _) => Some("Int".to_string()),
+                Expr::Float(_, _) => Some("Float".to_string()),
+                Expr::String(_, _) => Some("String".to_string()),
+                Expr::Bool(_, _) => Some("Bool".to_string()),
+                Expr::Char(_, _) => Some("Char".to_string()),
+                Expr::List(_, _, _) => Some("List".to_string()),
+                Expr::Map(_, _) => Some("Map".to_string()),
+                Expr::Set(_, _) => Some("Set".to_string()),
+                Expr::Var(ident) => local_types.get(&ident.node).cloned(),
+                Expr::Record(name, _, _) => Some(name.node.clone()),
+                Expr::Call(callee, _, _, _) => {
+                    // Infer return types for common builtin functions
+                    if let Some(name) = get_call_name(callee) {
+                        match name.as_str() {
+                            "self" => Some("Pid".to_string()),
+                            "spawn" => Some("Pid".to_string()),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        }
+
+        // Check if a method is valid for a given type via UFCS
+        // For types like List, Map, Set - methods are top-level builtins
+        fn is_valid_ufcs_method(type_name: &str, method: &str, known_functions: &HashSet<String>) -> bool {
+            match type_name {
+                "List" => {
+                    // List methods are top-level builtins called via UFCS
+                    const LIST_METHODS: &[&str] = &[
+                        "map", "filter", "take", "drop", "reverse", "sort",
+                        "concat", "flatten", "unique", "takeWhile", "dropWhile",
+                        "zip", "zipWith", "interleave", "group", "scanl",
+                        "init", "push", "remove", "removeAt", "insertAt",
+                        "set", "slice", "findIndices", "any", "all", "contains",
+                        "count", "fold", "foldl", "foldr", "find", "head", "tail",
+                        "last", "length", "isEmpty", "get", "sum", "product",
+                        "maximum", "minimum", "enumerate", "partition", "span",
+                    ];
+                    LIST_METHODS.contains(&method) || known_functions.contains(method)
+                }
+                "Map" => {
+                    // Check for Map.method builtins
+                    let qualified = format!("Map.{}", method);
+                    known_functions.contains(&qualified)
+                }
+                "Set" => {
+                    // Check for Set.method builtins
+                    let qualified = format!("Set.{}", method);
+                    known_functions.contains(&qualified)
+                }
+                "Pid" => {
+                    // Pid has no methods, so any method call is invalid
+                    false
+                }
+                _ => {
+                    // For other types (like Server, String, Int, etc.), check Type.method
+                    let qualified = format!("{}.{}", type_name, method);
+                    known_functions.contains(&qualified)
+                }
+            }
+        }
+
         // Helper to extract function name from call expression
         fn get_call_name(expr: &Expr) -> Option<String> {
             match expr {
@@ -3113,185 +3182,202 @@ impl ReplEngine {
         }
 
         // Collect all function calls from a statement
-        fn collect_calls_stmt(stmt: &Stmt, calls: &mut Vec<(String, usize)>) {
+        fn collect_calls_stmt(stmt: &Stmt, calls: &mut Vec<(String, usize)>, local_types: &mut HashMap<String, String>) {
             match stmt {
-                Stmt::Expr(expr) => collect_calls(expr, calls),
-                Stmt::Let(binding) => collect_calls(&binding.value, calls),
-                Stmt::Assign(_, expr, _) => collect_calls(expr, calls),
+                Stmt::Expr(expr) => collect_calls(expr, calls, local_types),
+                Stmt::Let(binding) => {
+                    // Infer type from value and track it
+                    if let Some(ty) = infer_expr_type(&binding.value, local_types) {
+                        if let Pattern::Var(ident) = &binding.pattern {
+                            local_types.insert(ident.node.clone(), ty);
+                        }
+                    }
+                    collect_calls(&binding.value, calls, local_types);
+                }
+                Stmt::Assign(_, expr, _) => collect_calls(expr, calls, local_types),
             }
         }
 
         // Collect all function calls from an expression
-        fn collect_calls(expr: &Expr, calls: &mut Vec<(String, usize)>) {
+        fn collect_calls(expr: &Expr, calls: &mut Vec<(String, usize)>, local_types: &mut HashMap<String, String>) {
             match expr {
                 Expr::Call(callee, _, args, span) => {
                     if let Some(name) = get_call_name(callee) {
                         calls.push((name, span.start));
                     }
-                    collect_calls(callee, calls);
+                    collect_calls(callee, calls, local_types);
                     for arg in args {
-                        collect_calls(arg, calls);
+                        collect_calls(arg, calls, local_types);
                     }
                 }
                 Expr::MethodCall(receiver, method, args, span) => {
-                    // Check if receiver is a module/type name (capitalized identifier)
-                    // e.g., Server.close(x) -> validate Server.close exists
-                    // Note: Server parses as Record(name, [], _) not Var
-                    let module_name = match receiver.as_ref() {
-                        Expr::Var(ident) => Some(&ident.node),
-                        Expr::Record(ident, fields, _) if fields.is_empty() => Some(&ident.node),
-                        _ => None,
-                    };
-                    if let Some(name) = module_name {
-                        if name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
-                            let call_name = format!("{}.{}", name, method.node);
-                            calls.push((call_name, span.start));
+                    // Try to determine the receiver type for method validation
+                    // Priority: Module name > Variable type lookup > Expression type inference
+                    let receiver_type = match receiver.as_ref() {
+                        // Capitalized name with empty fields = module/type name (e.g., Server)
+                        Expr::Record(ident, fields, _) if fields.is_empty() => {
+                            Some(ident.node.clone())
                         }
+                        // Capitalized variable = module name
+                        Expr::Var(ident) if ident.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) => {
+                            Some(ident.node.clone())
+                        }
+                        // Lowercase variable - look up its type
+                        Expr::Var(ident) => {
+                            local_types.get(&ident.node).cloned()
+                        }
+                        // Try to infer from expression
+                        _ => infer_expr_type(receiver, local_types),
+                    };
+
+                    if let Some(recv_type) = receiver_type {
+                        let call_name = format!("{}.{}", recv_type, method.node);
+                        calls.push((call_name, span.start));
                     }
-                    collect_calls(receiver, calls);
+                    collect_calls(receiver, calls, local_types);
                     for arg in args {
-                        collect_calls(arg, calls);
+                        collect_calls(arg, calls, local_types);
                     }
                 }
                 Expr::BinOp(left, _, right, _) => {
-                    collect_calls(left, calls);
-                    collect_calls(right, calls);
+                    collect_calls(left, calls, local_types);
+                    collect_calls(right, calls, local_types);
                 }
                 Expr::UnaryOp(_, operand, _) => {
-                    collect_calls(operand, calls);
+                    collect_calls(operand, calls, local_types);
                 }
                 Expr::If(cond, then_branch, else_branch, _) => {
-                    collect_calls(cond, calls);
-                    collect_calls(then_branch, calls);
-                    collect_calls(else_branch, calls);
+                    collect_calls(cond, calls, local_types);
+                    collect_calls(then_branch, calls, local_types);
+                    collect_calls(else_branch, calls, local_types);
                 }
                 Expr::Match(scrutinee, arms, _) => {
-                    collect_calls(scrutinee, calls);
+                    collect_calls(scrutinee, calls, local_types);
                     for arm in arms {
                         if let Some(guard) = &arm.guard {
-                            collect_calls(guard, calls);
+                            collect_calls(guard, calls, local_types);
                         }
-                        collect_calls(&arm.body, calls);
+                        collect_calls(&arm.body, calls, local_types);
                     }
                 }
                 Expr::Block(stmts, _) => {
                     for stmt in stmts {
-                        collect_calls_stmt(stmt, calls);
+                        collect_calls_stmt(stmt, calls, local_types);
                     }
                 }
                 Expr::Lambda(_, body, _) => {
-                    collect_calls(body, calls);
+                    collect_calls(body, calls, local_types);
                 }
                 Expr::Tuple(exprs, _) => {
                     for e in exprs {
-                        collect_calls(e, calls);
+                        collect_calls(e, calls, local_types);
                     }
                 }
                 Expr::List(exprs, spread, _) => {
                     for e in exprs {
-                        collect_calls(e, calls);
+                        collect_calls(e, calls, local_types);
                     }
                     if let Some(s) = spread {
-                        collect_calls(s, calls);
+                        collect_calls(s, calls, local_types);
                     }
                 }
                 Expr::Map(pairs, _) => {
                     for (k, v) in pairs {
-                        collect_calls(k, calls);
-                        collect_calls(v, calls);
+                        collect_calls(k, calls, local_types);
+                        collect_calls(v, calls, local_types);
                     }
                 }
                 Expr::Set(exprs, _) => {
                     for e in exprs {
-                        collect_calls(e, calls);
+                        collect_calls(e, calls, local_types);
                     }
                 }
                 Expr::Record(_, fields, _) => {
                     for field in fields {
                         match field {
-                            nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls),
-                            nostos_syntax::ast::RecordField::Named(_, expr) => collect_calls(expr, calls),
+                            nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls, local_types),
+                            nostos_syntax::ast::RecordField::Named(_, expr) => collect_calls(expr, calls, local_types),
                         }
                     }
                 }
                 Expr::RecordUpdate(_, base, fields, _) => {
-                    collect_calls(base, calls);
+                    collect_calls(base, calls, local_types);
                     for field in fields {
                         match field {
-                            nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls),
-                            nostos_syntax::ast::RecordField::Named(_, expr) => collect_calls(expr, calls),
+                            nostos_syntax::ast::RecordField::Positional(expr) => collect_calls(expr, calls, local_types),
+                            nostos_syntax::ast::RecordField::Named(_, expr) => collect_calls(expr, calls, local_types),
                         }
                     }
                 }
                 Expr::FieldAccess(base, _, _) => {
-                    collect_calls(base, calls);
+                    collect_calls(base, calls, local_types);
                 }
                 Expr::Index(base, index, _) => {
-                    collect_calls(base, calls);
-                    collect_calls(index, calls);
+                    collect_calls(base, calls, local_types);
+                    collect_calls(index, calls, local_types);
                 }
                 Expr::Try(try_expr, catch_arms, finally_expr, _) => {
-                    collect_calls(try_expr, calls);
+                    collect_calls(try_expr, calls, local_types);
                     for arm in catch_arms {
                         if let Some(guard) = &arm.guard {
-                            collect_calls(guard, calls);
+                            collect_calls(guard, calls, local_types);
                         }
-                        collect_calls(&arm.body, calls);
+                        collect_calls(&arm.body, calls, local_types);
                     }
                     if let Some(f) = finally_expr {
-                        collect_calls(f, calls);
+                        collect_calls(f, calls, local_types);
                     }
                 }
                 Expr::Try_(inner, _) => {
-                    collect_calls(inner, calls);
+                    collect_calls(inner, calls, local_types);
                 }
                 Expr::While(cond, body, _) => {
-                    collect_calls(cond, calls);
-                    collect_calls(body, calls);
+                    collect_calls(cond, calls, local_types);
+                    collect_calls(body, calls, local_types);
                 }
                 Expr::For(_, start, end, body, _) => {
-                    collect_calls(start, calls);
-                    collect_calls(end, calls);
-                    collect_calls(body, calls);
+                    collect_calls(start, calls, local_types);
+                    collect_calls(end, calls, local_types);
+                    collect_calls(body, calls, local_types);
                 }
                 Expr::Do(stmts, _) => {
                     for stmt in stmts {
                         match stmt {
-                            DoStmt::Bind(_, expr) => collect_calls(expr, calls),
-                            DoStmt::Expr(expr) => collect_calls(expr, calls),
+                            DoStmt::Bind(_, expr) => collect_calls(expr, calls, local_types),
+                            DoStmt::Expr(expr) => collect_calls(expr, calls, local_types),
                         }
                     }
                 }
                 Expr::Send(target, msg, _) => {
-                    collect_calls(target, calls);
-                    collect_calls(msg, calls);
+                    collect_calls(target, calls, local_types);
+                    collect_calls(msg, calls, local_types);
                 }
                 Expr::Receive(arms, timeout, _) => {
                     for arm in arms {
                         if let Some(guard) = &arm.guard {
-                            collect_calls(guard, calls);
+                            collect_calls(guard, calls, local_types);
                         }
-                        collect_calls(&arm.body, calls);
+                        collect_calls(&arm.body, calls, local_types);
                     }
                     if let Some((timeout_expr, timeout_body)) = timeout {
-                        collect_calls(timeout_expr, calls);
-                        collect_calls(timeout_body, calls);
+                        collect_calls(timeout_expr, calls, local_types);
+                        collect_calls(timeout_body, calls, local_types);
                     }
                 }
                 Expr::Spawn(_, callee, args, _) => {
-                    collect_calls(callee, calls);
+                    collect_calls(callee, calls, local_types);
                     for arg in args {
-                        collect_calls(arg, calls);
+                        collect_calls(arg, calls, local_types);
                     }
                 }
                 Expr::Break(Some(expr), _) => {
-                    collect_calls(expr, calls);
+                    collect_calls(expr, calls, local_types);
                 }
                 Expr::Quote(inner, _) => {
-                    collect_calls(inner, calls);
+                    collect_calls(inner, calls, local_types);
                 }
                 Expr::Splice(inner, _) => {
-                    collect_calls(inner, calls);
+                    collect_calls(inner, calls, local_types);
                 }
                 // Literals and simple expressions - no calls
                 _ => {}
@@ -3300,14 +3386,16 @@ impl ReplEngine {
 
         // Collect calls from all function definitions
         let mut all_calls = Vec::new();
+        let mut local_types = HashMap::new();
         for item in &module.items {
             if let Item::FnDef(fn_def) = item {
                 for clause in &fn_def.clauses {
-                    collect_calls(&clause.body, &mut all_calls);
+                    local_types.clear();
+                    collect_calls(&clause.body, &mut all_calls, &mut local_types);
                 }
             }
             if let Item::Binding(binding) = item {
-                collect_calls(&binding.value, &mut all_calls);
+                collect_calls(&binding.value, &mut all_calls, &mut local_types);
             }
         }
 
@@ -3322,6 +3410,15 @@ impl ReplEngine {
             // Simple heuristic: if it doesn't contain a dot and isn't capitalized, might be a variable
             if !call_name.contains('.') && call_name.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) {
                 continue;
+            }
+
+            // Check if it's a valid UFCS method call (e.g., List.map -> top-level map)
+            if let Some(dot_pos) = call_name.find('.') {
+                let type_name = &call_name[..dot_pos];
+                let method_name = &call_name[dot_pos + 1..];
+                if is_valid_ufcs_method(type_name, method_name, &known_functions) {
+                    continue;
+                }
             }
 
             // Unknown function
@@ -8431,4 +8528,112 @@ fn visit_dirs(dir: &std::path::Path, files: &mut Vec<PathBuf>) -> Result<(), Str
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod check_module_tests {
+    use super::*;
+
+    #[test]
+    fn test_method_on_int_variable() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = { me = 42; me.xxx() }";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for Int.xxx");
+        assert!(result.unwrap_err().contains("Int.xxx"), "Error should mention Int.xxx");
+    }
+
+    #[test]
+    fn test_method_on_string_variable_valid() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = { s = "hello"; s.length() }"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "String.length should be valid");
+    }
+
+    #[test]
+    fn test_method_on_string_variable_invalid() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = { s = "hello"; s.xxx() }"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for String.xxx");
+        assert!(result.unwrap_err().contains("String.xxx"), "Error should mention String.xxx");
+    }
+
+    #[test]
+    fn test_server_method_invalid() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = Server.closex(42)";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for Server.closex");
+        assert!(result.unwrap_err().contains("Server.closex"), "Error should mention Server.closex");
+    }
+
+    #[test]
+    fn test_list_map_method_valid() {
+        // x = [1] is a List, x.map(...) should be valid (map is a top-level builtin)
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = { x = [1]; x.map(y => y * 2) }";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "List.map should be valid: {:?}", result);
+    }
+
+    #[test]
+    fn test_list_method_invalid() {
+        // x = [1] is a List, x.xxx() should fail
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = { x = [1]; x.xxx() }";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "List.xxx should be invalid");
+    }
+
+    #[test]
+    fn test_self_return_type() {
+        // me = self() should infer Pid type, me.xxx() should fail with Pid.xxx
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = { me = self(); me.xxx() }";
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for Pid.xxx");
+        assert!(result.unwrap_err().contains("Pid.xxx"), "Error should mention Pid.xxx");
+    }
+
+    #[test]
+    fn test_http_server_like_code() {
+        // Reproduce the exact scenario from the TUI
+        // x.map should be valid, me.fff should fail with Pid.fff
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = {
+  println("test")
+  me = self()
+  x = [1]
+  x.map(y => y * 2)
+  me.fff()
+}"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for Pid.fff");
+        assert!(result.unwrap_err().contains("Pid.fff"), "Error should mention Pid.fff");
+    }
+
+    #[test]
+    fn test_http_server_like_code_no_error() {
+        // Same as above but without the invalid me.fff() call
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = {
+  println("test")
+  me = self()
+  x = [1]
+  x.map(y => y * 2)
+}"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Should compile without errors: {:?}", result);
+    }
 }
