@@ -492,7 +492,9 @@ pub struct Compiler {
     /// Pending functions to compile (second pass)
     /// (AST, module_path, imports, line_starts, source, source_name)
     pending_functions: Vec<(FnDef, Vec<String>, HashMap<String, String>, Vec<usize>, Arc<String>, String)>,
-    
+    /// Pre-built signatures for pending functions (for type checking)
+    pending_fn_signatures: HashMap<String, nostos_types::FunctionType>,
+
     // Current source context
     current_source: Option<Arc<String>>,
     current_source_name: Option<String>,
@@ -649,6 +651,7 @@ impl Compiler {
             loop_stack: Vec::new(),
             line_starts: vec![0],
             pending_functions: Vec::new(),
+            pending_fn_signatures: HashMap::new(),
             current_source: None,
             current_source_name: None,
             type_defs: HashMap::new(),
@@ -685,6 +688,46 @@ impl Compiler {
         let pending = std::mem::take(&mut self.pending_functions);
         let mut errors: Vec<(String, CompileError)> = Vec::new();
 
+        // Pre-build function signatures for type checking (done once, not per-function)
+        self.pending_fn_signatures.clear();
+        let mut counter = 0u32;
+        for (fn_def, module_path, _, _, _, _) in &pending {
+            let fn_name = if module_path.is_empty() {
+                fn_def.name.node.clone()
+            } else {
+                format!("{}.{}", module_path.join("."), fn_def.name.node)
+            };
+            if let Some(clause) = fn_def.clauses.first() {
+                let param_types: Vec<nostos_types::Type> = clause.params
+                    .iter()
+                    .map(|p| {
+                        if let Some(ty_expr) = &p.ty {
+                            self.type_name_to_type(&self.type_expr_to_string(ty_expr))
+                        } else {
+                            // Create unique type variable for each untyped param
+                            counter += 1;
+                            nostos_types::Type::Var(counter)
+                        }
+                    })
+                    .collect();
+                let ret_ty = clause.return_type.as_ref()
+                    .map(|ty| self.type_name_to_type(&self.type_expr_to_string(ty)))
+                    .unwrap_or_else(|| {
+                        counter += 1;
+                        nostos_types::Type::Var(counter)
+                    });
+
+                self.pending_fn_signatures.insert(
+                    fn_name,
+                    nostos_types::FunctionType {
+                        type_params: vec![],
+                        params: param_types,
+                        ret: Box::new(ret_ty),
+                    },
+                );
+            }
+        }
+
         // First pass: compile all functions
         for (fn_def, module_path, imports, line_starts, source, source_name) in pending {
             let saved_path = self.module_path.clone();
@@ -718,6 +761,10 @@ impl Compiler {
             self.current_source = saved_source;
             self.current_source_name = saved_source_name;
         }
+
+        // Clear pending data now that we've processed them
+        self.pending_functions.clear();
+        self.pending_fn_signatures.clear();
 
         // Second pass: re-run HM inference for functions with type variables in their signatures
         // This handles cases like bar23() = bar() + 1 where bar was compiled after bar23's first inference
@@ -838,6 +885,7 @@ impl Compiler {
             loop_stack: Vec::new(),
             line_starts,
             pending_functions: Vec::new(),
+            pending_fn_signatures: HashMap::new(),
             current_source: Some(Arc::new(source.to_string())),
             current_source_name: Some("unknown".to_string()),
             type_defs: HashMap::new(),
@@ -2861,7 +2909,7 @@ impl Compiler {
                         message.contains("Unknown type") ||
                         message.contains("has no field") ||
                         message.contains("() and ()") ||
-                        Self::contains_type_variable(message);
+                        Self::is_type_variable_only_error(message);
 
                     !is_inference_limitation
                 }
@@ -8033,6 +8081,13 @@ impl Compiler {
             );
         }
 
+        // Also register pending function signatures (pre-built in compile_all_collecting_errors)
+        for (fn_name, fn_type) in &self.pending_fn_signatures {
+            if !env.functions.contains_key(fn_name) {
+                env.functions.insert(fn_name.clone(), fn_type.clone());
+            }
+        }
+
         // Pre-register the function being checked with fresh type variables for recursion support
         // This allows the function to call itself during type inference
         let fn_name = &def.name.node;
@@ -8082,26 +8137,42 @@ impl Compiler {
         Ok(())
     }
 
-    /// Check if an error message contains a type variable (single uppercase letter).
-    /// Type variables like T, R, L, a, b, etc. indicate polymorphism issues.
-    fn contains_type_variable(message: &str) -> bool {
-        // Look for patterns like "types: T " or " and T" or "types: a " or " and a"
-        // Also match trait bound errors like "T does not implement"
-        // These indicate type variables in the error message
-        let patterns = [
-            // Uppercase type variables in type errors
-            "types: T ", " and T", "types: R ", " and R", "types: L ", " and L",
-            "types: A ", " and A", "types: B ", " and B", "types: E ", " and E",
-            // Lowercase type variables
-            "types: a ", " and a", "types: b ", " and b", "types: c ", " and c",
-            // Also check for ?N patterns (internal type variable representation)
-            " and ?",
-            // Trait bound errors with type variables
+    /// Check if an error is an inference limitation (only type variables, no concrete types).
+    /// We should report errors that involve concrete type mismatches like "Int and String".
+    fn is_type_variable_only_error(message: &str) -> bool {
+        // Check for "Cannot unify types: X and Y" pattern
+        if message.contains("Cannot unify types:") {
+            // Extract the two types from the message
+            if let Some(types_part) = message.strip_prefix("Cannot unify types: ") {
+                let parts: Vec<&str> = types_part.split(" and ").collect();
+                if parts.len() == 2 {
+                    let type1 = parts[0].trim();
+                    let type2 = parts[1].trim();
+
+                    // Check if a type is a type variable (starts with ? or is single letter)
+                    let is_type_var = |s: &str| {
+                        s.starts_with('?') ||  // Internal type variable like ?5
+                        (s.len() == 1 && s.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false))  // Single letter like T or a
+                    };
+
+                    // Only suppress if BOTH are type variables
+                    // If one is concrete (Int, String, etc.), we should report the error
+                    return is_type_var(type1) && is_type_var(type2);
+                }
+            }
+        }
+
+        // Trait bound errors with type variables should be suppressed
+        let trait_bound_patterns = [
             "T does not implement", "R does not implement", "L does not implement",
             "A does not implement", "B does not implement", "E does not implement",
             "a does not implement", "b does not implement", "c does not implement",
         ];
-        patterns.iter().any(|p| message.contains(p))
+        if trait_bound_patterns.iter().any(|p| message.contains(p)) {
+            return true;
+        }
+
+        false
     }
 
     /// Collect all type variable IDs in order of first appearance.
