@@ -3183,12 +3183,6 @@ impl ReplEngine {
                     Arc::new(source.clone()),
                     file_path.to_str().unwrap().to_string(),
                 );
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-                    use std::io::Write;
-                    let _ = writeln!(f, "[load_directory] add_module({:?}) result={:?}", components, result.is_ok());
-                    let use_stmts = self.compiler.get_all_use_stmts();
-                    let _ = writeln!(f, "[load_directory] all use_stmts after: {:?}", use_stmts);
-                }
                 result.ok();
 
 
@@ -3624,16 +3618,6 @@ impl ReplEngine {
         use nostos_syntax::{parse, parse_errors_to_source_errors, offset_to_line_col};
         use nostos_syntax::ast::{Expr, Item, Stmt, DoStmt, TypeBody, Pattern};
         use nostos_compiler::Compiler;
-
-        // Debug logging
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
-            use std::io::Write;
-            let imports = self.compiler.get_module_imports(module_name);
-            let use_stmts = self.compiler.get_module_use_stmts(module_name);
-            let _ = writeln!(f, "[check_module_compiles] module_name={:?}, imports={:?}, use_stmts={:?}",
-                module_name, imports, use_stmts);
-            let _ = writeln!(f, "[check_module_compiles] content first 200 chars: {:?}", &content.chars().take(200).collect::<String>());
-        }
 
         // Prepend module-level imports and use statements if editing within a module context
         // This ensures that when editing a function, the module's imports are visible
