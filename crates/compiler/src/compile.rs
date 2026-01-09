@@ -390,6 +390,11 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Selenium.exists", signature: "Int -> String -> Bool", doc: "Check if element exists: exists(driver, selector)" },
     BuiltinInfo { name: "Selenium.close", signature: "Int -> ()", doc: "Close WebDriver: close(driver)" },
 
+    // === Native JSON Functions ===
+    BuiltinInfo { name: "Json.parse", signature: "String -> a", doc: "Parse JSON string to Json variant (native, fast)" },
+    BuiltinInfo { name: "Json.stringify", signature: "a -> String", doc: "Convert Json variant to JSON string" },
+    BuiltinInfo { name: "Json.escapeString", signature: "String -> String", doc: "Escape string for embedding in JSON" },
+
     // === UUID Functions ===
     BuiltinInfo { name: "Uuid.v4", signature: "() -> String", doc: "Generate a random UUID v4" },
     BuiltinInfo { name: "Uuid.isValid", signature: "String -> Bool", doc: "Check if string is a valid UUID" },
@@ -5356,6 +5361,13 @@ impl Compiler {
                             let arg1_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();
                             self.emit_call_native(dst, &qualified_name, vec![arg0_reg, arg1_reg].into(), line);
+                            return Ok(dst);
+                        }
+                        // Json functions (1 arg)
+                        "Json.parse" | "Json.stringify" | "Json.escapeString" if args.len() == 1 => {
+                            let arg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let dst = self.alloc_reg();
+                            self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // Map functions (1 arg)

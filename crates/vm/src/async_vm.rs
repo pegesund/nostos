@@ -13663,6 +13663,211 @@ impl AsyncVM {
             }),
         }));
 
+        // === JSON Native Functions ===
+        // Json.parse - Parse JSON string to Json variant using serde_json (fast native parsing)
+        self.register_native("Json.parse", Arc::new(GcNativeFn {
+            name: "Json.parse".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let json_type = Arc::new("stdlib.json.Json".to_string());
+
+                fn serde_to_nostos(val: &serde_json::Value, heap: &mut Heap, json_type: &Arc<String>) -> GcValue {
+                    match val {
+                        serde_json::Value::Null => {
+                            let ptr = heap.alloc_variant(json_type.clone(), Arc::new("Null".to_string()), vec![]);
+                            GcValue::Variant(ptr)
+                        }
+                        serde_json::Value::Bool(b) => {
+                            let ptr = heap.alloc_variant(json_type.clone(), Arc::new("Bool".to_string()), vec![GcValue::Bool(*b)]);
+                            GcValue::Variant(ptr)
+                        }
+                        serde_json::Value::Number(n) => {
+                            let f = n.as_f64().unwrap_or(0.0);
+                            let ptr = heap.alloc_variant(json_type.clone(), Arc::new("Number".to_string()), vec![GcValue::Float64(f)]);
+                            GcValue::Variant(ptr)
+                        }
+                        serde_json::Value::String(s) => {
+                            let str_ptr = heap.alloc_string(s.clone());
+                            let ptr = heap.alloc_variant(json_type.clone(), Arc::new("String".to_string()), vec![GcValue::String(str_ptr)]);
+                            GcValue::Variant(ptr)
+                        }
+                        serde_json::Value::Array(arr) => {
+                            let items: Vec<GcValue> = arr.iter()
+                                .map(|v| serde_to_nostos(v, heap, json_type))
+                                .collect();
+                            let list = heap.make_list(items);
+                            let ptr = heap.alloc_variant(json_type.clone(), Arc::new("Array".to_string()), vec![GcValue::List(list)]);
+                            GcValue::Variant(ptr)
+                        }
+                        serde_json::Value::Object(obj) => {
+                            // Object is List[(String, Json)]
+                            let pairs: Vec<GcValue> = obj.iter()
+                                .map(|(k, v)| {
+                                    let key = GcValue::String(heap.alloc_string(k.clone()));
+                                    let val = serde_to_nostos(v, heap, json_type);
+                                    GcValue::Tuple(heap.alloc_tuple(vec![key, val]))
+                                })
+                                .collect();
+                            let list = heap.make_list(pairs);
+                            let ptr = heap.alloc_variant(json_type.clone(), Arc::new("Object".to_string()), vec![GcValue::List(list)]);
+                            GcValue::Variant(ptr)
+                        }
+                    }
+                }
+
+                match &args[0] {
+                    GcValue::String(ptr) => {
+                        if let Some(str_val) = heap.get_string(*ptr) {
+                            match serde_json::from_str::<serde_json::Value>(&str_val.data) {
+                                Ok(parsed) => Ok(serde_to_nostos(&parsed, heap, &json_type)),
+                                Err(e) => Err(RuntimeError::Panic(format!("JSON parse error: {}", e)))
+                            }
+                        } else {
+                            Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // Json.stringify - Convert Json variant to JSON string
+        self.register_native("Json.stringify", Arc::new(GcNativeFn {
+            name: "Json.stringify".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                fn nostos_to_serde(val: &GcValue, heap: &Heap) -> Result<serde_json::Value, RuntimeError> {
+                    match val {
+                        GcValue::Variant(ptr) => {
+                            if let Some(var) = heap.get_variant(*ptr) {
+                                match var.constructor.as_str() {
+                                    "Null" => Ok(serde_json::Value::Null),
+                                    "Bool" => {
+                                        if let Some(GcValue::Bool(b)) = var.fields.get(0) {
+                                            Ok(serde_json::Value::Bool(*b))
+                                        } else {
+                                            Err(RuntimeError::Panic("Invalid Bool variant".to_string()))
+                                        }
+                                    }
+                                    "Number" => {
+                                        if let Some(GcValue::Float64(f)) = var.fields.get(0) {
+                                            Ok(serde_json::Value::Number(
+                                                serde_json::Number::from_f64(*f)
+                                                    .unwrap_or_else(|| serde_json::Number::from(0))
+                                            ))
+                                        } else {
+                                            Err(RuntimeError::Panic("Invalid Number variant".to_string()))
+                                        }
+                                    }
+                                    "String" => {
+                                        if let Some(GcValue::String(s_ptr)) = var.fields.get(0) {
+                                            if let Some(s) = heap.get_string(*s_ptr) {
+                                                Ok(serde_json::Value::String(s.data.clone()))
+                                            } else {
+                                                Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                                            }
+                                        } else {
+                                            Err(RuntimeError::Panic("Invalid String variant".to_string()))
+                                        }
+                                    }
+                                    "Array" => {
+                                        if let Some(GcValue::List(list)) = var.fields.get(0) {
+                                            let items: Result<Vec<serde_json::Value>, _> = list.items()
+                                                .iter()
+                                                .map(|v| nostos_to_serde(v, heap))
+                                                .collect();
+                                            Ok(serde_json::Value::Array(items?))
+                                        } else {
+                                            Err(RuntimeError::Panic("Invalid Array variant".to_string()))
+                                        }
+                                    }
+                                    "Object" => {
+                                        if let Some(GcValue::List(list)) = var.fields.get(0) {
+                                            let mut map = serde_json::Map::new();
+                                            for item in list.items() {
+                                                if let GcValue::Tuple(t_ptr) = item {
+                                                    if let Some(tuple) = heap.get_tuple(t_ptr) {
+                                                        if tuple.items.len() >= 2 {
+                                                            if let GcValue::String(k_ptr) = &tuple.items[0] {
+                                                                if let Some(k) = heap.get_string(*k_ptr) {
+                                                                    let v = nostos_to_serde(&tuple.items[1], heap)?;
+                                                                    map.insert(k.data.clone(), v);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Ok(serde_json::Value::Object(map))
+                                        } else {
+                                            Err(RuntimeError::Panic("Invalid Object variant".to_string()))
+                                        }
+                                    }
+                                    _ => Err(RuntimeError::Panic(format!("Unknown Json constructor: {}", var.constructor)))
+                                }
+                            } else {
+                                Err(RuntimeError::Panic("Invalid variant pointer".to_string()))
+                            }
+                        }
+                        // Also handle raw values for convenience
+                        GcValue::Bool(b) => Ok(serde_json::Value::Bool(*b)),
+                        GcValue::Int64(n) => Ok(serde_json::Value::Number(serde_json::Number::from(*n))),
+                        GcValue::Float64(f) => Ok(serde_json::Value::Number(
+                            serde_json::Number::from_f64(*f).unwrap_or_else(|| serde_json::Number::from(0))
+                        )),
+                        GcValue::String(ptr) => {
+                            if let Some(s) = heap.get_string(*ptr) {
+                                Ok(serde_json::Value::String(s.data.clone()))
+                            } else {
+                                Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                            }
+                        }
+                        GcValue::Unit => Ok(serde_json::Value::Null),
+                        _ => Err(RuntimeError::TypeError { expected: "Json".to_string(), found: "other".to_string() })
+                    }
+                }
+
+                let serde_val = nostos_to_serde(&args[0], heap)?;
+                let json_str = serde_json::to_string(&serde_val)
+                    .map_err(|e| RuntimeError::Panic(format!("JSON stringify error: {}", e)))?;
+                Ok(GcValue::String(heap.alloc_string(json_str)))
+            }),
+        }));
+
+        // Json.escapeString - Escape a string for embedding in JSON
+        self.register_native("Json.escapeString", Arc::new(GcNativeFn {
+            name: "Json.escapeString".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(ptr) => {
+                        if let Some(str_val) = heap.get_string(*ptr) {
+                            // Escape special JSON characters
+                            let mut escaped = String::with_capacity(str_val.data.len());
+                            for c in str_val.data.chars() {
+                                match c {
+                                    '"' => escaped.push_str("\\\""),
+                                    '\\' => escaped.push_str("\\\\"),
+                                    '\n' => escaped.push_str("\\n"),
+                                    '\r' => escaped.push_str("\\r"),
+                                    '\t' => escaped.push_str("\\t"),
+                                    c if c.is_control() => {
+                                        // Escape control characters as \uXXXX
+                                        escaped.push_str(&format!("\\u{:04x}", c as u32));
+                                    }
+                                    c => escaped.push(c),
+                                }
+                            }
+                            Ok(GcValue::String(heap.alloc_string(escaped)))
+                        } else {
+                            Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
     }
 
     /// Run the main function and return the result.

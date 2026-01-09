@@ -34,7 +34,8 @@
 
 use stdlib.server.{serve, respondHtml, respond404, getParam}
 use stdlib.rhtml
-use stdlib.json.{jsonParse, Null, Bool, Number, Object, String}
+# Import Json variant constructors for pattern matching (Json.parse returns these)
+use stdlib.json.{Null, Bool, Number, Object, String}
 use stdlib.rweb_state.rwebLastServer
 
 # --- Client JavaScript ---
@@ -187,7 +188,7 @@ listIsEmpty(xs) = match xs {
 sendFullPageUpdate(writerId, renderPage) = {
     newResult = renderPage()
     html = renderRHtml(newResult)
-    msg = "{\"type\":\"full\",\"html\":\"" ++ escapeJsonString(html) ++ "\"}"
+    msg = "{\"type\":\"full\",\"html\":\"" ++ Json.escapeString(html) ++ "\"}"
     WebSocket.sendShared(writerId, msg)
     newResult
 }
@@ -282,7 +283,7 @@ jsonFindField(pairs, key) = match pairs {
 
 # Parse JSON action message: { "action": "name", "params": {...} }
 parseActionMessage(jsonStr) = {
-    json = jsonParse(jsonStr)
+    json = Json.parse(jsonStr)
 
     # Extract action name
     actionJson = jsonGetField(json, "action")
@@ -350,29 +351,28 @@ sendComponentUpdates(writerId, componentNames, renderers) = match componentNames
             # Wrap with component div to preserve the id for future updates
             # This matches the structure created by renderComponent in rhtml.nos
             html = "<div id=\"" ++ name ++ "\" data-component=\"true\">" ++ innerHtml ++ "</div>"
-            msg = "{\"type\":\"update\",\"component\":\"" ++ escapeJsonString(name) ++ "\",\"html\":\"" ++ escapeJsonString(html) ++ "\"}"
+            msg = "{\"type\":\"update\",\"component\":\"" ++ Json.escapeString(name) ++ "\",\"html\":\"" ++ Json.escapeString(html) ++ "\"}"
             WebSocket.sendShared(writerId, msg)
         } else ()
         sendComponentUpdates(writerId, rest, renderers)
     }
 }
 
-# Escape string for JSON
-escapeJsonString(s) = escapeJsonChars(String.chars(s))
-
-escapeJsonChars(chars) = match chars {
-    [] -> ""
-    [c | rest] -> escapeJsonChar(c) ++ escapeJsonChars(rest)
-}
-
-escapeJsonChar(c) = match c {
-    '"' -> "\\\""
-    '\\' -> "\\\\"
-    '\n' -> "\\n"
-    '\r' -> "\\r"
-    '\t' -> "\\t"
-    _ -> String.from_chars([c])
-}
+# Old pure-Nostos JSON escaping - kept for reference
+# Now using native Json.escapeString for performance
+# escapeJsonString(s) = escapeJsonChars(String.chars(s))
+# escapeJsonChars(chars) = match chars {
+#     [] -> ""
+#     [c | rest] -> escapeJsonChar(c) ++ escapeJsonChars(rest)
+# }
+# escapeJsonChar(c) = match c {
+#     '"' -> "\\\""
+#     '\\' -> "\\\\"
+#     '\n' -> "\\n"
+#     '\r' -> "\\r"
+#     '\t' -> "\\t"
+#     _ -> String.from_chars([c])
+# }
 
 # --- Request Handler ---
 
@@ -415,7 +415,7 @@ rwebHandleRequest(req, title, sessionSetup) = {
 
         # Send initial full page HTML (using shared writer)
         html = renderRHtml(renderResult)
-        msg = "{\"type\":\"full\",\"html\":\"" ++ escapeJsonString(html) ++ "\"}"
+        msg = "{\"type\":\"full\",\"html\":\"" ++ Json.escapeString(html) ++ "\"}"
         WebSocket.sendShared(writerId, msg)
 
         # Enter session loop (this process becomes the session)
@@ -616,7 +616,7 @@ rwebHandleRequestWithRoutes(req, title, reactiveResolver, plainResolver) = {
 
                 # Send initial full page HTML (using shared writer)
                 html = renderRHtml(renderResult)
-                msg = "{\"type\":\"full\",\"html\":\"" ++ escapeJsonString(html) ++ "\"}"
+                msg = "{\"type\":\"full\",\"html\":\"" ++ Json.escapeString(html) ++ "\"}"
                 WebSocket.sendShared(writerId, msg)
 
                 # Enter session loop (persistent process)
@@ -776,7 +776,7 @@ pub mvar onSessionEndCallback: Option[(Int -> ())] = None()
 # writerId: the writer ID obtained from session (logged as "writerId=..." when session starts)
 # html: the HTML content to push
 pub rwebPushFull(writerId, html) = {
-    msg = "{\"type\":\"full\",\"html\":\"" ++ escapeJsonString(html) ++ "\"}"
+    msg = "{\"type\":\"full\",\"html\":\"" ++ Json.escapeString(html) ++ "\"}"
     WebSocket.sendShared(writerId, msg)
 }
 
@@ -786,7 +786,7 @@ pub rwebPushFull(writerId, html) = {
 # html: the new HTML for the component
 pub rwebPushComponent(writerId, componentId, html) = {
     wrappedHtml = "<div id=\"" ++ componentId ++ "\" data-component=\"true\">" ++ html ++ "</div>"
-    msg = "{\"type\":\"update\",\"component\":\"" ++ escapeJsonString(componentId) ++ "\",\"html\":\"" ++ escapeJsonString(wrappedHtml) ++ "\"}"
+    msg = "{\"type\":\"update\",\"component\":\"" ++ Json.escapeString(componentId) ++ "\",\"html\":\"" ++ Json.escapeString(wrappedHtml) ++ "\"}"
     WebSocket.sendShared(writerId, msg)
 }
 
