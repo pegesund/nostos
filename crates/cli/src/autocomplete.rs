@@ -918,34 +918,74 @@ impl Autocomplete {
             ]
         } else if base_type.starts_with("List") || base_type == "List" || base_type.starts_with('[') {
             vec![
+                // Builtins
+                ("length", "() -> Int", "Get the number of elements"),
+                ("head", "() -> a", "Get the first element"),
+                ("tail", "() -> List", "Get all elements except the first"),
+                ("isEmpty", "() -> Bool", "Check if the list is empty"),
+                // Core transformations
                 ("map", "(f) -> List", "Apply a function to each element"),
                 ("filter", "(pred) -> List", "Keep elements that satisfy the predicate"),
+                ("each", "(f) -> ()", "Apply function to each element for side effects"),
                 ("fold", "(acc, f) -> a", "Left fold with accumulator"),
                 ("foldr", "(acc, f) -> a", "Right fold with accumulator"),
+                // Predicates
                 ("any", "(pred) -> Bool", "Check if any element satisfies the predicate"),
                 ("all", "(pred) -> Bool", "Check if all elements satisfy the predicate"),
+                ("contains", "(elem) -> Bool", "Check if the list contains an element"),
+                // Search
                 ("find", "(pred) -> Option", "Find the first element satisfying the predicate"),
                 ("position", "(pred) -> Option Int", "Find the index of first matching element"),
+                ("indexOf", "(elem) -> Option Int", "Find index of first occurrence"),
+                // Element access
+                ("last", "() -> a", "Get the last element"),
+                ("init", "() -> List", "Get all elements except the last"),
+                ("get", "(n) -> a", "Get element at index (0-based)"),
+                ("nth", "(n) -> a", "Get element at index (0-based)"),
+                // Modification
+                ("set", "(idx, val) -> List", "Set element at index, returns new list"),
+                ("push", "(elem) -> List", "Append element to end of list"),
+                ("pop", "() -> (List, a)", "Remove and return last element"),
+                ("remove", "(elem) -> List", "Remove first occurrence of element"),
+                ("removeAt", "(idx) -> List", "Remove element at index"),
+                ("insertAt", "(idx, elem) -> List", "Insert element at index"),
+                // Slicing
                 ("take", "(n) -> List", "Take the first n elements"),
                 ("drop", "(n) -> List", "Drop the first n elements"),
+                ("slice", "(start, stop) -> List", "Get sublist from start to stop (exclusive)"),
                 ("takeWhile", "(pred) -> List", "Take elements while predicate is true"),
                 ("dropWhile", "(pred) -> List", "Drop elements while predicate is true"),
+                ("splitAt", "(n) -> (List, List)", "Split at index n"),
+                ("partition", "(pred) -> (List, List)", "Split into (matching, non-matching)"),
+                // Ordering
                 ("reverse", "() -> List", "Reverse the list"),
                 ("sort", "() -> List", "Sort the list"),
+                ("sortBy", "(cmp) -> List", "Sort with custom comparator"),
+                ("isSorted", "() -> Bool", "Check if list is sorted"),
+                // Combining
                 ("concat", "(other) -> List", "Concatenate two lists"),
                 ("flatten", "() -> List", "Flatten a list of lists"),
-                ("unique", "() -> List", "Remove duplicate elements"),
                 ("zip", "(other) -> List", "Zip two lists into pairs"),
                 ("zipWith", "(other, f) -> List", "Zip two lists using a function"),
-                ("partition", "(pred) -> (List, List)", "Split into (matching, non-matching)"),
-                ("splitAt", "(n) -> (List, List)", "Split at index n"),
-                ("count", "(pred) -> Int", "Count elements satisfying the predicate"),
-                ("contains", "(elem) -> Bool", "Check if the list contains an element"),
+                ("unzip", "() -> (List, List)", "Split list of pairs into two lists"),
                 ("interleave", "(other) -> List", "Interleave elements from two lists"),
+                ("intersperse", "(sep) -> List", "Insert separator between elements"),
+                // Grouping
+                ("unique", "() -> List", "Remove duplicate elements"),
                 ("group", "() -> List", "Group consecutive equal elements"),
-                ("scanl", "(acc, f) -> List", "Left scan with accumulator"),
+                ("groupBy", "(keyFn) -> List", "Group by key function"),
+                // Aggregation
+                ("count", "(pred) -> Int", "Count elements satisfying the predicate"),
+                ("sum", "() -> a", "Sum all elements"),
+                ("product", "() -> a", "Product of all elements"),
                 ("maximum", "() -> a", "Get the maximum element"),
                 ("minimum", "() -> a", "Get the minimum element"),
+                // Scan
+                ("scanl", "(acc, f) -> List", "Left scan with accumulator"),
+                // Other
+                ("replicate", "(n, val) -> List", "Create list of n copies"),
+                ("transpose", "() -> List", "Transpose list of lists"),
+                ("pairwise", "(f) -> List", "Apply function to adjacent pairs"),
             ]
         } else if base_type == "Tuple" || base_type.starts_with('(') {
             vec![
