@@ -8,7 +8,7 @@ use std::sync::Arc;
 use nostos_compiler::compile::Compiler;
 use nostos_jit::{JitCompiler, JitConfig};
 use crate::CallGraph;
-use nostos_syntax::ast::Item;
+use nostos_syntax::ast::{Item, Pattern};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::parallel::{ParallelVM, ParallelConfig};
 
@@ -19,6 +19,7 @@ pub enum BrowserItem {
     Function { name: String, signature: String },
     Type { name: String },
     Trait { name: String },
+    Variable { name: String, mutable: bool },
 }
 
 /// REPL configuration
@@ -164,7 +165,7 @@ impl ReplEngine {
         let (module_opt, errors) = parse(&source);
         if !errors.is_empty() {
             // Format errors to string
-            let source_errors = parse_errors_to_source_errors(&errors);
+            let _source_errors = parse_errors_to_source_errors(&errors);
             // eprint_errors writes to stderr. We want to capture it or return error string.
             // For now, return generic error, but ideally we should format it.
             // But source_errors.eprint prints.
@@ -181,6 +182,28 @@ impl ReplEngine {
             .map(|s| s.to_string())
             .unwrap_or_default();
 
+        // Extract top-level bindings from the module before compilation
+        // We need to create thunk functions for each binding so they're accessible
+        let mut bindings_to_add: Vec<(String, bool, String)> = Vec::new();
+        for item in &module.items {
+            if let Item::Binding(binding) = item {
+                // Extract variable name from pattern (only simple variable patterns)
+                if let Pattern::Var(ident) = &binding.pattern {
+                    let name = ident.node.clone();
+                    let mutable = binding.mutable;
+                    // Extract the expression source text using its span
+                    let expr_span = binding.value.span();
+                    let expr_text = if expr_span.end <= source.len() {
+                        source[expr_span.start..expr_span.end].to_string()
+                    } else {
+                        // Fallback: shouldn't happen, but just in case
+                        continue;
+                    };
+                    bindings_to_add.push((name, mutable, expr_text));
+                }
+            }
+        }
+
         // Add to compiler
         self.compiler.add_module(&module, vec![], Arc::new(source.clone()), path_str.to_string())
             .map_err(|e| format!("Compilation error: {}", e))?;
@@ -188,6 +211,29 @@ impl ReplEngine {
         // Compile all bodies
         if let Err((e, _filename, _source)) = self.compiler.compile_all() {
             return Err(format!("Compilation error: {}", e));
+        }
+
+        // Now create thunk functions for each binding
+        for (name, mutable, expr_text) in bindings_to_add {
+            self.var_counter += 1;
+            let thunk_name = format!("__file_var_{}_{}", name, self.var_counter);
+
+            let wrapper = format!("{}() = {}", thunk_name, expr_text);
+            let (wrapper_module_opt, errors) = parse(&wrapper);
+
+            if errors.is_empty() {
+                if let Some(wrapper_module) = wrapper_module_opt {
+                    if self.compiler.add_module(&wrapper_module, vec![], Arc::new(wrapper.clone()), "<file-binding>".to_string()).is_ok() {
+                        if self.compiler.compile_all().is_ok() {
+                            self.var_bindings.insert(name.clone(), VarBinding {
+                                thunk_name,
+                                mutable,
+                                type_annotation: None,
+                            });
+                        }
+                    }
+                }
+            }
         }
 
         // Update VM
@@ -825,20 +871,42 @@ impl ReplEngine {
             }
         }
 
-        // Build result list: modules first, then types, traits, functions
+        // Build result list: modules first, then variables (at root), then types, traits, functions
         let mut items = Vec::new();
+
+        // Modules first
         for m in modules {
             items.push(BrowserItem::Module(m));
         }
+
+        // Variables second (at root level only) - so user's REPL bindings are visible
+        if path.is_empty() {
+            let mut var_names: Vec<_> = self.var_bindings.keys().collect();
+            var_names.sort();
+            for name in var_names {
+                let binding = &self.var_bindings[name];
+                items.push(BrowserItem::Variable {
+                    name: name.clone(),
+                    mutable: binding.mutable,
+                });
+            }
+        }
+
+        // Types
         for t in types {
             items.push(BrowserItem::Type { name: t });
         }
+
+        // Traits
         for t in traits {
             items.push(BrowserItem::Trait { name: t });
         }
+
+        // Functions last
         for (name, sig) in functions {
             items.push(BrowserItem::Function { name, signature: sig });
         }
+
         items
     }
 
@@ -854,7 +922,83 @@ impl ReplEngine {
             BrowserItem::Function { name, .. } => format!("{}{}", prefix, name),
             BrowserItem::Type { name } => format!("{}{}", prefix, name),
             BrowserItem::Trait { name } => format!("{}{}", prefix, name),
+            BrowserItem::Variable { name, .. } => name.clone(),
         }
+    }
+
+    /// Get the value of a variable by evaluating its thunk (as string)
+    pub fn get_var_value(&mut self, name: &str) -> Option<String> {
+        if let Some(binding) = self.var_bindings.get(name) {
+            let thunk_call = format!("{}()", binding.thunk_name);
+            match self.eval(&thunk_call) {
+                Ok(value) => Some(value),
+                Err(_) => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Get the raw Value of a variable for inspection
+    pub fn get_var_value_raw(&mut self, name: &str) -> Option<nostos_vm::Value> {
+        let binding = self.var_bindings.get(name)?.clone();
+        let func = self.compiler.get_function(&binding.thunk_name)?;
+
+        match self.vm.run(func) {
+            Ok(result) => result.value.map(|v| v.to_value()),
+            Err(_) => None,
+        }
+    }
+
+    /// Check if a variable is mutable
+    pub fn is_var_mutable(&self, name: &str) -> bool {
+        self.var_bindings.get(name).map(|b| b.mutable).unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_var_binding_detection() {
+        // Test is_var_binding
+        assert_eq!(ReplEngine::is_var_binding("a = 10"), Some(("a".to_string(), false, "10".to_string())));
+        assert_eq!(ReplEngine::is_var_binding("var x = 5"), Some(("x".to_string(), true, "5".to_string())));
+        assert_eq!(ReplEngine::is_var_binding("foo = bar + 1"), Some(("foo".to_string(), false, "bar + 1".to_string())));
+        // Not variable bindings
+        assert_eq!(ReplEngine::is_var_binding("a == 10"), None);
+        assert_eq!(ReplEngine::is_var_binding("f(x) = x + 1"), None);
+    }
+
+    #[test]
+    fn test_var_bindings_in_browser() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Define some variables
+        let result = engine.eval("a = 10");
+        println!("eval a = 10: {:?}", result);
+
+        let result = engine.eval("b = 20");
+        println!("eval b = 20: {:?}", result);
+
+        // Check var_bindings directly
+        println!("var_bindings.len() = {}", engine.var_bindings.len());
+        for (k, v) in &engine.var_bindings {
+            println!("  {} -> {} (mutable={})", k, v.thunk_name, v.mutable);
+        }
+
+        // Get browser items at root
+        let items = engine.get_browser_items(&[]);
+        println!("Browser items count: {}", items.len());
+
+        let vars: Vec<_> = items.iter().filter(|item| matches!(item, BrowserItem::Variable { .. })).collect();
+        println!("Variable items: {:?}", vars);
+
+        assert!(engine.var_bindings.contains_key("a"), "var_bindings should contain 'a'");
+        assert!(engine.var_bindings.contains_key("b"), "var_bindings should contain 'b'");
+        assert!(vars.len() >= 2, "Browser should show at least 2 variables, got {}", vars.len());
     }
 }
 

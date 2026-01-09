@@ -84,7 +84,7 @@ pub enum Value {
 }
 
 /// Key type for maps and sets (must be hashable).
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MapKey {
     Unit,
     Bool(bool),
