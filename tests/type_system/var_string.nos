@@ -2,7 +2,7 @@
 # Mutable String type
 
 main() = {
-    var String s = "hello"
+    var s: String = "hello"
     s = "world"
     s
 }

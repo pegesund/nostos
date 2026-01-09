@@ -3,6 +3,6 @@
 
 main() = {
     (Int, Int) pair = (10, 20)
-    Int sum = pair.0 + pair.1
+    sum: Int = pair.0 + pair.1
     sum
 }

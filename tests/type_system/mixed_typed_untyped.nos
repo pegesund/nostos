@@ -2,8 +2,8 @@
 # Mixed typed and untyped bindings
 
 main() = {
-    Int a = 10
+    a: Int = 10
     b = 20
-    Int c = 30
+    c: Int = 30
     a + b + c
 }

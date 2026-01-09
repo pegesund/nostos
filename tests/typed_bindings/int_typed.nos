@@ -2,6 +2,6 @@
 # Basic Int typed binding
 
 main() = {
-    Int x = 42
+    x: Int = 42
     x
 }

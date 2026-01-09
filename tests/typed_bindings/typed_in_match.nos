@@ -2,7 +2,7 @@
 # Typed binding with match result
 
 main() = {
-    Int result = match 5
+    result: Int = match 5
         x when x > 3 -> x * 2
         _ -> 0
     end

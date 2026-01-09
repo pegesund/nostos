@@ -2,6 +2,6 @@
 # Basic Bool typed binding
 
 main() = {
-    Bool b = true
+    b: Bool = true
     b
 }

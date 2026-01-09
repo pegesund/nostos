@@ -2,6 +2,6 @@
 # Float64 explicit type
 
 main() = {
-    Float64 e = 2.718281828
+    e: Float64 = 2.718281828
     e
 }

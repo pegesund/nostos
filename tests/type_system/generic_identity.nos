@@ -4,6 +4,6 @@
 identity(x) = x
 
 main() = {
-    Int result = identity(42)
+    result: Int = identity(42)
     result
 }

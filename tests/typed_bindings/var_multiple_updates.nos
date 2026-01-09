@@ -2,7 +2,7 @@
 # Multiple updates to mutable typed binding
 
 main() = {
-    var Int x = 1
+    var x: Int = 1
     x = x + 1
     x = x + 1
     x = x + 1

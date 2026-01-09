@@ -4,7 +4,7 @@
 type Point = { x: Int, y: Int }
 
 main() = {
-    Point p = Point(10, 20)
-    Int sum = p.x + p.y
+    p: Point = Point(10, 20)
+    sum: Int = p.x + p.y
     sum
 }

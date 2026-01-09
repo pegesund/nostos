@@ -2,6 +2,6 @@
 # Basic String typed binding
 
 main() = {
-    String s = "hello"
+    s: String = "hello"
     s
 }

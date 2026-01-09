@@ -2,7 +2,7 @@
 # Mutable Int typed binding
 
 main() = {
-    var Int x = 50
+    var x: Int = 50
     x = 100
     x
 }

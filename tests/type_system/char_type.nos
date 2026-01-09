@@ -2,6 +2,6 @@
 # Char type
 
 main() = {
-    Char c = 'a'
+    c: Char = 'a'
     c
 }

@@ -13,6 +13,6 @@ end
 
 main() = {
     Option[Option[Int]] nested = Some(Some(42))
-    Int result = doubleUnwrap(nested)
+    result: Int = doubleUnwrap(nested)
     result
 }

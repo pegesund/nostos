@@ -2,7 +2,7 @@
 # Mutable Float typed binding
 
 main() = {
-    var Float x = 3.14
+    var x: Float = 3.14
     x = 6.28
     x
 }
