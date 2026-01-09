@@ -730,7 +730,12 @@ impl ThreadWorker {
     }
 
     /// Check timer heap and wake up any processes whose timers have expired.
+    #[inline]
     fn check_timers(&mut self) {
+        // Fast path: no timers, no work
+        if self.timer_heap.is_empty() {
+            return;
+        }
         let now = Instant::now();
         while let Some(&Reverse((wake_time, local_id))) = self.timer_heap.peek() {
             if wake_time <= now {
