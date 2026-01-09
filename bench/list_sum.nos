@@ -1,17 +1,16 @@
-# List sum benchmark - recursive fold
+# List sum benchmark - iterative style (like Python)
 # Tests list traversal performance
 
-fold(_, acc, []) = acc
-fold(f, acc, [h | t]) = fold(f, f(acc, h), t)
-
-sum(lst) = fold((a, b) => a + b, 0, lst)
-
-# Build a list of n integers (native implementation)
-# range(0) = []
-# range(n) = [n | range(n - 1)]
+sum(lst) = {
+    acc = 0
+    while !isEmpty(lst) {
+        acc = acc + head(lst)
+        lst = tail(lst)
+    }
+    acc
+}
 
 main() = {
-    # Create list of 10000 integers and sum 10 times (same total work)
     lst = rangeList(10000)
     total = 0
     i = 0
