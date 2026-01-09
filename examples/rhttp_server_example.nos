@@ -4,8 +4,8 @@
 # Run with: ./target/release/nostos examples/rhttp_server_example.nos
 # Open: http://localhost:8080
 
-use stdlib.rhtml
-use stdlib.rhttp_server
+use stdlib.rhtml.*
+use stdlib.rhttp_server.*
 
 # Define the page content
 myPage() = RHtml(

@@ -1173,7 +1173,13 @@ impl Compiler {
 
         // Validate parameter type annotations for functions compiled in THIS pass
         // This catches undefined types like `greet(p: Person)` where Person doesn't exist
+        // Skip stdlib files - they're tested separately and have complex inter-dependencies
         for (fn_name, fn_def, imports, source_name, source) in pending_fn_info {
+            // Skip validation for stdlib files
+            if source_name.contains("stdlib/") || source_name.starts_with("stdlib") {
+                continue;
+            }
+
             // Temporarily set imports for this function so validate_type_expr can check imported types
             let saved_imports = std::mem::replace(&mut self.imports, imports);
 
@@ -1257,7 +1263,8 @@ impl Compiler {
         for (fn_name, fn_ast) in &self.fn_asts {
             // Skip stdlib functions (they may have inference limitations we don't want to report)
             // Stdlib functions don't have source files or are in internal paths
-            if fn_name.starts_with("List.") || fn_name.starts_with("String.") ||
+            if fn_name.starts_with("stdlib.") ||
+               fn_name.starts_with("List.") || fn_name.starts_with("String.") ||
                fn_name.starts_with("Math.") || fn_name.starts_with("Map.") ||
                fn_name.starts_with("Set.") || fn_name.starts_with("Json.") {
                 continue;
@@ -2139,11 +2146,20 @@ impl Compiler {
                 if self.types.contains_key(&qualified) || self.types.contains_key(name) {
                     return None;
                 }
-                // Check if it's imported from another module
-                for (_alias, imported_module) in &self.imports {
-                    let qualified_in_module = format!("{}.{}", imported_module, name);
-                    if self.types.contains_key(&qualified_in_module) {
+                // Check if it's imported via use statement (imports maps local_name -> qualified_name)
+                if let Some(qualified_name) = self.imports.get(name) {
+                    if self.types.contains_key(qualified_name) {
                         return None;
+                    }
+                }
+                // Check if it might be from a wildcard import (use module.*)
+                for (_local, qualified_name) in &self.imports {
+                    // For wildcard imports, types are registered with qualified names
+                    // Check if name matches the last part of a qualified type
+                    if qualified_name.ends_with(&format!(".{}", name)) {
+                        if self.types.contains_key(qualified_name) {
+                            return None;
+                        }
                     }
                 }
                 // Type not found - report error

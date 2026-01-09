@@ -2,36 +2,41 @@
 # Run with: ./target/release/nostos examples/rweb_counter.nos
 # Then open http://localhost:8080 in browser
 
-use stdlib.rweb
-use stdlib.rhtml
+use stdlib.rweb.*
+use stdlib.rhtml.*
 
 reactive Counter = { value: Int }
 
-# Initialize state for each session
-initState() = Counter(0)
+# Session setup - creates fresh state per session
+# Returns (renderPage, onAction) tuple
+sessionSetup() = {
+    counter = Counter(0)
 
-# Render the page - counter is captured by component closures
-renderPage(counter: Counter) = RHtml(div([
-    h1("RWeb Counter"),
-    component("display", () => RHtml(
+    # Render function captures counter
+    renderPage = () => RHtml(div([
+        h1("RWeb Counter"),
+        component("display", () => RHtml(
+            div([
+                span("Count: "),
+                span(show(counter.value))
+            ])
+        )),
         div([
-            span("Count: "),
-            span(show(counter.value))
+            button([attr("data-action", "inc")], "+"),
+            button([attr("data-action", "dec")], "-"),
+            button([attr("data-action", "reset")], "Reset")
         ])
-    )),
-    div([
-        button([attr("data-action", "inc")], "+"),
-        button([attr("data-action", "dec")], "-"),
-        button([attr("data-action", "reset")], "Reset")
-    ])
-]))
+    ]))
 
-# Handle actions - just mutate, no return value
-handleAction(action, params, counter) = match action {
-    "inc" -> { counter.value = counter.value + 1 }
-    "dec" -> { counter.value = counter.value - 1 }
-    "reset" -> { counter.value = 0 }
-    _ -> ()
+    # Action handler mutates counter
+    onAction = (action, params) => match action {
+        "inc" -> { counter.value = counter.value + 1 }
+        "dec" -> { counter.value = counter.value - 1 }
+        "reset" -> { counter.value = 0 }
+        _ -> ()
+    }
+
+    (renderPage, onAction)
 }
 
-main() = startRWeb(8080, "RWeb Counter", initState, renderPage, handleAction)
+main() = startRWeb(8080, "RWeb Counter", sessionSetup)

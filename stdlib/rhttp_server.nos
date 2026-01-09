@@ -31,7 +31,7 @@ generateId() = {
 }
 
 # Extract session ID from cookies
-getSessionIdFromCookies(cookies): Option[String] = {
+getSessionIdFromCookies(cookies) = {
     cookieValue = getParam(cookies, sessionCookieName())
     if cookieValue == "" then None()
     else Some(cookieValue)
@@ -208,13 +208,13 @@ rhttpAcceptLoop(server, pageRenderer, pageTitle, mainPid) = {
 # Start the reactive HTTP server
 # pageRenderer: () -> RHtmlResult - function that returns the initial page state
 # Returns when server shuts down
-startRHttpServer(port, pageRenderer) =
+pub startRHttpServer(port, pageRenderer) =
     startRHttpServerWithTitle(port, pageRenderer, "Nostos App")
 
-startRHttpServerWithTitle(port, pageRenderer, pageTitle) = {
+pub startRHttpServerWithTitle(port, pageRenderer, pageTitle) = {
     mainPid = self()
 
-    result = try {
+    try {
         server = Server.bind(port)
         println("RHtml Server started on http://localhost:" ++ show(port))
         println("Endpoints:")
@@ -240,11 +240,10 @@ startRHttpServerWithTitle(port, pageRenderer, pageTitle) = {
     } catch { (kind, msg) ->
         println("Error [" ++ kind ++ "]: " ++ msg)
     }
-    result
 }
 
 # Start server with custom handler for additional routes
-startRHttpServerCustom(port, pageRenderer, pageTitle, customHandler) = {
+pub startRHttpServerCustom(port, pageRenderer, pageTitle, customHandler) = {
     mainPid = self()
 
     # Combined handler: try custom first, fall back to default
@@ -254,7 +253,7 @@ startRHttpServerCustom(port, pageRenderer, pageTitle, customHandler) = {
         else defaultHandler(req, pageRenderer, pageTitle, mainPid)
     }
 
-    result = try {
+    try {
         server = Server.bind(port)
         println("RHtml Server started on http://localhost:" ++ show(port))
 
@@ -272,7 +271,6 @@ startRHttpServerCustom(port, pageRenderer, pageTitle, customHandler) = {
     } catch { (kind, msg) ->
         println("Error [" ++ kind ++ "]: " ++ msg)
     }
-    result
 }
 
 customAcceptLoop(server, handler) = {
