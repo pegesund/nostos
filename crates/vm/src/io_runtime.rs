@@ -673,6 +673,13 @@ impl IoRuntime {
         self.request_tx.clone()
     }
 
+    /// Get the runtime handle for spawning tasks on the IO runtime.
+    /// This is used for long-lived spawned processes that need to outlive
+    /// individual eval calls.
+    pub fn runtime_handle(&self) -> tokio::runtime::Handle {
+        self.runtime.handle().clone()
+    }
+
     /// Generate a new unique file handle
     pub fn next_file_handle(&self) -> FileHandle {
         FileHandle(self.next_handle.fetch_add(1, Ordering::Relaxed))

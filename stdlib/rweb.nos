@@ -424,7 +424,14 @@ rwebHandleRequest(req, title, sessionSetup) = {
 pub startRWeb(port, title, sessionSetup) = {
     println("RWeb server started on http://localhost:" ++ show(port))
     println("WebSocket endpoint: ws://localhost:" ++ show(port) ++ "/ws")
-    serve(port, req => rwebHandleRequest(req, title, sessionSetup))
+    # In interactive mode (REPL/TUI), spawn server in background
+    # In script mode, run server in foreground (blocking)
+    if Runtime.isInteractive() then {
+        spawn { serve(port, req => rwebHandleRequest(req, title, sessionSetup)) }
+        ()
+    } else {
+        serve(port, req => rwebHandleRequest(req, title, sessionSetup))
+    }
 }
 
 # --- Multi-Route Support ---
@@ -651,7 +658,14 @@ rwebHandleRequestWithRoutes(req, title, reactiveResolver, plainResolver) = {
 pub startRWebWithRoutes(port, title, reactiveResolver, plainResolver) = {
     println("RWeb server with routes started on http://localhost:" ++ show(port))
     println("WebSocket endpoint: ws://localhost:" ++ show(port) ++ "/ws?path=<path>")
-    serve(port, req => rwebHandleRequestWithRoutes(req, title, reactiveResolver, plainResolver))
+    # In interactive mode (REPL/TUI), spawn server in background
+    # In script mode, run server in foreground (blocking)
+    if Runtime.isInteractive() then {
+        spawn { serve(port, req => rwebHandleRequestWithRoutes(req, title, reactiveResolver, plainResolver)) }
+        ()
+    } else {
+        serve(port, req => rwebHandleRequestWithRoutes(req, title, reactiveResolver, plainResolver))
+    }
 }
 
 # --- REPL-friendly Background Server ---

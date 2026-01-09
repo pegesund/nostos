@@ -959,6 +959,8 @@ pub enum Instruction {
     Sleep(Reg),
     /// Get VM stats: dst = (spawned, exited, active) process counts
     VmStats(Reg),
+    /// Check if running in interactive mode: dst = Runtime.isInteractive()
+    RuntimeIsInteractive(Reg),
 
     // === Process introspection ===
     /// Get all process IDs: dst = Process.all()
