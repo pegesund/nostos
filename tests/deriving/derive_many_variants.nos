@@ -1,5 +1,5 @@
 # expect: "passed"
-type Weekday = Mon | Tue | Wed | Thu | Fri | Sat | Sun deriving (Hash, Eq, Show)
+type Weekday = Mon | Tue | Wed | Thu | Fri | Sat | Sun deriving (Hash + Eq + Show)
 
 main() = {
     d1 = Mon

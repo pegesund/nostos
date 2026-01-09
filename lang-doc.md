@@ -455,6 +455,152 @@ impl Show[Bool] {
 }
 ```
 
+## Deriving
+
+Instead of manually implementing traits like `Hash`, `Eq`, `Show`, or `Copy`, you can use the `deriving` keyword to have them generated automatically.
+
+### Basic Syntax
+
+```nos
+# Derive a single trait
+type Point = Point(Int, Int) deriving Hash
+
+# Derive multiple traits
+type Person = { name: String, age: Int } deriving (Hash + Show + Eq + Copy)
+```
+
+### Derivable Traits
+
+Four traits can be automatically derived:
+
+| Trait | Generated Function | Description |
+|-------|-------------------|-------------|
+| `Hash` | `hash(x) -> Int` | Hash function for maps/sets |
+| `Show` | `show(x) -> String` | String representation |
+| `Eq` | `==`, `!=` operators | Equality comparison |
+| `Copy` | `copy(x) -> T` | Deep copy |
+
+### Examples
+
+```nos
+# Variant types
+type Color = Red | Green | Blue deriving (Hash + Show + Eq)
+type Result = Ok(Int) | Err(String) deriving (Hash + Show + Eq + Copy)
+
+# Record types
+type Address = { street: String, city: String, zip: Int } deriving (Hash + Eq + Show)
+
+# Nested types - inner types' derived methods are called automatically
+type Email = Email(String) deriving (Hash + Eq + Show)
+type Contact = { name: String, email: Email } deriving (Hash + Eq + Show)
+```
+
+### Using Derived Traits
+
+```nos
+type Person = { name: String, age: Int } deriving (Hash + Show + Eq + Copy)
+
+main() = {
+    alice = Person("Alice", 30)
+    bob = Person("Bob", 25)
+
+    # Using derived Eq
+    println("alice == alice: " ++ show(alice == alice))  # true
+    println("alice == bob: " ++ show(alice == bob))      # false
+
+    # Using derived Show
+    println("Person: " ++ show(alice))  # Person("Alice", 30)
+
+    # Using derived Hash
+    println("Hash: " ++ show(hash(alice)))
+
+    # Using derived Copy
+    alice_copy = copy(alice)
+    println("Copy equals original: " ++ show(alice == alice_copy))  # true
+}
+```
+
+## Trait Bounds
+
+Trait bounds let you write generic functions that require certain capabilities from their type parameters. This enables compile-time checking that types support the operations you need.
+
+### Basic Syntax
+
+```nos
+# Function with trait bound: T must implement Hash
+hashable[T: Hash](x: T) -> Int = hash(x)
+
+# Multiple constraints with +
+hash_and_show[T: Hash + Show](x: T) -> String = {
+    h = hash(x)
+    "hash(" ++ show(x) ++ ") = " ++ show(h)
+}
+```
+
+### Multiple Type Parameters
+
+Each type parameter can have its own constraints:
+
+```nos
+# Two parameters, each with a constraint
+compare_hashes[T: Hash, U: Hash](x: T, y: U) -> Bool = hash(x) == hash(y)
+
+# Mixed: one constrained, one unconstrained
+show_first[T: Show, U](x: T, y: U) -> String = show(x)
+```
+
+### Examples
+
+```nos
+# Generic equality check
+are_equal[T: Eq](x: T, y: T) -> Bool = x == y
+
+# Generic hash-based lookup
+lookup[K: Eq, V](items: List, key: K) -> V = match items
+    [] -> panic("Key not found")
+    [(k, v) | rest] -> if k == key then v else lookup(rest, key)
+end
+
+# Works with any type that derives Eq
+type UserId = UserId(Int) deriving (Hash + Eq)
+
+main() = {
+    # Primitives implement Eq, Hash, Show
+    println(show(are_equal(42, 42)))      # true
+    println(show(are_equal("a", "b")))    # false
+
+    # Custom types with derived traits
+    println(show(are_equal(UserId(1), UserId(1))))  # true
+}
+```
+
+### Primitive Type Traits
+
+Built-in primitive types automatically implement common traits:
+
+| Type | Implements |
+|------|------------|
+| `Int` | `Hash`, `Eq`, `Show`, `Copy` |
+| `Float` | `Eq`, `Show`, `Copy` |
+| `Bool` | `Hash`, `Eq`, `Show`, `Copy` |
+| `Char` | `Hash`, `Eq`, `Show`, `Copy` |
+| `String` | `Hash`, `Eq`, `Show`, `Copy` |
+
+### Compile-Time Checking
+
+Trait bounds are checked at compile time. If you try to use a type that doesn't implement the required trait, you get a compile error:
+
+```nos
+type NotHashable = NotHashable(Int)  # No deriving!
+
+hashable[T: Hash](x: T) -> Int = hash(x)
+
+main() = {
+    x = NotHashable(42)
+    hashable(x)  # Compile error: NotHashable does not implement trait `Hash`
+}
+```
+
 ## Concurrency (Erlang-style)
 
 ### Spawning Processes
@@ -832,7 +978,7 @@ The following are reserved keywords:
 - `spawn`, `spawn_link`, `spawn_monitor`
 - `self`
 - `true`, `false`
-- `type`, `trait`, `impl`
+- `type`, `trait`, `impl`, `deriving`
 - `when`
 
 **Note**: `end` is a keyword and cannot be used as a variable name (use `stop`, `limit`, etc. instead).

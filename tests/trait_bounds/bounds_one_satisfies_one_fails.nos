@@ -1,4 +1,4 @@
-# expect_error: does not implement trait
+# expect_error: TraitBoundNotSatisfied
 type Good = Good(Int) deriving Hash
 type Bad = Bad(Int)
 

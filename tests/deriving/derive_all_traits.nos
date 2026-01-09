@@ -1,5 +1,5 @@
 # expect: "passed"
-type Person = { name: String, age: Int } deriving (Hash, Show, Copy, Eq)
+type Person = { name: String, age: Int } deriving (Hash + Show + Copy + Eq)
 
 main() = {
     p1 = Person("Alice", 30)

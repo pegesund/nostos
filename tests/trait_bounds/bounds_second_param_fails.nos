@@ -1,4 +1,4 @@
-# expect_error: does not implement trait `Hash`
+# expect_error: TraitBoundNotSatisfied
 type NotHashable = NotHashable(Int)
 
 hash_second[T, U: Hash](x: T, y: U) -> Int = hash(y)

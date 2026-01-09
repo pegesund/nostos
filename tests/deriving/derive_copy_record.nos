@@ -1,5 +1,5 @@
 # expect: "passed"
-type Point = { x: Int, y: Int } deriving (Copy, Eq)
+type Point = { x: Int, y: Int } deriving (Copy + Eq)
 
 main() = {
     p1 = Point(10, 20)

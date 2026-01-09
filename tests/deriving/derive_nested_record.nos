@@ -1,6 +1,6 @@
 # expect: "passed"
-type Address = { city: String, zip: Int } deriving (Hash, Eq, Show)
-type Person = { name: String, addr: Address } deriving (Hash, Eq, Show)
+type Address = { city: String, zip: Int } deriving (Hash + Eq + Show)
+type Person = { name: String, addr: Address } deriving (Hash + Eq + Show)
 
 main() = {
     addr1 = Address("NYC", 10001)

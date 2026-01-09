@@ -1,4 +1,4 @@
-# expect_error: does not implement trait `Eq`
+# expect_error: TraitBoundNotSatisfied
 type HashOnly = HashOnly(Int) deriving Hash
 
 compare_and_hash[T: Hash + Eq](x: T, y: T) -> Bool = {

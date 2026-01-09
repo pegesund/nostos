@@ -1,5 +1,5 @@
 # expect: "passed"
-type Result = Ok(Int) | Err(String) deriving (Copy, Eq)
+type Result = Ok(Int) | Err(String) deriving (Copy + Eq)
 
 main() = {
     ok = Ok(42)

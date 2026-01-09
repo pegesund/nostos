@@ -1,6 +1,6 @@
 # expect: "passed"
-type A = A(Int) deriving (Hash, Eq, Show, Copy)
-type B = B(Int) deriving (Copy, Show, Eq, Hash)
+type A = A(Int) deriving (Hash + Eq + Show + Copy)
+type B = B(Int) deriving (Copy + Show + Eq + Hash)
 
 main() = {
     a1 = A(42)

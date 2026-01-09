@@ -1,0 +1,99 @@
+# Deriving Basics
+#
+# Demonstrates automatic trait derivation - a powerful feature that
+# automatically generates trait implementations for your types.
+#
+# Instead of manually writing Hash, Show, Eq, or Copy implementations,
+# you can use the 'deriving' keyword to have them generated automatically.
+#
+# Syntax:
+#   type MyType = ... deriving TraitName
+#   type MyType = ... deriving (Trait1 + Trait2 + ...)
+#
+# Supported derivable traits:
+#   - Hash: Generates hash function for use in maps/sets
+#   - Show: Generates string representation
+#   - Eq: Generates equality comparison (==)
+#   - Copy: Generates copy function
+
+# ========== Simple Example: Single Trait ==========
+# Derive Hash for a simple point type
+
+type Point = Point(Int, Int) deriving Hash
+
+# ========== Multiple Traits ==========
+# You can derive multiple traits at once using parentheses
+
+type Person = { name: String, age: Int } deriving (Hash + Show + Eq + Copy)
+
+# ========== Variant Types ==========
+# Deriving also works with variant (sum) types
+
+type Color = Red | Green | Blue deriving (Hash + Show + Eq)
+
+type Result = Ok(Int) | Err(String) deriving (Hash + Show + Eq + Copy)
+
+# ========== Helper Functions ==========
+# A simple lookup function for our color example
+color_lookup([], target) = "not found"
+color_lookup([(k, v) | rest], target) = if k == target then v else color_lookup(rest, target)
+
+# ========== Using Derived Traits ==========
+
+main() = {
+    println("=== Deriving Basics Demo ===")
+    println("")
+
+    # ----- Hash Trait -----
+    println("--- Hash Trait ---")
+    p1 = Point(3, 4)
+    p2 = Point(3, 4)
+    p3 = Point(5, 6)
+
+    println("Point(3, 4) hash: " ++ show(hash(p1)))
+    println("Same point has same hash: " ++ show(hash(p1) == hash(p2)))
+    println("Different point has different hash: " ++ show(hash(p1) != hash(p3)))
+    println("")
+
+    # ----- Show Trait -----
+    println("--- Show Trait ---")
+    alice = Person("Alice", 30)
+    println("Person as string: " ++ show(alice))
+
+    println("Red as string: " ++ show(Red))
+    println("Ok(42) as string: " ++ show(Ok(42)))
+    println("Err(\"oops\") as string: " ++ show(Err("oops")))
+    println("")
+
+    # ----- Eq Trait -----
+    println("--- Eq Trait ---")
+    bob = Person("Bob", 25)
+    alice2 = Person("Alice", 30)
+
+    println("alice == alice2: " ++ show(alice == alice2))
+    println("alice == bob: " ++ show(alice == bob))
+    println("Red == Red: " ++ show(Red == Red))
+    println("Red == Blue: " ++ show(Red == Blue))
+    println("")
+
+    # ----- Copy Trait -----
+    println("--- Copy Trait ---")
+    original = Person("Original", 100)
+    copied = copy(original)
+    println("Original: " ++ show(original))
+    println("Copied: " ++ show(copied))
+    println("Are they equal? " ++ show(original == copied))
+    println("")
+
+    # ----- Practical Use: Hash in a lookup -----
+    println("--- Practical: Using Hash for Lookups ---")
+    colors = [(Red, "rouge"), (Green, "vert"), (Blue, "bleu")]
+
+    # Find French translation (using color_lookup defined above)
+    println("Red in French: " ++ color_lookup(colors, Red))
+    println("Green in French: " ++ color_lookup(colors, Green))
+
+    println("")
+    println("All tests passed!")
+    0
+}

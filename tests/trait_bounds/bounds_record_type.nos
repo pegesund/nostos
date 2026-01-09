@@ -1,5 +1,5 @@
 # expect: "passed"
-type Point = { x: Int, y: Int } deriving (Hash, Eq)
+type Point = { x: Int, y: Int } deriving (Hash + Eq)
 
 hashable[T: Hash](x: T) -> Int = hash(x)
 equal[T: Eq](x: T, y: T) -> Bool = x == y

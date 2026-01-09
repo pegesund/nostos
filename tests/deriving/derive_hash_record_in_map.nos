@@ -1,6 +1,6 @@
 # expect: "passed"
 # Test derived Hash/Eq record type for lookup
-type Point = { x: Int, y: Int } deriving (Hash, Eq)
+type Point = { x: Int, y: Int } deriving (Hash + Eq)
 type Option = Some(String) | NotFound deriving Eq
 
 find_point([], _) = NotFound

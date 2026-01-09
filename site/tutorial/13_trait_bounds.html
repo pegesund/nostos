@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trait Bounds - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75; /* A distinct red/orange for operators */
+        }
+        .hljs-function {
+            color: #e5c07b; /* A distinct yellow/gold for functions */
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/yourusername/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+
+        <!-- Sidebar -->
+        <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_concurrency.html" class="block text-slate-400 hover:text-white transition">7. Concurrency</a></li>
+                    <li><a href="08_async_io_http.html" class="block text-slate-400 hover:text-white transition">8. Async I/O & HTTP</a></li>
+                    <li><a href="09_type_system.html" class="block text-slate-400 hover:text-white transition">9. Type System</a></li>
+                    <li><a href="10_error_handling.html" class="block text-slate-400 hover:text-white transition">10. Error Handling</a></li>
+                    <li><a href="11_traits.html" class="block text-slate-400 hover:text-white transition">11. Traits</a></li>
+                    <li><a href="12_deriving.html" class="block text-slate-400 hover:text-white transition">12. Deriving</a></li>
+                    <li><a href="13_trait_bounds.html" class="block text-blue-400 font-medium">13. Trait Bounds</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Trait Bounds</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Trait bounds let you write generic functions that require certain capabilities from their type parameters. This enables <strong class="text-white">compile-time checking</strong> that types support the operations you need, catching errors before your code runs.
+                </p>
+
+                <!-- Basic Syntax -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Basic Syntax</h2>
+                <p class="text-slate-400 mb-4">Add trait bounds after a type parameter using a colon. The syntax <code class="text-emerald-400">[T: Trait]</code> means "T must implement Trait".</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># T must implement Hash
+hashable[T: Hash](x: T) -> Int = hash(x)
+
+# T must implement Eq
+are_equal[T: Eq](x: T, y: T) -> Bool = x == y
+
+# T must implement Show
+describe[T: Show](x: T) -> String = "Value: " ++ show(x)
+
+main() = {
+    # Works with any type implementing the required trait
+    println(show(hashable(42)))           # Int implements Hash
+    println(show(are_equal("a", "a")))    # String implements Eq
+    println(describe(true))               # Bool implements Show
+}
+</code></pre>
+                </div>
+
+                <!-- Multiple Constraints -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Multiple Constraints</h2>
+                <p class="text-slate-400 mb-4">Use <code class="text-emerald-400">+</code> to require a type to implement multiple traits. This is the same syntax used in <code class="text-emerald-400">deriving</code>.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># T must implement both Hash AND Show
+hash_and_show[T: Hash + Show](x: T) -> String = {
+    h = hash(x)
+    "hash(" ++ show(x) ++ ") = " ++ show(h)
+}
+
+# T must implement Hash, Eq, AND Show
+full_info[T: Hash + Eq + Show](x: T, y: T) -> String = {
+    eq_str = if x == y then "equal" else "not equal"
+    show(x) ++ " and " ++ show(y) ++ " are " ++ eq_str
+}
+
+main() = {
+    println(hash_and_show(42))
+    # Output: hash(42) = 7298839827432
+
+    println(full_info("hello", "hello"))
+    # Output: hello and hello are equal
+}
+</code></pre>
+                </div>
+
+                <!-- Multiple Type Parameters -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Multiple Type Parameters</h2>
+                <p class="text-slate-400 mb-4">Each type parameter can have its own constraints, separated by commas.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Two parameters with the same bound
+compare_hashes[T: Hash, U: Hash](x: T, y: U) -> Bool = hash(x) == hash(y)
+
+# Different bounds on each parameter
+show_hash[T: Show, U: Hash](x: T, y: U) -> String = {
+    show(x) ++ " has hash peer with hash " ++ show(hash(y))
+}
+
+# Mixed: one constrained, one unconstrained
+show_first[T: Show, U](x: T, y: U) -> String = show(x)
+
+main() = {
+    # compare_hashes works with different types
+    println(show(compare_hashes(42, 42)))     # true (same Int)
+    println(show(compare_hashes("a", "a")))   # true (same String)
+}
+</code></pre>
+                </div>
+
+                <!-- Compile-Time Checking -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Compile-Time Checking</h2>
+                <p class="text-slate-400 mb-4">Trait bounds are checked at compile time. If you try to use a type that doesn't implement the required trait, you get a helpful error message.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># A type WITHOUT any deriving
+type NotHashable = NotHashable(Int)
+
+hashable[T: Hash](x: T) -> Int = hash(x)
+
+main() = {
+    x = NotHashable(42)
+    hashable(x)  # Compile error!
+}
+
+# Error: NotHashable does not implement trait `Hash`
+</code></pre>
+                </div>
+                <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-4 mb-8">
+                    <p class="text-amber-200"><strong>Tip:</strong> The error message tells you exactly which trait is missing. Add <code class="text-emerald-400">deriving Hash</code> to fix it!</p>
+                </div>
+
+                <!-- Primitive Types -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Primitive Type Traits</h2>
+                <p class="text-slate-400 mb-4">Built-in primitive types automatically implement common traits, so you can use them with bounded functions right away.</p>
+
+                <div class="overflow-x-auto mb-8">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="border-b border-slate-700">
+                                <th class="py-3 px-4 text-slate-300 font-semibold">Type</th>
+                                <th class="py-3 px-4 text-slate-300 font-semibold">Implements</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4 text-emerald-400 font-mono">Int</td>
+                                <td class="py-3 px-4 text-slate-400">Hash, Eq, Show, Copy</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4 text-emerald-400 font-mono">Float</td>
+                                <td class="py-3 px-4 text-slate-400">Eq, Show, Copy</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4 text-emerald-400 font-mono">Bool</td>
+                                <td class="py-3 px-4 text-slate-400">Hash, Eq, Show, Copy</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-3 px-4 text-emerald-400 font-mono">Char</td>
+                                <td class="py-3 px-4 text-slate-400">Hash, Eq, Show, Copy</td>
+                            </tr>
+                            <tr>
+                                <td class="py-3 px-4 text-emerald-400 font-mono">String</td>
+                                <td class="py-3 px-4 text-slate-400">Hash, Eq, Show, Copy</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Practical Example -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Practical Example: Generic Lookup</h2>
+                <p class="text-slate-400 mb-4">Here's a practical example: a generic lookup function that works with any key type that implements <code class="text-emerald-400">Eq</code>.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Generic lookup - K must implement Eq for comparison
+type NotFound = NotFound
+type Found = Found(V)
+
+lookup[K: Eq, V](items: List, key: K) = match items
+    [] -> NotFound
+    [(k, v) | rest] -> if k == key then Found(v) else lookup(rest, key)
+end
+
+# Custom types with derived Eq
+type UserId = UserId(Int) deriving (Hash + Eq + Show)
+type Email = Email(String) deriving (Hash + Eq + Show)
+
+main() = {
+    # Works with UserId keys
+    users = [(UserId(1), "Alice"), (UserId(2), "Bob")]
+    result1 = lookup(users, UserId(1))
+    println(show(result1))  # Found(Alice)
+
+    # Works with Email keys
+    emails = [(Email("a@b.com"), 100), (Email("x@y.com"), 200)]
+    result2 = lookup(emails, Email("x@y.com"))
+    println(show(result2))  # Found(200)
+
+    # Works with primitive keys too
+    scores = [("Alice", 100), ("Bob", 85)]
+    result3 = lookup(scores, "Bob")
+    println(show(result3))  # Found(85)
+}
+</code></pre>
+                </div>
+
+                <!-- Higher-Order Functions -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Bounds with Higher-Order Functions</h2>
+                <p class="text-slate-400 mb-4">Trait bounds work seamlessly with higher-order functions and lambdas.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Apply a function and show the result
+apply_and_show[T: Show, U: Show](f: T -> U, x: T) -> String = {
+    result = f(x)
+    show(x) ++ " -> " ++ show(result)
+}
+
+main() = {
+    double = x => x * 2
+    println(apply_and_show(double, 21))
+    # Output: 21 -> 42
+
+    negate = b => if b then false else true
+    println(apply_and_show(negate, true))
+    # Output: true -> false
+}
+</code></pre>
+                </div>
+
+                <!-- Summary -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Summary</h2>
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <ul class="space-y-3 text-slate-300">
+                        <li class="flex items-start">
+                            <span class="text-emerald-400 mr-2">1.</span>
+                            <span><strong class="text-white">Basic bounds:</strong> <code class="text-emerald-400">[T: Trait]</code> requires T to implement Trait</span>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="text-emerald-400 mr-2">2.</span>
+                            <span><strong class="text-white">Multiple traits:</strong> Use <code class="text-emerald-400">+</code> to combine: <code class="text-emerald-400">[T: Hash + Eq]</code></span>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="text-emerald-400 mr-2">3.</span>
+                            <span><strong class="text-white">Multiple params:</strong> Each can have bounds: <code class="text-emerald-400">[T: Hash, U: Show]</code></span>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="text-emerald-400 mr-2">4.</span>
+                            <span><strong class="text-white">Compile-time safety:</strong> Errors caught before runtime</span>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="text-emerald-400 mr-2">5.</span>
+                            <span><strong class="text-white">Works with deriving:</strong> Add traits to custom types with <code class="text-emerald-400">deriving</code></span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Navigation Buttons -->
+            <div class="flex justify-between border-t border-slate-800 pt-8">
+                <a href="12_deriving.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
+                    Previous: Deriving
+                </a>
+                <div></div>
+            </div>
+        </main>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>
+</html>

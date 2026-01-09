@@ -1,4 +1,5 @@
-type Point = Point(Int, Int) deriving (Hash, Eq)
+# expect: "passed"
+type Point = Point(Int, Int) deriving (Hash + Eq)
 
 compare_and_hash[T: Hash + Eq](x: T, y: T) -> Bool = {
     h1 = hash(x)
