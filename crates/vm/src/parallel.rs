@@ -1488,6 +1488,39 @@ impl ThreadWorker {
                     // Fall back to slow path for non-inlinable calls
                     return Ok(FastLoopResult::NeedSlowPath(instr.clone()));
                 }
+                // Fast path for tail call to named function
+                TailCallDirect(func_idx, args) => {
+                    // Get target function from shared state
+                    let func = match shared.function_list.get(*func_idx as usize) {
+                        Some(f) => Arc::clone(f),
+                        None => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+
+                    // Collect arguments from current frame
+                    let arg_values: Vec<GcValue> = args.iter()
+                        .map(|&r| proc.frames[frame_idx].registers[r as usize].clone())
+                        .collect();
+
+                    // Tail call: replace current frame with new frame
+                    let reg_count = func.code.register_count;
+                    let mut registers = vec![GcValue::Unit; reg_count];
+                    for (i, arg) in arg_values.into_iter().enumerate() {
+                        if i < reg_count {
+                            registers[i] = arg;
+                        }
+                    }
+
+                    // Keep the same return_reg (we're replacing, not pushing)
+                    let return_reg = proc.frames[frame_idx].return_reg;
+                    proc.frames[frame_idx] = CallFrame {
+                        function: func,
+                        ip: 0,
+                        registers,
+                        captures: Vec::new(),
+                        return_reg,
+                    };
+                    // Continue in fast loop with new frame
+                }
                 _ => {
                     // Slow path instruction - need to release proc and call method on self
                     proc.frames[frame_idx].ip += 1;
