@@ -1,0 +1,49 @@
+# expect: 0
+# Test chain spawning: A spawns B, B spawns C, etc., all accessing MVars
+
+mvar chain_length: Int = 0
+mvar total_value: Int = 0
+
+record_link(value) = {
+    chain_length = chain_length + 1
+    total_value = total_value + value
+    chain_length
+}
+
+# Each link in chain spawns the next, passing accumulated value
+chain_link(parent, depth, value) = {
+    record_link(value)
+    if depth <= 1 then
+        parent <- ("end", value)
+    else {
+        me = self()
+        spawn { chain_link(me, depth - 1, value * 2) }
+        receive msg ->
+            parent <- msg
+        end
+    }
+}
+
+main() = {
+    me = self()
+
+    # Start 3 chains of depth 4
+    spawn { chain_link(me, 4, 1) }
+    spawn { chain_link(me, 4, 10) }
+    spawn { chain_link(me, 4, 100) }
+
+    # Wait for all chains to complete
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+
+    # 3 chains * 4 links = 12 total chain_length
+    assert_eq(12, chain_length)
+
+    # Chain 1: 1 + 2 + 4 + 8 = 15
+    # Chain 2: 10 + 20 + 40 + 80 = 150
+    # Chain 3: 100 + 200 + 400 + 800 = 1500
+    # Total: 15 + 150 + 1500 = 1665
+    assert_eq(1665, total_value)
+    0
+}

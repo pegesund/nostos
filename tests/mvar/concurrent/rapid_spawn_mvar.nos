@@ -1,0 +1,48 @@
+# expect: 0
+# Test rapid spawning and dying with MVar access
+
+mvar spawn_count: Int = 0
+mvar exit_count: Int = 0
+
+on_spawn() = {
+    spawn_count = spawn_count + 1
+    spawn_count
+}
+
+on_exit() = {
+    exit_count = exit_count + 1
+    exit_count
+}
+
+# Quick worker: spawn, touch mvars, exit
+quick_worker(parent) = {
+    on_spawn()
+    on_exit()
+    parent <- "bye"
+}
+
+# Spawn n quick workers
+spawn_quick_workers(parent, n) = if n <= 0 then () else {
+    spawn { quick_worker(parent) }
+    spawn_quick_workers(parent, n - 1)
+}
+
+# Wait for n completions
+wait_all(n) = if n <= 0 then () else {
+    receive _ -> () end
+    wait_all(n - 1)
+}
+
+main() = {
+    me = self()
+
+    # Spawn 50 quick workers
+    spawn_quick_workers(me, 50)
+
+    # Wait for all
+    wait_all(50)
+
+    assert_eq(50, spawn_count)
+    assert_eq(50, exit_count)
+    0
+}

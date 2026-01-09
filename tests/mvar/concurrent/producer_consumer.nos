@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Producer/consumer pattern with shared queue counter
 
 mvar queue_size: Int = 0
@@ -62,4 +62,5 @@ main() = {
 
     # Should have produced 60 items
     assert_eq(60, get_produced())
+    0
 }

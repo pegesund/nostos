@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Multiple independent mvars being updated concurrently
 # Tests that sorted lock ordering prevents deadlocks
 
@@ -78,4 +78,5 @@ main() = {
     assert_eq(40, get_a())
     assert_eq(40, get_b())
     assert_eq(40, get_c())
+    0
 }

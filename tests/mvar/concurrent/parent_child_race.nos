@@ -1,0 +1,47 @@
+# expect: 0
+# Test parent and child processes racing to access MVars
+
+mvar shared_value: Int = 0
+mvar operation_count: Int = 0
+
+# Child does multiple read-modify-write operations
+child_worker(parent, iterations) = {
+    do_iterations(iterations)
+    parent <- "done"
+}
+
+do_iterations(n) = if n <= 0 then () else {
+    shared_value = shared_value + 1
+    operation_count = operation_count + 1
+    do_iterations(n - 1)
+}
+
+# Parent also does operations while children run
+parent_work(n) = if n <= 0 then () else {
+    shared_value = shared_value + 10
+    operation_count = operation_count + 1
+    parent_work(n - 1)
+}
+
+main() = {
+    me = self()
+
+    # Spawn children that will race with parent
+    spawn { child_worker(me, 20) }
+    spawn { child_worker(me, 20) }
+    spawn { child_worker(me, 20) }
+
+    # Parent also does work concurrently
+    parent_work(10)
+
+    # Wait for all children
+    receive _ -> () end
+    receive _ -> () end
+    receive _ -> () end
+
+    # 3 children * 20 ops * 1 + parent * 10 ops * 10 = 60 + 100 = 160
+    assert_eq(160, shared_value)
+    # 3 * 20 + 10 = 70 operations
+    assert_eq(70, operation_count)
+    0
+}

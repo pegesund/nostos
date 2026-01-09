@@ -1,4 +1,4 @@
-# expect: ()
+# expect: 0
 # Multiple readers and writers accessing shared mvar
 # Tests that read/write locking works correctly
 
@@ -53,4 +53,5 @@ main() = {
 
     # Final value should be 5
     assert_eq(5, read_value())
+    0
 }
