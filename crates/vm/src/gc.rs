@@ -272,6 +272,12 @@ pub struct GcFloat64Array {
     pub items: Vec<f64>,
 }
 
+/// A GC-managed typed array of f32 (mutable, homogeneous, for vectors).
+#[derive(Clone, Debug)]
+pub struct GcFloat32Array {
+    pub items: Vec<f32>,
+}
+
 /// A specialized immutable list of i64 for fast integer operations.
 /// Uses imbl::Vector<i64> for O(log n) cons/tail operations.
 /// Avoids GcValue boxing overhead for integer lists.
@@ -696,6 +702,7 @@ pub enum GcValue {
     // Typed arrays for JIT optimization (contiguous memory, no tag checking)
     Int64Array(GcPtr<GcInt64Array>),
     Float64Array(GcPtr<GcFloat64Array>),
+    Float32Array(GcPtr<GcFloat32Array>),
     /// Specialized list of i64 - avoids GcValue boxing overhead
     Int64List(GcInt64List),
     Tuple(GcPtr<GcTuple>),
@@ -747,6 +754,8 @@ unsafe impl Send for GcInt64Array {}
 unsafe impl Sync for GcInt64Array {}
 unsafe impl Send for GcFloat64Array {}
 unsafe impl Sync for GcFloat64Array {}
+unsafe impl Send for GcFloat32Array {}
+unsafe impl Sync for GcFloat32Array {}
 unsafe impl Send for GcTuple {}
 unsafe impl Sync for GcTuple {}
 unsafe impl Send for GcMap {}
@@ -836,6 +845,7 @@ impl fmt::Debug for GcValue {
             GcValue::Array(ptr) => write!(f, "Array({:?})", ptr),
             GcValue::Int64Array(ptr) => write!(f, "Int64Array({:?})", ptr),
             GcValue::Float64Array(ptr) => write!(f, "Float64Array({:?})", ptr),
+            GcValue::Float32Array(ptr) => write!(f, "Float32Array({:?})", ptr),
             GcValue::Tuple(ptr) => write!(f, "Tuple({:?})", ptr),
             GcValue::Map(ptr) => write!(f, "Map({:?})", ptr),
             GcValue::SharedMap(map) => write!(f, "SharedMap({} entries)", map.len()),
@@ -888,6 +898,7 @@ impl GcValue {
             // Typed arrays have no GC pointers (contain raw values, not GcValue)
             GcValue::Int64Array(ptr) => vec![ptr.as_raw()],
             GcValue::Float64Array(ptr) => vec![ptr.as_raw()],
+            GcValue::Float32Array(ptr) => vec![ptr.as_raw()],
 
             GcValue::String(ptr) => vec![ptr.as_raw()],
             // Lists are inline, so we trace through all contained values
@@ -968,6 +979,7 @@ impl GcValue {
             GcValue::Array(_) => "Array",
             GcValue::Int64Array(_) => "Int64Array",
             GcValue::Float64Array(_) => "Float64Array",
+            GcValue::Float32Array(_) => "Float32Array",
             GcValue::Tuple(_) => "Tuple",
             GcValue::Map(_) => "Map",
             GcValue::SharedMap(_) => "Map",
@@ -1073,6 +1085,7 @@ pub enum ObjectType {
     Array,
     Int64Array,
     Float64Array,
+    Float32Array,
     Tuple,
     Map,
     Set,
@@ -1101,6 +1114,7 @@ pub enum HeapData {
     Array(GcArray),
     Int64Array(GcInt64Array),
     Float64Array(GcFloat64Array),
+    Float32Array(GcFloat32Array),
     Tuple(GcTuple),
     Map(GcMap),
     Set(GcSet),
@@ -1119,6 +1133,7 @@ impl HeapData {
             HeapData::Array(_) => ObjectType::Array,
             HeapData::Int64Array(_) => ObjectType::Int64Array,
             HeapData::Float64Array(_) => ObjectType::Float64Array,
+            HeapData::Float32Array(_) => ObjectType::Float32Array,
             HeapData::Tuple(_) => ObjectType::Tuple,
             HeapData::Map(_) => ObjectType::Map,
             HeapData::Set(_) => ObjectType::Set,
@@ -1142,6 +1157,7 @@ impl HeapData {
             // Typed arrays contain no GC pointers (raw values)
             HeapData::Int64Array(_) => vec![],
             HeapData::Float64Array(_) => vec![],
+            HeapData::Float32Array(_) => vec![],
             HeapData::Tuple(tuple) => tuple
                 .items
                 .iter()
@@ -1192,6 +1208,9 @@ impl HeapData {
             }
             HeapData::Float64Array(a) => {
                 std::mem::size_of::<GcFloat64Array>() + a.items.len() * std::mem::size_of::<f64>()
+            }
+            HeapData::Float32Array(a) => {
+                std::mem::size_of::<GcFloat32Array>() + a.items.len() * std::mem::size_of::<f32>()
             }
             HeapData::Tuple(t) => {
                 std::mem::size_of::<GcTuple>() + t.items.len() * std::mem::size_of::<GcValue>()
@@ -1436,6 +1455,12 @@ impl Heap {
         GcPtr::from_raw(self.alloc(data))
     }
 
+    /// Allocate a typed f32 array (for vectors/pgvector).
+    pub fn alloc_float32_array(&mut self, items: Vec<f32>) -> GcPtr<GcFloat32Array> {
+        let data = HeapData::Float32Array(GcFloat32Array { items });
+        GcPtr::from_raw(self.alloc(data))
+    }
+
     /// Allocate a tuple.
     pub fn alloc_tuple(&mut self, items: Vec<GcValue>) -> GcPtr<GcTuple> {
         let data = HeapData::Tuple(GcTuple { items });
@@ -1567,6 +1592,22 @@ impl Heap {
     pub fn get_float64_array_mut(&mut self, ptr: GcPtr<GcFloat64Array>) -> Option<&mut GcFloat64Array> {
         match self.get_mut(ptr.as_raw())?.data {
             HeapData::Float64Array(ref mut a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Get a typed reference to f32 array data.
+    pub fn get_float32_array(&self, ptr: GcPtr<GcFloat32Array>) -> Option<&GcFloat32Array> {
+        match self.get(ptr.as_raw())?.data {
+            HeapData::Float32Array(ref a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Get a mutable reference to f32 array data.
+    pub fn get_float32_array_mut(&mut self, ptr: GcPtr<GcFloat32Array>) -> Option<&mut GcFloat32Array> {
+        match self.get_mut(ptr.as_raw())?.data {
+            HeapData::Float32Array(ref mut a) => Some(a),
             _ => None,
         }
     }
@@ -1918,6 +1959,13 @@ impl Heap {
                     "<invalid float64 array>".to_string()
                 }
             }
+            GcValue::Float32Array(ptr) => {
+                if let Some(arr) = self.get_float32_array(*ptr) {
+                    format!("Float32Array[{}]", arr.items.len())
+                } else {
+                    "<invalid float32 array>".to_string()
+                }
+            }
             GcValue::Tuple(ptr) => {
                 if let Some(tuple) = self.get_tuple(*ptr) {
                     let mut result = "(".to_string();
@@ -2092,6 +2140,10 @@ impl Heap {
                 let arr = self.get_float64_array(*ptr)?;
                 SharedMapValue::Float64Array(arr.items.clone())
             }
+            GcValue::Float32Array(ptr) => {
+                let arr = self.get_float32_array(*ptr)?;
+                SharedMapValue::Float32Array(arr.items.clone())
+            }
             // Types that can't be shared
             GcValue::Decimal(_) | GcValue::BigInt(_) | GcValue::Array(_) |
             GcValue::Closure(_, _) | GcValue::Function(_) | GcValue::NativeFunction(_) |
@@ -2169,6 +2221,10 @@ impl Heap {
             SharedMapValue::Float64Array(items) => {
                 let ptr = self.alloc_float64_array(items.clone());
                 GcValue::Float64Array(ptr)
+            }
+            SharedMapValue::Float32Array(items) => {
+                let ptr = self.alloc_float32_array(items.clone());
+                GcValue::Float32Array(ptr)
             }
         }
     }
@@ -2360,6 +2416,13 @@ impl Heap {
             GcValue::Float64Array(ptr) => {
                 if let Some(arr) = source.get_float64_array(*ptr) {
                     GcValue::Float64Array(self.alloc_float64_array(arr.items.clone()))
+                } else {
+                    GcValue::Unit
+                }
+            }
+            GcValue::Float32Array(ptr) => {
+                if let Some(arr) = source.get_float32_array(*ptr) {
+                    GcValue::Float32Array(self.alloc_float32_array(arr.items.clone()))
                 } else {
                     GcValue::Unit
                 }
@@ -2578,6 +2641,14 @@ impl Heap {
                     GcValue::Unit
                 }
             }
+            GcValue::Float32Array(ptr) => {
+                let items = self.get_float32_array(*ptr).map(|a| a.items.clone());
+                if let Some(items) = items {
+                    GcValue::Float32Array(self.alloc_float32_array(items))
+                } else {
+                    GcValue::Unit
+                }
+            }
             GcValue::Tuple(ptr) => {
                 let items = self.get_tuple(*ptr).map(|t| t.items.clone());
                 if let Some(items) = items {
@@ -2774,6 +2845,10 @@ impl Heap {
                 let items = arr.read().unwrap().clone();
                 GcValue::Float64Array(self.alloc_float64_array(items))
             }
+            Value::Float32Array(arr) => {
+                let items = arr.read().unwrap().clone();
+                GcValue::Float32Array(self.alloc_float32_array(items))
+            }
 
             // Tuple - recursively convert elements
             Value::Tuple(items) => {
@@ -2952,6 +3027,10 @@ impl Heap {
             GcValue::Float64Array(ptr) => {
                 let arr = self.get_float64_array(*ptr).expect("invalid float64 array pointer");
                 Value::Float64Array(Arc::new(RwLock::new(arr.items.clone())))
+            }
+            GcValue::Float32Array(ptr) => {
+                let arr = self.get_float32_array(*ptr).expect("invalid float32 array pointer");
+                Value::Float32Array(Arc::new(RwLock::new(arr.items.clone())))
             }
 
             // Tuple
@@ -3173,6 +3252,11 @@ fn shared_value_to_value(value: &SharedMapValue) -> Value {
         SharedMapValue::Float64Array(items) => {
             // Convert to list of Float64 values
             let values: Vec<Value> = items.iter().map(|f| Value::Float64(*f)).collect();
+            Value::List(Arc::new(values))
+        }
+        SharedMapValue::Float32Array(items) => {
+            // Convert to list of Float32 values
+            let values: Vec<Value> = items.iter().map(|f| Value::Float32(*f)).collect();
             Value::List(Arc::new(values))
         }
     }

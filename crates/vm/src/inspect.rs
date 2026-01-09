@@ -146,6 +146,7 @@ impl Value {
             Value::Array(a) => a.read().map(|g| g.is_empty()).unwrap_or(true),
             Value::Int64Array(a) => a.read().map(|g| g.is_empty()).unwrap_or(true),
             Value::Float64Array(a) => a.read().map(|g| g.is_empty()).unwrap_or(true),
+            Value::Float32Array(a) => a.read().map(|g| g.is_empty()).unwrap_or(true),
             Value::Tuple(t) => t.is_empty(),
             Value::Map(m) => m.is_empty(),
             Value::Set(s) => s.is_empty(),
@@ -220,6 +221,13 @@ impl Value {
                     format!("Float64Array({} items)", guard.len())
                 } else {
                     "Float64Array(<locked>)".to_string()
+                }
+            }
+            Value::Float32Array(a) => {
+                if let Ok(guard) = a.read() {
+                    format!("Float32Array({} items)", guard.len())
+                } else {
+                    "Float32Array(<locked>)".to_string()
                 }
             }
             Value::Tuple(t) => {
@@ -325,6 +333,20 @@ impl Value {
                     guard.iter().enumerate().map(|(i, v)| SlotInfo {
                         slot: Slot::Index(i),
                         value_type: "Float64".to_string(),
+                        preview: v.to_string(),
+                        is_leaf: true,
+                    }).collect()
+                } else {
+                    vec![]
+                }
+            }
+
+            // Float32Array
+            Value::Float32Array(a) => {
+                if let Ok(guard) = a.read() {
+                    guard.iter().enumerate().map(|(i, v)| SlotInfo {
+                        slot: Slot::Index(i),
+                        value_type: "Float32".to_string(),
                         preview: v.to_string(),
                         is_leaf: true,
                     }).collect()

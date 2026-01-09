@@ -84,6 +84,10 @@ impl InspectorTab {
                 let idx: usize = segment.trim_start_matches('[').trim_end_matches(']').parse().ok()?;
                 items.get(idx).map(|v| ThreadSafeValue::Float64(*v))
             }
+            ThreadSafeValue::Float32Array(items) => {
+                let idx: usize = segment.trim_start_matches('[').trim_end_matches(']').parse().ok()?;
+                items.get(idx).map(|v| ThreadSafeValue::Float64(*v as f64))
+            }
             ThreadSafeValue::Set(items) => {
                  let idx: usize = segment.trim_start_matches('[').trim_end_matches(']').parse().ok()?;
                  // ThreadSafeValue::Set uses Vec<ThreadSafeMapKey>, we need to convert to ThreadSafeValue for inspection
@@ -159,6 +163,7 @@ impl InspectorTab {
             }
             SharedMapValue::Int64Array(items) => ThreadSafeValue::Int64Array(items.clone()),
             SharedMapValue::Float64Array(items) => ThreadSafeValue::Float64Array(items.clone()),
+            SharedMapValue::Float32Array(items) => ThreadSafeValue::Float32Array(items.clone()),
         }
     }
 
@@ -231,6 +236,7 @@ impl InspectorTab {
             SharedMapValue::Set(items) => format!("Set({})", items.len()),
             SharedMapValue::Int64Array(items) => format!("Int64Array({})", items.len()),
             SharedMapValue::Float64Array(items) => format!("Float64Array({})", items.len()),
+            SharedMapValue::Float32Array(items) => format!("Float32Array({})", items.len()),
         }
     }
 
@@ -256,6 +262,7 @@ impl InspectorTab {
             SharedMapValue::Set(items) => format!("Set{{...}} ({} items)", items.len()),
             SharedMapValue::Int64Array(items) => format!("Int64Array({} items)", items.len()),
             SharedMapValue::Float64Array(items) => format!("Float64Array({} items)", items.len()),
+            SharedMapValue::Float32Array(items) => format!("Float32Array({} items)", items.len()),
         }
     }
 
@@ -272,6 +279,7 @@ impl InspectorTab {
             SharedMapValue::Set(items) => items.is_empty(),
             SharedMapValue::Int64Array(items) => items.is_empty(),
             SharedMapValue::Float64Array(items) => items.is_empty(),
+            SharedMapValue::Float32Array(items) => items.is_empty(),
         }
     }
 
@@ -351,6 +359,7 @@ impl InspectorTab {
             }
             SharedMapValue::Int64Array(items) => format!("{:?}", items),
             SharedMapValue::Float64Array(items) => format!("{:?}", items),
+            SharedMapValue::Float32Array(items) => format!("{:?}", items),
         }
     }
 
@@ -398,6 +407,11 @@ impl InspectorTab {
                     (format!("[{}]", i), "Float64".to_string(), v.to_string(), true)
                 }).collect()
             }
+            ThreadSafeValue::Float32Array(items) => {
+                items.iter().enumerate().map(|(i, v)| {
+                    (format!("[{}]", i), "Float32".to_string(), v.to_string(), true)
+                }).collect()
+            }
             ThreadSafeValue::Set(items) => {
                 items.iter().enumerate().map(|(i, k)| {
                     (format!("[{}]", i), "Key".to_string(), self.map_key_preview(k), true)
@@ -427,6 +441,7 @@ impl InspectorTab {
             ThreadSafeValue::Set(items) => format!("Set({})", items.len()),
             ThreadSafeValue::Int64Array(items) => format!("Int64Array({})", items.len()),
             ThreadSafeValue::Float64Array(items) => format!("Float64Array({})", items.len()),
+            ThreadSafeValue::Float32Array(items) => format!("Float32Array({})", items.len()),
         }
     }
 
@@ -470,6 +485,7 @@ impl InspectorTab {
             ThreadSafeValue::Set(items) => format!("Set{{...}} ({} items)", items.len()),
             ThreadSafeValue::Int64Array(items) => format!("Int64Array({} items)", items.len()),
             ThreadSafeValue::Float64Array(items) => format!("Float64Array({} items)", items.len()),
+            ThreadSafeValue::Float32Array(items) => format!("Float32Array({} items)", items.len()),
         }
     }
 
@@ -519,6 +535,7 @@ impl InspectorTab {
             ThreadSafeValue::Set(items) => items.is_empty(),
             ThreadSafeValue::Int64Array(items) => items.is_empty(),
             ThreadSafeValue::Float64Array(items) => items.is_empty(),
+            ThreadSafeValue::Float32Array(items) => items.is_empty(),
         }
     }
 
@@ -602,6 +619,7 @@ impl InspectorTab {
             }
             ThreadSafeValue::Int64Array(items) => format!("{:?}", items),
             ThreadSafeValue::Float64Array(items) => format!("{:?}", items),
+            ThreadSafeValue::Float32Array(items) => format!("{:?}", items),
         }
     }
 }

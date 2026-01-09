@@ -632,6 +632,9 @@ impl SendableValue {
             SharedMapValue::Float64Array(items) => {
                 SendableValue::List(items.iter().map(|f| SendableValue::Float64(*f)).collect())
             }
+            SharedMapValue::Float32Array(items) => {
+                SendableValue::List(items.iter().map(|f| SendableValue::Float32(*f)).collect())
+            }
         }
     }
 
@@ -991,6 +994,8 @@ pub enum SharedMapValue {
     Int64Array(Vec<i64>),
     /// Float64 typed array
     Float64Array(Vec<f64>),
+    /// Float32 typed array (for vectors/pgvector)
+    Float32Array(Vec<f32>),
 }
 
 // SharedMapValue is explicitly Send + Sync
@@ -1078,6 +1083,7 @@ impl SharedMapValue {
             SharedMapValue::Set(items) => format!("#{{...{} items}}", items.len()),
             SharedMapValue::Int64Array(arr) => format!("Int64Array[{}]", arr.len()),
             SharedMapValue::Float64Array(arr) => format!("Float64Array[{}]", arr.len()),
+            SharedMapValue::Float32Array(arr) => format!("Float32Array[{}]", arr.len()),
         }
     }
 }
