@@ -3005,7 +3005,7 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let dialog = Dialog::around(
         LinearLayout::vertical()
             .child(split_view)
-            .child(TextView::new("Enter: Open | a: All | n: New | r: Rename | d: Delete | e: Error | g: Graph | Ctrl+F: Search | Esc: Close"))
+            .child(TextView::new("Enter: Open | a: All | n: New | r: Rename | d: Delete | e: Error | g: Graph | i: History | Ctrl+F: Search | Esc: Close"))
     )
     .title(&title);
 
@@ -3023,6 +3023,8 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let engine_for_search = engine.clone();
     let path_for_graph = path.clone();
     let engine_for_graph = engine.clone();
+    let path_for_history = path.clone();
+    let engine_for_history = engine.clone();
     let dialog_with_keys = OnEventView::new(dialog)
         .on_event(Key::Esc, |s| {
             s.pop_layer();
@@ -3051,6 +3053,29 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                      show_call_graph_dialog(s, engine, full_name);
                  } else {
                      log_to_repl(s, "Call graph only available for functions");
+                 }
+             }
+        })
+        .on_event('i', move |s| {
+             let engine = engine_for_history.clone();
+             let path = path_for_history.clone();
+
+             let selected = s.call_on_name("browser_select", |v: &mut SelectView<BrowserItem>| {
+                 v.selection().map(|rc| (*rc).clone())
+             }).flatten();
+
+             if let Some(item) = selected {
+                 if let BrowserItem::Function { name, .. } = item {
+                     let full_name = engine.borrow().get_full_name(&path, &BrowserItem::Function {
+                         name: name.clone(),
+                         signature: String::new(),
+                         doc: None,
+                         eval_created: false,
+                     });
+                     s.pop_layer(); // Close browser
+                     open_git_history_for_definition(s, &full_name);
+                 } else {
+                     log_to_repl(s, "Git history only available for functions");
                  }
              }
         })
