@@ -3642,7 +3642,7 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let dialog = Dialog::around(
         LinearLayout::vertical()
             .child(split_view)
-            .child(TextView::new("Enter: Open | a: All | n: New | r: Rename | d: Delete | e: Error | g: Graph | i: History | Ctrl+F: Search | Esc: Close"))
+            .child(TextView::new("Enter: Open | a: All | n: New | m: Module | r: Rename | d: Delete | e: Error | g: Graph | i: History | Ctrl+F: Search | Esc: Close"))
     )
     .title(&title);
 
@@ -3662,6 +3662,8 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let engine_for_graph = engine.clone();
     let path_for_history = path.clone();
     let engine_for_history = engine.clone();
+    let path_for_module = path.clone();
+    let engine_for_module = engine.clone();
     let dialog_with_keys = OnEventView::new(dialog)
         .on_event(Key::Esc, |s| {
             s.pop_layer();
@@ -3768,6 +3770,66 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 .on_event(Key::Esc, |s| { s.pop_layer(); });
 
             s.add_layer(dialog_with_esc);
+        })
+        .on_event('m', {
+            let engine = engine_for_module.clone();
+            let path = path_for_module.clone();
+            move |s| {
+                // Show dialog to enter new module name
+                let path_for_create = path.clone();
+                let engine_for_create = engine.clone();
+                debug_log(&format!("New module dialog opened, current path: {:?}", path_for_create));
+
+                let edit_view = EditView::new()
+                    .on_submit(move |s, name| {
+                        let name = name.trim();
+                        if name.is_empty() {
+                            return;
+                        }
+
+                        s.pop_layer(); // Remove new module dialog
+
+                        // Create the module
+                        let create_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            engine_for_create.borrow_mut().create_module(name, &path_for_create)
+                        }));
+
+                        match create_result {
+                            Ok(Ok(())) => {
+                                let full_name = if path_for_create.is_empty() {
+                                    name.to_string()
+                                } else {
+                                    format!("{}.{}", path_for_create.join("."), name)
+                                };
+                                log_to_repl(s, &format!("Created module '{}'", full_name));
+                                // Refresh browser at the same path
+                                s.pop_layer(); // Remove browser
+                                show_browser_dialog(s, engine_for_create.clone(), path_for_create.clone());
+                            }
+                            Ok(Err(e)) => {
+                                s.add_layer(Dialog::info(format!("Error creating module: {}", e)));
+                            }
+                            Err(_) => {
+                                s.add_layer(Dialog::info("Internal error creating module"));
+                            }
+                        }
+                    })
+                    .with_name("new_module_name")
+                    .fixed_width(30);
+
+                let dialog = Dialog::new()
+                    .title("New Module (Enter to create, Esc to cancel)")
+                    .content(
+                        LinearLayout::vertical()
+                            .child(TextView::new("Module name:"))
+                            .child(edit_view)
+                    );
+
+                let dialog_with_esc = OnEventView::new(dialog)
+                    .on_event(Key::Esc, |s| { s.pop_layer(); });
+
+                s.add_layer(dialog_with_esc);
+            }
         })
         .on_event(Event::Char('r'), move |s| {
             // Get selected item from browser for rename
