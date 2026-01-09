@@ -9765,17 +9765,42 @@ impl Compiler {
                 }
                 None
             }
-            // For field access, look up the field's type from the record definition
+            // For field access, look up the field's type from the record/variant definition
             Expr::FieldAccess(obj, field, _) => {
                 // First, get the type of the base object
                 if let Some(obj_type) = self.expr_type_name(obj) {
-                    // Look up the type definition
+                    // Strip type parameters to get base type (e.g., Box[Int] -> Box)
+                    let base_type = if let Some(bracket_pos) = obj_type.find('[') {
+                        &obj_type[..bracket_pos]
+                    } else {
+                        &obj_type[..]
+                    };
+
+                    // Look up in simplified type info first (works for records)
                     if let Some(type_info) = self.types.get(&obj_type) {
                         if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
                             // Find the field and return its type
                             for (fname, ftype) in fields {
                                 if fname == &field.node {
                                     return Some(ftype.clone());
+                                }
+                            }
+                        }
+                    }
+
+                    // Also check AST type definitions for single-constructor variants with named fields
+                    // This handles types like `type Inner = Inner { value: Int }`
+                    if let Some(type_def) = self.type_defs.get(base_type) {
+                        if let nostos_syntax::ast::TypeBody::Variant(variants) = &type_def.body {
+                            // For single-constructor variants with named fields
+                            if variants.len() == 1 {
+                                if let nostos_syntax::ast::VariantFields::Named(fields) = &variants[0].fields {
+                                    for f in fields {
+                                        if f.name.node == field.node {
+                                            // Return the field's type
+                                            return Some(self.type_expr_to_string(&f.ty));
+                                        }
+                                    }
                                 }
                             }
                         }

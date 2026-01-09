@@ -1,10 +1,10 @@
 # expect: 60
-# Nested record access (using type annotation workaround)
+# Nested record access with chained field access
 type Inner = Inner { value: Int }
 type Outer = Outer { inner: Inner, extra: Int }
 
 main() = {
     obj = Outer(inner: Inner(value: 50), extra: 10)
-    i: Inner = obj.inner
-    i.value + obj.extra
+    # Direct chained access now works
+    obj.inner.value + obj.extra
 }

@@ -1,0 +1,17 @@
+# expect: 135
+# Deep nested field access on single-constructor variants
+type Level3 = Level3 { value: Int }
+type Level2 = Level2 { level3: Level3, bonus: Int }
+type Level1 = Level1 { level2: Level2, extra: Int }
+
+main() = {
+    obj = Level1(
+        level2: Level2(
+            level3: Level3(value: 100),
+            bonus: 25
+        ),
+        extra: 10
+    )
+    # Three levels of chained field access
+    obj.level2.level3.value + obj.level2.bonus + obj.extra
+}
