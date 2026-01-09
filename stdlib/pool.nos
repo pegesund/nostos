@@ -1,6 +1,7 @@
 # PostgreSQL Connection Pool
 #
 # Automatic connection management - get, use, release handled for you.
+# Limits concurrent connections to avoid exhausting database resources.
 #
 # Usage:
 #   use stdlib.pool.{init, query, execute, withConn}
@@ -13,23 +14,72 @@
 
 mvar connections: List[Int] = []
 mvar connectionString: String = ""
+mvar active: Int = 0      # Number of connections currently in use
+mvar maxPool: Int = 25    # Maximum concurrent connections (PostgreSQL default is 100)
 
 # Initialize the pool with a connection string
 init(connStr) = {
     connectionString = connStr
 }
 
-# Get a connection from the pool (internal)
-getConn() = match connections {
-    [] -> Pg.connect(connectionString)
+# Initialize the pool with a connection string and custom max pool size
+initWithMax(connStr, maxConnections) = {
+    connectionString = connStr
+    maxPool = maxConnections
+}
+
+# Decide what to do: take from pool, create new, or wait
+# Returns: ("take", conn, "") | ("create", 0, connStr) | ("wait", 0, "")
+# This function holds the mvar lock, but returns quickly
+decideConnection() = match connections {
     [conn | rest] -> {
         connections = rest
-        conn
+        active = active + 1
+        ("take", conn, "")
+    }
+    [] -> if active < maxPool then {
+        active = active + 1
+        ("create", 0, connectionString)
+    } else ("wait", 0, "")
+}
+
+# Decrement active count (used when connection creation fails)
+releaseSlot() = {
+    active = active - 1
+}
+
+# Get pool statistics for debugging/monitoring
+# Returns: (active, pooled, total, max)
+#   active = connections currently in use
+#   pooled = connections waiting in pool
+#   total  = active + pooled (total connections created)
+#   max    = maximum allowed connections
+stats() = {
+    pooled = length(connections)
+    (active, pooled, active + pooled, maxPool)
+}
+
+# Get a connection from the pool (internal)
+# Connection creation happens OUTSIDE the mvar lock to avoid blocking others
+getConn() = match decideConnection() {
+    ("take", conn, _) -> conn
+    ("create", _, connStr) -> try {
+        Pg.connect(connStr)
+    } catch {
+        e -> {
+            releaseSlot()
+            throw(e)
+        }
+    }
+    ("wait", _, _) -> {
+        sleep(5)
+        getConn()
     }
 }
 
 # Return a connection to the pool (internal)
 releaseConn(conn) = {
+    active = active - 1
     connections = conn :: connections
 }
 
