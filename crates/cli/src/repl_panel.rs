@@ -3,6 +3,18 @@
 //! Provides a notebook-style REPL where each input/output pair is displayed
 //! in a scrollable view with syntax highlighting.
 
+/// Debug logging to /tmp/nostos_repl_panel.log
+fn debug_log(msg: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/nostos_repl_panel.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "{}", msg);
+    }
+}
+
 use cursive::event::{Callback, Event, EventResult, Key};
 use cursive::theme::{Color, ColorStyle, Style};
 use cursive::view::{View, CannotFocus};
@@ -69,7 +81,7 @@ pub struct ReplEntry {
 }
 
 /// Output from evaluating an entry
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ReplOutput {
     /// Successful evaluation with result
     Success(String),
@@ -223,7 +235,7 @@ impl ReplPanel {
             autocomplete.update_from_source(&source);
         }
 
-        Self {
+        let panel = Self {
             history: Vec::new(),
             current: ReplEntry::new(),
             cursor: (0, 0),
@@ -240,7 +252,9 @@ impl ReplPanel {
             eval_in_progress: false,
             eval_handle: None,
             debug_session: None,
-        }
+        };
+        debug_log(&format!("[ReplPanel::new] repl_id={}, self_ptr={:p}", instance_id, &panel as *const _));
+        panel
     }
 
     /// Check if all braces/brackets/parens are balanced in the current input
@@ -303,9 +317,11 @@ impl ReplPanel {
 
         if has_breakpoints {
             // Use debug mode when breakpoints are set
+            debug_log(&format!("[submit_input] repl_id={}, starting debug session", self.instance_id));
             let debug_result = self.engine.borrow_mut().start_debug_async(&input_text);
             match debug_result {
                 Ok(session) => {
+                    debug_log(&format!("[submit_input] repl_id={}, debug session created successfully", self.instance_id));
                     // Set breakpoints on the debug session
                     for bp in self.engine.borrow().get_vm_breakpoints() {
                         let _ = session.send(nostos_vm::shared_types::DebugCommand::AddBreakpoint(bp));
@@ -314,6 +330,7 @@ impl ReplPanel {
                     let _ = session.send(nostos_vm::shared_types::DebugCommand::Continue);
 
                     self.debug_session = Some(session);
+                    debug_log(&format!("[submit_input] repl_id={}, debug_session set, has_session={}, self_ptr={:p}", self.instance_id, self.debug_session.is_some(), self as *const _));
                     self.eval_in_progress = true;
                     self.current.output = Some(ReplOutput::Definition("Debugging...".to_string()));
                 }
@@ -354,17 +371,25 @@ impl ReplPanel {
 
     /// Complete evaluation with a result (used for sync eval and polling)
     fn finish_eval_with_result(&mut self, result: Result<String, String>) {
-        // Drain any output from spawned processes
+        // Drain any output from spawned processes (println, etc.)
         let spawned_output = self.engine.borrow().drain_output();
 
         self.current.output = Some(match result {
-            Ok(mut output) => {
-                // Append any output from spawned processes
+            Ok(result_str) => {
+                // Prepend spawned output BEFORE the result (println happens during execution)
+                let mut output = String::new();
                 for line in spawned_output {
                     if !output.is_empty() {
                         output.push('\n');
                     }
                     output.push_str(&line);
+                }
+                // Add result after spawned output
+                if !result_str.is_empty() {
+                    if !output.is_empty() {
+                        output.push('\n');
+                    }
+                    output.push_str(&result_str);
                 }
                 if output.is_empty() || output.starts_with("Defined") || output.starts_with("Type") {
                     ReplOutput::Definition(output)
@@ -414,14 +439,19 @@ impl ReplPanel {
 
     /// Poll for async evaluation result. Returns true if result was received.
     pub fn poll_eval_result(&mut self) -> bool {
+        debug_log(&format!("[poll_eval_result] repl_id={}, eval_in_progress={}, has_debug_session={}, self_ptr={:p}",
+            self.instance_id, self.eval_in_progress, self.debug_session.is_some(), self as *const _));
         if !self.eval_in_progress {
             return false;
         }
 
         // Check debug session first
         if let Some(session) = &self.debug_session {
-            match session.try_result() {
+            let result = session.try_result();
+            debug_log(&format!("[poll_eval_result] repl_id={}, try_result={:?}", self.instance_id, result.as_ref().map(|r| r.is_ok())));
+            match result {
                 Some(Ok(result)) => {
+                    debug_log(&format!("[poll_eval_result] repl_id={}, debug session completed OK", self.instance_id));
                     let output = if result.is_unit() {
                         String::new()
                     } else {
@@ -432,6 +462,7 @@ impl ReplPanel {
                     return true;
                 }
                 Some(Err(e)) => {
+                    debug_log(&format!("[poll_eval_result] repl_id={}, debug session error: {}", self.instance_id, e));
                     let err_msg = if e.contains("Interrupted") {
                         "Interrupted".to_string()
                     } else {
@@ -443,6 +474,7 @@ impl ReplPanel {
                 }
                 None => {
                     // Still running or paused - don't finish yet
+                    debug_log(&format!("[poll_eval_result] repl_id={}, debug session still running", self.instance_id));
                     return false;
                 }
             }
@@ -492,12 +524,49 @@ impl ReplPanel {
 
     /// Check if we have an active debug session
     pub fn has_debug_session(&self) -> bool {
-        self.debug_session.is_some()
+        let has = self.debug_session.is_some();
+        debug_log(&format!("[has_debug_session] repl_id={}, has_session={}, self_ptr={:p}", self.instance_id, has, self as *const _));
+        has
     }
 
     /// Get a reference to the debug session if one exists
     pub fn get_debug_session(&self) -> Option<&nostos_vm::DebugSession> {
         self.debug_session.as_ref()
+    }
+
+    /// Append debug output to the current entry (shown in real-time during debugging)
+    pub fn append_debug_output(&mut self, output: &[String]) {
+        debug_log(&format!("[append_debug_output] repl_id={}, output={:?}, self_ptr={:p}", self.instance_id, output, self as *const _));
+        debug_log(&format!("[append_debug_output] BEFORE current.output={:?}", self.current.output));
+        if output.is_empty() {
+            return;
+        }
+
+        // Append to current output or create new output
+        let new_output = output.join("\n");
+        match &mut self.current.output {
+            Some(ReplOutput::Success(existing)) => {
+                if existing.is_empty() {
+                    *existing = new_output;
+                } else {
+                    existing.push('\n');
+                    existing.push_str(&new_output);
+                }
+            }
+            Some(ReplOutput::Definition(existing)) => {
+                // For definitions, append after
+                existing.push('\n');
+                existing.push_str(&new_output);
+            }
+            Some(ReplOutput::Error(existing)) => {
+                existing.push('\n');
+                existing.push_str(&new_output);
+            }
+            None => {
+                self.current.output = Some(ReplOutput::Success(new_output));
+            }
+        }
+        debug_log(&format!("[append_debug_output] AFTER current.output={:?}", self.current.output));
     }
 
     /// Cancel the current async evaluation
@@ -1002,6 +1071,27 @@ impl View for ReplPanel {
             content_y += 1;
         }
 
+        // Draw current output (for debug output shown during stepping)
+        if let Some(ref output) = self.current.output {
+            let (text, style) = match output {
+                ReplOutput::Success(s) => (s.as_str(), output_success_style),
+                ReplOutput::Error(s) => (s.as_str(), output_error_style),
+                ReplOutput::Definition(s) => (s.as_str(), output_def_style),
+            };
+
+            if !text.is_empty() {
+                for line in text.lines() {
+                    if content_y >= scroll_y && screen_y < view_height {
+                        printer.with_style(style, |p| {
+                            p.print((0, screen_y), line);
+                        });
+                        screen_y += 1;
+                    }
+                    content_y += 1;
+                }
+            }
+        }
+
         // Draw autocomplete popup
         self.draw_autocomplete(printer, cursor_screen_y);
 
@@ -1366,10 +1456,12 @@ impl ReplPanel {
     /// Take the debug state for preservation across rebuilds.
     /// Returns None if no debug session is in progress.
     pub fn take_debug_state(&mut self) -> Option<(nostos_vm::DebugSession, Vec<String>)> {
+        debug_log(&format!("[take_debug_state] repl_id={}, has_session={}, self_ptr={:p}", self.instance_id, self.debug_session.is_some(), self as *const _));
         if self.debug_session.is_some() {
             self.eval_in_progress = false;
             let session = self.debug_session.take();
             let input = self.current.input.clone();
+            debug_log(&format!("[take_debug_state] repl_id={}, session taken, self_ptr={:p}", self.instance_id, self as *const _));
             session.map(|s| (s, input))
         } else {
             None
@@ -1378,10 +1470,12 @@ impl ReplPanel {
 
     /// Restore debug state after a rebuild.
     pub fn restore_debug_state(&mut self, session: nostos_vm::DebugSession, input: Vec<String>) {
+        debug_log(&format!("[restore_debug_state] repl_id={}, restoring session, self_ptr={:p}", self.instance_id, self as *const _));
         self.debug_session = Some(session);
         self.eval_in_progress = true;
         self.current.input = input;
         self.current.output = Some(ReplOutput::Definition("Debugging...".to_string()));
+        debug_log(&format!("[restore_debug_state] repl_id={}, session restored, has_session={}, self_ptr={:p}", self.instance_id, self.debug_session.is_some(), self as *const _));
     }
 
     /// Load history entry by index (or restore stashed if None)
