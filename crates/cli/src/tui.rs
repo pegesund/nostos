@@ -551,9 +551,14 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
     let name_for_save = name.to_string();
     let name_for_close = name.to_string();
     let name_for_close_w = name.to_string();
+    let name_for_close_w_save = name.to_string();
+    let name_for_close_w_discard = name.to_string();
     let engine_save = engine.clone();
+    let engine_save_w = engine.clone();
     let editor_id_save = editor_id.clone();
     let editor_id_copy = editor_id.clone();
+    let editor_id_dirty = editor_id.clone();
+    let editor_id_save_w = editor_id.clone();
 
     // Ctrl+S to save, Ctrl+W to close, Ctrl+Y to copy, Esc to close
     let editor_with_events = OnEventView::new(editor.with_name(&editor_id))
@@ -569,8 +574,52 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
             }
         })
         .on_event(Event::CtrlChar('w'), move |s| {
-            // Close this editor
-            close_editor(s, &name_for_close_w);
+            // Check if editor has unsaved changes
+            let is_dirty = s.call_on_name(&editor_id_dirty, |v: &mut CodeEditor| v.is_dirty())
+                .unwrap_or(false);
+
+            if is_dirty {
+                // Show confirmation dialog
+                let name_save = name_for_close_w_save.clone();
+                let name_discard = name_for_close_w_discard.clone();
+                let editor_id_for_save = editor_id_save_w.clone();
+                let engine_for_save = engine_save_w.clone();
+
+                s.add_layer(
+                    Dialog::text("Unsaved changes. What do you want to do?")
+                        .title("Close Editor")
+                        .button("Save", move |s| {
+                            s.pop_layer(); // Remove dialog
+                            // Save the content
+                            let content = s.call_on_name(&editor_id_for_save, |v: &mut CodeEditor| v.get_content());
+                            if let Some(content) = content {
+                                match engine_for_save.borrow_mut().eval(&content) {
+                                    Ok(output) => {
+                                        if output.is_empty() {
+                                            log_to_repl(s, &format!("Saved {}", name_save));
+                                        } else {
+                                            log_to_repl(s, &output);
+                                        }
+                                        close_editor(s, &name_save);
+                                    }
+                                    Err(e) => {
+                                        s.add_layer(Dialog::info(format!("Error: {}", e)));
+                                    }
+                                }
+                            }
+                        })
+                        .button("Discard", move |s| {
+                            s.pop_layer(); // Remove dialog
+                            close_editor(s, &name_discard);
+                        })
+                        .button("Cancel", |s| {
+                            s.pop_layer(); // Just close dialog
+                        })
+                );
+            } else {
+                // No unsaved changes, close directly
+                close_editor(s, &name_for_close_w);
+            }
         })
         .on_event(Event::CtrlChar('s'), move |s| {
             let content = match s.call_on_name(&editor_id_save, |v: &mut CodeEditor| v.get_content()) {

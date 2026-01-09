@@ -13,17 +13,20 @@ pub struct CodeEditor {
     cursor: (usize, usize), // col, row (0-indexed)
     last_size: Vec2,
     engine: Option<Rc<RefCell<ReplEngine>>>, // For autocomplete
+    saved_content: String, // Content when last saved (for dirty checking)
 }
 
 impl CodeEditor {
     pub fn new(text: String) -> Self {
         let content: Vec<String> = text.lines().map(String::from).collect();
         let content = if content.is_empty() { vec![String::new()] } else { content };
+        let saved_content = content.join("\n");
         Self {
             content,
             cursor: (0, 0),
             last_size: Vec2::zero(),
             engine: None,
+            saved_content,
         }
     }
 
@@ -34,6 +37,16 @@ impl CodeEditor {
 
     pub fn get_content(&self) -> String {
         self.content.join("\n")
+    }
+
+    /// Check if the editor has unsaved changes
+    pub fn is_dirty(&self) -> bool {
+        self.get_content() != self.saved_content
+    }
+
+    /// Mark the current content as saved
+    pub fn mark_saved(&mut self) {
+        self.saved_content = self.get_content();
     }
 
     fn fix_cursor_x(&mut self) {
