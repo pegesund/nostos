@@ -238,8 +238,8 @@ impl ReplEngine {
         let mut vm = AsyncVM::new(vm_config);
         vm.set_interactive_mode(true);  // Enable interactive mode for REPL/TUI
         vm.register_default_natives();
-        // Initialize compiler with native indices for CallNativeIdx optimization
-        compiler.set_native_indices(vm.get_native_indices());
+        // Setup TUI channels BEFORE getting native indices
+        // This ensures the compiler uses the TUI versions of inspect/output/panel
         let inspect_receiver = Some(vm.setup_inspect());
         let output_receiver = Some(vm.setup_output());
         // Log the receiver pointer for debugging
@@ -256,6 +256,10 @@ impl ReplEngine {
         }
         let panel_receiver = Some(vm.setup_panel());
         vm.setup_eval();
+
+        // Initialize compiler with native indices AFTER all TUI setup is done
+        // This ensures CallNativeIdx optimization uses the correct TUI versions
+        compiler.set_native_indices(vm.get_native_indices());
 
         // Get dynamic_functions for eval to register/lookup functions
         let dynamic_functions = vm.get_dynamic_functions();
