@@ -1403,6 +1403,18 @@ impl ThreadWorker {
                     };
                     proc.frames[frame_idx].registers[*dst as usize] = GcValue::Int64(sum);
                 }
+                // Native range list creation - equivalent to [1..n]
+                RangeList(dst, n_reg) => {
+                    proc.frames[frame_idx].ip += 1;
+                    let n = match &proc.frames[frame_idx].registers[*n_reg as usize] {
+                        GcValue::Int64(n) => *n,
+                        _ => return Ok(FastLoopResult::NeedSlowPath(instr.clone())),
+                    };
+                    // Create list [1, 2, ..., n] efficiently
+                    let items: Vec<GcValue> = (1..=n).map(|i| GcValue::Int64(i)).collect();
+                    let list = proc.heap.make_list(items);
+                    proc.frames[frame_idx].registers[*dst as usize] = GcValue::List(list);
+                }
                 ListHead(dst, list_reg) => {
                     proc.frames[frame_idx].ip += 1;
                     let head = match &proc.frames[frame_idx].registers[*list_reg as usize] {
@@ -1437,11 +1449,8 @@ impl ThreadWorker {
                     proc.frames[frame_idx].ip += 1;
                     match &proc.frames[frame_idx].registers[*list_reg as usize] {
                         GcValue::List(list) => {
-                            // Lists are now inline - no heap lookup needed!
                             if !list.is_empty() {
                                 let head = list.items()[0].clone();
-                                // O(1) tail: just Arc clone + increment start offset
-                                // NO HEAP ALLOCATION - this is the key optimization!
                                 let tail_list = list.tail();
                                 proc.frames[frame_idx].registers[*head_dst as usize] = head;
                                 proc.frames[frame_idx].registers[*tail_dst as usize] = GcValue::List(tail_list);
@@ -1459,10 +1468,12 @@ impl ThreadWorker {
                     if args.len() == 2 {
                         let func_val = &proc.frames[frame_idx].registers[*func_reg as usize];
                         // Get the function code - works for both Function and Closure
+                        // Use unchecked access for closures since we know the ptr is valid
                         let func_code = match func_val {
                             GcValue::Function(func) => Some(&func.code),
                             GcValue::Closure(ptr) => {
-                                proc.heap.get_closure(*ptr).map(|c| &c.function.code)
+                                // SAFETY: Closure ptr came from a register which was set from a valid allocation
+                                Some(unsafe { &proc.heap.get_closure_unchecked(*ptr).function.code })
                             }
                             _ => None,
                         };

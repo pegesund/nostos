@@ -2351,6 +2351,16 @@ impl Runtime {
                 set_reg!(*dst, GcValue::Int64(result));
             }
 
+            Instruction::RangeList(dst, n_reg) => {
+                let n = match reg!(*n_reg) {
+                    GcValue::Int64(n) => *n,
+                    _ => panic!("rangeList requires Int64"),
+                };
+                let items: Vec<GcValue> = (1..=n).map(|i| GcValue::Int64(i)).collect();
+                let list = proc.heap.make_list(items);
+                set_reg!(*dst, GcValue::List(list));
+            }
+
             // === IO/Debug builtins ===
             Instruction::Print(dst, src) => {
                 let s = proc.heap.display_value(reg!(*src));

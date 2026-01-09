@@ -656,6 +656,8 @@ pub enum Instruction {
     ListIsEmpty(Reg, Reg),
     /// Sum list of integers: dst = listSum(list)
     ListSum(Reg, Reg),
+    /// Create list [1..n]: dst = rangeList(n)
+    RangeList(Reg, Reg),
 
     // === IO/Debug builtins ===
     /// Print value, return string representation: dst = print(value)
