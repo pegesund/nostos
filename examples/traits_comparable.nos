@@ -1,0 +1,102 @@
+# Comparable Trait Example
+# Shows a trait with multiple related methods.
+# Types can define custom comparison logic.
+
+# ========== Type Definitions ==========
+
+type Version = { major: Int, minor: Int, patch: Int }
+type Temperature = { celsius: Float }
+type Priority = { level: Int, name: String }
+
+# ========== Comparable Trait ==========
+# Returns: -1 if self < other, 0 if equal, 1 if self > other
+
+trait Comparable
+    compare(self, other: Self) -> Int
+end
+
+# ========== Implementations ==========
+
+# Version: compare major, then minor, then patch
+Version: Comparable
+    compare(self, other) = {
+        if self.major < other.major then -1
+        else if self.major > other.major then 1
+        else if self.minor < other.minor then -1
+        else if self.minor > other.minor then 1
+        else if self.patch < other.patch then -1
+        else if self.patch > other.patch then 1
+        else 0
+    }
+end
+
+# Temperature: compare by celsius value
+Temperature: Comparable
+    compare(self, other) = {
+        if self.celsius < other.celsius then -1
+        else if self.celsius > other.celsius then 1
+        else 0
+    }
+end
+
+# Priority: higher level = higher priority (reversed comparison)
+Priority: Comparable
+    compare(self, other) = {
+        if self.level > other.level then 1
+        else if self.level < other.level then -1
+        else 0
+    }
+end
+
+# ========== Helper Functions ==========
+
+compare_result(cmp: Int) -> String = {
+    if cmp < 0 then "less than"
+    else if cmp > 0 then "greater than"
+    else "equal to"
+}
+
+version_str(v: Version) -> String =
+    show(v.major) ++ "." ++ show(v.minor) ++ "." ++ show(v.patch)
+
+# ========== Main ==========
+
+main() = {
+    println("=== Comparable Trait ===")
+    println("")
+
+    # Version comparisons
+    println("Version Comparisons:")
+    v1 = Version(1, 0, 0)
+    v2 = Version(1, 2, 0)
+    v3 = Version(2, 0, 0)
+    v4 = Version(1, 2, 0)
+
+    println("  " ++ version_str(v1) ++ " is " ++ compare_result(v1.compare(v2)) ++ " " ++ version_str(v2))
+    println("  " ++ version_str(v2) ++ " is " ++ compare_result(v2.compare(v3)) ++ " " ++ version_str(v3))
+    println("  " ++ version_str(v2) ++ " is " ++ compare_result(v2.compare(v4)) ++ " " ++ version_str(v4))
+
+    println("")
+
+    # Temperature comparisons
+    println("Temperature Comparisons:")
+    cold = Temperature(0.0)
+    warm = Temperature(25.0)
+    hot = Temperature(35.0)
+
+    println("  " ++ show(cold.celsius) ++ "C is " ++ compare_result(cold.compare(warm)) ++ " " ++ show(warm.celsius) ++ "C")
+    println("  " ++ show(hot.celsius) ++ "C is " ++ compare_result(hot.compare(warm)) ++ " " ++ show(warm.celsius) ++ "C")
+
+    println("")
+
+    # Priority comparisons
+    println("Priority Comparisons:")
+    low = Priority(1, "Low")
+    medium = Priority(5, "Medium")
+    high = Priority(10, "High")
+
+    println("  " ++ high.name ++ " is " ++ compare_result(high.compare(low)) ++ " " ++ low.name)
+    println("  " ++ low.name ++ " is " ++ compare_result(low.compare(medium)) ++ " " ++ medium.name)
+
+    0
+}

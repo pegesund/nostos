@@ -1,0 +1,99 @@
+# Polymorphic Functions with Traits
+# Shows how to write functions that work with any type implementing a trait.
+# The compiler generates specialized versions for each concrete type used.
+
+# ========== Type Definitions ==========
+
+type Book = { title: String, pages: Int }
+type Movie = { title: String, minutes: Int }
+type Song = { title: String, seconds: Int }
+
+# ========== Describable Trait ==========
+
+trait Describable
+    describe(self) -> String
+    short_name(self) -> String
+end
+
+# ========== Implementations ==========
+
+Book: Describable
+    describe(self) = "Book: \"" ++ self.title ++ "\" (" ++ show(self.pages) ++ " pages)"
+    short_name(self) = self.title
+end
+
+Movie: Describable
+    describe(self) = "Movie: \"" ++ self.title ++ "\" (" ++ show(self.minutes) ++ " min)"
+    short_name(self) = self.title
+end
+
+Song: Describable
+    describe(self) = "Song: \"" ++ self.title ++ "\" (" ++ show(self.seconds) ++ "s)"
+    short_name(self) = self.title
+end
+
+# ========== Polymorphic Functions ==========
+# These functions call trait methods on their arguments.
+# The compiler creates specialized versions for each type.
+
+# Format item for display (works with Book, Movie, or Song)
+format_item_book(item: Book) -> String = {
+    ">> " ++ item.describe() ++ " <<"
+}
+
+format_item_movie(item: Movie) -> String = {
+    ">> " ++ item.describe() ++ " <<"
+}
+
+format_item_song(item: Song) -> String = {
+    ">> " ++ item.describe() ++ " <<"
+}
+
+# Print with prefix
+print_with_prefix_book(prefix: String, item: Book) = {
+    println(prefix ++ item.short_name())
+}
+
+print_with_prefix_movie(prefix: String, item: Movie) = {
+    println(prefix ++ item.short_name())
+}
+
+print_with_prefix_song(prefix: String, item: Song) = {
+    println(prefix ++ item.short_name())
+}
+
+# ========== Main ==========
+
+main() = {
+    println("=== Polymorphic Functions with Traits ===")
+    println("")
+
+    # Create media items
+    book = Book("The Rust Programming Language", 552)
+    movie = Movie("Inception", 148)
+    song = Song("Bohemian Rhapsody", 354)
+
+    # Use polymorphic formatting function
+    println("Formatted items:")
+    println(format_item_book(book))
+    println(format_item_movie(movie))
+    println(format_item_song(song))
+
+    println("")
+
+    # Use polymorphic print function
+    println("Short names with prefix:")
+    print_with_prefix_book("  - ", book)
+    print_with_prefix_movie("  - ", movie)
+    print_with_prefix_song("  - ", song)
+
+    println("")
+
+    # Direct trait method calls still work
+    println("Direct trait calls:")
+    println("  " ++ book.describe())
+    println("  " ++ movie.describe())
+    println("  " ++ song.describe())
+
+    0
+}

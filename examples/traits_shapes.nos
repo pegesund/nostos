@@ -1,0 +1,89 @@
+# Shapes Trait Example
+# A practical example showing traits for geometric calculations.
+# Multiple types implement the same trait with different formulas.
+
+# ========== Type Definitions ==========
+
+type Circle = { radius: Float }
+type Rectangle = { width: Float, height: Float }
+type Triangle = { base: Float, height: Float }
+
+# ========== Shape Trait ==========
+# Defines common operations for all shapes.
+
+trait Shape
+    area(self) -> Float
+    perimeter(self) -> Float
+    name(self) -> String
+end
+
+# ========== Implementations ==========
+
+Circle: Shape
+    area(self) = 3.14159 * self.radius * self.radius
+    perimeter(self) = 2.0 * 3.14159 * self.radius
+    name(self) = "Circle(r=" ++ show(self.radius) ++ ")"
+end
+
+Rectangle: Shape
+    area(self) = self.width * self.height
+    perimeter(self) = 2.0 * (self.width + self.height)
+    name(self) = "Rectangle(" ++ show(self.width) ++ "x" ++ show(self.height) ++ ")"
+end
+
+Triangle: Shape
+    area(self) = 0.5 * self.base * self.height
+    # Approximation: assumes right triangle for perimeter
+    perimeter(self) = self.base + self.height + sqrt(self.base * self.base + self.height * self.height)
+    name(self) = "Triangle(b=" ++ show(self.base) ++ ", h=" ++ show(self.height) ++ ")"
+end
+
+# ========== Helper Functions ==========
+
+# Print shape info (works with any Shape)
+print_shape_info_circle(s: Circle) = {
+    println("  " ++ s.name())
+    println("    Area:      " ++ show(s.area()))
+    println("    Perimeter: " ++ show(s.perimeter()))
+}
+
+print_shape_info_rect(s: Rectangle) = {
+    println("  " ++ s.name())
+    println("    Area:      " ++ show(s.area()))
+    println("    Perimeter: " ++ show(s.perimeter()))
+}
+
+print_shape_info_tri(s: Triangle) = {
+    println("  " ++ s.name())
+    println("    Area:      " ++ show(s.area()))
+    println("    Perimeter: " ++ show(s.perimeter()))
+}
+
+# ========== Main ==========
+
+main() = {
+    println("=== Shape Calculations ===")
+    println("")
+
+    circle = Circle(5.0)
+    rect = Rectangle(4.0, 6.0)
+    tri = Triangle(3.0, 4.0)
+
+    print_shape_info_circle(circle)
+    println("")
+    print_shape_info_rect(rect)
+    println("")
+    print_shape_info_tri(tri)
+
+    println("")
+    println("=== Area Comparisons ===")
+    println("Circle area:    " ++ show(circle.area()))
+    println("Rectangle area: " ++ show(rect.area()))
+    println("Triangle area:  " ++ show(tri.area()))
+
+    total = circle.area() + rect.area() + tri.area()
+    println("")
+    println("Total area: " ++ show(total))
+
+    0
+}

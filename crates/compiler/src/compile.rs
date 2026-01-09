@@ -213,7 +213,8 @@ pub struct TypeInfo {
 
 #[derive(Clone)]
 pub enum TypeInfoKind {
-    Record { fields: Vec<String>, mutable: bool },
+    /// Record type: fields with (name, type_name) pairs
+    Record { fields: Vec<(String, String)>, mutable: bool },
     /// Variant type: constructors with (name, field_types)
     /// Field types are stored as simple strings: "Float", "Int", etc.
     Variant { constructors: Vec<(String, Vec<String>)> },
@@ -335,7 +336,30 @@ impl Compiler {
             Expr::Int(_, _) => false,
             // Check if variable is known to be float
             Expr::Var(ident) => {
-                self.locals.get(&ident.node).map(|info| info.is_float).unwrap_or(false)
+                // Check locals.is_float first
+                if self.locals.get(&ident.node).map(|info| info.is_float).unwrap_or(false) {
+                    return true;
+                }
+                // Also check local_types for "Float" or "Float32" or "Float64"
+                if let Some(ty) = self.local_types.get(&ident.node) {
+                    return ty == "Float" || ty == "Float32" || ty == "Float64";
+                }
+                false
+            }
+            // Field access: look up the field's type from the record definition
+            Expr::FieldAccess(obj, field, _) => {
+                if let Some(obj_type) = self.expr_type_name(obj) {
+                    if let Some(type_info) = self.types.get(&obj_type) {
+                        if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
+                            for (fname, ftype) in fields {
+                                if fname == &field.node {
+                                    return ftype == "Float" || ftype == "Float32" || ftype == "Float64";
+                                }
+                            }
+                        }
+                    }
+                }
+                false
             }
             Expr::BinOp(left, op, right, _) => {
                 // Arithmetic operators preserve float type
@@ -424,10 +448,10 @@ impl Compiler {
 
         let kind = match &def.body {
             TypeBody::Record(fields) => {
-                let field_names: Vec<String> = fields.iter()
-                    .map(|f| f.name.node.clone())
+                let field_info: Vec<(String, String)> = fields.iter()
+                    .map(|f| (f.name.node.clone(), self.type_expr_name(&f.ty)))
                     .collect();
-                TypeInfoKind::Record { fields: field_names, mutable: def.mutable }
+                TypeInfoKind::Record { fields: field_info, mutable: def.mutable }
             }
             TypeBody::Variant(variants) => {
                 let constructors: Vec<(String, Vec<String>)> = variants.iter()
@@ -512,7 +536,30 @@ impl Compiler {
             modified_def.name = Spanned::new(qualified_name.clone(), method.name.span);
             modified_def.visibility = Visibility::Public; // Trait methods are always callable
 
+            // Set up param_types for Self-typed parameters before compiling
+            // This allows type inference to work correctly for field access on self/other
+            let saved_param_types = std::mem::take(&mut self.param_types);
+            for clause in &method.clauses {
+                for param in &clause.params {
+                    // Check if this parameter's type is Self
+                    let is_self_typed = param.ty.as_ref().map(|t| {
+                        matches!(t, TypeExpr::Name(n) if n.node == "Self")
+                    }).unwrap_or(false);
+
+                    // For "self" parameter (first param in trait methods) or Self-typed params
+                    if let Some(name) = self.pattern_binding_name(&param.pattern) {
+                        if name == "self" || is_self_typed {
+                            self.param_types.insert(name, type_name.clone());
+                        }
+                    }
+                }
+            }
+
             self.compile_fn_def(&modified_def)?;
+
+            // Restore param_types
+            self.param_types = saved_param_types;
+
             method_names.push(qualified_name);
         }
 
@@ -2307,8 +2354,11 @@ impl Compiler {
             Expr::Call(func, _, _) => {
                 if let Expr::Var(ident) = func.as_ref() {
                     if ident.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
-                        // It's a variant constructor - the type is determined by checking
-                        // what type has this constructor
+                        // Check if it's a record constructor (type name matches)
+                        if self.types.get(&ident.node).map(|info| matches!(&info.kind, TypeInfoKind::Record { .. })).unwrap_or(false) {
+                            return Some(ident.node.clone());
+                        }
+                        // Otherwise check if it's a variant constructor
                         for (type_name, info) in &self.types {
                             if let TypeInfoKind::Variant { constructors } = &info.kind {
                                 if constructors.iter().any(|(name, _)| name == &ident.node) {
@@ -2328,6 +2378,24 @@ impl Compiler {
                 }
                 // Then check local_types
                 self.local_types.get(&ident.node).cloned()
+            }
+            // For field access, look up the field's type from the record definition
+            Expr::FieldAccess(obj, field, _) => {
+                // First, get the type of the base object
+                if let Some(obj_type) = self.expr_type_name(obj) {
+                    // Look up the type definition
+                    if let Some(type_info) = self.types.get(&obj_type) {
+                        if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
+                            // Find the field and return its type
+                            for (fname, ftype) in fields {
+                                if fname == &field.node {
+                                    return Some(ftype.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                None
             }
             _ => None,
         }
@@ -3344,9 +3412,9 @@ impl Compiler {
             let type_value = match &type_info.kind {
                 TypeInfoKind::Record { fields, mutable } => {
                     let field_infos: Vec<FieldInfo> = fields.iter()
-                        .map(|f| FieldInfo {
-                            name: f.clone(),
-                            type_name: "any".to_string(),
+                        .map(|(fname, ftype)| FieldInfo {
+                            name: fname.clone(),
+                            type_name: ftype.clone(),
                             mutable: *mutable,
                             private: false,
                         })
