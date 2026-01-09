@@ -2358,6 +2358,7 @@ impl ThreadWorker {
                     let result = match (fast_reg!(*l), fast_reg!(*r)) {
                         (GcValue::Int64(a), GcValue::Int64(b)) => a < b,
                         (GcValue::Int32(a), GcValue::Int32(b)) => a < b,
+                        (GcValue::Char(a), GcValue::Char(b)) => a < b,
                         _ => return Err(RuntimeError::TypeError { expected: "integer".into(), found: "other".into() }),
                     };
                     fast_set!(*dst, GcValue::Bool(result));
@@ -2367,6 +2368,7 @@ impl ThreadWorker {
                     let result = match (fast_reg!(*l), fast_reg!(*r)) {
                         (GcValue::Int64(a), GcValue::Int64(b)) => a <= b,
                         (GcValue::Int32(a), GcValue::Int32(b)) => a <= b,
+                        (GcValue::Char(a), GcValue::Char(b)) => a <= b,
                         _ => return Err(RuntimeError::TypeError { expected: "integer".into(), found: "other".into() }),
                     };
                     fast_set!(*dst, GcValue::Bool(result));
@@ -2376,6 +2378,7 @@ impl ThreadWorker {
                     let result = match (fast_reg!(*l), fast_reg!(*r)) {
                         (GcValue::Int64(a), GcValue::Int64(b)) => a > b,
                         (GcValue::Int32(a), GcValue::Int32(b)) => a > b,
+                        (GcValue::Char(a), GcValue::Char(b)) => a > b,
                         _ => return Err(RuntimeError::TypeError { expected: "integer".into(), found: "other".into() }),
                     };
                     fast_set!(*dst, GcValue::Bool(result));
@@ -2385,6 +2388,7 @@ impl ThreadWorker {
                     let result = match (fast_reg!(*l), fast_reg!(*r)) {
                         (GcValue::Int64(a), GcValue::Int64(b)) => a >= b,
                         (GcValue::Int32(a), GcValue::Int32(b)) => a >= b,
+                        (GcValue::Char(a), GcValue::Char(b)) => a >= b,
                         _ => return Err(RuntimeError::TypeError { expected: "integer".into(), found: "other".into() }),
                     };
                     fast_set!(*dst, GcValue::Bool(result));
@@ -5438,19 +5442,27 @@ impl ThreadWorker {
             Concat(dst, a, b) => {
                 let a_val = reg!(*a).clone();
                 let b_val = reg!(*b).clone();
-                let (a_ptr, b_ptr) = match (a_val, b_val) {
-                    (GcValue::String(a), GcValue::String(b)) => (a, b),
+                match (a_val, b_val) {
+                    (GcValue::String(a_ptr), GcValue::String(b_ptr)) => {
+                        let proc = self.get_process_mut(local_id).unwrap();
+                        let a_str = proc.heap.get_string(a_ptr).map(|s| s.data.as_str()).unwrap_or("");
+                        let b_str = proc.heap.get_string(b_ptr).map(|s| s.data.as_str()).unwrap_or("");
+                        let result = format!("{}{}", a_str, b_str);
+                        let result_ptr = proc.heap.alloc_string(result);
+                        set_reg!(*dst, GcValue::String(result_ptr));
+                    }
+                    (GcValue::List(a_list), GcValue::List(b_list)) => {
+                        let mut new_items = a_list.items().to_vec();
+                        new_items.extend(b_list.items().iter().cloned());
+                        let proc = self.get_process_mut(local_id).unwrap();
+                        let result = proc.heap.make_list(new_items);
+                        set_reg!(*dst, GcValue::List(result));
+                    }
                     _ => return Err(RuntimeError::TypeError {
-                        expected: "String".to_string(),
-                        found: "non-string".to_string(),
+                        expected: "String or List".to_string(),
+                        found: "other".to_string(),
                     }),
                 };
-                let proc = self.get_process_mut(local_id).unwrap();
-                let a_str = proc.heap.get_string(a_ptr).map(|s| s.data.as_str()).unwrap_or("");
-                let b_str = proc.heap.get_string(b_ptr).map(|s| s.data.as_str()).unwrap_or("");
-                let result = format!("{}{}", a_str, b_str);
-                let result_ptr = proc.heap.alloc_string(result);
-                set_reg!(*dst, GcValue::String(result_ptr));
             }
 
             Throw(src) => {

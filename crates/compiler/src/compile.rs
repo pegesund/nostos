@@ -2528,12 +2528,32 @@ impl Compiler {
             }),
         };
 
-        // Create a new FnDef with the mangled name
-        let mut specialized_def = fn_def.clone();
-        specialized_def.name = Spanned::new(mangled_name.clone(), fn_def.name.span);
+        // Extract the module path from the base_name (e.g., "json.jsonParse" -> ["json"])
+        // This is needed to compile the function in its original module context
+        let original_module_path: Vec<String> = if base_name.contains('.') {
+            let parts: Vec<&str> = base_name.rsplitn(2, '.').collect();
+            if parts.len() == 2 {
+                parts[1].split('.').map(|s| s.to_string()).collect()
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        };
 
-        // Save current param_types
+        // Create a new FnDef with the mangled name (use local name, not fully qualified)
+        let mut specialized_def = fn_def.clone();
+        let local_name = if mangled_name.contains('.') {
+            mangled_name.rsplitn(2, '.').next().unwrap_or(&mangled_name).to_string()
+        } else {
+            mangled_name.clone()
+        };
+        specialized_def.name = Spanned::new(local_name, fn_def.name.span);
+
+        // Save current context
         let saved_param_types = std::mem::take(&mut self.param_types);
+        let saved_module_path = std::mem::replace(&mut self.module_path, original_module_path.clone());
+        let saved_imports = std::mem::take(&mut self.imports);
 
         // Set param_types for this specialization
         for (i, param_name) in param_names.iter().enumerate() {
@@ -2542,14 +2562,14 @@ impl Compiler {
             }
         }
 
-        // Forward declare the function
+        // Forward declare the function with the correct module
         let arity = fn_def.clauses[0].params.len();
         let placeholder = FunctionValue {
             name: mangled_name.clone(),
             arity,
             param_names: param_names.to_vec(),
             code: Arc::new(Chunk::new()),
-            module: if self.module_path.is_empty() { None } else { Some(self.module_path.join(".")) },
+            module: if original_module_path.is_empty() { None } else { Some(original_module_path.join(".")) },
             source_span: None,
             jit_code: None,
             call_count: AtomicU32::new(0),
@@ -2564,11 +2584,13 @@ impl Compiler {
             self.function_list.push(mangled_name.clone());
         }
 
-        // Compile the specialized function
+        // Compile the specialized function in the original module context
         self.compile_fn_def(&specialized_def)?;
 
-        // Restore param_types
+        // Restore context
         self.param_types = saved_param_types;
+        self.module_path = saved_module_path;
+        self.imports = saved_imports;
 
         Ok(mangled_name)
     }
@@ -2978,11 +3000,13 @@ impl Compiler {
             }
             Pattern::Variant(ctor, fields, _) => {
                 // Compute discriminant at compile time for fast runtime matching
-                let discriminant = constructor_discriminant(&ctor.node);
+                // Qualify the constructor name with module path to match how variants are created
+                let qualified_ctor = self.qualify_name(&ctor.node);
+                let discriminant = constructor_discriminant(&qualified_ctor);
                 self.chunk.emit(Instruction::TestTag(success_reg, scrut_reg, discriminant), 0);
 
                 // Look up field types for this constructor
-                let field_types = self.get_constructor_field_types(&ctor.node);
+                let field_types = self.get_constructor_field_types(&qualified_ctor);
 
                 // Extract and bind fields - only if tag matches (guard with conditional jump)
                 match fields {
@@ -3082,13 +3106,17 @@ impl Compiler {
                             let tail_reg = self.alloc_reg();
                             self.chunk.emit(Instruction::Decons(head_reg, tail_reg, current_list), 0);
 
-                            let (_, mut head_bindings) = self.compile_pattern_test(head_pat, head_reg)?;
+                            let (head_success, mut head_bindings) = self.compile_pattern_test(head_pat, head_reg)?;
+                            // AND the head pattern's success with our overall success
+                            self.chunk.emit(Instruction::And(success_reg, success_reg, head_success), 0);
                             bindings.append(&mut head_bindings);
 
                             // If this is the last head pattern and there's a tail pattern
                             if i == n - 1 {
                                 if let Some(tail_pat) = tail {
-                                    let (_, mut tail_bindings) = self.compile_pattern_test(tail_pat, tail_reg)?;
+                                    let (tail_success, mut tail_bindings) = self.compile_pattern_test(tail_pat, tail_reg)?;
+                                    // AND the tail pattern's success with our overall success
+                                    self.chunk.emit(Instruction::And(success_reg, success_reg, tail_success), 0);
                                     bindings.append(&mut tail_bindings);
                                 }
                             } else {
