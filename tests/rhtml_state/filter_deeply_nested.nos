@@ -1,0 +1,28 @@
+# expect: [page]
+# Deeply nested: when grandparent is affected, skip parent and child
+#
+# Structure: page > card > card-title
+# All three read User
+# When User changes, only "page" should be in outermost
+
+reactive User = { name: String }
+
+main() = {
+    user = User("Alice")
+    
+    cardTitle = () => RHtml(h3(user.name))
+    card = () => RHtml(div([
+        component("card-title", cardTitle),
+        p(user.name)
+    ]))
+    page = () => RHtml(div([
+        component("card", card),
+        h1(user.name)
+    ]))
+    
+    result = RHtml(div([component("page", page)]))
+    
+    # All three read user, but only page is outermost
+    affected = affectedComponents(result.deps, reactiveId(user))
+    filterOutermost(affected, result.components)
+}

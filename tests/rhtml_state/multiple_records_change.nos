@@ -1,0 +1,39 @@
+use stdlib.rhtml
+
+# expect: 4
+# Multiple records change at once - union of affected components
+#
+# When both User AND Theme change:
+# - userOnly affected (reads User)
+# - themeOnly affected (reads Theme)
+# - userTheme affected (reads both)
+# - allThree affected (reads both + Config)
+# All 4 are siblings, so all 4 should be in outermost
+
+reactive User = { name: String }
+reactive Theme = { color: String }
+reactive Config = { debug: Bool }
+
+main() = {
+    user = User("Alice")
+    theme = Theme("blue")
+    config = Config(false)
+
+    userOnly = () => RHtml(p(user.name))
+    themeOnly = () => RHtml(p(theme.color))
+    userTheme = () => RHtml(p(user.name ++ theme.color))
+    allThree = () => RHtml(p(user.name ++ theme.color ++ show(config.debug)))
+
+    result = RHtml(div([
+        component("userOnly", userOnly),
+        component("themeOnly", themeOnly),
+        component("userTheme", userTheme),
+        component("allThree", allThree)
+    ]))
+
+    # Both user and theme changed
+    changedRecords = [reactiveId(user), reactiveId(theme)]
+    affected = affectedComponentsMulti(result.deps, changedRecords)
+    outermost = filterOutermost(affected, result.components)
+    length(outermost)
+}

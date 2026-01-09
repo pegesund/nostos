@@ -1,0 +1,28 @@
+# expect: [card-title]
+# When only child is affected (not parent), re-render just child
+#
+# Structure: card contains card-title
+# Only card-title reads User (card reads Theme)
+# When User changes, only "card-title" should re-render
+
+reactive User = { name: String }
+reactive Theme = { color: String }
+
+main() = {
+    user = User("Alice")
+    theme = Theme("blue")
+    
+    # card-title reads user
+    cardTitle = () => RHtml(h2(user.name))
+    # card reads theme (not user)
+    card = () => RHtml(div([
+        component("card-title", cardTitle),
+        p(theme.color)
+    ]))
+    
+    result = RHtml(div([component("card", card)]))
+    
+    # Only card-title should be affected by user change
+    affected = affectedComponents(result.deps, reactiveId(user))
+    filterOutermost(affected, result.components)
+}

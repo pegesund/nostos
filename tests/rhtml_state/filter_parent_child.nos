@@ -1,0 +1,29 @@
+use stdlib.rhtml
+
+# expect: [card]
+# When parent and child both affected, only re-render parent
+#
+# Structure: card contains card-title
+# Both directly read User record
+# When User changes, only "card" should be in outermost list
+
+reactive User = { name: String }
+
+main() = {
+    user = User("Alice")
+
+    # Both card and card-title read user.name directly
+    cardTitle = () => RHtml(h2(user.name))
+    card = () => RHtml(div([
+        component("card-title", cardTitle),
+        p(user.name)  # Card also reads user
+    ]))
+
+    result = RHtml(div([component("card", card)]))
+
+    # Both card and card-title read user
+    affected = affectedComponents(result.deps, reactiveId(user))
+
+    # But filterOutermost should return only ["card"]
+    filterOutermost(affected, result.components)
+}

@@ -1,0 +1,59 @@
+use stdlib.rhtml
+
+# expect: 3
+# Complex hierarchy with crossing dependencies
+#
+# Structure:
+#   page
+#   ├── header (reads User)
+#   ├── sidebar
+#   │   ├── user-info (reads User)
+#   │   └── theme-picker (reads Theme)
+#   └── main-content
+#       ├── article (reads User, Theme)
+#       └── footer (reads Config)
+#
+# When User changes: header, user-info, article affected
+# sidebar is NOT affected (doesn't read User directly)
+# So outermost = [header, user-info, article] (3 components)
+
+reactive User = { name: String }
+reactive Theme = { color: String }
+reactive Config = { version: String }
+
+main() = {
+    user = User("Alice")
+    theme = Theme("dark")
+    config = Config("1.0")
+
+    headerComp = () => RHtml(h1(user.name))
+    userInfo = () => RHtml(p(user.name))
+    themePicker = () => RHtml(div([span(theme.color)]))
+    sidebar = () => RHtml(nav([
+        component("user-info", userInfo),
+        component("theme-picker", themePicker)
+    ]))
+    articleComp = () => RHtml(div([
+        h2(user.name),
+        p(theme.color)
+    ]))
+    footerComp = () => RHtml(footer([span(config.version)]))
+    mainContent = () => RHtml(div([
+        component("article", articleComp),
+        component("footer", footerComp)
+    ]))
+    page = () => RHtml(div([
+        component("header", headerComp),
+        component("sidebar", sidebar),
+        component("main-content", mainContent)
+    ]))
+
+    result = RHtml(div([component("page", page)]))
+
+    # When user changes
+    affected = affectedComponents(result.deps, reactiveId(user))
+    outermost = filterOutermost(affected, result.components)
+
+    # Should be header, user-info, article (sidebar and main-content not directly affected)
+    length(outermost)
+}

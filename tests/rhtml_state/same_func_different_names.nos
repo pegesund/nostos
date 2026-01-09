@@ -1,0 +1,24 @@
+use stdlib.rhtml
+
+# expect: 3
+# Same render function used with different component names
+# Each is tracked independently (checking count)
+
+reactive User = { name: String }
+
+main() = {
+    user = User("Alice")
+
+    # Same function, different names
+    badge = () => RHtml(span(user.name))
+
+    result = RHtml(div([
+        component("badge-1", badge),
+        component("badge-2", badge),
+        component("badge-3", badge)
+    ]))
+
+    # All three should be affected when user changes
+    affected = affectedComponents(result.deps, reactiveId(user))
+    length(affected)
+}

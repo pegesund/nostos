@@ -1,0 +1,50 @@
+# expect: true
+# Complex crossing: 3 records, 4 components with various dependencies
+# 
+# Records: User, Theme, Config
+# Components:
+#   - userOnly: reads User
+#   - themeOnly: reads Theme  
+#   - userTheme: reads User AND Theme
+#   - allThree: reads User AND Theme AND Config
+#
+# When User changes: [userOnly, userTheme, allThree] affected
+# When Theme changes: [themeOnly, userTheme, allThree] affected
+# When Config changes: [allThree] affected
+
+reactive User = { name: String }
+reactive Theme = { color: String }
+reactive Config = { debug: Bool }
+
+main() = {
+    user = User("Alice")
+    theme = Theme("blue")
+    config = Config(true)
+    
+    userOnly = () => RHtml(p(user.name))
+    themeOnly = () => RHtml(p(theme.color))
+    userTheme = () => RHtml(p(user.name ++ " " ++ theme.color))
+    allThree = () => RHtml(
+        if config.debug then p(user.name ++ " " ++ theme.color ++ " DEBUG")
+        else p(user.name ++ " " ++ theme.color)
+    )
+    
+    result = RHtml(div([
+        component("userOnly", userOnly),
+        component("themeOnly", themeOnly),
+        component("userTheme", userTheme),
+        component("allThree", allThree)
+    ]))
+    
+    # Verify deps structure
+    userAffected = affectedComponents(result.deps, reactiveId(user))
+    themeAffected = affectedComponents(result.deps, reactiveId(theme))
+    configAffected = affectedComponents(result.deps, reactiveId(config))
+    
+    # User affects 3 components
+    length(userAffected) == 3 &&
+    # Theme affects 3 components  
+    length(themeAffected) == 3 &&
+    # Config affects 1 component
+    length(configAffected) == 1
+}

@@ -187,3 +187,74 @@ escapeHtmlChars(chars: List[Char]) = match chars {
 }
 
 escapeHtml(str: String) = escapeHtmlChars(String.chars(str))
+
+# === State Transition Helpers ===
+
+# Get component names affected by a reactive record change
+affectedComponents(deps: Map[Int, List[String]], recordId: Int) =
+    if Map.contains(deps, recordId) then Map.get(deps, recordId)
+    else []
+
+# Helper: check if list contains string
+listContainsStr(list: List[String], s: String) = match list {
+    [] -> false
+    [x | rest] -> if x == s then true else listContainsStr(rest, s)
+}
+
+# Helper: add item to list if not present
+addUniqueStr(items: List[String], acc: List[String]) = match items {
+    [] -> acc
+    [x | rest] ->
+        if listContainsStr(acc, x) then addUniqueStr(rest, acc)
+        else addUniqueStr(rest, [x | acc])
+}
+
+# Helper: union of two lists (no duplicates)
+unionStrLists(a: List[String], b: List[String]) = addUniqueStr(b, a)
+
+# Collect affected components from multiple records
+collectAffectedHelper(deps: Map[Int, List[String]], ids: List[Int], acc: List[String]) = match ids {
+    [] -> acc
+    [id | rest] -> {
+        affected = affectedComponents(deps, id)
+        collectAffectedHelper(deps, rest, unionStrLists(acc, affected))
+    }
+}
+
+# Get components affected by multiple record changes (union)
+affectedComponentsMulti(deps: Map[Int, List[String]], recordIds: List[Int]) =
+    collectAffectedHelper(deps, recordIds, [])
+
+# Helper: check if any item from list1 is in list2
+anyInList(list1: List[String], list2: List[String]) = match list1 {
+    [] -> false
+    [x | rest] -> if listContainsStr(list2, x) then true else anyInList(rest, list2)
+}
+
+# Build ancestry map from component trees
+buildAncestryMap(trees, ancestors, acc) = match trees {
+    [] -> acc
+    [CNode(name, children) | rest] -> {
+        newAcc = Map.insert(acc, name, ancestors)
+        newAncestors = [name | ancestors]
+        childAcc = buildAncestryMap(children, newAncestors, newAcc)
+        buildAncestryMap(rest, ancestors, childAcc)
+    }
+}
+
+# Filter list of affected names to only keep outermost
+filterAffectedList(affected: List[String], ancestryMap: Map[String, List[String]], acc: List[String]) = match affected {
+    [] -> acc
+    [name | rest] -> {
+        ancestors = if Map.contains(ancestryMap, name) then Map.get(ancestryMap, name) else []
+        hasAffectedAncestor = anyInList(ancestors, affected)
+        if hasAffectedAncestor then filterAffectedList(rest, ancestryMap, acc)
+        else filterAffectedList(rest, ancestryMap, [name | acc])
+    }
+}
+
+# Filter affected components to only the outermost ones
+filterOutermost(affected, components) = {
+    ancestryMap = buildAncestryMap(components, [], %{})
+    filterAffectedList(affected, ancestryMap, [])
+}

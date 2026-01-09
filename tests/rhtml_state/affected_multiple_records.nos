@@ -1,0 +1,27 @@
+use stdlib.rhtml
+
+# expect: 3
+# Multiple components affected by single record change
+# (checking count instead of exact list order)
+
+reactive User = { name: String }
+
+main() = {
+    user = User("Alice")
+
+    headerComp = () => RHtml(h1(user.name))
+    sidebarComp = () => RHtml(div([p(user.name)]))
+    footerComp = () => RHtml(footer([span(user.name)]))
+    staticComp = () => RHtml(p("static"))  # doesn't read user
+
+    result = RHtml(div([
+        component("header", headerComp),
+        component("sidebar", sidebarComp),
+        component("footer", footerComp),
+        component("static", staticComp)
+    ]))
+
+    # All except "static" should be affected
+    affected = affectedComponents(result.deps, reactiveId(user))
+    length(affected)
+}
