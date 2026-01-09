@@ -141,19 +141,21 @@ handleUserDetail(req, userId: String) = {
     respondHtml(req, render(layout("User " ++ userId, content)))
 }
 
-handleCreateUser(req) = {
-    if req.method != "POST" then respond405(req)
-    else {
+handleCreateUser(req) = match req.method {
+    "POST" -> {
         name = getParam(req.formParams, "name")
         email = getParam(req.formParams, "email")
 
-        if name == "" then respond400(req, "Name is required")
-        else if email == "" then respond400(req, "Email is required")
-        else {
-            execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", (name, email))
-            redirect(req, "/users")
+        match (name, email) {
+            ("", _) -> respond400(req, "Name is required")
+            (_, "") -> respond400(req, "Email is required")
+            _ -> {
+                execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", (name, email))
+                redirect(req, "/users")
+            }
         }
     }
+    _ -> respond405(req)
 }
 
 # Transfer credits between users - uses transaction for atomicity
