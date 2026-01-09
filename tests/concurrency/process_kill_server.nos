@@ -11,13 +11,13 @@ handler(req) = {
 # Server process that binds to a port
 serverProcess(port) = {
     server = Server.bind(port)
-    acceptLoop(server)
+    myAcceptLoop(server)
 }
 
-acceptLoop(server) = {
+myAcceptLoop(server) = {
     req = Server.accept(server)
     spawn { handler(req) }
-    acceptLoop(server)
+    myAcceptLoop(server)
 }
 
 main() = {

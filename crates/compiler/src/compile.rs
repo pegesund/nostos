@@ -4013,6 +4013,7 @@ impl Compiler {
         let is_stdlib = self.module_path.first().map_or(false, |m| m == "stdlib");
         let is_trait_impl = def.name.node.contains('.');
         if !is_stdlib && !is_trait_impl {
+            // Check for builtin shadowing
             if let Some((builtin_name, builtin_doc)) = check_builtin_shadowing(&def.name.node) {
                 return Err(CompileError::DefinitionError {
                     message: format!(
@@ -4024,6 +4025,25 @@ impl Compiler {
                     ),
                     span: def.name.span,
                 });
+            }
+
+            // Check for stdlib function shadowing
+            // If the function name matches an import that comes from prelude (stdlib),
+            // it would shadow the stdlib function
+            // Exception: 'main' is the entry point and should always be allowed
+            if def.name.node != "main" {
+                if let Some(qualified_name) = self.imports.get(&def.name.node) {
+                    if self.prelude_functions.contains(qualified_name) {
+                        return Err(CompileError::DefinitionError {
+                            message: format!(
+                                "Function '{}' shadows standard library function '{}'.\n\
+                                Consider renaming your function to avoid this conflict.",
+                                def.name.node, qualified_name
+                            ),
+                            span: def.name.span,
+                        });
+                    }
+                }
             }
         }
 
