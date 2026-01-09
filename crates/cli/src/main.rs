@@ -1,5 +1,10 @@
 //! Nostos CLI - Command-line interface for running Nostos programs.
 
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 mod tui;
 mod editor;
 mod custom_views;

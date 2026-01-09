@@ -2220,24 +2220,48 @@ impl AsyncProcess {
                     }
                 }
 
-                // Fast path for binary operations - check InlineOp first
+                // Fast path for inline operations - check InlineOp first
+                use crate::gc::InlineOp;
+                let inline_op = match &callee {
+                    GcValue::Closure(_, op) => *op,
+                    GcValue::Function(func) => InlineOp::from_function(func),
+                    _ => InlineOp::None,
+                };
+
+                // Handle unary operations with constant: x => x * const
+                if arg_values.len() == 1 {
+                    if let GcValue::Int64(x) = &arg_values[0] {
+                        match inline_op {
+                            InlineOp::MulIntConst(n) => {
+                                set_reg!(dst, GcValue::Int64(x * n));
+                                return Ok(StepResult::Continue);
+                            }
+                            InlineOp::AddIntConst(n) => {
+                                set_reg!(dst, GcValue::Int64(x + n));
+                                return Ok(StepResult::Continue);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Handle binary operations: (a, b) => a op b
                 if arg_values.len() == 2 {
-                    use crate::gc::InlineOp;
-                    let inline_op = match &callee {
-                        GcValue::Closure(_, op) => *op,
-                        GcValue::Function(func) => InlineOp::from_function(func),
-                        _ => InlineOp::None,
-                    };
-                    if inline_op != InlineOp::None {
-                        if let (GcValue::Int64(x), GcValue::Int64(y)) = (&arg_values[0], &arg_values[1]) {
-                            let result = match inline_op {
-                                InlineOp::AddInt => x + y,
-                                InlineOp::SubInt => x - y,
-                                InlineOp::MulInt => x * y,
-                                InlineOp::None => unreachable!(),
-                            };
-                            set_reg!(dst, GcValue::Int64(result));
-                            return Ok(StepResult::Continue);
+                    if let (GcValue::Int64(x), GcValue::Int64(y)) = (&arg_values[0], &arg_values[1]) {
+                        match inline_op {
+                            InlineOp::AddInt => {
+                                set_reg!(dst, GcValue::Int64(x + y));
+                                return Ok(StepResult::Continue);
+                            }
+                            InlineOp::SubInt => {
+                                set_reg!(dst, GcValue::Int64(x - y));
+                                return Ok(StepResult::Continue);
+                            }
+                            InlineOp::MulInt => {
+                                set_reg!(dst, GcValue::Int64(x * y));
+                                return Ok(StepResult::Continue);
+                            }
+                            _ => {}
                         }
                     }
                 }

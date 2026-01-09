@@ -40,19 +40,26 @@ use crate::shared_types::{SharedMap, SharedMapKey, SharedMapValue};
 pub enum InlineOp {
     #[default]
     None = 0,
+    // Binary ops: (a, b) => a op b
     AddInt = 1,
     SubInt = 2,
     MulInt = 3,
+    // Unary ops with constant: x => x op const
+    MulIntConst(i64) = 4,
+    AddIntConst(i64) = 5,
 }
 
 impl InlineOp {
     /// Compute InlineOp from function code.
-    /// Returns Some(op) if the function is a simple 2-arg binary op like (a, b) => a + b
+    /// Returns Some(op) if the function is a simple binary op or unary op with constant.
     #[inline]
     pub fn from_function(func: &FunctionValue) -> InlineOp {
         use crate::value::Instruction;
+        use crate::value::Value;
         let instrs = &func.code.code;
-        // Check for pattern: BinaryOp(dst, 0, 1); Return(dst)
+        let constants = &func.code.constants;
+
+        // Check for 2-instruction binary pattern: BinaryOp(dst, 0, 1); Return(dst)
         if instrs.len() == 2 {
             if let Instruction::Return(ret_reg) = &instrs[1] {
                 match &instrs[0] {
@@ -69,6 +76,28 @@ impl InlineOp {
                 }
             }
         }
+
+        // Check for 3-instruction unary pattern: LoadConst(1, idx); Op(dst, 0, 1); Return(dst)
+        // This handles closures like: x => x * 2
+        if instrs.len() == 3 {
+            if let (Instruction::LoadConst(const_reg, const_idx), Instruction::Return(ret_reg)) = (&instrs[0], &instrs[2]) {
+                if *const_reg == 1 {
+                    // Get the constant value
+                    if let Some(Value::Int64(n)) = constants.get(*const_idx as usize) {
+                        match &instrs[1] {
+                            Instruction::MulInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                                return InlineOp::MulIntConst(*n);
+                            }
+                            Instruction::AddInt(op_dst, a, b) if *op_dst == *ret_reg && *a == 0 && *b == 1 => {
+                                return InlineOp::AddIntConst(*n);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
         InlineOp::None
     }
 }

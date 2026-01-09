@@ -1,0 +1,8 @@
+# Closure-only benchmark: creates closures but no lists
+countWithClosure(n, max) = if n >= max then n else {
+  # Create a closure, immediately discard
+  f = x => x * 2
+  countWithClosure(n + 1, max)
+}
+
+main() = countWithClosure(0, 1000000)
