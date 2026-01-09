@@ -2941,12 +2941,16 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                 });
 
                 // Now compile the file
+                // Pass "filename._file" so eval_in_module extracts the correct module path
+                // e.g., "myfile._file" -> module_path = ["myfile"]
                 let compile_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let module_name = std::path::Path::new(file_path)
+                    let file_stem = std::path::Path::new(file_path)
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("main");
-                    engine.eval_in_module(&content, Some(module_name))
+                    // Use "stem._file" to ensure module_path includes the file stem
+                    let module_name = format!("{}._file", file_stem);
+                    engine.eval_in_module(&content, Some(&module_name))
                 }));
 
                 let file_path_owned = file_path.to_string();
@@ -3270,13 +3274,16 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                 });
 
                 // Try to compile the file content
+                // Pass "filename._file" so eval_in_module extracts the correct module path
+                // e.g., "myfile._file" -> module_path = ["myfile"]
                 let compile_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    // Get module name from file path (without .nos extension)
-                    let module_name = std::path::Path::new(file_path)
+                    let file_stem = std::path::Path::new(file_path)
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("main");
-                    engine.eval_in_module(&content, Some(module_name))
+                    // Use "stem._file" to ensure module_path includes the file stem
+                    let module_name = format!("{}._file", file_stem);
+                    engine.eval_in_module(&content, Some(&module_name))
                 }));
 
                 let file_path_owned = file_path.to_string();
