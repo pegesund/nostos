@@ -6508,6 +6508,14 @@ impl Compiler {
 
             }
 
+            // CRITICAL: If this is a local variable (function parameter or let binding),
+            // do NOT resolve it as a global function. Fall through to generic call path.
+            // This ensures local variables shadow global/stdlib functions when called.
+            if !qualified_name.contains('.') && self.locals.contains_key(&qualified_name) {
+                // Skip function resolution - this is a local variable being called as a function
+                // Fall through to generic call path at the end of compile_call
+            } else {
+
             // Resolve the name (handles imports and module path) with ambiguity checking
             let resolved_name = self.resolve_name_checked(&qualified_name, func.span())?;
 
@@ -6667,6 +6675,7 @@ impl Compiler {
                     });
                 }
             }
+            } // Close the else block for local variable check
         }
 
         // Generic function call (lambdas, higher-order functions)
