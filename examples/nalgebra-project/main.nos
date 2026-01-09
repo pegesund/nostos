@@ -1,7 +1,6 @@
 # Nalgebra linear algebra benchmark - comparison with NumPy
 # Tests vector and matrix operations using wrapper functions
 # Uses native creation (no Nostos list intermediate) and internal timing
-import nalgebra
 use nalgebra.*
 
 main() = {

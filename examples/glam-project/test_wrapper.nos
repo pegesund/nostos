@@ -1,6 +1,6 @@
 # Test the glam wrapper module with list conversion functions
 
-import glam
+use glam.*
 
 main() = {
     println("Testing glam wrapper with list conversions")

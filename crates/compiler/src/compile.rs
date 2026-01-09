@@ -556,7 +556,7 @@ pub enum CompileError {
     #[error("internal compiler error: {message}")]
     InternalError { message: String, span: Span },
 
-    #[error("module `{module}` is not imported; add `import {module}` to use `{function}`")]
+    #[error("module `{module}` is not imported; add `use {module}.*` or `use {module}.{{{function}}}` to use `{function}`")]
     ModuleNotImported { module: String, function: String, span: Span },
 
     #[error("ambiguous name `{name}` is defined in multiple imported modules: {modules}")]
@@ -667,7 +667,7 @@ impl CompileError {
             }
             CompileError::ModuleNotImported { module, function, .. } => {
                 SourceError::compile(
-                    format!("module `{}` is not imported; add `import {}` to use `{}`", module, module, function),
+                    format!("module `{}` is not imported; add `use {}.*` or `use {}.{{{}}}` to use `{}`", module, module, module, function, function),
                     span
                 )
             }
@@ -14570,13 +14570,10 @@ fn load_stdlib_into_compiler(compiler: &mut Compiler, stdlib_path: &std::path::P
 impl Compiler {
     /// Compile a list of items (can be called recursively for nested modules).
     fn compile_items(&mut self, items: &[Item]) -> Result<(), CompileError> {
-        // First pass: process use and import statements to set up imports
+        // First pass: process use statements to set up imports
         for item in items {
             if let Item::Use(use_stmt) = item {
                 self.compile_use_stmt(use_stmt)?;
-            }
-            if let Item::Import(import_stmt) = item {
-                self.compile_import_stmt(import_stmt)?;
             }
         }
 
@@ -14795,6 +14792,9 @@ impl Compiler {
         };
         self.module_use_stmts.push((self.module_path.clone(), use_stmt_string));
 
+        // Also record that this module is imported (enables qualified access like module.func())
+        self.imported_modules.insert((self.module_path.clone(), module_path.clone()));
+
         match &use_stmt.imports {
             UseImports::All => {
                 // `use Foo.*` - import all public functions from the module
@@ -14844,21 +14844,6 @@ impl Compiler {
                 }
             }
         }
-
-        Ok(())
-    }
-
-    /// Compile an import statement.
-    /// Records that the current module imports the specified module.
-    fn compile_import_stmt(&mut self, import_stmt: &ImportStmt) -> Result<(), CompileError> {
-        // Build the module path from the import statement
-        let module_path: String = import_stmt.path.iter()
-            .map(|ident| ident.node.as_str())
-            .collect::<Vec<_>>()
-            .join(".");
-
-        // Record that this module is imported by the current module
-        self.imported_modules.insert((self.module_path.clone(), module_path));
 
         Ok(())
     }

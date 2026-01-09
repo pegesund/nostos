@@ -3281,16 +3281,6 @@ impl ReplEngine {
             let module_name = &name[..name.len() - 6]; // Strip "._meta"
             let mut output = String::new();
 
-            // Add imports section
-            let imports = self.compiler.get_module_imports(module_name);
-            if !imports.is_empty() {
-                output.push_str("# Imports\n");
-                for imp in &imports {
-                    output.push_str(&format!("import {}\n", imp));
-                }
-                output.push('\n');
-            }
-
             // Add use statements section
             let use_stmts = self.compiler.get_module_use_stmts(module_name);
             if !use_stmts.is_empty() {
@@ -3663,15 +3653,6 @@ impl ReplEngine {
             source.push_str(&format!("{}\n", stmt));
         }
         if !use_stmts.is_empty() {
-            source.push('\n');
-        }
-
-        // Add imports
-        let imports = self.compiler.get_module_imports(module_name);
-        for imp in &imports {
-            source.push_str(&format!("import {}\n", imp));
-        }
-        if !imports.is_empty() {
             source.push('\n');
         }
 
@@ -4331,14 +4312,10 @@ impl ReplEngine {
         use nostos_syntax::ast::{CallArg, Expr, Item, Stmt, DoStmt, TypeBody, Pattern};
         use nostos_compiler::Compiler;
 
-        // Prepend module-level imports, use statements, and type definitions if editing within a module context
+        // Prepend module-level use statements and type definitions if editing within a module context
         // This ensures that when editing a function, the module's imports and types are visible
         let (full_content, prefix_line_count) = if !module_name.is_empty() {
             let mut prefix = String::new();
-            // Add imports from the module
-            for imp in self.compiler.get_module_imports(module_name) {
-                prefix.push_str(&format!("import {}\n", imp));
-            }
             // Add use statements from the module
             for stmt in self.compiler.get_module_use_stmts(module_name) {
                 prefix.push_str(&format!("{}\n", stmt));
@@ -4410,20 +4387,10 @@ impl ReplEngine {
         // Build set of known function base names (without signature suffix)
         let mut known_functions: HashSet<String> = HashSet::new();
 
-        // Build set of known module names (from imports)
+        // Build set of known module names (from use statements)
         let mut known_modules: HashSet<String> = HashSet::new();
 
-        // Collect imports first
-        for item in &module.items {
-            if let Item::Import(import_stmt) = item {
-                // Module name is the first component of the import path
-                if let Some(first) = import_stmt.path.first() {
-                    known_modules.insert(first.node.clone());
-                }
-            }
-        }
-
-        // Process use statements to add imported function names
+        // Process use statements to add imported function names and module names
         for item in &module.items {
             if let Item::Use(use_stmt) = item {
                 use nostos_syntax::ast::UseImports;
@@ -4433,6 +4400,11 @@ impl ReplEngine {
                     .map(|ident| ident.node.as_str())
                     .collect::<Vec<_>>()
                     .join(".");
+
+                // Add the first component of the path as a known module
+                if let Some(first) = use_stmt.path.first() {
+                    known_modules.insert(first.node.clone());
+                }
 
                 match &use_stmt.imports {
                     UseImports::All => {
@@ -13171,9 +13143,8 @@ main() = {
         let _ = fs::remove_dir_all(&temp_dir); // Clean up any previous run
         fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
 
-        // Create main.nos with import and use statements
-        let main_nos = r#"import nalgebra
-use nalgebra.*
+        // Create main.nos with use statements
+        let main_nos = r#"use nalgebra.*
 
 main() = {
     v1 = vec([1.0, 2.0, 3.0])
