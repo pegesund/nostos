@@ -1,4 +1,4 @@
-//! Scheduler for lightweight processes.
+//! Thread-safe scheduler for lightweight processes.
 //!
 //! The scheduler manages:
 //! - Process registry (Pid -> Process mapping)
@@ -6,99 +6,393 @@
 //! - Message routing between processes
 //! - Link/monitor notification on exit
 //!
-//! JIT compatibility: The scheduler works with any execution engine.
-//! It just manages which Process runs, not how it runs.
+//! Thread-safety: Uses parking_lot for fast locking and atomic
+//! counters for Pid/RefId allocation. Ready for multi-CPU execution.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 
-use crate::gc::{GcConfig, GcNativeFn, GcValue, Heap};
+use parking_lot::{Mutex, RwLock};
+
+use crate::gc::{GcConfig, GcNativeFn, GcValue};
 use crate::process::{ExitReason, Process, ProcessState};
 use crate::value::{FunctionValue, Pid, RefId, RuntimeError, TypeValue, Value};
 
-/// The process scheduler.
+/// Configuration for JIT compilation.
+#[derive(Clone, Debug)]
+pub struct JitConfig {
+    /// Call count threshold before JIT compilation
+    pub hot_threshold: usize,
+    /// Maximum functions to queue for JIT at once
+    pub max_queue_size: usize,
+    /// Enable JIT compilation
+    pub enabled: bool,
+}
+
+impl Default for JitConfig {
+    fn default() -> Self {
+        Self {
+            hot_threshold: 1000,
+            max_queue_size: 64,
+            enabled: true,
+        }
+    }
+}
+
+/// JIT-compiled function signature.
+///
+/// Takes a pointer to the register file and returns an i64 status code.
+/// Status codes:
+/// - 0: Success, result is in r0
+/// - Non-zero: Need to fall back to interpreter
+///
+/// This signature is designed for:
+/// - Minimal overhead (single pointer arg)
+/// - Easy Cranelift code generation
+/// - Simple fallback to interpreter
+pub type JitFn = unsafe extern "C" fn(*mut Value) -> i64;
+
+/// A compiled function with metadata.
+#[derive(Clone)]
+pub struct CompiledFunction {
+    /// The compiled function pointer
+    pub code: JitFn,
+    /// Size of the compiled code in bytes (for memory tracking)
+    pub code_size: usize,
+}
+
+/// Trait for JIT compilation backends.
+///
+/// This trait allows different compilation backends to be plugged in.
+/// The primary implementation will be Cranelift, but this abstraction
+/// allows for testing with stubs.
+pub trait JitBackend: Send + Sync {
+    /// Compile a function to native code.
+    /// Returns None if compilation fails or is not possible.
+    fn compile(&self, func: &FunctionValue) -> Option<CompiledFunction>;
+
+    /// Get the name of this backend (for logging/debugging).
+    fn name(&self) -> &str;
+}
+
+/// A no-op JIT backend for when JIT is disabled.
+pub struct NoJitBackend;
+
+impl JitBackend for NoJitBackend {
+    fn compile(&self, _func: &FunctionValue) -> Option<CompiledFunction> {
+        None
+    }
+
+    fn name(&self) -> &str {
+        "none"
+    }
+}
+
+/// Tracks hot functions for JIT compilation.
+///
+/// Thread-safe: uses atomic counters and locks for queuing.
+pub struct JitTracker {
+    /// Call counts per function name
+    call_counts: RwLock<HashMap<String, AtomicUsize>>,
+    /// Functions queued for JIT compilation
+    jit_queue: Mutex<VecDeque<String>>,
+    /// Functions already JIT compiled (to avoid re-queuing)
+    compiled: RwLock<HashSet<String>>,
+    /// Compiled function code (fast lookup for dispatch)
+    compiled_code: RwLock<HashMap<String, CompiledFunction>>,
+    /// Total compiled code size in bytes
+    total_code_size: AtomicUsize,
+    /// Configuration
+    config: JitConfig,
+}
+
+impl JitTracker {
+    /// Create a new JIT tracker.
+    pub fn new(config: JitConfig) -> Self {
+        Self {
+            call_counts: RwLock::new(HashMap::new()),
+            jit_queue: Mutex::new(VecDeque::new()),
+            compiled: RwLock::new(HashSet::new()),
+            compiled_code: RwLock::new(HashMap::new()),
+            total_code_size: AtomicUsize::new(0),
+            config,
+        }
+    }
+
+    /// Record a function call and check if it should be JIT compiled.
+    /// Returns true if function just became hot (should be queued for JIT).
+    pub fn record_call(&self, func_name: &str) -> bool {
+        if !self.config.enabled {
+            return false;
+        }
+
+        // Check if already compiled
+        if self.compiled.read().contains(func_name) {
+            return false;
+        }
+
+        // Increment call count
+        let counts = self.call_counts.read();
+        if let Some(counter) = counts.get(func_name) {
+            let prev = counter.fetch_add(1, Ordering::Relaxed);
+            if prev + 1 == self.config.hot_threshold {
+                // Just reached threshold - queue for JIT
+                drop(counts);
+                self.queue_for_jit(func_name);
+                return true;
+            }
+            return false;
+        }
+        drop(counts);
+
+        // First call - add to tracking
+        let mut counts = self.call_counts.write();
+        counts.entry(func_name.to_string())
+            .or_insert_with(|| AtomicUsize::new(1));
+        false
+    }
+
+    /// Queue a function for JIT compilation.
+    fn queue_for_jit(&self, func_name: &str) {
+        let mut queue = self.jit_queue.lock();
+        if queue.len() < self.config.max_queue_size {
+            queue.push_back(func_name.to_string());
+        }
+    }
+
+    /// Get next function to JIT compile.
+    pub fn pop_jit_queue(&self) -> Option<String> {
+        self.jit_queue.lock().pop_front()
+    }
+
+    /// Mark a function as JIT compiled.
+    pub fn mark_compiled(&self, func_name: &str) {
+        self.compiled.write().insert(func_name.to_string());
+    }
+
+    /// Check if a function is hot (above threshold).
+    pub fn is_hot(&self, func_name: &str) -> bool {
+        if let Some(counter) = self.call_counts.read().get(func_name) {
+            counter.load(Ordering::Relaxed) >= self.config.hot_threshold
+        } else {
+            false
+        }
+    }
+
+    /// Get call count for a function.
+    pub fn get_call_count(&self, func_name: &str) -> usize {
+        self.call_counts.read()
+            .get(func_name)
+            .map(|c| c.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    /// Check if JIT is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.config.enabled
+    }
+
+    /// Get the hot threshold.
+    pub fn hot_threshold(&self) -> usize {
+        self.config.hot_threshold
+    }
+
+    /// Register a compiled function.
+    /// This stores the compiled code and marks the function as compiled.
+    pub fn register_compiled(&self, func_name: &str, compiled: CompiledFunction) {
+        let code_size = compiled.code_size;
+        self.compiled_code.write().insert(func_name.to_string(), compiled);
+        self.compiled.write().insert(func_name.to_string());
+        self.total_code_size.fetch_add(code_size, Ordering::Relaxed);
+    }
+
+    /// Get compiled function if available.
+    /// Returns the JIT function pointer for fast dispatch.
+    #[inline]
+    pub fn get_compiled(&self, func_name: &str) -> Option<JitFn> {
+        self.compiled_code.read().get(func_name).map(|f| f.code)
+    }
+
+    /// Fast check if function has JIT code.
+    /// This is optimized for the hot path - uses read lock.
+    #[inline]
+    pub fn is_compiled(&self, func_name: &str) -> bool {
+        self.compiled.read().contains(func_name)
+    }
+
+    /// Get total compiled code size in bytes.
+    pub fn total_code_size(&self) -> usize {
+        self.total_code_size.load(Ordering::Relaxed)
+    }
+
+    /// Get number of compiled functions.
+    pub fn compiled_count(&self) -> usize {
+        self.compiled.read().len()
+    }
+
+    /// Process the JIT queue with a backend.
+    /// Compiles queued functions and registers them.
+    /// Returns number of functions successfully compiled.
+    pub fn process_queue<B: JitBackend>(&self, backend: &B, functions: &HashMap<String, Rc<FunctionValue>>) -> usize {
+        let mut compiled = 0;
+
+        while let Some(func_name) = self.pop_jit_queue() {
+            // Skip if already compiled (might have been compiled by another thread)
+            if self.is_compiled(&func_name) {
+                continue;
+            }
+
+            // Get the function definition
+            if let Some(func) = functions.get(&func_name) {
+                // Try to compile
+                if let Some(compiled_fn) = backend.compile(func) {
+                    self.register_compiled(&func_name, compiled_fn);
+                    compiled += 1;
+                }
+            }
+        }
+
+        compiled
+    }
+}
+
+/// A thread-safe handle to a process.
+///
+/// Processes are wrapped in Arc<Mutex<>> to allow safe access from
+/// multiple worker threads. The Mutex is from parking_lot for speed.
+pub type ProcessHandle = Arc<Mutex<Process>>;
+
+/// The thread-safe process scheduler.
 ///
 /// Manages all processes and coordinates their execution.
-/// JIT-compatible: scheduler doesn't care if process runs
-/// interpreted or JIT-compiled code.
+/// All fields are thread-safe, ready for multi-CPU scheduling.
 pub struct Scheduler {
-    /// All processes by Pid.
-    processes: HashMap<Pid, Process>,
+    /// All processes by Pid (thread-safe).
+    processes: RwLock<HashMap<Pid, ProcessHandle>>,
 
     /// Run queue (Pids of ready processes).
-    run_queue: VecDeque<Pid>,
+    run_queue: Mutex<VecDeque<Pid>>,
 
     /// Waiting processes (in receive, not in run queue).
-    waiting: Vec<Pid>,
+    waiting: Mutex<Vec<Pid>>,
 
-    /// Currently running process Pid.
-    current: Option<Pid>,
+    /// Currently running process Pid (for single-threaded mode).
+    /// In multi-threaded mode, each worker tracks its own current.
+    current: Mutex<Option<Pid>>,
 
-    /// Next Pid to allocate (internal counter).
-    next_pid: u64,
+    /// Next Pid to allocate (atomic counter).
+    next_pid: AtomicU64,
 
-    /// Next RefId for monitors (internal counter).
-    next_ref: u64,
+    /// Next RefId for monitors (atomic counter).
+    next_ref: AtomicU64,
 
     /// Global functions (shared across processes).
-    pub functions: HashMap<String, Rc<FunctionValue>>,
+    /// RwLock since these are typically only written at startup.
+    pub functions: RwLock<HashMap<String, Rc<FunctionValue>>>,
 
     /// Native functions (shared across processes).
-    pub natives: HashMap<String, Rc<GcNativeFn>>,
+    pub natives: RwLock<HashMap<String, Rc<GcNativeFn>>>,
 
     /// Type definitions (shared).
-    pub types: HashMap<String, Rc<TypeValue>>,
+    pub types: RwLock<HashMap<String, Rc<TypeValue>>>,
 
     /// Global variables (shared, read-only after init).
-    pub globals: HashMap<String, Value>,
+    pub globals: RwLock<HashMap<String, Value>>,
+
+    /// JIT compilation tracker (hot function detection).
+    pub jit_tracker: JitTracker,
 }
 
 impl Scheduler {
     /// Create a new scheduler.
     pub fn new() -> Self {
+        Self::with_jit_config(JitConfig::default())
+    }
+
+    /// Create a scheduler with custom JIT configuration.
+    pub fn with_jit_config(jit_config: JitConfig) -> Self {
         Self {
-            processes: HashMap::new(),
-            run_queue: VecDeque::new(),
-            waiting: Vec::new(),
-            current: None,
-            next_pid: 1, // Pid 0 is reserved for "init" process
-            next_ref: 1,
-            functions: HashMap::new(),
-            natives: HashMap::new(),
-            types: HashMap::new(),
-            globals: HashMap::new(),
+            processes: RwLock::new(HashMap::new()),
+            run_queue: Mutex::new(VecDeque::new()),
+            waiting: Mutex::new(Vec::new()),
+            current: Mutex::new(None),
+            next_pid: AtomicU64::new(1), // Pid 0 is reserved
+            next_ref: AtomicU64::new(1),
+            functions: RwLock::new(HashMap::new()),
+            natives: RwLock::new(HashMap::new()),
+            types: RwLock::new(HashMap::new()),
+            globals: RwLock::new(HashMap::new()),
+            jit_tracker: JitTracker::new(jit_config),
         }
     }
 
     /// Spawn a new process.
     /// Returns the new process's Pid.
-    pub fn spawn(&mut self) -> Pid {
+    /// Note: Adds process to internal run queue. For WorkerPool use, consider spawn_unqueued().
+    pub fn spawn(&self) -> Pid {
         self.spawn_with_config(GcConfig::default())
     }
 
     /// Spawn a new process with custom GC config.
-    pub fn spawn_with_config(&mut self, gc_config: GcConfig) -> Pid {
-        let pid = Pid(self.next_pid);
-        self.next_pid += 1;
+    /// Note: Adds process to internal run queue. For WorkerPool use, consider spawn_unqueued().
+    pub fn spawn_with_config(&self, gc_config: GcConfig) -> Pid {
+        let pid = Pid(self.next_pid.fetch_add(1, Ordering::SeqCst));
 
         let process = Process::with_gc_config(pid, gc_config);
-        self.processes.insert(pid, process);
-        self.run_queue.push_back(pid);
+        let handle = Arc::new(Mutex::new(process));
+
+        self.processes.write().insert(pid, handle);
+        self.run_queue.lock().push_back(pid);
+
+        pid
+    }
+
+    /// Spawn a new process without adding to the run queue.
+    /// Used by WorkerPool which manages its own work queues.
+    pub fn spawn_unqueued(&self) -> Pid {
+        self.spawn_unqueued_with_config(GcConfig::default())
+    }
+
+    /// Spawn with config without adding to run queue.
+    pub fn spawn_unqueued_with_config(&self, gc_config: GcConfig) -> Pid {
+        let pid = Pid(self.next_pid.fetch_add(1, Ordering::SeqCst));
+
+        let process = Process::with_gc_config(pid, gc_config);
+        let handle = Arc::new(Mutex::new(process));
+
+        self.processes.write().insert(pid, handle);
+        // Don't add to run_queue - caller will manage scheduling
 
         pid
     }
 
     /// Spawn a linked process.
     /// If either process dies with an error, the other is killed too.
-    pub fn spawn_link(&mut self, parent_pid: Pid) -> Pid {
+    pub fn spawn_link(&self, parent_pid: Pid) -> Pid {
         let child_pid = self.spawn();
 
         // Create bidirectional link
-        if let Some(parent) = self.processes.get_mut(&parent_pid) {
-            parent.link(child_pid);
-        }
-        if let Some(child) = self.processes.get_mut(&child_pid) {
-            child.link(parent_pid);
+        // Lock ordering: always lock lower Pid first to prevent deadlock
+        let (first_pid, second_pid) = if parent_pid.0 < child_pid.0 {
+            (parent_pid, child_pid)
+        } else {
+            (child_pid, parent_pid)
+        };
+
+        let processes = self.processes.read();
+        if let (Some(first), Some(second)) = (processes.get(&first_pid), processes.get(&second_pid)) {
+            let mut first_lock = first.lock();
+            let mut second_lock = second.lock();
+
+            if first_pid == parent_pid {
+                first_lock.link(child_pid);
+                second_lock.link(parent_pid);
+            } else {
+                first_lock.link(parent_pid);
+                second_lock.link(child_pid);
+            }
         }
 
         child_pid
@@ -106,99 +400,173 @@ impl Scheduler {
 
     /// Spawn a monitored process.
     /// Returns (child_pid, monitor_ref).
-    pub fn spawn_monitor(&mut self, parent_pid: Pid) -> (Pid, RefId) {
+    pub fn spawn_monitor(&self, parent_pid: Pid) -> (Pid, RefId) {
         let child_pid = self.spawn();
-        let ref_id = RefId(self.next_ref);
-        self.next_ref += 1;
+        let ref_id = RefId(self.next_ref.fetch_add(1, Ordering::SeqCst));
 
-        // Set up monitor (parent watches child)
-        if let Some(parent) = self.processes.get_mut(&parent_pid) {
-            parent.add_monitor(ref_id, child_pid);
-        }
-        if let Some(child) = self.processes.get_mut(&child_pid) {
-            child.add_monitored_by(ref_id, parent_pid);
+        // Lock ordering: always lock lower Pid first
+        let (first_pid, second_pid) = if parent_pid.0 < child_pid.0 {
+            (parent_pid, child_pid)
+        } else {
+            (child_pid, parent_pid)
+        };
+
+        let processes = self.processes.read();
+        if let (Some(first), Some(second)) = (processes.get(&first_pid), processes.get(&second_pid)) {
+            let mut first_lock = first.lock();
+            let mut second_lock = second.lock();
+
+            if first_pid == parent_pid {
+                first_lock.add_monitor(ref_id, child_pid);
+                second_lock.add_monitored_by(ref_id, parent_pid);
+            } else {
+                second_lock.add_monitor(ref_id, child_pid);
+                first_lock.add_monitored_by(ref_id, parent_pid);
+            }
         }
 
         (child_pid, ref_id)
     }
 
     /// Allocate a new unique reference.
-    pub fn make_ref(&mut self) -> RefId {
-        let r = RefId(self.next_ref);
-        self.next_ref += 1;
-        r
+    pub fn make_ref(&self) -> RefId {
+        RefId(self.next_ref.fetch_add(1, Ordering::SeqCst))
     }
 
-    /// Get a process by Pid (immutable).
-    pub fn get_process(&self, pid: Pid) -> Option<&Process> {
-        self.processes.get(&pid)
+    /// Get a process handle by Pid.
+    /// Returns a cloned Arc - safe to hold across await points.
+    pub fn get_process_handle(&self, pid: Pid) -> Option<ProcessHandle> {
+        self.processes.read().get(&pid).cloned()
     }
 
-    /// Get a process by Pid (mutable).
-    pub fn get_process_mut(&mut self, pid: Pid) -> Option<&mut Process> {
-        self.processes.get_mut(&pid)
+    /// Execute a function with a locked process.
+    /// This is the preferred way to access process data.
+    pub fn with_process<F, R>(&self, pid: Pid, f: F) -> Option<R>
+    where
+        F: FnOnce(&Process) -> R,
+    {
+        let processes = self.processes.read();
+        processes.get(&pid).map(|handle| f(&handle.lock()))
     }
 
-    /// Get the currently running process.
-    pub fn current_process(&self) -> Option<&Process> {
-        self.current.and_then(|pid| self.processes.get(&pid))
-    }
-
-    /// Get the currently running process (mutable).
-    pub fn current_process_mut(&mut self) -> Option<&mut Process> {
-        self.current.and_then(|pid| self.processes.get_mut(&pid))
+    /// Execute a function with a mutable locked process.
+    pub fn with_process_mut<F, R>(&self, pid: Pid, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut Process) -> R,
+    {
+        let processes = self.processes.read();
+        processes.get(&pid).map(|handle| f(&mut handle.lock()))
     }
 
     /// Get current process Pid.
     pub fn current_pid(&self) -> Option<Pid> {
-        self.current
+        *self.current.lock()
     }
 
     /// Send a message from one process to another.
     /// The message is deep-copied to the target's heap.
-    pub fn send(&mut self, from_pid: Pid, to_pid: Pid, message: GcValue) -> Result<(), RuntimeError> {
-        // Get source heap for deep copy
-        let source_heap = if let Some(from) = self.processes.get(&from_pid) {
-            // Clone heap reference for borrow checker
-            // In practice, we need to be careful here
-            &from.heap as *const Heap
+    pub fn send(&self, from_pid: Pid, to_pid: Pid, message: GcValue) -> Result<(), RuntimeError> {
+        // Lock ordering: always lock lower Pid first to prevent deadlock
+        let (first_pid, second_pid, from_is_first) = if from_pid.0 < to_pid.0 {
+            (from_pid, to_pid, true)
+        } else if from_pid.0 > to_pid.0 {
+            (to_pid, from_pid, false)
         } else {
-            return Err(RuntimeError::Panic(format!("Sender process {:?} not found", from_pid)));
+            // Sending to self - just push the message directly
+            let processes = self.processes.read();
+            if let Some(handle) = processes.get(&from_pid) {
+                let mut proc = handle.lock();
+                // For self-send, the message is already on our heap - just clone it
+                proc.mailbox.push_back(message.clone());
+            }
+            return Ok(());
         };
 
-        // Deliver to target
-        if let Some(to) = self.processes.get_mut(&to_pid) {
-            // Safety: source_heap is valid, we're not modifying it
-            unsafe {
-                to.deliver_message(message, &*source_heap);
-            }
+        let processes = self.processes.read();
 
-            // If target was waiting, add back to run queue
-            if to.state == ProcessState::Running && !self.run_queue.contains(&to_pid) {
-                // Was waiting, now has message - add to run queue
-                self.waiting.retain(|&p| p != to_pid);
-                self.run_queue.push_back(to_pid);
-            }
+        let first_handle = processes.get(&first_pid);
+        let second_handle = processes.get(&second_pid);
 
-            Ok(())
-        } else {
-            // Target doesn't exist - message is silently dropped (Erlang behavior)
-            Ok(())
+        match (first_handle, second_handle) {
+            (Some(first), Some(second)) => {
+                let mut first_lock = first.lock();
+                let mut second_lock = second.lock();
+
+                let (source, target) = if from_is_first {
+                    (&*first_lock, &mut *second_lock)
+                } else {
+                    (&*second_lock, &mut *first_lock)
+                };
+
+                // Deep copy message from source heap to target heap
+                let copied = target.heap.deep_copy(&message, &source.heap);
+                target.mailbox.push_back(copied);
+
+                // Wake up if waiting
+                if target.state == ProcessState::Waiting {
+                    target.state = ProcessState::Running;
+                }
+
+                drop(first_lock);
+                drop(second_lock);
+                drop(processes);
+
+                // Add to run queue if was waiting
+                self.wake_process(to_pid);
+
+                Ok(())
+            }
+            (None, _) => {
+                Err(RuntimeError::Panic(format!("Sender process {:?} not found", from_pid)))
+            }
+            (_, None) => {
+                // Target doesn't exist - message is silently dropped (Erlang behavior)
+                Ok(())
+            }
         }
     }
 
+    /// Wake a waiting process (add to run queue if not there).
+    fn wake_process(&self, pid: Pid) {
+        let mut run_queue = self.run_queue.lock();
+        let mut waiting = self.waiting.lock();
+
+        waiting.retain(|&p| p != pid);
+        if !run_queue.contains(&pid) {
+            run_queue.push_back(pid);
+        }
+    }
+
+    /// Drain all pids from the run queue.
+    /// Used by WorkerPool to pick up newly spawned/woken processes.
+    pub fn drain_run_queue(&self) -> Vec<Pid> {
+        self.run_queue.lock().drain(..).collect()
+    }
+
+    /// Pop a single pid from the run queue.
+    /// Returns None if queue is empty.
+    pub fn pop_run_queue(&self) -> Option<Pid> {
+        self.run_queue.lock().pop_front()
+    }
+
     /// Pick next process to run (round-robin).
-    pub fn schedule_next(&mut self) -> Option<Pid> {
+    pub fn schedule_next(&self) -> Option<Pid> {
+        let mut current_guard = self.current.lock();
+
         // Put current back in queue if still runnable
-        if let Some(current_pid) = self.current {
-            if let Some(proc) = self.processes.get(&current_pid) {
+        if let Some(current_pid) = *current_guard {
+            if let Some(handle) = self.processes.read().get(&current_pid) {
+                let proc = handle.lock();
                 match proc.state {
                     ProcessState::Running | ProcessState::Suspended => {
-                        self.run_queue.push_back(current_pid);
+                        drop(proc);
+                        self.run_queue.lock().push_back(current_pid);
                     }
                     ProcessState::Waiting => {
-                        if !self.waiting.contains(&current_pid) {
-                            self.waiting.push(current_pid);
+                        drop(proc);
+                        let mut waiting = self.waiting.lock();
+                        if !waiting.contains(&current_pid) {
+                            waiting.push(current_pid);
                         }
                     }
                     ProcessState::Exited(_) => {
@@ -209,108 +577,119 @@ impl Scheduler {
         }
 
         // Get next from run queue
-        self.current = self.run_queue.pop_front();
+        let next = self.run_queue.lock().pop_front();
+        *current_guard = next;
 
         // Reset reductions for new process
-        if let Some(pid) = self.current {
-            if let Some(proc) = self.processes.get_mut(&pid) {
+        if let Some(pid) = next {
+            if let Some(handle) = self.processes.read().get(&pid) {
+                let mut proc = handle.lock();
                 proc.reset_reductions();
                 proc.state = ProcessState::Running;
             }
         }
 
-        self.current
+        next
     }
 
     /// Mark current process as yielded and schedule next.
-    pub fn yield_current(&mut self) -> Option<Pid> {
-        if let Some(pid) = self.current {
-            if let Some(proc) = self.processes.get_mut(&pid) {
-                proc.suspend();
-            }
+    pub fn yield_current(&self) -> Option<Pid> {
+        if let Some(pid) = self.current_pid() {
+            self.with_process_mut(pid, |proc| proc.suspend());
         }
         self.schedule_next()
     }
 
     /// Process exited - handle links and monitors.
-    pub fn process_exit(&mut self, pid: Pid, reason: ExitReason, value: Option<GcValue>) {
-        let (links, monitored_by) = if let Some(proc) = self.processes.get_mut(&pid) {
-            proc.exit(reason.clone(), value.clone());
-            (proc.links.clone(), proc.monitored_by.clone())
-        } else {
-            return;
+    pub fn process_exit(&self, pid: Pid, reason: ExitReason, value: Option<GcValue>) {
+        let (links, monitored_by) = {
+            let processes = self.processes.read();
+            if let Some(handle) = processes.get(&pid) {
+                let mut proc = handle.lock();
+                proc.exit(reason.clone(), value.clone());
+                (proc.links.clone(), proc.monitored_by.clone())
+            } else {
+                return;
+            }
         };
 
         // Propagate to linked processes
         let is_error = !matches!(reason, ExitReason::Normal);
         if is_error {
             for linked_pid in links {
-                if let Some(linked) = self.processes.get_mut(&linked_pid) {
+                self.with_process_mut(linked_pid, |linked| {
                     linked.unlink(pid);
-                    if linked.state != ProcessState::Exited(ExitReason::Normal) {
-                        // Kill linked process
+                    if !matches!(linked.state, ProcessState::Exited(_)) {
                         linked.exit(
                             ExitReason::LinkedExit(pid, format!("{:?}", reason)),
                             None,
                         );
                     }
-                }
+                });
             }
         }
 
         // Send DOWN messages to monitors
         for (ref_id, watcher_pid) in monitored_by {
-            if let Some(watcher) = self.processes.get_mut(&watcher_pid) {
-                // Create DOWN message: {:DOWN, ref, :process, pid, reason}
-                // For now, just send a simple tuple
+            self.with_process_mut(watcher_pid, |watcher| {
+                // Create DOWN message: (ref, pid)
                 let down_msg = GcValue::Tuple(watcher.heap.alloc_tuple(vec![
-                    GcValue::Int(ref_id.0 as i64), // ref
-                    GcValue::Pid(pid.0),           // pid of exited process
+                    GcValue::Int(ref_id.0 as i64),
+                    GcValue::Pid(pid.0),
                 ]));
                 watcher.mailbox.push_back(down_msg);
 
                 // Wake if waiting
                 if watcher.state == ProcessState::Waiting {
                     watcher.state = ProcessState::Running;
-                    if !self.run_queue.contains(&watcher_pid) {
-                        self.waiting.retain(|&p| p != watcher_pid);
-                        self.run_queue.push_back(watcher_pid);
-                    }
                 }
 
-                // Remove monitor
                 watcher.monitors.remove(&ref_id);
-            }
+            });
+
+            self.wake_process(watcher_pid);
         }
 
         // Remove from queues
-        self.run_queue.retain(|&p| p != pid);
-        self.waiting.retain(|&p| p != pid);
-        if self.current == Some(pid) {
-            self.current = None;
+        self.run_queue.lock().retain(|&p| p != pid);
+        self.waiting.lock().retain(|&p| p != pid);
+
+        let mut current_guard = self.current.lock();
+        if *current_guard == Some(pid) {
+            *current_guard = None;
         }
     }
 
     /// Check if any processes are still alive.
     pub fn has_processes(&self) -> bool {
-        self.processes.values().any(|p| !p.is_exited())
+        self.processes.read().values().any(|handle| {
+            !handle.lock().is_exited()
+        })
     }
 
     /// Get count of active (non-exited) processes.
     pub fn process_count(&self) -> usize {
-        self.processes.values().filter(|p| !p.is_exited()).count()
+        self.processes.read().values()
+            .filter(|handle| !handle.lock().is_exited())
+            .count()
     }
 
     /// Get count of runnable processes.
     pub fn runnable_count(&self) -> usize {
-        self.run_queue.len() + if self.current.is_some() { 1 } else { 0 }
+        self.run_queue.lock().len() + if self.current_pid().is_some() { 1 } else { 0 }
     }
 
     /// Clean up exited processes.
-    pub fn cleanup_exited(&mut self) {
-        self.processes.retain(|_, p| !p.is_exited());
+    pub fn cleanup_exited(&self) {
+        self.processes.write().retain(|_, handle| {
+            !handle.lock().is_exited()
+        });
     }
 }
+
+// SAFETY: Scheduler uses only thread-safe primitives internally
+unsafe impl Send for Scheduler {}
+unsafe impl Sync for Scheduler {}
 
 impl Default for Scheduler {
     fn default() -> Self {
@@ -324,7 +703,7 @@ mod tests {
 
     #[test]
     fn test_spawn() {
-        let mut sched = Scheduler::new();
+        let sched = Scheduler::new();
 
         let pid1 = sched.spawn();
         let pid2 = sched.spawn();
@@ -336,7 +715,7 @@ mod tests {
 
     #[test]
     fn test_scheduling() {
-        let mut sched = Scheduler::new();
+        let sched = Scheduler::new();
 
         let pid1 = sched.spawn();
         let pid2 = sched.spawn();
@@ -357,7 +736,7 @@ mod tests {
 
     #[test]
     fn test_message_passing() {
-        let mut sched = Scheduler::new();
+        let sched = Scheduler::new();
 
         let pid1 = sched.spawn();
         let pid2 = sched.spawn();
@@ -367,30 +746,32 @@ mod tests {
         sched.send(pid1, pid2, msg).unwrap();
 
         // Check pid2 received it
-        let proc2 = sched.get_process_mut(pid2).unwrap();
-        assert!(proc2.has_messages());
-        let received = proc2.try_receive().unwrap();
-        assert_eq!(received, GcValue::Int(42));
+        sched.with_process_mut(pid2, |proc| {
+            assert!(proc.has_messages());
+            let received = proc.try_receive().unwrap();
+            assert_eq!(received, GcValue::Int(42));
+        });
     }
 
     #[test]
     fn test_spawn_link() {
-        let mut sched = Scheduler::new();
+        let sched = Scheduler::new();
 
         let parent = sched.spawn();
         let child = sched.spawn_link(parent);
 
         // Both should be linked
-        let parent_proc = sched.get_process(parent).unwrap();
-        let child_proc = sched.get_process(child).unwrap();
-
-        assert!(parent_proc.links.contains(&child));
-        assert!(child_proc.links.contains(&parent));
+        sched.with_process(parent, |proc| {
+            assert!(proc.links.contains(&child));
+        });
+        sched.with_process(child, |proc| {
+            assert!(proc.links.contains(&parent));
+        });
     }
 
     #[test]
     fn test_process_exit_kills_linked() {
-        let mut sched = Scheduler::new();
+        let sched = Scheduler::new();
 
         let parent = sched.spawn();
         let child = sched.spawn_link(parent);
@@ -399,38 +780,339 @@ mod tests {
         sched.process_exit(child, ExitReason::Error("crash".to_string()), None);
 
         // Parent should also be dead
-        let parent_proc = sched.get_process(parent).unwrap();
-        assert!(parent_proc.is_exited());
+        sched.with_process(parent, |proc| {
+            assert!(proc.is_exited());
+        });
     }
 
     #[test]
     fn test_spawn_monitor() {
-        let mut sched = Scheduler::new();
+        let sched = Scheduler::new();
 
         let watcher = sched.spawn();
-        let (child, ref_id) = sched.spawn_monitor(watcher);
+        let (child, _ref_id) = sched.spawn_monitor(watcher);
 
         // Kill child
         sched.process_exit(child, ExitReason::Normal, None);
 
         // Watcher should have DOWN message
-        let watcher_proc = sched.get_process(watcher).unwrap();
-        assert!(watcher_proc.has_messages());
+        sched.with_process(watcher, |proc| {
+            assert!(proc.has_messages());
+        });
     }
 
     #[test]
     fn test_waiting_wakeup() {
-        let mut sched = Scheduler::new();
+        let sched = Scheduler::new();
 
         let pid1 = sched.spawn();
         let pid2 = sched.spawn();
 
         // Put pid2 in waiting state
-        sched.get_process_mut(pid2).unwrap().wait_for_message();
-        assert_eq!(sched.get_process(pid2).unwrap().state, ProcessState::Waiting);
+        sched.with_process_mut(pid2, |proc| {
+            proc.wait_for_message();
+        });
+        sched.with_process(pid2, |proc| {
+            assert_eq!(proc.state, ProcessState::Waiting);
+        });
 
         // Send message should wake it up
         sched.send(pid1, pid2, GcValue::Int(1)).unwrap();
-        assert_eq!(sched.get_process(pid2).unwrap().state, ProcessState::Running);
+        sched.with_process(pid2, |proc| {
+            assert_eq!(proc.state, ProcessState::Running);
+        });
+    }
+
+    #[test]
+    fn test_concurrent_spawn() {
+        use std::thread;
+
+        let sched = Arc::new(Scheduler::new());
+        let mut handles = vec![];
+
+        // Spawn from multiple threads
+        for _ in 0..4 {
+            let sched_clone = Arc::clone(&sched);
+            handles.push(thread::spawn(move || {
+                for _ in 0..100 {
+                    sched_clone.spawn();
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Should have 400 processes
+        assert_eq!(sched.process_count(), 400);
+    }
+
+    #[test]
+    fn test_concurrent_message_passing() {
+        use std::thread;
+
+        let sched = Arc::new(Scheduler::new());
+        let receiver = sched.spawn();
+
+        let mut handles = vec![];
+
+        // Send messages from multiple threads
+        for i in 0..4 {
+            let sched_clone = Arc::clone(&sched);
+            let sender = sched.spawn();
+            handles.push(thread::spawn(move || {
+                for j in 0..100 {
+                    let msg = GcValue::Int((i * 100 + j) as i64);
+                    sched_clone.send(sender, receiver, msg).unwrap();
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Receiver should have 400 messages
+        sched.with_process(receiver, |proc| {
+            assert_eq!(proc.mailbox.len(), 400);
+        });
+    }
+
+    #[test]
+    fn test_jit_tracker_call_counting() {
+        let tracker = JitTracker::new(JitConfig {
+            hot_threshold: 10,
+            max_queue_size: 64,
+            enabled: true,
+        });
+
+        // First 9 calls shouldn't trigger
+        for _ in 0..9 {
+            assert!(!tracker.record_call("test_func"));
+        }
+
+        assert_eq!(tracker.get_call_count("test_func"), 9);
+        assert!(!tracker.is_hot("test_func"));
+
+        // 10th call should trigger (reach threshold)
+        assert!(tracker.record_call("test_func"));
+        assert!(tracker.is_hot("test_func"));
+
+        // Should be queued for JIT
+        assert_eq!(tracker.pop_jit_queue(), Some("test_func".to_string()));
+        assert_eq!(tracker.pop_jit_queue(), None);
+
+        // More calls shouldn't trigger again
+        for _ in 0..10 {
+            assert!(!tracker.record_call("test_func"));
+        }
+    }
+
+    #[test]
+    fn test_jit_tracker_compiled_not_queued() {
+        let tracker = JitTracker::new(JitConfig {
+            hot_threshold: 5,
+            max_queue_size: 64,
+            enabled: true,
+        });
+
+        // Reach threshold
+        for _ in 0..4 {
+            tracker.record_call("func1");
+        }
+        assert!(tracker.record_call("func1")); // 5th call triggers
+
+        // Mark as compiled
+        tracker.mark_compiled("func1");
+
+        // More calls shouldn't re-queue
+        for _ in 0..10 {
+            assert!(!tracker.record_call("func1"));
+        }
+
+        // Queue should only have func1 once (from before mark_compiled)
+        assert_eq!(tracker.pop_jit_queue(), Some("func1".to_string()));
+        assert_eq!(tracker.pop_jit_queue(), None);
+    }
+
+    #[test]
+    fn test_jit_tracker_disabled() {
+        let tracker = JitTracker::new(JitConfig {
+            hot_threshold: 5,
+            max_queue_size: 64,
+            enabled: false, // Disabled
+        });
+
+        // Calls should not be tracked
+        for _ in 0..100 {
+            assert!(!tracker.record_call("func"));
+        }
+
+        // Should not be hot (not tracked)
+        assert!(!tracker.is_hot("func"));
+        assert_eq!(tracker.pop_jit_queue(), None);
+    }
+
+    #[test]
+    fn test_jit_tracker_multiple_functions() {
+        let tracker = JitTracker::new(JitConfig {
+            hot_threshold: 3,
+            max_queue_size: 64,
+            enabled: true,
+        });
+
+        // Call multiple functions
+        for _ in 0..2 {
+            tracker.record_call("slow");
+        }
+        for _ in 0..3 {
+            tracker.record_call("fast");
+        }
+
+        // fast should be hot, slow should not
+        assert!(!tracker.is_hot("slow"));
+        assert!(tracker.is_hot("fast"));
+
+        // fast should be in queue
+        assert_eq!(tracker.pop_jit_queue(), Some("fast".to_string()));
+    }
+
+    #[test]
+    fn test_jit_register_and_get_compiled() {
+        let tracker = JitTracker::new(JitConfig::default());
+
+        // Create a stub JIT function for testing
+        unsafe extern "C" fn stub_jit_fn(_regs: *mut Value) -> i64 {
+            0 // Success
+        }
+
+        // Register compiled function
+        let compiled = CompiledFunction {
+            code: stub_jit_fn,
+            code_size: 128,
+        };
+        tracker.register_compiled("test_func", compiled);
+
+        // Should be marked as compiled
+        assert!(tracker.is_compiled("test_func"));
+
+        // Should be retrievable
+        let retrieved = tracker.get_compiled("test_func");
+        assert!(retrieved.is_some());
+
+        // Code size should be tracked
+        assert_eq!(tracker.total_code_size(), 128);
+        assert_eq!(tracker.compiled_count(), 1);
+    }
+
+    #[test]
+    fn test_jit_multiple_compiled_functions() {
+        let tracker = JitTracker::new(JitConfig::default());
+
+        unsafe extern "C" fn stub_fn(_regs: *mut Value) -> i64 { 0 }
+
+        // Register multiple functions
+        for i in 0..5 {
+            let compiled = CompiledFunction {
+                code: stub_fn,
+                code_size: 100 + i * 10,
+            };
+            tracker.register_compiled(&format!("func_{}", i), compiled);
+        }
+
+        // All should be compiled
+        assert_eq!(tracker.compiled_count(), 5);
+        assert_eq!(tracker.total_code_size(), 100 + 110 + 120 + 130 + 140);
+
+        // All should be retrievable
+        for i in 0..5 {
+            assert!(tracker.is_compiled(&format!("func_{}", i)));
+            assert!(tracker.get_compiled(&format!("func_{}", i)).is_some());
+        }
+
+        // Non-existent function should return None
+        assert!(!tracker.is_compiled("nonexistent"));
+        assert!(tracker.get_compiled("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_jit_process_queue_with_mock_backend() {
+        use crate::value::Chunk;
+
+        struct MockBackend {
+            should_compile: bool,
+        }
+
+        impl JitBackend for MockBackend {
+            fn compile(&self, _func: &FunctionValue) -> Option<CompiledFunction> {
+                if self.should_compile {
+                    unsafe extern "C" fn mock_fn(_regs: *mut Value) -> i64 { 0 }
+                    Some(CompiledFunction {
+                        code: mock_fn,
+                        code_size: 64,
+                    })
+                } else {
+                    None
+                }
+            }
+
+            fn name(&self) -> &str {
+                "mock"
+            }
+        }
+
+        let tracker = JitTracker::new(JitConfig {
+            hot_threshold: 2,
+            max_queue_size: 64,
+            enabled: true,
+        });
+
+        // Create function definitions
+        let mut functions: HashMap<String, Rc<FunctionValue>> = HashMap::new();
+        functions.insert("hot_func".to_string(), Rc::new(FunctionValue {
+            name: "hot_func".to_string(),
+            arity: 0,
+            param_names: vec![],
+            code: Rc::new(Chunk::new()),
+            module: None,
+            source_span: None,
+            jit_code: None,
+        }));
+
+        // Make function hot
+        tracker.record_call("hot_func");
+        tracker.record_call("hot_func"); // Triggers queueing
+
+        assert!(!tracker.jit_queue.lock().is_empty());
+
+        // Process with mock backend that succeeds
+        let backend = MockBackend { should_compile: true };
+        let compiled = tracker.process_queue(&backend, &functions);
+
+        assert_eq!(compiled, 1);
+        assert!(tracker.is_compiled("hot_func"));
+        assert_eq!(tracker.total_code_size(), 64);
+    }
+
+    #[test]
+    fn test_jit_no_jit_backend() {
+        use crate::value::Chunk;
+
+        let backend = NoJitBackend;
+
+        let func = FunctionValue {
+            name: "test".to_string(),
+            arity: 0,
+            param_names: vec![],
+            code: Rc::new(Chunk::new()),
+            module: None,
+            source_span: None,
+            jit_code: None,
+        };
+
+        // NoJitBackend should never compile
+        assert!(backend.compile(&func).is_none());
+        assert_eq!(backend.name(), "none");
     }
 }

@@ -42,6 +42,8 @@ pub enum ExitReason {
     Killed,
     /// Linked process died.
     LinkedExit(Pid, String),
+    /// Clean shutdown (e.g., by supervisor).
+    Shutdown,
 }
 
 /// A lightweight process (like Erlang processes).
