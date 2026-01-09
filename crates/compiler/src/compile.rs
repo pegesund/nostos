@@ -240,9 +240,6 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Exec.wait", signature: "Int -> Int", doc: "Wait for spawned process to exit, returns exit code, throws on error" },
     BuiltinInfo { name: "Exec.kill", signature: "Int -> ()", doc: "Kill a spawned process, throws on error" },
 
-    // === Option Functions ===
-    BuiltinInfo { name: "unwrapOr", signature: "a -> b -> b", doc: "Unwrap Option or return default value" },
-
     // === String Functions ===
     BuiltinInfo { name: "String.length", signature: "String -> Int", doc: "Get string length in characters" },
     BuiltinInfo { name: "String.chars", signature: "String -> [Char]", doc: "Convert string to list of characters" },
@@ -8912,12 +8909,6 @@ impl Compiler {
                     "newFloat32Array" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.emit_call_native(dst, "newFloat32Array", arg_regs.into(), line);
-                        return Ok(dst);
-                    }
-                    // === Option unwrapping ===
-                    "unwrapOr" if arg_regs.len() == 2 => {
-                        let dst = self.alloc_reg();
-                        self.emit_call_native(dst, "unwrapOr", arg_regs.into(), line);
                         return Ok(dst);
                     }
                     // === Trait-based builtins (show, copy, hash) ===
