@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reflection & Eval - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75;
+        }
+        .hljs-function {
+            color: #e5c07b;
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/pegesund/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+
+        <!-- Sidebar -->
+        <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_type_system.html" class="block text-slate-400 hover:text-white transition">7. Type System</a></li>
+                    <li><a href="08_traits.html" class="block text-slate-400 hover:text-white transition">8. Traits</a></li>
+                    <li><a href="09_builtin_traits.html" class="block text-slate-400 hover:text-white transition">9. Builtin Traits</a></li>
+                    <li><a href="10_trait_bounds.html" class="block text-slate-400 hover:text-white transition">10. Trait Bounds</a></li>
+                    <li><a href="11_error_handling.html" class="block text-slate-400 hover:text-white transition">11. Error Handling</a></li>
+                    <li><a href="12_modules.html" class="block text-slate-400 hover:text-white transition">12. Modules & Imports</a></li>
+                    <li><a href="13_stdlib.html" class="block text-slate-400 hover:text-white transition">13. Standard Library</a></li>
+                    <li><a href="14_json.html" class="block text-slate-400 hover:text-white transition">14. JSON</a></li>
+                    <li><a href="15_concurrency.html" class="block text-slate-400 hover:text-white transition">15. Concurrency</a></li>
+                    <li><a href="16_async_runtime.html" class="block text-slate-400 hover:text-white transition">16. Async Runtime</a></li>
+                    <li><a href="17_async_io_http.html" class="block text-slate-400 hover:text-white transition">17. Async I/O & HTTP</a></li>
+                    <li><a href="18_reflection.html" class="block text-blue-400 font-medium">18. Reflection & Eval</a></li>
+                    <li><a href="19_debugging_profiling.html" class="block text-slate-400 hover:text-white transition">19. Debugging & Profiling</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Reflection & Eval</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Nostos provides powerful metaprogramming capabilities including runtime type introspection, dynamic value construction, and code evaluation.
+                </p>
+
+                <!-- Type Introspection -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Type Introspection with typeInfo</h2>
+                <p class="text-slate-400 mb-4">The <code>typeInfo(typeName)</code> builtin returns type metadata as a Map, allowing you to inspect types at runtime.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">type Person = { name: String, age: Int }
+type Status = Active | Pending | Done
+
+main() = {
+    # Get record type info
+    personInfo = typeInfo("Person")
+    println(personInfo.get("kind"))    # "record"
+    println(personInfo.get("fields"))  # List of field metadata
+
+    # Get variant type info
+    statusInfo = typeInfo("Status")
+    println(statusInfo.get("kind"))    # "variant"
+    println(statusInfo.get("constructors"))  # List of constructors
+
+    # Unknown types return empty map
+    unknownInfo = typeInfo("NoSuchType")
+    println(unknownInfo.isEmpty())  # true
+}</code></pre>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <h4 class="text-sm font-semibold text-slate-300 mb-2">typeInfo Return Value</h4>
+                    <ul class="text-slate-400 text-sm space-y-1">
+                        <li><code class="text-blue-400">"name"</code> - Type name as string</li>
+                        <li><code class="text-blue-400">"kind"</code> - "record" or "variant"</li>
+                        <li><code class="text-blue-400">"fields"</code> - List of Maps with "name" and "type" (for records)</li>
+                        <li><code class="text-blue-400">"constructors"</code> - List of Maps with constructor info (for variants)</li>
+                    </ul>
+                </div>
+
+                <!-- tagOf -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Getting Variant Tags with tagOf</h2>
+                <p class="text-slate-400 mb-4">The <code>tagOf(value)</code> builtin returns the constructor name of a variant value, or an empty string for non-variants.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">type Result = Ok(Int) | Err(String)
+type Color = Red | Green | Blue
+
+main() = {
+    result = Ok(42)
+    println(tagOf(result))  # "Ok"
+
+    err = Err("failed")
+    println(tagOf(err))     # "Err"
+
+    color = Red
+    println(tagOf(color))   # "Red"
+
+    # Non-variants return empty string
+    println(tagOf(42))      # ""
+    println(tagOf("hello")) # ""
+}</code></pre>
+                </div>
+
+                <!-- Dynamic Construction -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Dynamic Value Construction</h2>
+                <p class="text-slate-400 mb-4">Construct typed values dynamically using <code>makeRecord</code> and <code>makeVariant</code>.</p>
+
+                <h3 class="text-xl font-semibold text-white mb-3">With Type Parameters</h3>
+                <p class="text-slate-400 mb-4">Use type parameters when the type is known at compile time.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.json.{String, Number}
+
+type Person = { name: String, age: Int }
+type Result = Ok(Int) | Err(String)
+
+main() = {
+    # Construct a record from a Map[String, Json]
+    fields = %{"name": String("Alice"), "age": Number(30.0)}
+    person = makeRecord[Person](fields)
+    println(person.name)  # "Alice"
+    println(person.age)   # 30
+
+    # Construct a variant
+    ok_fields = %{"_0": Number(42.0)}
+    result = makeVariant[Result]("Ok", ok_fields)
+    # result is Ok(42)
+}</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">With String Type Names</h3>
+                <p class="text-slate-400 mb-4">Use string-based versions when the type name is determined at runtime.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.json.{jsonParse, fromJsonValue, String, Number}
+
+type Person = { name: String, age: Int }
+
+main() = {
+    # Type name as runtime string
+    typeName = "Person"
+    fields = %{"name": String("Bob"), "age": Number(25.0)}
+    person = makeRecordByName(typeName, fields)
+
+    # Same for variants
+    result = makeVariantByName("Result", "Ok", %{"_0": Number(100.0)})
+
+    # JSON to typed value using stdlib
+    json = jsonParse('{"name": "Charlie", "age": 35}')
+    person2 = fromJsonValue("Person", json)
+}</code></pre>
+                </div>
+
+                <!-- Eval -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Dynamic Code Evaluation</h2>
+                <p class="text-slate-400 mb-4">The <code>eval(code)</code> builtin compiles and executes Nostos code at runtime, returning the result as a string.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">main() = {
+    # Evaluate simple expressions
+    result = eval("1 + 2 * 3")
+    println(result)  # "7"
+
+    # Define and call functions
+    eval("add(a, b) = a + b")
+    result2 = eval("add(10, 20)")
+    println(result2)  # "30"
+
+    # Works with any Nostos code
+    eval("type Point = { x: Int, y: Int }")
+    result3 = eval("Point(1, 2)")
+    println(result3)  # "Point { x: 1, y: 2 }"
+}</code></pre>
+                </div>
+
+                <div class="bg-gradient-to-r from-yellow-900/20 to-orange-900/20 rounded-lg p-6 mb-8 border border-yellow-800/30">
+                    <h3 class="text-lg font-semibold text-white mb-3">Performance Note</h3>
+                    <p class="text-slate-400">
+                        <code>eval</code> compiles code at runtime, which has overhead. For performance-critical code, prefer pre-compiled functions. Use <code>eval</code> for:
+                    </p>
+                    <ul class="list-disc list-inside text-slate-400 mt-2 space-y-1">
+                        <li>REPL-like interfaces</li>
+                        <li>Dynamic configuration</li>
+                        <li>Plugin systems</li>
+                        <li>Prototyping and experimentation</li>
+                    </ul>
+                </div>
+
+                <!-- Use Cases -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Use Cases</h2>
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <ul class="list-disc list-inside text-slate-400 space-y-2">
+                        <li><strong>Generic serialization:</strong> Build JSON/YAML/XML serializers that work with any type</li>
+                        <li><strong>ORM mapping:</strong> Map database rows to typed records dynamically</li>
+                        <li><strong>Form generation:</strong> Generate UI forms from type schemas</li>
+                        <li><strong>Plugin systems:</strong> Load and execute code at runtime</li>
+                        <li><strong>REPL tools:</strong> Build interactive development environments</li>
+                    </ul>
+                </div>
+
+                <!-- Navigation -->
+                <div class="mt-12 pt-8 border-t border-slate-800 flex justify-between">
+                    <a href="15_stdlib.html" class="text-blue-400 hover:text-blue-300 transition">&larr; Previous: Standard Library</a>
+                    <span class="text-slate-600">End of Tutorial</span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script>hljs.highlightAll();</script>
+
+</body>
+</html>

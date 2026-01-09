@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Modules & Imports - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75;
+        }
+        .hljs-function {
+            color: #e5c07b;
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium">Tutorial</span>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/yourusername/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-16 flex min-h-screen">
+
+        <!-- Sidebar -->
+        <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
+            <div class="p-6">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
+                                <ul class="space-y-3">
+                    <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
+                    <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
+                    <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
+                    <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
+                    <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
+                    <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
+                    <li><a href="07_type_system.html" class="block text-slate-400 hover:text-white transition">7. Type System</a></li>
+                    <li><a href="08_traits.html" class="block text-slate-400 hover:text-white transition">8. Traits</a></li>
+                    <li><a href="09_builtin_traits.html" class="block text-slate-400 hover:text-white transition">9. Builtin Traits</a></li>
+                    <li><a href="10_trait_bounds.html" class="block text-slate-400 hover:text-white transition">10. Trait Bounds</a></li>
+                    <li><a href="11_error_handling.html" class="block text-slate-400 hover:text-white transition">11. Error Handling</a></li>
+                    <li><a href="12_modules.html" class="block text-blue-400 font-medium">12. Modules & Imports</a></li>
+                    <li><a href="13_stdlib.html" class="block text-slate-400 hover:text-white transition">13. Standard Library</a></li>
+                    <li><a href="14_json.html" class="block text-slate-400 hover:text-white transition">14. JSON</a></li>
+                    <li><a href="15_concurrency.html" class="block text-slate-400 hover:text-white transition">15. Concurrency</a></li>
+                    <li><a href="16_async_runtime.html" class="block text-slate-400 hover:text-white transition">16. Async Runtime</a></li>
+                    <li><a href="17_async_io_http.html" class="block text-slate-400 hover:text-white transition">17. Async I/O & HTTP</a></li>
+                    <li><a href="18_reflection.html" class="block text-slate-400 hover:text-white transition">18. Reflection & Eval</a></li>
+                    <li><a href="19_debugging_profiling.html" class="block text-slate-400 hover:text-white transition">19. Debugging & Profiling</a></li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Modules & Imports</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Nostos uses a simple module system to organize code. Modules let you split your code into separate files and import functionality from the standard library or other modules.
+                </p>
+
+                <!-- Importing from Standard Library -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Importing from the Standard Library</h2>
+                <p class="text-slate-400 mb-4">
+                    The <code>use</code> keyword imports functions and types from modules. The standard library lives under the <code>stdlib</code> namespace.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Import specific items from stdlib.json
+use stdlib.json.{jsonParse, jsonStringify}
+
+main() = {
+    data = %{"name": "Alice", "age": 30}
+    json_str = jsonStringify(data)
+    println(json_str)  # {"name":"Alice","age":30}
+
+    parsed = jsonParse(json_str)
+    println(parsed)
+}</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Import Syntax Variations</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Import specific items (recommended)
+use stdlib.json.{jsonParse, jsonStringify}
+
+# Import types alongside functions
+use stdlib.json.{jsonParse, Null, Bool, Number, String, Array, Object}
+
+# The Json type has these variants:
+#   Null, Bool(Bool), Number(Float), String(String),
+#   Array(List[Json]), Object(List[(String, Json)])</code></pre>
+                </div>
+
+                <!-- Built-in Modules -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Built-in Modules</h2>
+                <p class="text-slate-400 mb-4">
+                    Some modules are built into the runtime and don't require explicit imports. These provide core functionality:
+                </p>
+
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <table class="w-full text-left">
+                        <thead>
+                            <tr class="border-b border-slate-700">
+                                <th class="py-2 text-blue-400">Module</th>
+                                <th class="py-2 text-slate-300">Description</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-slate-400">
+                            <tr class="border-b border-slate-800">
+                                <td class="py-2"><code class="text-emerald-400">Pg</code></td>
+                                <td class="py-2">PostgreSQL database access</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-2"><code class="text-emerald-400">Http</code></td>
+                                <td class="py-2">HTTP client for making requests</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-2"><code class="text-emerald-400">File</code></td>
+                                <td class="py-2">File system operations</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-2"><code class="text-emerald-400">String</code></td>
+                                <td class="py-2">String manipulation functions</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-2"><code class="text-emerald-400">List</code></td>
+                                <td class="py-2">List operations (map, filter, fold, etc.)</td>
+                            </tr>
+                            <tr>
+                                <td class="py-2"><code class="text-emerald-400">Map</code></td>
+                                <td class="py-2">Map operations (get, insert, keys, etc.)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <p class="text-slate-400 mb-4">
+                    These built-in modules are accessed directly without import:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># No import needed for built-in modules
+main() = {
+    # PostgreSQL
+    conn = Pg.connect("host=localhost user=postgres")
+    rows = Pg.query(conn, "SELECT * FROM users", [])
+    Pg.close(conn)
+
+    # HTTP requests
+    response = Http.get("https://api.example.com/data")
+
+    # File I/O
+    content = File.read("config.txt")
+    File.write("output.txt", "Hello!")
+
+    # String operations
+    upper = String.toUpper("hello")  # "HELLO"
+    parts = String.split("a,b,c", ",")  # ["a", "b", "c"]
+}</code></pre>
+                </div>
+
+                <!-- Standard Library Modules -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Standard Library Modules</h2>
+                <p class="text-slate-400 mb-4">
+                    The <code>stdlib</code> namespace contains modules written in Nostos itself. These require explicit imports:
+                </p>
+
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <table class="w-full text-left">
+                        <thead>
+                            <tr class="border-b border-slate-700">
+                                <th class="py-2 text-blue-400">Module</th>
+                                <th class="py-2 text-slate-300">Provides</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-slate-400">
+                            <tr class="border-b border-slate-800">
+                                <td class="py-2"><code class="text-emerald-400">stdlib.json</code></td>
+                                <td class="py-2">JSON parsing and stringification</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-2"><code class="text-emerald-400">stdlib.list</code></td>
+                                <td class="py-2">Extended list operations</td>
+                            </tr>
+                            <tr>
+                                <td class="py-2"><code class="text-emerald-400">stdlib.io</code></td>
+                                <td class="py-2">I/O utilities</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Example: Working with JSON -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Example: Working with JSON</h2>
+                <p class="text-slate-400 mb-4">
+                    Here's a complete example showing how to import and use the JSON module:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Import JSON parsing functions and type variants
+use stdlib.json.{jsonParse, jsonStringify}
+
+# Define a type that maps to JSON structure
+type User = { name: String, age: Int, active: Bool }
+
+main() = {
+    # Parse JSON string
+    json = jsonParse("{\"name\": \"Alice\", \"age\": 30, \"active\": true}")
+
+    # Convert to typed value using jsonToType
+    user = jsonToType[User](json)
+
+    println("Name: " ++ user.name)    # "Name: Alice"
+    println("Age: " ++ show(user.age)) # "Age: 30"
+
+    # Modify and convert back to JSON
+    updated = User("Alice", 31, true)
+    json_out = jsonStringify(updated)
+    println(json_out)  # {"name":"Alice","age":31,"active":true}
+}</code></pre>
+                </div>
+
+                <!-- Project Structure -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Project Structure</h2>
+                <p class="text-slate-400 mb-4">
+                    For multi-file projects, Nostos uses a <code>nostos.toml</code> file to define project metadata:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-toml"># nostos.toml
+[project]
+name = "my_app"
+version = "0.1.0"</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">
+                    Files in the same directory can reference each other. The runtime automatically discovers and compiles all <code>.nos</code> files in the project.
+                </p>
+
+                <div class="bg-gradient-to-r from-blue-900/20 to-emerald-900/20 rounded-lg p-6 mb-8 border border-blue-800/30">
+                    <h3 class="text-lg font-semibold text-white mb-3">Best Practices</h3>
+                    <ul class="list-disc list-inside text-slate-400 space-y-2">
+                        <li>Import only what you need with selective imports: <code>use module.{a, b}</code></li>
+                        <li>Group related functions and types in the same file</li>
+                        <li>Use built-in modules (Pg, Http, File) directly without imports</li>
+                        <li>Check the stdlib source for available functions and types</li>
+                    </ul>
+                </div>
+
+            </div>
+
+                        <!-- Navigation Buttons -->
+            <div class="flex justify-between border-t border-slate-800 pt-8">
+                <a href="11_error_handling.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>
+                    Previous: Error Handling
+                </a>
+                <a href="13_stdlib.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
+                    Next: Standard Library
+                    <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m0 0h18"></path></svg>
+                </a>
+            </div>
+        </main>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>
+</html>

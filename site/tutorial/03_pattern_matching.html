@@ -58,22 +58,26 @@
         <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
             <div class="p-6">
                 <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
-                <ul class="space-y-3">
+                                <ul class="space-y-3">
                     <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
                     <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
                     <li><a href="03_pattern_matching.html" class="block text-blue-400 font-medium">3. Pattern Matching</a></li>
                     <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
                     <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
                     <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
-                    <li><a href="07_concurrency.html" class="block text-slate-400 hover:text-white transition">7. Concurrency</a></li>
-                    <li><a href="08_async_io_http.html" class="block text-slate-400 hover:text-white transition">8. Async I/O & HTTP</a></li>
-                    <li><a href="09_type_system.html" class="block text-slate-400 hover:text-white transition">9. Type System</a></li>
-                    <li><a href="10_error_handling.html" class="block text-slate-400 hover:text-white transition">10. Error Handling</a></li>
-                    <li><a href="11_traits.html" class="block text-slate-400 hover:text-white transition">11. Traits</a></li>
-                    <li><a href="12_deriving.html" class="block text-slate-400 hover:text-white transition">12. Builtin Traits</a></li>
-                    <li><a href="13_trait_bounds.html" class="block text-slate-400 hover:text-white transition">13. Trait Bounds</a></li>
+                    <li><a href="07_type_system.html" class="block text-slate-400 hover:text-white transition">7. Type System</a></li>
+                    <li><a href="08_traits.html" class="block text-slate-400 hover:text-white transition">8. Traits</a></li>
+                    <li><a href="09_builtin_traits.html" class="block text-slate-400 hover:text-white transition">9. Builtin Traits</a></li>
+                    <li><a href="10_trait_bounds.html" class="block text-slate-400 hover:text-white transition">10. Trait Bounds</a></li>
+                    <li><a href="11_error_handling.html" class="block text-slate-400 hover:text-white transition">11. Error Handling</a></li>
+                    <li><a href="12_modules.html" class="block text-slate-400 hover:text-white transition">12. Modules & Imports</a></li>
+                    <li><a href="13_stdlib.html" class="block text-slate-400 hover:text-white transition">13. Standard Library</a></li>
                     <li><a href="14_json.html" class="block text-slate-400 hover:text-white transition">14. JSON</a></li>
-                    <li><a href="15_stdlib.html" class="block text-slate-400 hover:text-white transition">15. Standard Library</a></li>
+                    <li><a href="15_concurrency.html" class="block text-slate-400 hover:text-white transition">15. Concurrency</a></li>
+                    <li><a href="16_async_runtime.html" class="block text-slate-400 hover:text-white transition">16. Async Runtime</a></li>
+                    <li><a href="17_async_io_http.html" class="block text-slate-400 hover:text-white transition">17. Async I/O & HTTP</a></li>
+                    <li><a href="18_reflection.html" class="block text-slate-400 hover:text-white transition">18. Reflection & Eval</a></li>
+                    <li><a href="19_debugging_profiling.html" class="block text-slate-400 hover:text-white transition">19. Debugging & Profiling</a></li>
                 </ul>
             </div>
         </aside>
@@ -83,7 +87,103 @@
             <div class="mb-12">
                 <h1 class="text-4xl font-bold text-white mb-6">Pattern Matching</h1>
                 <p class="text-lg text-slate-400 leading-relaxed mb-8">
-                    Pattern matching is a core feature in Nostos, allowing you to concisely extract values from data structures and control flow based on the shape of data. It's used extensively in function definitions and <code>match</code> expressions.
+                    Pattern matching is the heart of Nostos. It's not just a feature - it's a way of thinking about data. Instead of asking "what type is this?" and then digging inside, you describe the <em>shape</em> you expect and the values fall into place.
+                </p>
+
+                <!-- The Aha Moment -->
+                <div class="bg-gradient-to-r from-blue-900/30 to-emerald-900/30 rounded-lg p-6 mb-8 border border-blue-800/50">
+                    <h3 class="text-lg font-semibold text-white mb-3">The "Aha!" Moment</h3>
+                    <p class="text-slate-400 mb-4">
+                        Here's a database query. See how we name the columns right in the pattern:
+                    </p>
+                    <div class="bg-nostos-code rounded-lg p-4 overflow-x-auto">
+<pre><code class="language-nostos"># Query returns rows as tuples
+rows = Pg.query(conn, "SELECT id, name, email FROM users", [])
+
+# Pattern matching gives each column a name - no row[0], row[1] needed!
+rows.each((id, name, email) => {
+    println(name ++ " <" ++ email ++ ">")
+})</code></pre>
+                    </div>
+                    <p class="text-slate-300 mt-4 text-sm">
+                        No index lookups. No parsing. The structure of your data becomes the structure of your code.
+                    </p>
+                </div>
+
+                <!-- Why Pattern Matching -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Why Pattern Matching?</h2>
+                <p class="text-slate-400 mb-4">
+                    Traditional languages make you <em>ask</em> about your data: Is it null? What type? How long? Pattern matching lets you <em>declare</em> what shape you expect, and the language handles the rest.
+                </p>
+
+                <div class="grid md:grid-cols-2 gap-4 mb-8">
+                    <div class="bg-red-900/20 rounded-lg p-4 border border-red-800/30">
+                        <h4 class="text-sm font-semibold text-red-400 mb-2">Traditional approach (verbose)</h4>
+<pre class="text-sm text-slate-300"><code># Pseudo-code for other languages
+def process(data):
+    if data is None:
+        return "empty"
+    elif isinstance(data, list):
+        if len(data) == 0:
+            return "empty list"
+        else:
+            first = data[0]
+            return f"first: {first}"
+    else:
+        return "unknown"</code></pre>
+                    </div>
+                    <div class="bg-emerald-900/20 rounded-lg p-4 border border-emerald-800/30">
+                        <h4 class="text-sm font-semibold text-emerald-400 mb-2">Pattern matching (elegant)</h4>
+<pre class="text-sm text-slate-300"><code class="language-nostos"># Nostos pattern matching
+process(None) = "empty"
+process([]) = "empty list"
+process([first | _]) = "first: " ++ show(first)
+process(_) = "unknown"</code></pre>
+                    </div>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <h3 class="text-lg font-semibold text-white mb-3">Key Benefits</h3>
+                    <ul class="space-y-2 text-slate-400">
+                        <li><strong class="text-emerald-400">Exhaustiveness checking:</strong> The compiler warns if you forget a case</li>
+                        <li><strong class="text-emerald-400">Destructuring built-in:</strong> Extract values while matching structure</li>
+                        <li><strong class="text-emerald-400">No null pointer exceptions:</strong> Handle None/Some explicitly</li>
+                        <li><strong class="text-emerald-400">Self-documenting:</strong> The pattern shows exactly what data shape is expected</li>
+                        <li><strong class="text-emerald-400">Composable:</strong> Combine patterns with guards for complex logic</li>
+                    </ul>
+                </div>
+
+                <!-- Real-World Example -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Real-World Example: Parsing Commands</h2>
+                <p class="text-slate-400 mb-4">
+                    Pattern matching shines when handling structured data. Here's how you might parse user commands:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Command type with different variants
+type Command =
+    | Help
+    | Quit
+    | Load(String)
+    | Save(String)
+    | Search(String, Int)
+
+# Handle each command - the compiler ensures all cases are covered
+execute(Help) = println("Available commands: help, quit, load, save, search")
+execute(Quit) = println("Goodbye!")
+execute(Load(filename)) = println("Loading " ++ filename ++ "...")
+execute(Save(filename)) = println("Saving to " ++ filename ++ "...")
+execute(Search(query, limit)) = println("Searching for '" ++ query ++ "' (max " ++ show(limit) ++ " results)")
+
+main() = {
+    execute(Help)
+    execute(Load("data.json"))
+    execute(Search("nostos", 10))
+    execute(Quit)
+}</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-8">
+                    Each function clause handles one command variant. If you add a new command to the type, the compiler will remind you to handle it everywhere. No more forgotten cases!
                 </p>
 
                 <!-- Patterns in Function Definitions -->
@@ -302,9 +402,147 @@ main() = {
 }
 </code></pre>
                 </div>
+
+                <!-- Recursive Data Structures -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Pattern Matching with Recursive Types</h2>
+                <p class="text-slate-400 mb-4">
+                    Pattern matching truly shines with recursive data structures like trees. Here's a binary tree with operations defined purely through pattern matching:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># A binary tree: either empty or a node with value and children
+type Tree[T] = Empty | Node(T, Tree[T], Tree[T])
+
+# Count nodes in the tree
+size(Empty) = 0
+size(Node(_, left, right)) = 1 + size(left) + size(right)
+
+# Sum all values (for numeric trees)
+sum(Empty) = 0
+sum(Node(val, left, right)) = val + sum(left) + sum(right)
+
+# Check if a value exists in the tree
+contains(Empty, _) = false
+contains(Node(val, _, _), target) when val == target = true
+contains(Node(_, left, right), target) = contains(left, target) || contains(right, target)
+
+# Map a function over all values
+map_tree(Empty, _) = Empty
+map_tree(Node(val, left, right), f) = Node(f(val), map_tree(left, f), map_tree(right, f))
+
+main() = {
+    #       5
+    #      / \
+    #     3   8
+    #    /   / \
+    #   1   6   9
+    tree = Node(5,
+        Node(3, Node(1, Empty, Empty), Empty),
+        Node(8, Node(6, Empty, Empty), Node(9, Empty, Empty))
+    )
+
+    assert_eq(size(tree), 6)
+    assert_eq(sum(tree), 32)
+    assert(contains(tree, 6))
+    assert(contains(tree, 100) == false)
+
+    # Double all values
+    doubled = map_tree(tree, x => x * 2)
+    assert_eq(sum(doubled), 64)
+
+    println("Tree operations passed!")
+}</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">
+                    Notice how each function is defined with clear, separate cases. There's no complex branching logic - just patterns that match the structure of the data.
+                </p>
+
+                <div class="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-8">
+                    <p class="text-blue-300 text-sm">
+                        <strong>Tip:</strong> Pattern matching encourages you to think about your data as <em>shapes</em> rather than as objects with methods. This often leads to simpler, more composable code.
+                    </p>
+                </div>
+
+                <!-- Database Query Results -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Pattern Matching with Database Results</h2>
+                <p class="text-slate-400 mb-4">
+                    Pattern matching makes working with database query results clean and readable. PostgreSQL queries return rows as tuples, which you can destructure directly into named variables:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Query returns tuples - destructure them into named variables
+process_users(conn) = {
+    rows = Pg.query(conn, "SELECT id, name, email, age FROM users", [])
+
+    # Each row is a tuple (id, name, email, age)
+    # Pattern match to give each field a meaningful name
+    rows.each((id, name, email, age) => {
+        println("User #" ++ show(id) ++ ": " ++ name)
+        println("  Email: " ++ email)
+        println("  Age: " ++ show(age))
+    })
+}
+
+# Or use pattern matching in function definitions
+format_user((id, name, email, _)) =
+    "User " ++ show(id) ++ ": " ++ name ++ " <" ++ email ++ ">"
+
+# Handle different result shapes
+handle_result([]) = println("No users found")
+handle_result([(id, name, _, _)]) = println("Found one user: " ++ name)
+handle_result(users) = println("Found " ++ show(users.length()) ++ " users")
+
+# Combine with guards for conditional logic
+categorize_user((_, _, _, age)) when age < 18 = "minor"
+categorize_user((_, _, _, age)) when age < 65 = "adult"
+categorize_user(_) = "senior"
+
+main() = {
+    conn = Pg.connect("postgresql://localhost/mydb")
+
+    # Get rows and process with pattern matching
+    rows = Pg.query(conn, "SELECT id, name, score FROM players ORDER BY score DESC LIMIT 3", [])
+
+    # Destructure each row into named variables
+    rows.each((id, name, score) => {
+        println(name ++ " (ID: " ++ show(id) ++ ") - Score: " ++ show(score))
+    })
+
+    # Pattern match on the result list
+    match rows
+        [] -> println("No players yet!")
+        [(_, winner, _)] -> println("Only player: " ++ winner)
+        [(_, first, _), (_, second, _) | _] -> println("Top 2: " ++ first ++ ", " ++ second)
+    end
+
+    Pg.close(conn)
+}</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">
+                    Compare this to traditional database code where you access columns by index (<code>row[0]</code>, <code>row[1]</code>) or string keys. Pattern matching gives you named access and validates the structure at the same time.
+                </p>
+
+                <div class="grid md:grid-cols-2 gap-4 mb-8">
+                    <div class="bg-red-900/20 rounded-lg p-4 border border-red-800/30">
+                        <h4 class="text-sm font-semibold text-red-400 mb-2">Index-based (error prone)</h4>
+<pre class="text-sm text-slate-300"><code># Easy to mix up indices
+for row in rows:
+    id = row[0]
+    name = row[1]    # Was this 1 or 2?
+    email = row[2]   # Hope the order is right...</code></pre>
+                    </div>
+                    <div class="bg-emerald-900/20 rounded-lg p-4 border border-emerald-800/30">
+                        <h4 class="text-sm font-semibold text-emerald-400 mb-2">Pattern matching (clear)</h4>
+<pre class="text-sm text-slate-300"><code class="language-nostos"># Names are right in the pattern
+rows.each((id, name, email) => {
+    # Can't mix them up!
+    println(name ++ ": " ++ email)
+})</code></pre>
+                    </div>
+                </div>
             </div>
 
-            <!-- Navigation Buttons -->
+                        <!-- Navigation Buttons -->
             <div class="flex justify-between border-t border-slate-800 pt-8">
                 <a href="02_functions.html" class="flex items-center text-blue-400 hover:text-blue-300 font-medium transition">
                     <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m0 0h18"></path></svg>

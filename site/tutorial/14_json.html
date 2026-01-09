@@ -58,22 +58,26 @@
         <aside class="w-64 fixed h-full border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block">
             <div class="p-6">
                 <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Contents</h3>
-                <ul class="space-y-3">
+                                <ul class="space-y-3">
                     <li><a href="01_basics.html" class="block text-slate-400 hover:text-white transition">1. Basics</a></li>
                     <li><a href="02_functions.html" class="block text-slate-400 hover:text-white transition">2. Functions</a></li>
                     <li><a href="03_pattern_matching.html" class="block text-slate-400 hover:text-white transition">3. Pattern Matching</a></li>
                     <li><a href="04_lists_tuples.html" class="block text-slate-400 hover:text-white transition">4. Lists & Tuples</a></li>
                     <li><a href="05_maps_sets.html" class="block text-slate-400 hover:text-white transition">5. Maps & Sets</a></li>
                     <li><a href="06_typed_arrays.html" class="block text-slate-400 hover:text-white transition">6. Typed Arrays</a></li>
-                    <li><a href="07_concurrency.html" class="block text-slate-400 hover:text-white transition">7. Concurrency</a></li>
-                    <li><a href="08_async_io_http.html" class="block text-slate-400 hover:text-white transition">8. Async I/O & HTTP</a></li>
-                    <li><a href="09_type_system.html" class="block text-slate-400 hover:text-white transition">9. Type System</a></li>
-                    <li><a href="10_error_handling.html" class="block text-slate-400 hover:text-white transition">10. Error Handling</a></li>
-                    <li><a href="11_traits.html" class="block text-slate-400 hover:text-white transition">11. Traits</a></li>
-                    <li><a href="12_deriving.html" class="block text-slate-400 hover:text-white transition">12. Builtin Traits</a></li>
-                    <li><a href="13_trait_bounds.html" class="block text-slate-400 hover:text-white transition">13. Trait Bounds</a></li>
+                    <li><a href="07_type_system.html" class="block text-slate-400 hover:text-white transition">7. Type System</a></li>
+                    <li><a href="08_traits.html" class="block text-slate-400 hover:text-white transition">8. Traits</a></li>
+                    <li><a href="09_builtin_traits.html" class="block text-slate-400 hover:text-white transition">9. Builtin Traits</a></li>
+                    <li><a href="10_trait_bounds.html" class="block text-slate-400 hover:text-white transition">10. Trait Bounds</a></li>
+                    <li><a href="11_error_handling.html" class="block text-slate-400 hover:text-white transition">11. Error Handling</a></li>
+                    <li><a href="12_modules.html" class="block text-slate-400 hover:text-white transition">12. Modules & Imports</a></li>
+                    <li><a href="13_stdlib.html" class="block text-slate-400 hover:text-white transition">13. Standard Library</a></li>
                     <li><a href="14_json.html" class="block text-blue-400 font-medium">14. JSON</a></li>
-                    <li><a href="15_stdlib.html" class="block text-slate-400 hover:text-white transition">15. Standard Library</a></li>
+                    <li><a href="15_concurrency.html" class="block text-slate-400 hover:text-white transition">15. Concurrency</a></li>
+                    <li><a href="16_async_runtime.html" class="block text-slate-400 hover:text-white transition">16. Async Runtime</a></li>
+                    <li><a href="17_async_io_http.html" class="block text-slate-400 hover:text-white transition">17. Async I/O & HTTP</a></li>
+                    <li><a href="18_reflection.html" class="block text-slate-400 hover:text-white transition">18. Reflection & Eval</a></li>
+                    <li><a href="19_debugging_profiling.html" class="block text-slate-400 hover:text-white transition">19. Debugging & Profiling</a></li>
                 </ul>
             </div>
         </aside>
@@ -88,12 +92,15 @@
 
                 <!-- Parsing JSON -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Parsing JSON</h2>
-                <p class="text-slate-400 mb-4">Use <code>jsonParse</code> to parse a JSON string into a <code>Json</code> value. It's available in the prelude, no import needed.</p>
+                <p class="text-slate-400 mb-4">Use <code>jsonParse</code> to parse a JSON string into a <code>Json</code> value.</p>
                 <div class="bg-slate-800/50 rounded-lg p-4 mb-4 border border-slate-700">
                     <p class="text-slate-400 text-sm"><strong>Tip:</strong> Use single-quoted strings for JSON to avoid escaping double quotes: <code>'{"name": "Alice"}'</code> instead of <code>"{\"name\": \"Alice\"}"</code></p>
                 </div>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">main() = {
+<pre><code class="language-nostos"># Import from stdlib
+use stdlib.json.{jsonParse, jsonStringify, Json}
+
+main() = {
     # Parse a JSON string (single quotes make it cleaner!)
     json = jsonParse('{"name": "Alice", "age": 30}')
 
@@ -104,19 +111,24 @@
     println(json)
 }</code></pre>
                 </div>
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <p class="text-slate-400 text-sm"><strong>Note:</strong> In the REPL, stdlib functions are auto-imported so you can use <code>jsonParse</code> directly. In script files, use the <code>use</code> statement to import them.</p>
+                </div>
 
                 <!-- Typed Deserialization -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Typed Deserialization with fromJson</h2>
                 <p class="text-slate-400 mb-4">The <code>fromJson[T](json)</code> builtin converts JSON to typed Nostos values. This is the recommended way to work with JSON data.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos"># Define your types
+<pre><code class="language-nostos">use stdlib.json.{jsonParse}
+
+# Define your types
 type Person = { name: String, age: Int }
 
 main() = {
     # Parse JSON string
     json = jsonParse('{"name": "Alice", "age": 30}')
 
-    # Convert to typed value
+    # Convert to typed value (fromJson is a builtin, no import needed)
     person = fromJson[Person](json)
 
     println(person.name)  # "Alice"
@@ -263,75 +275,6 @@ main() = {
 }</code></pre>
                 </div>
 
-                <!-- Advanced: Type Introspection -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Advanced: Type Introspection</h2>
-                <p class="text-slate-400 mb-4">Nostos provides low-level builtins for type introspection and dynamic value construction.</p>
-
-                <h3 class="text-xl font-semibold text-white mb-3">typeInfo - Get Type Metadata</h3>
-                <p class="text-slate-400 mb-4">The <code>typeInfo(typeName)</code> builtin returns type metadata as a native Map.</p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">type Person = { name: String, age: Int }
-
-main() = {
-    info = typeInfo("Person")
-
-    # Returns Map with keys:
-    # "name" -> "Person"
-    # "kind" -> "record" or "variant"
-    # "fields" -> List of Maps with "name" and "type"
-    # "constructors" -> List of Maps (for variants)
-
-    println(info.get("kind"))  # "record"
-}</code></pre>
-                </div>
-
-                <h3 class="text-xl font-semibold text-white mb-3">makeRecord and makeVariant - Dynamic Construction</h3>
-                <p class="text-slate-400 mb-4">Construct typed values dynamically from Maps of JSON values.</p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">type Person = { name: String, age: Int }
-type Result = Ok(Int) | Err(String)
-
-main() = {
-    # Construct a record from a Map[String, Json]
-    fields = %{"name": String("Alice"), "age": Number(30.0)}
-    person = makeRecord[Person](fields)
-    println(person.name)  # "Alice"
-
-    # Construct a variant
-    ok_fields = %{"_0": Number(42.0)}
-    result = makeVariant[Result]("Ok", ok_fields)
-    # result is Ok(42)
-}</code></pre>
-                </div>
-
-                <h3 class="text-xl font-semibold text-white mb-3">String-Based Variants</h3>
-                <p class="text-slate-400 mb-4">For fully dynamic scenarios where the type name is known at runtime, use the string-based versions.</p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">import stdlib.json
-
-# When type name is known at runtime
-typeName = "Person"
-fields = %{"name": String("Bob"), "age": Number(25.0)}
-person = makeRecordByName(typeName, fields)
-
-# Same for variants
-result = makeVariantByName("Result", "Ok", %{"_0": Number(100.0)})
-
-# And for JSON conversion using stdlib fromJsonValue
-json = jsonParse('{"name": "Charlie", "age": 35}')
-person2 = stdlib.json.fromJsonValue("Person", json)</code></pre>
-                </div>
-
-                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
-                    <h3 class="text-lg font-semibold text-white mb-3">Use Cases</h3>
-                    <ul class="list-disc list-inside text-slate-400 space-y-2">
-                        <li>Generic serialization/deserialization libraries</li>
-                        <li>ORM-style database mapping</li>
-                        <li>Dynamic form generation from type schemas</li>
-                        <li>Plugin systems with runtime type discovery</li>
-                    </ul>
-                </div>
-
                 <!-- Navigation -->
                 <div class="mt-12 pt-8 border-t border-slate-800 flex justify-between">
                     <a href="13_trait_bounds.html" class="text-blue-400 hover:text-blue-300 transition">&larr; Previous: Trait Bounds</a>
@@ -341,14 +284,9 @@ person2 = stdlib.json.fromJsonValue("Person", json)</code></pre>
         </main>
     </div>
 
-    <script src="../js/nostos-highlight.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script>
-        if (typeof nostos_highlight !== 'undefined') {
-            hljs.registerLanguage('nostos', nostos_highlight);
-        }
-        hljs.highlightAll();
-    </script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script>hljs.highlightAll();</script>
 
 </body>
 </html>
