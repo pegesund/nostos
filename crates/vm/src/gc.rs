@@ -2014,6 +2014,7 @@ mod tests {
             module: None,
             source_span: None,
             jit_code: None,
+            call_count: std::cell::Cell::new(0),
         });
 
         let ptr = heap.alloc_closure(
@@ -2221,6 +2222,7 @@ mod tests {
             module: None,
             source_span: None,
             jit_code: None,
+            call_count: std::cell::Cell::new(0),
         });
 
         let x = heap.alloc_string("captured x".to_string());
@@ -2472,6 +2474,7 @@ mod tests {
             module: None,
             source_span: None,
             jit_code: None,
+            call_count: std::cell::Cell::new(0),
         });
 
         let captured = heap1.alloc_string("captured_value".to_string());

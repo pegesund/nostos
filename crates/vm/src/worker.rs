@@ -1649,6 +1649,7 @@ mod tests {
             module: None,
             source_span: None,
             jit_code: None,
+            call_count: std::cell::Cell::new(0),
         })
     }
 

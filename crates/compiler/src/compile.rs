@@ -6,6 +6,7 @@
 //! - Pattern match compilation
 //! - Type-directed code generation
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -597,6 +598,7 @@ impl Compiler {
             module: None,
             source_span: None,
             jit_code: None,
+            call_count: Cell::new(0),
         };
 
         // Assign function index if not already indexed (for trait methods and late-compiled functions)
@@ -2159,6 +2161,7 @@ impl Compiler {
             module: None,
             source_span: None,
             jit_code: None,
+            call_count: Cell::new(0),
         };
 
         let dst = self.alloc_reg();
@@ -2652,6 +2655,7 @@ impl Compiler {
                 module: if self.module_path.is_empty() { None } else { Some(self.module_path.join(".")) },
                 source_span: None,
                 jit_code: None,
+                call_count: Cell::new(0),
             };
             self.functions.insert(name.clone(), Rc::new(placeholder));
 
