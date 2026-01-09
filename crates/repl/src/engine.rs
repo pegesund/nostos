@@ -3633,6 +3633,94 @@ impl ReplEngine {
         }
     }
 
+    /// Get module source reconstructed from compiler (not from disk)
+    /// This is used for saving back to the original file after editing
+    pub fn get_module_source_reconstructed(&mut self, module_name: &str) -> String {
+        let module_path: Vec<String> = if module_name.is_empty() {
+            vec![]
+        } else {
+            module_name.split('.').map(|s| s.to_string()).collect()
+        };
+
+        // Get all items from browser
+        let items = self.get_browser_items(&module_path);
+        let prefix = if module_path.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", module_name)
+        };
+
+        let mut source = String::new();
+
+        // Add use statements first
+        let use_stmts = self.compiler.get_module_use_stmts(module_name);
+        for stmt in &use_stmts {
+            source.push_str(&format!("{}\n", stmt));
+        }
+        if !use_stmts.is_empty() {
+            source.push('\n');
+        }
+
+        // Add imports
+        let imports = self.compiler.get_module_imports(module_name);
+        for imp in &imports {
+            source.push_str(&format!("import {}\n", imp));
+        }
+        if !imports.is_empty() {
+            source.push('\n');
+        }
+
+        // Add types first
+        for item in &items {
+            if let BrowserItem::Type { name, .. } = item {
+                let full_name = format!("{}{}", prefix, name);
+                let item_source = self.get_source(&full_name);
+                if !item_source.starts_with("Not found:") {
+                    source.push_str(&item_source);
+                    source.push_str("\n\n");
+                }
+            }
+        }
+
+        // Add traits
+        for item in &items {
+            if let BrowserItem::Trait { name, .. } = item {
+                let full_name = format!("{}{}", prefix, name);
+                let item_source = self.get_source(&full_name);
+                if !item_source.starts_with("Not found:") {
+                    source.push_str(&item_source);
+                    source.push_str("\n\n");
+                }
+            }
+        }
+
+        // Add mvars
+        for item in &items {
+            if let BrowserItem::Variable { name, mutable, .. } = item {
+                let full_name = format!("{}{}", prefix, name);
+                if *mutable {
+                    if let Some(info) = self.compiler.get_mvars().get(&full_name) {
+                        source.push_str(&format!("mvar {}: {} = {:?}\n\n", name, info.type_name, info.initial_value));
+                    }
+                }
+            }
+        }
+
+        // Add functions
+        for item in &items {
+            if let BrowserItem::Function { name, .. } = item {
+                let full_name = format!("{}{}", prefix, name);
+                let item_source = self.get_source(&full_name);
+                if !item_source.starts_with("Not found:") {
+                    source.push_str(&item_source);
+                    source.push_str("\n\n");
+                }
+            }
+        }
+
+        source
+    }
+
     /// Search for a string in functions within a module and its submodules
     /// Returns a list of matches with function name, line content, and match position
     pub fn search_in_module(&self, module_path: &[String], query: &str) -> Vec<SearchResult> {

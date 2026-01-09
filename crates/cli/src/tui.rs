@@ -2895,13 +2895,6 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
             };
             debug_log(&format!("Content length: {} chars", content.len()));
 
-            // Background save to original file if in single-file mode
-            if let Some(path) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
-                state.borrow().source_file_path.clone()
-            }).flatten() {
-                save_file_background(path, content.clone());
-            }
-
             // Extract actual definition names from the content
             let actual_names = extract_definition_names(&content);
             debug_log(&format!("Actual definition names in content: {:?}", actual_names));
@@ -3116,14 +3109,29 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                     }
                 }
             } else {
-                // No source manager - just try to compile without saving
-                debug_log("No source manager, just compiling");
+                // No source manager - compile and save to original file if in single-file mode
+                debug_log("No source manager, compiling for single-file mode");
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     engine.eval_in_module(&eval_content, Some(&name_for_save))
                 }));
 
                 match result {
                     Ok(Ok(output)) => {
+                        // Get module name from the function name (e.g., "ptest.session" -> "ptest")
+                        let module_name = if let Some(dot_pos) = name_for_save.rfind('.') {
+                            &name_for_save[..dot_pos]
+                        } else {
+                            &name_for_save
+                        };
+
+                        // Background save reconstructed source to original file
+                        if let Some(path) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                            state.borrow().source_file_path.clone()
+                        }).flatten() {
+                            let reconstructed = engine.get_module_source_reconstructed(module_name);
+                            save_file_background(path, reconstructed);
+                        }
+
                         drop(engine);
                         if output.is_empty() {
                             log_to_repl(s, &format!("Evaluated {}", name_for_save));
@@ -3161,13 +3169,6 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                     return;
                 }
             };
-
-            // Background save to original file if in single-file mode
-            if let Some(path) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
-                state.borrow().source_file_path.clone()
-            }).flatten() {
-                save_file_background(path, content.clone());
-            }
 
             // Extract actual definition names from the content
             let actual_names = extract_definition_names(&content);
@@ -3294,7 +3295,7 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                     }
                 }
             } else {
-                // No source manager - use eval_in_module to get type prefixing
+                // No source manager - compile and save to original file if in single-file mode
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     engine.eval_in_module(&eval_content, Some(&name_for_compile))
                 }));
@@ -3303,6 +3304,21 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
 
                 match result {
                     Ok(Ok(_output)) => {
+                        // Get module name from the function name (e.g., "ptest.session" -> "ptest")
+                        let module_name = if let Some(dot_pos) = name_for_compile.rfind('.') {
+                            &name_for_compile[..dot_pos]
+                        } else {
+                            &name_for_compile
+                        };
+
+                        // Background save reconstructed source to original file
+                        if let Some(path) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                            state.borrow().source_file_path.clone()
+                        }).flatten() {
+                            let reconstructed = engine.get_module_source_reconstructed(module_name);
+                            save_file_background(path, reconstructed);
+                        }
+
                         drop(engine);
                         let names_str = if actual_names.is_empty() {
                             name_for_compile.clone()
