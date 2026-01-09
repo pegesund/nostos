@@ -344,6 +344,7 @@ fn run_with_async_vm(
     entry_point_name: &str,
     profiling_enabled: bool,
     enable_jit: bool,
+    extension_paths: &[String],
 ) -> ExitCode {
     let config = AsyncConfig {
         profiling_enabled,
@@ -353,6 +354,27 @@ fn run_with_async_vm(
 
     // Register default native functions
     vm.register_default_natives();
+
+    // Load extensions if specified
+    if !extension_paths.is_empty() {
+        // Create tokio runtime for extension manager
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime for extensions");
+        let ext_mgr = std::sync::Arc::new(nostos_vm::ExtensionManager::new(rt.handle().clone()));
+
+        for path in extension_paths {
+            let ext_path = std::path::Path::new(path);
+            match ext_mgr.load(ext_path) {
+                Ok(msg) => eprintln!("{}", msg),
+                Err(e) => {
+                    eprintln!("Error loading extension '{}': {}", path, e);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+
+        // Set extension manager on VM
+        vm.set_extension_manager(ext_mgr);
+    }
 
     // Register all functions from compiler
     for (name, func) in compiler.get_all_functions().iter() {
@@ -709,6 +731,7 @@ fn main() -> ExitCode {
     let mut debug_mode = false;
     let mut num_threads: usize = 0; // 0 = auto-detect
     let mut profiling_enabled = false; // Enable function call profiling
+    let mut extension_paths: Vec<String> = Vec::new(); // Extension library paths
 
     let mut i = 1;
     let mut file_idx: Option<usize> = None;
@@ -731,6 +754,7 @@ fn main() -> ExitCode {
                 println!("  --json-errors    Output errors as JSON (for debugger integration)");
                 println!("  --threads N      Use N worker threads (default: all CPUs)");
                 println!("  --profile        Enable function call profiling (JIT functions show as [JIT])");
+                println!("  --extension PATH Load native extension from shared library (.so/.dylib)");
                 println!();
                 println!("REPL usage:");
                 println!("  nostos repl              Start interactive REPL");
@@ -774,6 +798,17 @@ fn main() -> ExitCode {
                 // JIT profiling is now supported - JIT functions show as "[JIT] function_name"
                 i += 1;
                 continue;
+            }
+            if arg == "--extension" || arg == "-e" {
+                // Load extension from shared library
+                if i + 1 < args.len() {
+                    extension_paths.push(args[i + 1].clone());
+                    i += 2;
+                    continue;
+                } else {
+                    eprintln!("Error: --extension requires a path argument");
+                    return ExitCode::FAILURE;
+                }
             }
             i += 1;
         } else {
@@ -1001,5 +1036,5 @@ fn main() -> ExitCode {
     };
 
     // Run with AsyncVM
-    run_with_async_vm(&compiler, &entry_point_name, profiling_enabled, enable_jit)
+    run_with_async_vm(&compiler, &entry_point_name, profiling_enabled, enable_jit, &extension_paths)
 }

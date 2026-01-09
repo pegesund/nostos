@@ -8692,6 +8692,11 @@ impl AsyncVM {
             .insert(func_index, jit_fn);
     }
 
+    /// Set the extension manager for native library functions.
+    pub fn set_extension_manager(&self, manager: Arc<ExtensionManager>) {
+        *self.shared.extensions.write().unwrap() = Some(manager);
+    }
+
     /// Get dynamic functions (for REPL).
     pub fn get_dynamic_functions(&self) -> Arc<RwLock<HashMap<String, Arc<FunctionValue>>>> {
         self.shared.dynamic_functions.clone()
