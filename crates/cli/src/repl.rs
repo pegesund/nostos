@@ -162,6 +162,7 @@ struct SharedCompletionData {
     types: Vec<String>,
     variables: Vec<String>,
     variable_types: HashMap<String, String>,
+    function_signatures: HashMap<String, String>,
 }
 
 type SharedCompletionState = Arc<RwLock<SharedCompletionData>>;
@@ -186,6 +187,7 @@ struct ReplCompletionSource {
     types: Vec<String>,
     variables: Vec<String>,
     variable_types: HashMap<String, String>,
+    function_signatures: HashMap<String, String>,
 }
 
 impl ReplCompletionSource {
@@ -196,6 +198,7 @@ impl ReplCompletionSource {
             types: data.types.clone(),
             variables: data.variables.clone(),
             variable_types: data.variable_types.clone(),
+            function_signatures: data.function_signatures.clone(),
         }
     }
 }
@@ -206,7 +209,9 @@ impl CompletionSource for ReplCompletionSource {
     fn get_variables(&self) -> Vec<String> { self.variables.clone() }
     fn get_type_fields(&self, _type_name: &str) -> Vec<String> { vec![] }
     fn get_type_constructors(&self, _type_name: &str) -> Vec<String> { vec![] }
-    fn get_function_signature(&self, _name: &str) -> Option<String> { None }
+    fn get_function_signature(&self, name: &str) -> Option<String> {
+        self.function_signatures.get(name).cloned()
+    }
     fn get_function_doc(&self, _name: &str) -> Option<String> { None }
     fn get_variable_type(&self, var_name: &str) -> Option<String> {
         self.variable_types.get(var_name).cloned()
@@ -486,6 +491,22 @@ impl Repl {
                 if !return_type.is_empty() {
                     state.variable_types.insert(name.clone(), return_type);
                 }
+            }
+        }
+
+        // Collect function signatures (for autocomplete return type inference)
+        state.function_signatures.clear();
+        // Add builtin signatures
+        for (name, sig) in Compiler::get_builtins() {
+            state.function_signatures.insert(name.to_string(), sig.to_string());
+        }
+        // Add user-defined function signatures (clone to avoid borrow conflict)
+        let fn_names: Vec<String> = state.functions.clone();
+        for fn_name in fn_names {
+            // Extract base name (without arity suffix like "/Int,Int")
+            let base_name = fn_name.split('/').next().unwrap_or(&fn_name);
+            if let Some(sig) = self.compiler.get_function_signature(&fn_name) {
+                state.function_signatures.insert(base_name.to_string(), sig);
             }
         }
     }
