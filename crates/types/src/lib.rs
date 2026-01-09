@@ -280,6 +280,8 @@ pub struct TypeEnv {
     pub bindings: HashMap<String, (Type, bool)>,
     /// Type definitions: name -> TypeDef
     pub types: HashMap<String, TypeDef>,
+    /// Type aliases: short name -> qualified name (e.g., "Option" -> "stdlib.list.Option")
+    pub type_aliases: HashMap<String, String>,
     /// Trait definitions: name -> TraitDef
     pub traits: HashMap<String, TraitDef>,
     /// Trait implementations
@@ -338,8 +340,28 @@ impl TypeEnv {
     }
 
     /// Look up a type definition.
+    /// First checks for type aliases, then looks up the resolved name.
     pub fn lookup_type(&self, name: &str) -> Option<&TypeDef> {
-        self.types.get(name)
+        // First try direct lookup
+        if let Some(def) = self.types.get(name) {
+            return Some(def);
+        }
+        // Try resolving through aliases
+        if let Some(qualified) = self.type_aliases.get(name) {
+            return self.types.get(qualified);
+        }
+        None
+    }
+
+    /// Resolve a type name through aliases.
+    /// Returns the qualified name if an alias exists, otherwise returns the original name.
+    pub fn resolve_type_name(&self, name: &str) -> String {
+        self.type_aliases.get(name).cloned().unwrap_or_else(|| name.to_string())
+    }
+
+    /// Add a type alias (e.g., "Option" -> "stdlib.list.Option").
+    pub fn add_type_alias(&mut self, short_name: String, qualified_name: String) {
+        self.type_aliases.insert(short_name, qualified_name);
     }
 
     /// Look up a function by name with arity-aware resolution.

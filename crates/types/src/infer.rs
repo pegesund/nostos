@@ -589,11 +589,18 @@ impl<'a> InferCtx<'a> {
                 Ok(())
             }
 
-            // Named types with same name
+            // Named types - resolve aliases before comparing
             (
                 Type::Named { name: n1, args: a1 },
                 Type::Named { name: n2, args: a2 },
-            ) if n1 == n2 => {
+            ) => {
+                // Resolve type aliases (e.g., "RNode" -> "stdlib.rhtml.RNode")
+                let resolved1 = self.env.resolve_type_name(n1);
+                let resolved2 = self.env.resolve_type_name(n2);
+
+                if resolved1 != resolved2 {
+                    return Err(TypeError::UnificationFailed(t1.display(), t2.display()));
+                }
                 if a1.len() != a2.len() {
                     return Err(TypeError::TypeArityMismatch {
                         expected: a1.len(),
@@ -681,7 +688,8 @@ impl<'a> InferCtx<'a> {
                     "Ref" => Type::Ref,
                     "Never" => Type::Never,
                     _ => Type::Named {
-                        name: name.clone(),
+                        // Resolve through type aliases (e.g., Option -> stdlib.list.Option)
+                        name: self.env.resolve_type_name(name),
                         args: vec![],
                     }
                 }
@@ -699,7 +707,8 @@ impl<'a> InferCtx<'a> {
                     ),
                     "IO" if type_args.len() == 1 => Type::IO(Box::new(type_args[0].clone())),
                     _ => Type::Named {
-                        name: name_str.clone(),
+                        // Resolve through type aliases (e.g., Option -> stdlib.list.Option)
+                        name: self.env.resolve_type_name(name_str),
                         args: type_args,
                     },
                 }
@@ -962,6 +971,8 @@ impl<'a> InferCtx<'a> {
             // Record construction
             Expr::Record(name, fields, _) => {
                 let type_name = &name.node;
+                // Resolve type name through aliases to get qualified name
+                let resolved_type_name = self.env.resolve_type_name(type_name);
 
                 // Check for record update pattern: first field is positional (base), rest have named fields
                 // E.g., Point(p, x: 10) means "update p with x = 10"
@@ -973,13 +984,13 @@ impl<'a> InferCtx<'a> {
                             // This is a record update - infer base type and require it matches the record type
                             let base_ty = self.infer_expr(base_expr)?;
                             let expected_ty = Type::Named {
-                                name: type_name.clone(),
+                                name: resolved_type_name.clone(),
                                 args: vec![],
                             };
                             self.unify(base_ty, expected_ty.clone());
 
                             // Infer and check types of named update fields
-                            if let Some(TypeDef::Record { fields: def_fields, .. }) = self.env.lookup_type(type_name).cloned() {
+                            if let Some(TypeDef::Record { fields: def_fields, .. }) = self.env.lookup_type(&resolved_type_name).cloned() {
                                 for field in &fields[1..] {
                                     if let RecordField::Named(fname, expr) = field {
                                         let ty = self.infer_expr(expr)?;
@@ -987,7 +998,7 @@ impl<'a> InferCtx<'a> {
                                             self.unify(ty, fty.clone());
                                         } else {
                                             return Err(TypeError::NoSuchField {
-                                                ty: type_name.clone(),
+                                                ty: resolved_type_name.clone(),
                                                 field: fname.node.clone(),
                                             });
                                         }
@@ -1002,7 +1013,7 @@ impl<'a> InferCtx<'a> {
 
                 if let Some(TypeDef::Record {
                     fields: def_fields, ..
-                }) = self.env.lookup_type(type_name).cloned()
+                }) = self.env.lookup_type(&resolved_type_name).cloned()
                 {
                     let mut provided = HashMap::new();
                     for field in fields {
@@ -1026,7 +1037,7 @@ impl<'a> InferCtx<'a> {
                                     provided.insert(fname.node.clone(), ());
                                 } else {
                                     return Err(TypeError::NoSuchField {
-                                        ty: type_name.clone(),
+                                        ty: resolved_type_name.clone(),
                                         field: fname.node.clone(),
                                     });
                                 }
@@ -1035,11 +1046,11 @@ impl<'a> InferCtx<'a> {
                     }
 
                     Ok(Type::Named {
-                        name: type_name.clone(),
+                        name: resolved_type_name.clone(),
                         args: vec![],
                     })
                 } else {
-                    Err(TypeError::UnknownType(type_name.clone()))
+                    Err(TypeError::UnknownType(resolved_type_name.clone()))
                 }
             }
 
@@ -1248,10 +1259,11 @@ impl<'a> InferCtx<'a> {
                 let err_ty = self.fresh();
 
                 // inner should be Result[T, E]
+                let result_type_name = self.env.resolve_type_name("Result");
                 self.unify(
                     inner_ty,
                     Type::Named {
-                        name: "Result".to_string(),
+                        name: result_type_name,
                         args: vec![ok_ty.clone(), err_ty],
                     },
                 );
@@ -1338,9 +1350,10 @@ impl<'a> InferCtx<'a> {
 
             // Record update
             Expr::RecordUpdate(name, base, fields, _) => {
+                let resolved_name = self.env.resolve_type_name(&name.node);
                 let base_ty = self.infer_expr(base)?;
                 let expected_ty = Type::Named {
-                    name: name.node.clone(),
+                    name: resolved_name,
                     args: vec![],
                 };
                 self.unify(base_ty, expected_ty.clone());

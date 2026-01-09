@@ -1377,12 +1377,23 @@ fn main() -> ExitCode {
                  }
                  let module_prefix = components.join(".");
 
-                 // Collect function names from this module for prelude imports
+                 // Collect function and type names from this module for prelude imports
                  for item in &module.items {
-                     if let nostos_syntax::ast::Item::FnDef(fn_def) = item {
-                         let local_name = fn_def.name.node.clone();
-                         let qualified_name = format!("{}.{}", module_prefix, local_name);
-                         stdlib_functions.push((local_name, qualified_name));
+                     match item {
+                         nostos_syntax::ast::Item::FnDef(fn_def) => {
+                             let local_name = fn_def.name.node.clone();
+                             let qualified_name = format!("{}.{}", module_prefix, local_name);
+                             stdlib_functions.push((local_name, qualified_name));
+                         }
+                         nostos_syntax::ast::Item::TypeDef(type_def) => {
+                             // Add public types to the prelude (like Option, Result)
+                             if matches!(type_def.visibility, nostos_syntax::ast::Visibility::Public) {
+                                 let local_name = type_def.name.node.clone();
+                                 let qualified_name = format!("{}.{}", module_prefix, local_name);
+                                 stdlib_functions.push((local_name, qualified_name));
+                             }
+                         }
+                         _ => {}
                      }
                  }
 

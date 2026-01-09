@@ -2648,6 +2648,54 @@ impl Compiler {
         }
     }
 
+    /// Resolve a type annotation to its fully qualified form.
+    /// This resolves imports for stdlib types like Option, Result when at top-level.
+    fn resolve_type_annotation(&self, ty: &nostos_syntax::TypeExpr) -> String {
+        match ty {
+            nostos_syntax::TypeExpr::Name(ident) => {
+                let name = &ident.node;
+                // Skip built-in types and type parameters
+                if self.is_builtin_type_name(name) ||
+                   (name.len() == 1 && name.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)) {
+                    return name.clone();
+                }
+                // At top-level (no module path), check imports first for stdlib types
+                if self.module_path.is_empty() {
+                    if let Some(imported) = self.imports.get(name) {
+                        return imported.clone();
+                    }
+                }
+                // Otherwise use type_expr_name which handles qualification
+                self.type_expr_name(ty)
+            }
+            nostos_syntax::TypeExpr::Generic(ident, args) => {
+                let args_str: Vec<String> = args.iter()
+                    .map(|arg| self.resolve_type_annotation(arg))
+                    .collect();
+                let name = &ident.node;
+                // At top-level (no module path), check imports first for stdlib types
+                let base_name = if self.module_path.is_empty() {
+                    if let Some(imported) = self.imports.get(name) {
+                        imported.clone()
+                    } else if self.is_builtin_type_name(name) {
+                        name.clone()
+                    } else {
+                        self.type_expr_name(&nostos_syntax::TypeExpr::Name(ident.clone()))
+                    }
+                } else {
+                    self.type_expr_name(&nostos_syntax::TypeExpr::Name(ident.clone()))
+                };
+                if args_str.is_empty() {
+                    base_name
+                } else {
+                    format!("{}[{}]", base_name, args_str.join(", "))
+                }
+            }
+            // For other type expressions, delegate to type_expr_name
+            _ => self.type_expr_name(ty),
+        }
+    }
+
     /// Compile a module-level mutable variable (mvar) definition.
     /// This registers the mvar with the compiler and will set up the VM storage.
     fn compile_mvar_def(&mut self, def: &MvarDef) -> Result<(), CompileError> {
@@ -4467,7 +4515,10 @@ impl Compiler {
             doc,
             signature: Some(self.infer_signature(def)),
             param_types: def.param_type_strings(),
-            return_type: def.return_type_string(),
+            // Resolve return type using imports (e.g., Option -> stdlib.list.Option)
+            return_type: def.clauses.first()
+                .and_then(|c| c.return_type.as_ref())
+                .map(|ty| self.resolve_type_annotation(ty)),
             required_params,
         };
 
@@ -4847,8 +4898,55 @@ impl Compiler {
                 // Regular field access on a record
                 let obj_reg = self.compile_expr_tail(obj, false)?;
                 let dst = self.alloc_reg();
-                let field_idx = self.chunk.add_constant(Value::String(Arc::new(field.node.clone())));
-                self.chunk.emit(Instruction::GetField(dst, obj_reg, field_idx), line);
+
+                // Try to determine the object type for named field access on single-constructor variants
+                // (e.g., Point { x: Int, y: Int } needs point.x to become point[0])
+                let mut field_index: Option<usize> = None;
+                if let Some(type_name) = self.expr_type_name(obj) {
+                    // Strip type parameters to get base type (e.g., Box[Int] -> Box)
+                    let base_type = if let Some(bracket_pos) = type_name.find('[') {
+                        &type_name[..bracket_pos]
+                    } else {
+                        &type_name
+                    };
+
+                    // Check if this type has a TypeDef with named fields
+                    if let Some(type_def) = self.type_defs.get(base_type) {
+                        match &type_def.body {
+                            nostos_syntax::ast::TypeBody::Record(fields) => {
+                                // True record type - find field by name
+                                for (idx, f) in fields.iter().enumerate() {
+                                    if f.name.node == field.node {
+                                        field_index = Some(idx);
+                                        break;
+                                    }
+                                }
+                            }
+                            nostos_syntax::ast::TypeBody::Variant(variants) => {
+                                // Single-constructor variant with named fields
+                                if variants.len() == 1 {
+                                    if let nostos_syntax::ast::VariantFields::Named(fields) = &variants[0].fields {
+                                        for (idx, f) in fields.iter().enumerate() {
+                                            if f.name.node == field.node {
+                                                field_index = Some(idx);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Use numeric index string if found, otherwise use field name
+                // For variants, GetField expects the index as a string like "0", "1", etc.
+                let field_const = match field_index {
+                    Some(idx) => self.chunk.add_constant(Value::String(Arc::new(idx.to_string()))),
+                    None => self.chunk.add_constant(Value::String(Arc::new(field.node.clone()))),
+                };
+                self.chunk.emit(Instruction::GetField(dst, obj_reg, field_const), line);
                 Ok(dst)
             }
 
@@ -9203,39 +9301,98 @@ impl Compiler {
             // Note: The parser treats uppercase calls like Foo(42) as Record expressions
             Expr::Record(type_name, args, _) => {
                 let name = &type_name.node;
+
+                // Helper: try to infer type parameters for a type from constructor args
+                let try_infer_type_params = |ty_name: &str, args: &[RecordField]| -> Option<String> {
+                    // Check if this type has type parameters by looking at the TypeDef
+                    if let Some(type_def) = self.type_defs.get(ty_name) {
+                        if !type_def.type_params.is_empty() && !args.is_empty() {
+                            // The type has type parameters - try to infer from constructor args
+                            // For single-constructor variants like Box[T] = Box(T), the constructor
+                            // fields reference type params by name (e.g., "T")
+                            if let Some(info) = self.types.get(ty_name) {
+                                if let TypeInfoKind::Variant { constructors } = &info.kind {
+                                    if constructors.len() == 1 {
+                                        let ctor_fields = &constructors[0].1;
+                                        // Collect inferred type args
+                                        let mut inferred_type_args: Vec<String> = Vec::new();
+
+                                        for (i, field_type) in ctor_fields.iter().enumerate() {
+                                            // Check if this field type is a type parameter
+                                            let is_type_param = field_type.len() == 1
+                                                && field_type.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+
+                                            if is_type_param && i < args.len() {
+                                                // Infer type from argument
+                                                let arg_expr = match &args[i] {
+                                                    RecordField::Positional(e) => e,
+                                                    RecordField::Named(_, e) => e,
+                                                };
+                                                if let Some(arg_type) = self.expr_type_name(arg_expr) {
+                                                    inferred_type_args.push(arg_type);
+                                                }
+                                            }
+                                        }
+
+                                        if !inferred_type_args.is_empty() {
+                                            return Some(format!("{}[{}]", ty_name, inferred_type_args.join(", ")));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    None
+                };
+
                 // First check if it's directly a type name (for records and single-constructor variants)
                 if self.types.contains_key(name) {
+                    // Try to infer type parameters
+                    if let Some(parameterized) = try_infer_type_params(name, args) {
+                        return Some(parameterized);
+                    }
                     return Some(name.clone());
                 }
+
                 // Try resolving the name (handles module-qualified types like nalgebra.Vec)
                 let resolved_name = self.resolve_name(name);
                 if self.types.contains_key(&resolved_name) {
+                    // Try to infer type parameters
+                    if let Some(parameterized) = try_infer_type_params(&resolved_name, args) {
+                        return Some(parameterized);
+                    }
                     return Some(resolved_name);
                 }
-                // Otherwise check if it's a variant constructor
+
+                // Otherwise check if it's a variant constructor (different from type name)
                 for (ty_name, info) in &self.types {
                     if let TypeInfoKind::Variant { constructors } = &info.kind {
                         if let Some((_, ctor_fields)) = constructors.iter().find(|(ctor_name, _)| ctor_name == name) {
                             // Check if the constructor has type parameter fields
                             // Type params are single uppercase letters like "T", "U", etc.
                             if !ctor_fields.is_empty() && !args.is_empty() {
-                                let first_field_type = &ctor_fields[0];
-                                // Check if first field type is a type parameter (single uppercase letter)
-                                let is_type_param = first_field_type.len() == 1
-                                    && first_field_type.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
-                                if is_type_param {
-                                    // Try to infer type arg from first constructor arg
-                                    let first_arg_expr = match &args[0] {
-                                        RecordField::Positional(e) => Some(e),
-                                        RecordField::Named(_, e) => Some(e),
-                                    };
-                                    if let Some(arg_expr) = first_arg_expr {
+                                // Collect inferred type args
+                                let mut inferred_type_args: Vec<String> = Vec::new();
+
+                                for (i, field_type) in ctor_fields.iter().enumerate() {
+                                    // Check if this field type is a type parameter
+                                    let is_type_param = field_type.len() == 1
+                                        && field_type.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+
+                                    if is_type_param && i < args.len() {
+                                        // Infer type from argument
+                                        let arg_expr = match &args[i] {
+                                            RecordField::Positional(e) => e,
+                                            RecordField::Named(_, e) => e,
+                                        };
                                         if let Some(arg_type) = self.expr_type_name(arg_expr) {
-                                            // Return type with inferred type arg
-                                            // E.g., "MyOpt" + arg_type="Int" -> "MyOpt[Int]"
-                                            return Some(format!("{}[{}]", ty_name, arg_type));
+                                            inferred_type_args.push(arg_type);
                                         }
                                     }
+                                }
+
+                                if !inferred_type_args.is_empty() {
+                                    return Some(format!("{}[{}]", ty_name, inferred_type_args.join(", ")));
                                 }
                             }
                             return Some(ty_name.clone());
@@ -14753,6 +14910,27 @@ impl Compiler {
             }
         }
 
+        // Register type aliases from imports (e.g., "Option" -> "stdlib.list.Option")
+        // This allows type annotations like "-> Option[Int]" to resolve correctly
+        for (short_name, qualified_name) in &self.imports {
+            // Only add alias if the qualified name is a known type
+            if self.types.contains_key(qualified_name) {
+                env.add_type_alias(short_name.clone(), qualified_name.clone());
+            }
+        }
+
+        // Also add aliases for all types with their short names (e.g., "RNode" -> "stdlib.rhtml.RNode")
+        // This ensures that within-module type references resolve correctly
+        for type_name in self.types.keys() {
+            if let Some(dot_pos) = type_name.rfind('.') {
+                let short_name = &type_name[dot_pos + 1..];
+                // Only add if there isn't already an alias
+                if !env.type_aliases.contains_key(short_name) {
+                    env.add_type_alias(short_name.to_string(), type_name.clone());
+                }
+            }
+        }
+
         // Register mvars as bindings so type inference can resolve mvar references
         for (mvar_name, mvar_info) in &self.mvars {
             let mvar_type = self.type_name_to_type(&mvar_info.type_name);
@@ -15037,6 +15215,27 @@ impl Compiler {
                             constructors: ctors,
                         },
                     );
+                }
+            }
+        }
+
+        // Register type aliases from imports (e.g., "Option" -> "stdlib.list.Option")
+        // This allows type annotations like "-> Option[Int]" to resolve correctly
+        for (short_name, qualified_name) in &self.imports {
+            // Only add alias if the qualified name is a known type
+            if self.types.contains_key(qualified_name) {
+                env.add_type_alias(short_name.clone(), qualified_name.clone());
+            }
+        }
+
+        // Also add aliases for all types with their short names (e.g., "RNode" -> "stdlib.rhtml.RNode")
+        // This ensures that within-module type references resolve correctly
+        for type_name in self.types.keys() {
+            if let Some(dot_pos) = type_name.rfind('.') {
+                let short_name = &type_name[dot_pos + 1..];
+                // Only add if there isn't already an alias
+                if !env.type_aliases.contains_key(short_name) {
+                    env.add_type_alias(short_name.to_string(), type_name.clone());
                 }
             }
         }
