@@ -1,0 +1,22 @@
+# expect: 42
+# Test basic field setter dispatch
+
+# Define a mutable record
+var type Point = { x: Int, y: Int }
+
+# Define a custom setter for x field
+# When we write p.x = v, this function will be called
+pointSetX(p: Point, v: Int) -> Point = {
+    # Custom setter: double the value
+    Point(v * 2, p.y)
+}
+
+main() = {
+    p = Point(10, 20)
+
+    # This should call pointSetX(p, 21) and update p with the result
+    p.x = 21
+
+    # x should be 21 * 2 = 42 (setter doubles the value)
+    p.x
+}

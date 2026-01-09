@@ -1,0 +1,25 @@
+# expect: 100
+# Test practical use case: validation in setter
+
+var type Counter = { count: Int }
+
+# Setter that ensures count is never negative
+counterSetCount(c: Counter, v: Int) -> Counter = {
+    if v < 0 then Counter(0) else Counter(v)
+}
+
+main() = {
+    c = Counter(50)
+
+    # Try to set to -10, but setter clamps to 0
+    c.count = -10
+    minVal = c.count  # Should be 0
+
+    # Verify the clamping worked - minVal should be 0
+    assert(minVal == 0)
+
+    # Now set to a positive value
+    c.count = 100
+
+    c.count
+}
