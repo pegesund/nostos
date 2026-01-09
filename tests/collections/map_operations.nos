@@ -1,0 +1,45 @@
+# expect: 0
+# Test new Map operations
+
+main() = {
+    # Create test maps
+    m1 = Map.fromList([("a", 1), ("b", 2), ("c", 3)])
+    m2 = Map.fromList([("b", 20), ("c", 30), ("d", 40)])
+
+    # Test Map.union (first map wins on conflict - left-biased)
+    u = Map.union(m1, m2)
+    assert(Map.get(u, "a") == 1)
+    assert(Map.get(u, "b") == 2)  # m1's value wins
+    assert(Map.get(u, "d") == 40)
+    assert(Map.size(u) == 4)
+
+    # Test Map.intersection (values from first map)
+    inter = Map.intersection(m1, m2)
+    assert(Map.size(inter) == 2)
+    assert(Map.contains(inter, "b"))
+    assert(Map.contains(inter, "c"))
+    assert(Map.get(inter, "b") == 2)
+
+    # Test Map.difference (keys in m1 but not in m2)
+    diff = Map.difference(m1, m2)
+    assert(Map.size(diff) == 1)
+    assert(Map.contains(diff, "a"))
+    assert(!Map.contains(diff, "b"))
+
+    # Test Map.toList
+    m3 = Map.fromList([("x", 10)])
+    pairs = Map.toList(m3)
+    assert(length(pairs) == 1)
+    (k, v) = head(pairs)
+    assert(k == "x")
+    assert(v == 10)
+
+    # Test Map.fromList roundtrip
+    original = [("one", 1), ("two", 2), ("three", 3)]
+    m4 = Map.fromList(original)
+    assert(Map.size(m4) == 3)
+    assert(Map.get(m4, "two") == 2)
+
+    println("All Map tests passed!")
+    0
+}

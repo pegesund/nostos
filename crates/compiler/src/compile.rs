@@ -94,6 +94,15 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "isEmpty", signature: "[a] -> Bool", doc: "True if list is empty (alias for empty)" },
     BuiltinInfo { name: "sum", signature: "[a] -> a", doc: "Sum of all elements" },
     BuiltinInfo { name: "product", signature: "[a] -> a", doc: "Product of all elements" },
+    BuiltinInfo { name: "indexOf", signature: "[a] -> a -> Option Int", doc: "Find index of first matching element" },
+    BuiltinInfo { name: "sortBy", signature: "[a] -> (a -> a -> Int) -> [a]", doc: "Sort list using comparator function" },
+    BuiltinInfo { name: "intersperse", signature: "[a] -> a -> [a]", doc: "Insert element between all elements" },
+    BuiltinInfo { name: "spanList", signature: "[a] -> (a -> Bool) -> ([a], [a])", doc: "Split at first element not satisfying predicate" },
+    BuiltinInfo { name: "groupBy", signature: "[a] -> (a -> k) -> [[a]]", doc: "Group consecutive elements by key function" },
+    BuiltinInfo { name: "transpose", signature: "[[a]] -> [[a]]", doc: "Transpose list of lists (rows become columns)" },
+    BuiltinInfo { name: "pairwise", signature: "[a] -> (a -> a -> b) -> [b]", doc: "Apply function to pairs of adjacent elements" },
+    BuiltinInfo { name: "isSorted", signature: "[a] -> Bool", doc: "Check if list is sorted in ascending order" },
+    BuiltinInfo { name: "isSortedBy", signature: "[a] -> (a -> a -> Int) -> Bool", doc: "Check if list is sorted by comparator" },
 
     // === Typed Arrays ===
     BuiltinInfo { name: "newInt64Array", signature: "Int -> Int64Array", doc: "Create a new Int64 array of given size" },
@@ -263,6 +272,11 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Map.values", signature: "Map k v -> [v]", doc: "Get list of all values" },
     BuiltinInfo { name: "Map.size", signature: "Map k v -> Int", doc: "Get number of entries in map" },
     BuiltinInfo { name: "Map.isEmpty", signature: "Map k v -> Bool", doc: "Check if map is empty" },
+    BuiltinInfo { name: "Map.union", signature: "Map k v -> Map k v -> Map k v", doc: "Union of two maps (second wins on conflict)" },
+    BuiltinInfo { name: "Map.intersection", signature: "Map k v -> Map k v -> Map k v", doc: "Intersection of two maps (keys in both)" },
+    BuiltinInfo { name: "Map.difference", signature: "Map k v -> Map k v -> Map k v", doc: "Keys in first map but not second" },
+    BuiltinInfo { name: "Map.toList", signature: "Map k v -> [(k, v)]", doc: "Convert map to list of key-value pairs" },
+    BuiltinInfo { name: "Map.fromList", signature: "[(k, v)] -> Map k v", doc: "Create map from list of key-value pairs" },
 
     // === Set Functions ===
     BuiltinInfo { name: "Set.insert", signature: "Set a -> a -> Set a", doc: "Insert element, returns new set" },
@@ -274,6 +288,11 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Set.union", signature: "Set a -> Set a -> Set a", doc: "Union of two sets" },
     BuiltinInfo { name: "Set.intersection", signature: "Set a -> Set a -> Set a", doc: "Intersection of two sets" },
     BuiltinInfo { name: "Set.difference", signature: "Set a -> Set a -> Set a", doc: "Elements in first set but not in second" },
+    BuiltinInfo { name: "Set.symmetricDifference", signature: "Set a -> Set a -> Set a", doc: "Elements in either set but not both" },
+    BuiltinInfo { name: "Set.isSubset", signature: "Set a -> Set a -> Bool", doc: "Check if first set is subset of second" },
+    BuiltinInfo { name: "Set.isProperSubset", signature: "Set a -> Set a -> Bool", doc: "Check if first set is proper subset of second" },
+    BuiltinInfo { name: "Set.fromList", signature: "[a] -> Set a", doc: "Create set from list" },
+
     // === PostgreSQL ===
     BuiltinInfo { name: "Pg.connect", signature: "String -> Int", doc: "Connect to PostgreSQL database, returns handle" },
     BuiltinInfo { name: "Pg.query", signature: "Int -> String -> [a] -> [[a]]", doc: "Execute query with params, returns rows as list of lists" },
@@ -4238,7 +4257,7 @@ impl Compiler {
                             return Ok(dst);
                         }
                         // Map functions (1 arg)
-                        "Map.keys" | "Map.values" | "Map.size" | "Map.isEmpty" if args.len() == 1 => {
+                        "Map.keys" | "Map.values" | "Map.size" | "Map.isEmpty" | "Map.toList" | "Map.fromList" if args.len() == 1 => {
                             let arg_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
                             let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
@@ -4246,7 +4265,7 @@ impl Compiler {
                             return Ok(dst);
                         }
                         // Map functions (2 args)
-                        "Map.get" | "Map.contains" | "Map.remove" if args.len() == 2 => {
+                        "Map.get" | "Map.contains" | "Map.remove" | "Map.union" | "Map.intersection" | "Map.difference" if args.len() == 2 => {
                             let arg0_reg = self.compile_expr_tail(&args[0], false)?;
                             let arg1_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
@@ -4265,7 +4284,7 @@ impl Compiler {
                             return Ok(dst);
                         }
                         // Set functions (1 arg)
-                        "Set.size" | "Set.isEmpty" | "Set.toList" if args.len() == 1 => {
+                        "Set.size" | "Set.isEmpty" | "Set.toList" | "Set.fromList" if args.len() == 1 => {
                             let arg_reg = self.compile_expr_tail(&args[0], false)?;
                             let dst = self.alloc_reg();
                             let name_idx = self.chunk.add_constant(Value::String(Arc::new(qualified_name)));
@@ -4274,7 +4293,8 @@ impl Compiler {
                         }
                         // Set functions (2 args)
                         "Set.insert" | "Set.remove" | "Set.contains" | "Set.union"
-                        | "Set.intersection" | "Set.difference" if args.len() == 2 => {
+                        | "Set.intersection" | "Set.difference" | "Set.symmetricDifference"
+                        | "Set.isSubset" | "Set.isProperSubset" if args.len() == 2 => {
                             let arg0_reg = self.compile_expr_tail(&args[0], false)?;
                             let arg1_reg = self.compile_expr_tail(&args[1], false)?;
                             let dst = self.alloc_reg();
@@ -5106,7 +5126,10 @@ impl Compiler {
                             "values" => Some("Map.values"),
                             "size" => Some("Map.size"),
                             "isEmpty" => Some("Map.isEmpty"),
-                            "merge" => Some("Map.merge"),
+                            "union" => Some("Map.union"),
+                            "intersection" => Some("Map.intersection"),
+                            "difference" => Some("Map.difference"),
+                            "toList" => Some("Map.toList"),
                             _ => None,
                         }
                     } else if type_name.starts_with("Set[") || type_name == "Set" {
@@ -5119,6 +5142,9 @@ impl Compiler {
                             "union" => Some("Set.union"),
                             "intersection" => Some("Set.intersection"),
                             "difference" => Some("Set.difference"),
+                            "symmetricDifference" => Some("Set.symmetricDifference"),
+                            "isSubset" => Some("Set.isSubset"),
+                            "isProperSubset" => Some("Set.isProperSubset"),
                             "toList" => Some("Set.toList"),
                             _ => None,
                         }

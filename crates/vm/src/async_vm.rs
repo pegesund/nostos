@@ -3184,22 +3184,29 @@ impl AsyncProcess {
 
             ListProduct(dst, src) => {
                 let val = reg!(src);
-                if let GcValue::List(list) = val {
-                    let mut product: i64 = 1;
-                    for item in list.iter() {
-                        if let GcValue::Int64(n) = item {
-                            product *= n;
-                        } else {
-                            return Err(RuntimeError::Panic(
-                                format!("listProduct: expected Int64, got {:?}", item.type_name(&self.heap))
-                            ));
+                match val {
+                    GcValue::List(list) => {
+                        let mut product: i64 = 1;
+                        for item in list.iter() {
+                            if let GcValue::Int64(n) = item {
+                                product *= n;
+                            } else {
+                                return Err(RuntimeError::Panic(
+                                    format!("listProduct: expected Int64, got {:?}", item.type_name(&self.heap))
+                                ));
+                            }
                         }
+                        set_reg!(dst, GcValue::Int64(product));
                     }
-                    set_reg!(dst, GcValue::Int64(product));
-                } else {
-                    return Err(RuntimeError::Panic(
-                        format!("listProduct: expected List, got {:?}", val.type_name(&self.heap))
-                    ));
+                    GcValue::Int64List(list) => {
+                        // Fast path for specialized Int64List
+                        set_reg!(dst, GcValue::Int64(list.product()));
+                    }
+                    _ => {
+                        return Err(RuntimeError::Panic(
+                            format!("listProduct: expected List, got {:?}", val.type_name(&self.heap))
+                        ));
+                    }
                 }
             }
 
@@ -3369,6 +3376,7 @@ impl AsyncProcess {
                 let list_val = reg!(list_reg);
                 let is_empty = match list_val {
                     GcValue::List(list) => list.is_empty(),
+                    GcValue::Int64List(list) => list.is_empty(),
                     _ => false,
                 };
                 set_reg!(dst, GcValue::Bool(is_empty));
@@ -10218,6 +10226,131 @@ impl AsyncVM {
             }),
         }));
 
+        // Map.union(map1, map2) -> new map with all entries from both (map2 wins on conflict)
+        self.register_native("Map.union", Arc::new(GcNativeFn {
+            name: "Map.union".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                match (&args[0], &args[1]) {
+                    (GcValue::Map(ptr1), GcValue::Map(ptr2)) => {
+                        let map1 = heap.get_map(*ptr1).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        let map2 = heap.get_map(*ptr2).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        let new_entries = map1.entries.clone().union(map2.entries.clone());
+                        let new_ptr = heap.alloc_map(new_entries);
+                        Ok(GcValue::Map(new_ptr))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
+            }),
+        }));
+
+        // Map.intersection(map1, map2) -> new map with only keys in both (values from map1)
+        self.register_native("Map.intersection", Arc::new(GcNativeFn {
+            name: "Map.intersection".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                match (&args[0], &args[1]) {
+                    (GcValue::Map(ptr1), GcValue::Map(ptr2)) => {
+                        let map1 = heap.get_map(*ptr1).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        let map2 = heap.get_map(*ptr2).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        let new_entries = map1.entries.clone().intersection(map2.entries.clone());
+                        let new_ptr = heap.alloc_map(new_entries);
+                        Ok(GcValue::Map(new_ptr))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
+            }),
+        }));
+
+        // Map.difference(map1, map2) -> new map with keys in map1 but not in map2
+        self.register_native("Map.difference", Arc::new(GcNativeFn {
+            name: "Map.difference".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                match (&args[0], &args[1]) {
+                    (GcValue::Map(ptr1), GcValue::Map(ptr2)) => {
+                        let map1 = heap.get_map(*ptr1).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        let map2 = heap.get_map(*ptr2).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        let new_entries = map1.entries.clone().relative_complement(map2.entries.clone());
+                        let new_ptr = heap.alloc_map(new_entries);
+                        Ok(GcValue::Map(new_ptr))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
+            }),
+        }));
+
+        // Map.toList(map) -> [(key, value), ...]
+        self.register_native("Map.toList", Arc::new(GcNativeFn {
+            name: "Map.toList".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        let entries_cloned: Vec<_> = map.entries.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                        let pairs: Vec<GcValue> = entries_cloned.into_iter().map(|(k, v)| {
+                            let key = k.to_gc_value(heap);
+                            let tuple_ptr = heap.alloc_tuple(vec![key, v]);
+                            GcValue::Tuple(tuple_ptr)
+                        }).collect();
+                        Ok(GcValue::List(heap.make_list(pairs)))
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        let entries_cloned: Vec<_> = shared_map.iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        let pairs: Vec<GcValue> = entries_cloned.into_iter().map(|(k, v)| {
+                            let key = crate::gc::GcMapKey::from_shared_key(&k).to_gc_value(heap);
+                            let value = heap.shared_to_gc_value(&v);
+                            let tuple_ptr = heap.alloc_tuple(vec![key, value]);
+                            GcValue::Tuple(tuple_ptr)
+                        }).collect();
+                        Ok(GcValue::List(heap.make_list(pairs)))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
+            }),
+        }));
+
+        // Map.fromList([(key, value), ...]) -> Map
+        self.register_native("Map.fromList", Arc::new(GcNativeFn {
+            name: "Map.fromList".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::List(list) => {
+                        let mut entries = imbl::HashMap::new();
+                        for item in list.items().iter() {
+                            match item {
+                                GcValue::Tuple(tuple_ptr) => {
+                                    let tuple = heap.get_tuple(*tuple_ptr).ok_or_else(|| RuntimeError::Panic("Invalid tuple pointer".to_string()))?;
+                                    if tuple.items.len() != 2 {
+                                        return Err(RuntimeError::TypeError {
+                                            expected: "(key, value) tuple".to_string(),
+                                            found: format!("tuple of {} elements", tuple.items.len())
+                                        });
+                                    }
+                                    let key = tuple.items[0].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                                        expected: "hashable".to_string(),
+                                        found: tuple.items[0].type_name(heap).to_string()
+                                    })?;
+                                    entries.insert(key, tuple.items[1].clone());
+                                }
+                                _ => return Err(RuntimeError::TypeError {
+                                    expected: "(key, value) tuple".to_string(),
+                                    found: item.type_name(heap).to_string()
+                                })
+                            }
+                        }
+                        let new_ptr = heap.alloc_map(entries);
+                        Ok(GcValue::Map(new_ptr))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "List".to_string(), found: args[0].type_name(heap).to_string() })
+                }
+            }),
+        }));
+
         // === Set Functions ===
 
         // Set.insert(set, elem) -> new set with element inserted
@@ -10394,6 +10527,91 @@ impl AsyncVM {
                 let new_items = set1.items.clone().relative_complement(set2.items.clone());
                 let new_ptr = heap.alloc_set(new_items);
                 Ok(GcValue::Set(new_ptr))
+            }),
+        }));
+
+        // Set.symmetricDifference(set1, set2) -> elements in either but not both
+        self.register_native("Set.symmetricDifference", Arc::new(GcNativeFn {
+            name: "Set.symmetricDifference".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let set1_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let set2_ptr = match &args[1] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[1].type_name(heap).to_string() })
+                };
+
+                let set1 = heap.get_set(set1_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let set2 = heap.get_set(set2_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let new_items = set1.items.clone().symmetric_difference(set2.items.clone());
+                let new_ptr = heap.alloc_set(new_items);
+                Ok(GcValue::Set(new_ptr))
+            }),
+        }));
+
+        // Set.isSubset(set1, set2) -> true if set1 is a subset of set2
+        self.register_native("Set.isSubset", Arc::new(GcNativeFn {
+            name: "Set.isSubset".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let set1_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let set2_ptr = match &args[1] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[1].type_name(heap).to_string() })
+                };
+
+                let set1 = heap.get_set(set1_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let set2 = heap.get_set(set2_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                Ok(GcValue::Bool(set1.items.is_subset(&set2.items)))
+            }),
+        }));
+
+        // Set.isProperSubset(set1, set2) -> true if set1 is a proper subset of set2
+        self.register_native("Set.isProperSubset", Arc::new(GcNativeFn {
+            name: "Set.isProperSubset".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let set1_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let set2_ptr = match &args[1] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[1].type_name(heap).to_string() })
+                };
+
+                let set1 = heap.get_set(set1_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let set2 = heap.get_set(set2_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                Ok(GcValue::Bool(set1.items.is_proper_subset(&set2.items)))
+            }),
+        }));
+
+        // Set.fromList(list) -> Set
+        self.register_native("Set.fromList", Arc::new(GcNativeFn {
+            name: "Set.fromList".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::List(list) => {
+                        let mut items = imbl::HashSet::new();
+                        for elem in list.items().iter() {
+                            let key = elem.to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                                expected: "hashable".to_string(),
+                                found: elem.type_name(heap).to_string()
+                            })?;
+                            items.insert(key);
+                        }
+                        let new_ptr = heap.alloc_set(items);
+                        Ok(GcValue::Set(new_ptr))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "List".to_string(), found: args[0].type_name(heap).to_string() })
+                }
             }),
         }));
 
