@@ -321,6 +321,111 @@ async fn test_external_push() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// Test 7: GC stress - fewer clients but many clicks each (tests garbage collection)
+async fn test_gc_stress() -> Result<(), Box<dyn std::error::Error>> {
+    println!("\n=== Test 7: GC Stress (1000 clients, 1000 clicks each) ===");
+
+    let num_clients = 1000;
+    let clicks_per_client = 1000;
+
+    let start_time = std::time::Instant::now();
+
+    // Spawn all clients concurrently
+    let mut handles = vec![];
+    for id in 0..num_clients {
+        handles.push(tokio::spawn(async move {
+            let result: Result<(u128, i64), String> = async {
+                let mut client = TestClient::connect("ws://localhost:8080/ws", id)
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                // Receive initial page
+                client.recv_message().await.map_err(|e| e.to_string())?;
+
+                // Do many clicks to stress GC
+                let mut total_time: u128 = 0;
+                for _ in 0..clicks_per_client {
+                    let click_start = std::time::Instant::now();
+                    client.send_action("inc").await.map_err(|e| e.to_string())?;
+                    let response = client.recv_message().await.map_err(|e| e.to_string())?;
+                    total_time += click_start.elapsed().as_millis();
+
+                    // Extract final count
+                    let _ = response;
+                }
+
+                // Get final count from last response
+                client.send_action("inc").await.map_err(|e| e.to_string())?;
+                let final_response = client.recv_message().await.map_err(|e| e.to_string())?;
+                let final_count = TestClient::extract_count(
+                    final_response["html"].as_str().unwrap_or("")
+                ).unwrap_or(0);
+
+                client.close().await.map_err(|e| e.to_string())?;
+                Ok((total_time / clicks_per_client as u128, final_count))
+            }.await;
+            result
+        }));
+    }
+
+    println!("  Spawned {} clients, each doing {} clicks", num_clients, clicks_per_client);
+
+    // Collect results
+    let mut avg_times: Vec<u128> = vec![];
+    let mut final_counts: Vec<i64> = vec![];
+    let mut failures = 0;
+    for handle in handles {
+        match handle.await {
+            Ok(Ok((avg_time, count))) => {
+                avg_times.push(avg_time);
+                final_counts.push(count);
+            }
+            Ok(Err(e)) => { println!("  Error: {}", e); failures += 1; }
+            Err(e) => { println!("  Task error: {}", e); failures += 1; }
+        }
+    }
+
+    let total_duration = start_time.elapsed();
+    let total_clicks = (num_clients - failures) * clicks_per_client;
+    let clicks_per_sec = total_clicks as f64 / total_duration.as_secs_f64();
+
+    avg_times.sort();
+    final_counts.sort();
+
+    if !avg_times.is_empty() {
+        let min = avg_times.first().unwrap();
+        let max = avg_times.last().unwrap();
+        let avg: u128 = avg_times.iter().sum::<u128>() / avg_times.len() as u128;
+        let p50 = avg_times[avg_times.len() / 2];
+
+        println!("  Average response time per client:");
+        println!("    Min:  {}ms", min);
+        println!("    Avg:  {}ms", avg);
+        println!("    P50:  {}ms (median)", p50);
+        println!("    Max:  {}ms", max);
+        println!("  Final counts: min={}, max={}", final_counts.first().unwrap(), final_counts.last().unwrap());
+    }
+
+    println!("  Total clicks: {}", total_clicks);
+    println!("  Duration: {:.2}s", total_duration.as_secs_f64());
+    println!("  Throughput: {:.0} clicks/sec", clicks_per_sec);
+    println!("  Success: {}, Failures: {}", num_clients - failures, failures);
+
+    assert_eq!(failures, 0, "No failures expected");
+
+    // Verify all clients got independent counts (each should be 501 = 500 + 1 final)
+    let expected_count = (clicks_per_client + 1) as i64;
+    let all_correct = final_counts.iter().all(|&c| c == expected_count);
+    if all_correct {
+        println!("  All clients reached count {} ✓", expected_count);
+    } else {
+        println!("  WARNING: Some clients have wrong counts!");
+    }
+
+    println!("  PASSED ✓");
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     println!("WebSocket Test Suite for RWeb");
@@ -360,6 +465,14 @@ async fn main() {
     // Only run external push test if env var is set (requires different server)
     if std::env::var("TEST_EXTERNAL_PUSH").is_ok() {
         match test_external_push().await {
+            Ok(_) => passed += 1,
+            Err(e) => { println!("  FAILED: {}", e); failed += 1; }
+        }
+    }
+
+    // GC stress test - run with TEST_GC_STRESS=1
+    if std::env::var("TEST_GC_STRESS").is_ok() {
+        match test_gc_stress().await {
             Ok(_) => passed += 1,
             Err(e) => { println!("  FAILED: {}", e); failed += 1; }
         }
