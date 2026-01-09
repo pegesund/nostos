@@ -801,15 +801,12 @@ fn open_nostos_test_panel(s: &mut Cursive) {
 
     // Define the panel's view function and state in Nostos
     let setup_code = r#"
-        // Mutable counter state
-        _testPanelCount = 0
+_testPanelCount = 0
 
-        // View function - returns what to display
-        testPanelView() = "Counter: {_testPanelCount}\n\nPress UP/DOWN to change\nPress ESC to close"
+testPanelView() = "Counter: {_testPanelCount}\n\nPress UP/DOWN to change\nPress ESC to close"
 
-        // Event handlers
-        testPanelUp() = { _testPanelCount = _testPanelCount + 1 }
-        testPanelDown() = { _testPanelCount = _testPanelCount - 1 }
+testPanelUp() = { _testPanelCount = _testPanelCount + 1 }
+testPanelDown() = { _testPanelCount = _testPanelCount - 1 }
     "#;
 
     // Evaluate the setup code
