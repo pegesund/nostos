@@ -84,7 +84,8 @@ pub enum Value {
     /// Opaque pointer for FFI (legacy)
     Pointer(usize),
     /// GC-managed native handle (extension data with cleanup callback)
-    NativeHandle(GcNativeHandle),
+    /// Wrapped in Arc so cloning is safe and cleanup only happens once.
+    NativeHandle(Arc<GcNativeHandle>),
 }
 
 /// Key type for maps and sets (must be hashable).

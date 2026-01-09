@@ -191,7 +191,8 @@ pub enum Value {
     /// Opaque native handle (for holding Rust objects, Arc-based cleanup)
     Native(NativeHandle),
     /// GC-managed native handle (pointer + type_id, GC calls cleanup function)
-    GcHandle(GcNativeHandle),
+    /// Wrapped in Arc so cloning is safe and cleanup only happens once.
+    GcHandle(Arc<GcNativeHandle>),
     /// None/null value
     None,
 }
@@ -245,12 +246,12 @@ impl Value {
     /// Create a GC-managed native handle from a boxed value.
     /// The cleanup function will be called when the GC collects this value.
     pub fn gc_handle<T>(value: Box<T>, type_id: u64, cleanup: NativeCleanupFn) -> Self {
-        Value::GcHandle(GcNativeHandle::from_boxed(value, type_id, cleanup))
+        Value::GcHandle(Arc::new(GcNativeHandle::from_boxed(value, type_id, cleanup)))
     }
 
     /// Create a GC-managed native handle from raw pointer.
     pub fn gc_handle_raw(ptr: usize, type_id: u64, cleanup: NativeCleanupFn) -> Self {
-        Value::GcHandle(GcNativeHandle::new(ptr, type_id, cleanup))
+        Value::GcHandle(Arc::new(GcNativeHandle::new(ptr, type_id, cleanup)))
     }
 
     pub fn none() -> Self {
@@ -340,7 +341,7 @@ impl Value {
     /// Get the GC-managed native handle's pointer and type_id.
     pub fn as_gc_handle(&self) -> Result<&GcNativeHandle, String> {
         match self {
-            Value::GcHandle(h) => Ok(h),
+            Value::GcHandle(h) => Ok(h.as_ref()),
             _ => Err(format!("Expected GcHandle, got {:?}", self.type_name())),
         }
     }

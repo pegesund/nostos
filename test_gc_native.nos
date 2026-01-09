@@ -1,0 +1,48 @@
+# Test that GC properly cleans up native handles
+# This test allocates many native handles that become garbage,
+# then verifies that the cleanup function was called.
+
+# Create temporary vectors that become garbage
+make_garbage(0) = ()
+make_garbage(n) = {
+    # Create a vector that will become garbage after this function returns
+    v = __native__("Nalgebra.dvec", [1.0, 2.0, 3.0, 4.0, 5.0])
+    # Recurse - the local 'v' becomes unreachable
+    make_garbage(n - 1)
+}
+
+main() = {
+    # Reset stats
+    __native__("Nalgebra.resetStats")
+
+    # Allocate many native handles that will become garbage
+    var i = 0
+    while i < 100 {
+        make_garbage(10)  # Each call creates 10 temporary vectors
+        i = i + 1
+    }
+
+    # Get counts
+    allocs = __native__("Nalgebra.allocCount")
+    cleanups = __native__("Nalgebra.cleanupCount")
+
+    # We allocated 100 * 10 = 1000 vectors
+    assert_eq(allocs, 1000)
+
+    # GC should have cleaned up at least some of them
+    # (GC triggers based on allocation threshold, so it should have run multiple times)
+    print("Allocs: ")
+    println(allocs)
+    print("Cleanups: ")
+    println(cleanups)
+
+    # Return success if at least some cleanup happened
+    # (We can't guarantee all 1000 are cleaned up yet since GC is lazy)
+    if cleanups > 0 then {
+        println("GC cleanup working!")
+        0
+    } else {
+        println("ERROR: No cleanup happened!")
+        1
+    }
+}

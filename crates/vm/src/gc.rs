@@ -787,8 +787,8 @@ pub enum GcValue {
     Type(Arc<TypeValue>),
     Pointer(usize),
 
-    // Native handle with GC-managed cleanup
-    NativeHandle(GcPtr<GcNativeHandle>),
+    // Native handle with GC-managed cleanup (Arc-wrapped for safe cloning)
+    NativeHandle(GcPtr<Arc<GcNativeHandle>>),
 }
 
 impl Default for GcValue {
@@ -1197,7 +1197,8 @@ pub enum HeapData {
     BigInt(GcBigInt),
     Closure(GcClosure),
     /// Native handle with GC-managed cleanup
-    NativeHandle(GcNativeHandle),
+    /// Wrapped in Arc so cloning is safe and cleanup only happens once.
+    NativeHandle(Arc<GcNativeHandle>),
 }
 
 impl HeapData {
@@ -1645,7 +1646,7 @@ impl Heap {
     /// Allocate a native handle with GC-managed cleanup.
     /// When this handle is garbage collected, the cleanup function will be called
     /// with (ptr, type_id) to free the native memory.
-    pub fn alloc_native_handle(&mut self, handle: GcNativeHandle) -> GcPtr<GcNativeHandle> {
+    pub fn alloc_native_handle(&mut self, handle: Arc<GcNativeHandle>) -> GcPtr<Arc<GcNativeHandle>> {
         let data = HeapData::NativeHandle(handle);
         GcPtr::from_raw(self.alloc(data))
     }
@@ -1826,7 +1827,7 @@ impl Heap {
     }
 
     /// Get a typed reference to native handle data.
-    pub fn get_native_handle(&self, ptr: GcPtr<GcNativeHandle>) -> Option<&GcNativeHandle> {
+    pub fn get_native_handle(&self, ptr: GcPtr<Arc<GcNativeHandle>>) -> Option<&Arc<GcNativeHandle>> {
         match self.get(ptr.as_raw())?.data {
             HeapData::NativeHandle(ref h) => Some(h),
             _ => None,
