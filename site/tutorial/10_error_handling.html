@@ -84,233 +84,249 @@
             <div class="mb-12">
                 <h1 class="text-4xl font-bold text-white mb-6">Error Handling</h1>
                 <p class="text-lg text-slate-400 leading-relaxed mb-8">
-                    Nostos promotes robust error handling through its type system, favoring explicit error representation over exceptions for recoverable errors. For unrecoverable errors, a panic mechanism is available, and for boundary situations, <code>try/catch</code> blocks can be used.
+                    Nostos provides multiple ways to handle errors. For most everyday code, <code>try/catch</code> with <code>throw</code> is the simplest approach. For more structured error handling, you can use the <code>Option</code> and <code>Result</code> types.
                 </p>
 
-                <!-- Option Type -->
-                <h2 class="text-2xl font-semibold text-white mb-4">The <code>Option</code> Type (No Nulls!)</h2>
-                <p class="text-slate-400 mb-4">Nostos does not have <code>null</code> or <code>nil</code>. Instead, it uses the <code>Option[T]</code> type to represent the possible absence of a value. This forces you to explicitly handle both cases, eliminating a common source of bugs.</p>
+                <!-- Try/Catch - The Everyday Approach -->
+                <h2 class="text-2xl font-semibold text-white mb-4"><code>try/catch</code> - The Everyday Approach</h2>
+                <p class="text-slate-400 mb-4">
+                    The simplest way to handle errors in Nostos is <code>try/catch</code>. Wrap code that might fail in a <code>try</code> block, and handle errors in the <code>catch</code> block.
+                </p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">
-type Option[T] = Some(T) | None
-
-find_item(list, target) = if list.contains?(target) then Some(target) else None
-
+<pre><code class="language-nostos"># Basic try/catch
 main() = {
-    my_list = [1, 2, 3]
-    found = find_item(my_list, 2)
-    not_found = find_item(my_list, 4)
-
-    # Handle Option using pattern matching
-    result1 = match found {
-        Some(val) -> "Found: " ++ val.show()
-        None -> "Not found"
+    result = try {
+        data = File.readAll("/etc/config.txt")
+        println("Got: " ++ data)
+        data
+    } catch { e ->
+        println("Failed: " ++ e)
+        "default value"
     }
-    println(result1) # "Found: 2"
-
-    result2 = match not_found {
-        Some(val) -> "Found: " ++ val.show()
-        None -> "Not found"
-    }
-    println(result2) # "Not found"
 }
-</code></pre>
+
+# Multiple operations in one try block
+process_request(url) = {
+    try {
+        response = Http.get(url)
+        parsed = Json.parse(response.body)
+        save_to_db(parsed)
+        "success"
+    } catch { e ->
+        log_error(e)
+        "failed"
+    }
+}</code></pre>
                 </div>
 
-                <!-- Result Type -->
-                <h2 class="text-2xl font-semibold text-white mb-4">The <code>Result</code> Type (Recoverable Errors)</h2>
-                <p class="text-slate-400 mb-4">For operations that can fail in a way you might want to recover from, Nostos uses the <code>Result[T, E]</code> type. It's either <code>Ok(T)</code> for a successful result or <code>Err(E)</code> for an error.</p>
+                <p class="text-slate-400 mb-4">
+                    All I/O operations (files, network, database) throw on error, so you'll use <code>try/catch</code> frequently:
+                </p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">
-type Result[T, E] = Ok(T) | Err(E)
-
-# Custom error type
-type DivideByZeroError = DivideByZeroError{message: String}
-
-safe_divide(numerator, denominator) = {
-    if denominator == 0 then Err(DivideByZeroError{message: "Cannot divide by zero"})
-    else Ok(numerator / denominator)
-}
-
-main() = {
-    division_ok = safe_divide(10, 2)
-    division_err = safe_divide(10, 0)
-
-    result_ok = match division_ok {
-        Ok(val) -> "Result: " ++ val.show()
-        Err(err) -> "Error: " ++ err.message
+<pre><code class="language-nostos"># File operations
+read_config(path) = {
+    try {
+        File.readAll(path)
+    } catch { _ ->
+        "{}"  # Return empty JSON on error
     }
-    println(result_ok) # "Result: 5"
+}
 
-    result_err = match division_err {
-        Ok(val) -> "Result: " ++ val.show()
-        Err(err) -> "Error: " ++ err.message
+# HTTP requests
+fetch_user(id) = {
+    try {
+        resp = Http.get("https://api.example.com/users/" ++ id.show())
+        Some(resp.body)
+    } catch { e ->
+        println("API error: " ++ e)
+        None
     }
-    println(result_err) # "Error: Cannot divide by zero"
-}
-</code></pre>
-                </div>
-
-                <!-- The ? Operator -->
-                <h2 class="text-2xl font-semibold text-white mb-4">The <code>?</code> Operator (Error Propagation)</h2>
-                <p class="text-slate-400 mb-4">The <code>?</code> operator provides a convenient shorthand for propagating errors from functions that return <code>Result</code>. If the <code>Result</code> is <code>Err</code>, it returns the error immediately; otherwise, it unwraps the <code>Ok</code> value.</p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">
-# (Assume safe_divide and DivideByZeroError from above)
-
-calculate_complex(a, b, c) = {
-    val1 = safe_divide(a, b)?   # Returns Err if b is 0
-    val2 = safe_divide(val1, c)? # Returns Err if c is 0
-    Ok(val1 + val2)
 }
 
-main() = {
-    res1 = calculate_complex(10, 2, 1) # Ok(7)
-    res2 = calculate_complex(10, 0, 1) # Err(DivideByZeroError) from first call
-    res3 = calculate_complex(10, 2, 0) # Err(DivideByZeroError) from second call
-
-    println(res1)
-    println(res2)
-    println(res3)
-}
-</code></pre>
+# Database queries
+get_orders(user_id) = {
+    try {
+        Pg.query(conn, "SELECT * FROM orders WHERE user_id = $1", [user_id])
+    } catch { e ->
+        println("DB error: " ++ e)
+        []
+    }
+}</code></pre>
                 </div>
 
                 <!-- Throw -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Throw (Catchable Exceptions)</h2>
-                <p class="text-slate-400 mb-4">Use <code>throw</code> to raise exceptions that can be caught with <code>try/catch</code>. You can throw any value - strings, numbers, or custom error types.</p>
+                <h2 class="text-2xl font-semibold text-white mb-4"><code>throw</code> - Raising Errors</h2>
+                <p class="text-slate-400 mb-4">
+                    Use <code>throw</code> to signal an error that callers should handle. You can throw any value - strings are common, but you can also throw custom error types.
+                </p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos"># Throw with a string message
-safe_divide(a, b) =
+<pre><code class="language-nostos"># Throw a string
+divide(a, b) =
     if b == 0 then throw("division by zero")
     else a / b
 
-# Throw with a custom error type
-type ApiError = { code: Int, msg: String }
+# Throw a custom error type
+type ValidationError = { field: String, message: String }
 
-fetch_user(id) =
-    if id < 0 then throw(ApiError(404, "not found"))
-    else "User " ++ id.show()
+validate_email(email) =
+    if not email.contains?("@") then
+        throw(ValidationError("email", "must contain @"))
+    else email
 
+# Caller catches the error
 main() = {
-    # These throws can be caught with try/catch
-    result = try { safe_divide(10, 0) } catch { e -> "Error: " ++ e }
-    println(result)  # "Error: division by zero"
-}
-</code></pre>
-                </div>
-
-                <!-- Panics -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Panic (Unrecoverable Errors)</h2>
-                <p class="text-slate-400 mb-4">Use <code>panic</code> for truly unrecoverable situations - programmer errors, violated invariants, or bugs that should never happen. Unlike <code>throw</code>, panics indicate logic errors that shouldn't be caught and handled normally.</p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos"># Panic on invariant violation
-validate_positive(n) =
-    if n <= 0 then panic("Expected a positive number, got " ++ n.show())
-    else n
-
-# Pattern matching exhaustiveness
-unwrap(Some(x)) = x
-unwrap(None) = panic("called unwrap on None")
-
-main() = {
-    valid = validate_positive(5)
-    # This will cause a panic and terminate the process
-    # invalid = validate_positive(-1)
-}
-</code></pre>
-                </div>
-
-                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
-                    <h4 class="text-sm font-semibold text-slate-300 mb-2">throw vs panic</h4>
-                    <ul class="text-slate-400 text-sm space-y-1">
-                        <li><code class="text-blue-400">throw</code> - Expected errors that callers should handle (invalid input, network failure, file not found)</li>
-                        <li><code class="text-blue-400">panic</code> - Bugs and invariant violations that should never occur in correct code</li>
-                    </ul>
-                </div>
-
-                <!-- Try/Catch -->
-                <h2 class="text-2xl font-semibold text-white mb-4"><code>try/catch</code> (Boundary Error Handling)</h2>
-                <p class="text-slate-400 mb-4">While <code>Result</code> is for recoverable errors in pure code, <code>try/catch</code> provides a mechanism to catch and handle exceptions. It's primarily used for I/O operations and when interacting with external systems.</p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">
-risky_operation(should_panic) =
-    if should_panic then panic("Something went really wrong!")
-    else "Operation successful"
-
-main() = {
-    result1 = try {
-        risky_operation(false)
-    } catch { err ->
-        "Caught error: " ++ err.show()
-    }
-    println(result1) # "Operation successful"
-
-    result2 = try {
-        risky_operation(true)
-    } catch { err ->
-        "Caught error: " ++ err.show()
-    }
-    println(result2) # "Caught error: Something went really wrong!"
-}
-</code></pre>
-                </div>
-
-                <!-- I/O Error Handling -->
-                <h2 class="text-2xl font-semibold text-white mb-4">I/O Error Handling</h2>
-                <p class="text-slate-400 mb-4">All I/O operations in Nostos (file, network, HTTP) throw exceptions on error. This keeps the happy path clean while ensuring errors are handled explicitly with <code>try/catch</code>.</p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">
-# File I/O with exception handling
-read_config(path) = {
-    try {
-        content = File.readAll(path)
-        println("Config loaded: " ++ content)
-        Some(content)
-    } catch { e ->
-        println("Failed to read config: " ++ e)
-        None
-    }
-}
-
-# HTTP requests with error handling
-fetch_data(url) = {
-    try {
-        response = Http.get(url)
-        if response.status == 200 then
-            Some(response.body)
-        else
-            None
-    } catch { e ->
-        println("Network error: " ++ e)
-        None
-    }
-}
-
-# Combining multiple I/O operations
-process_file(input_path, output_path) = {
-    try {
-        data = File.readAll(input_path)
-        processed = String.toUpper(data)
-        File.writeAll(output_path, processed)
-        println("Processing complete!")
-        true
+    result = try {
+        x = divide(10, 0)
+        x * 2
     } catch { e ->
         println("Error: " ++ e)
-        false
+        0
     }
+}</code></pre>
+                </div>
+
+                <!-- Panic -->
+                <h2 class="text-2xl font-semibold text-white mb-4"><code>panic</code> - Bugs and Impossible States</h2>
+                <p class="text-slate-400 mb-4">
+                    Use <code>panic</code> for programmer errors - situations that should <em>never</em> happen if the code is correct. Unlike <code>throw</code>, panics are not meant to be caught.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Panic on impossible state
+get_first(list) = match list {
+    [x | _] -> x
+    [] -> panic("get_first called on empty list")
+}
+
+# Panic on invariant violation
+set_age(age) =
+    if age < 0 then panic("age cannot be negative: " ++ age.show())
+    else age
+
+# Unwrap - panic if None
+unwrap(Some(x)) = x
+unwrap(None) = panic("unwrap called on None")</code></pre>
+                </div>
+
+                <div class="bg-gradient-to-r from-yellow-900/20 to-orange-900/20 rounded-lg p-6 mb-8 border border-yellow-800/30">
+                    <h3 class="text-lg font-semibold text-white mb-3">throw vs panic</h3>
+                    <div class="grid md:grid-cols-2 gap-4">
+                        <div>
+                            <h4 class="text-blue-400 font-medium mb-2">throw</h4>
+                            <ul class="text-slate-400 text-sm space-y-1">
+                                <li>• Expected failures (network, file, validation)</li>
+                                <li>• Caller should handle it</li>
+                                <li>• Can be caught with try/catch</li>
+                                <li>• Part of normal control flow</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <h4 class="text-red-400 font-medium mb-2">panic</h4>
+                            <ul class="text-slate-400 text-sm space-y-1">
+                                <li>• Bugs and impossible states</li>
+                                <li>• Should never happen in correct code</li>
+                                <li>• Not meant to be caught</li>
+                                <li>• Terminates the process</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Option Type -->
+                <h2 class="text-2xl font-semibold text-white mb-4"><code>Option</code> - When Values Might Be Absent</h2>
+                <p class="text-slate-400 mb-4">
+                    Nostos has no <code>null</code>. Instead, use <code>Option[T]</code> to represent values that might not exist. This forces you to handle the "nothing" case explicitly.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">type Option[T] = Some(T) | None
+
+# Functions that might not find something return Option
+find_user(id) =
+    if id == 1 then Some("Alice")
+    else if id == 2 then Some("Bob")
+    else None
+
+main() = {
+    # Handle with pattern matching
+    match find_user(1) {
+        Some(name) -> println("Found: " ++ name)
+        None -> println("User not found")
+    }
+
+    # Or use unwrapOr for a default
+    name = find_user(99).unwrapOr("Guest")
+    println(name)  # "Guest"
+}</code></pre>
+                </div>
+
+                <!-- Result Type -->
+                <h2 class="text-2xl font-semibold text-white mb-4"><code>Result</code> - Typed Error Handling</h2>
+                <p class="text-slate-400 mb-4">
+                    For pure functions where you want typed errors (not exceptions), use <code>Result[T, E]</code>. This is useful when you need to pass error information up the call stack in a structured way.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">type Result[T, E] = Ok(T) | Err(E)
+
+type ParseError = { line: Int, message: String }
+
+parse_number(s) = {
+    if s.all?(c => c.isDigit?()) then Ok(s.toInt())
+    else Err(ParseError(1, "not a number: " ++ s))
 }
 
 main() = {
-    read_config("/etc/myapp/config.txt")
-    fetch_data("https://api.example.com/data")
-    process_file("/tmp/input.txt", "/tmp/output.txt")
+    match parse_number("42") {
+        Ok(n) -> println("Got: " ++ n.show())
+        Err(e) -> println("Error at line " ++ e.line.show() ++ ": " ++ e.message)
+    }
+}</code></pre>
+                </div>
+
+                <!-- The ? Operator -->
+                <h2 class="text-2xl font-semibold text-white mb-4">The <code>?</code> Operator - Propagating Results</h2>
+                <p class="text-slate-400 mb-4">
+                    When chaining operations that return <code>Result</code>, use <code>?</code> to propagate errors automatically. If the result is <code>Err</code>, it returns immediately; if <code>Ok</code>, it unwraps the value.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">parse_config(text) = {
+    # Each ? will return Err early if parsing fails
+    port = parse_number(get_field(text, "port"))?
+    timeout = parse_number(get_field(text, "timeout"))?
+    Ok(Config(port, timeout))
 }
-</code></pre>
+
+main() = {
+    match parse_config(config_text) {
+        Ok(config) -> start_server(config)
+        Err(e) -> println("Config error: " ++ e.message)
+    }
+}</code></pre>
+                </div>
+
+                <!-- When to Use What -->
+                <h2 class="text-2xl font-semibold text-white mb-4">When to Use What</h2>
+                <div class="bg-gradient-to-r from-blue-900/20 to-emerald-900/20 rounded-lg p-6 mb-8 border border-blue-800/30">
+                    <div class="space-y-4">
+                        <div>
+                            <h4 class="text-emerald-400 font-medium mb-1">Use <code>try/catch</code> + <code>throw</code> for:</h4>
+                            <p class="text-slate-400 text-sm">I/O operations (files, HTTP, database), validation errors, API errors, and most everyday error handling. This is the simplest and most common approach.</p>
+                        </div>
+                        <div>
+                            <h4 class="text-red-400 font-medium mb-1">Use <code>panic</code> for:</h4>
+                            <p class="text-slate-400 text-sm">Bugs, violated invariants, and impossible states. If you're tempted to write "this should never happen", use panic.</p>
+                        </div>
+                        <div>
+                            <h4 class="text-blue-400 font-medium mb-1">Use <code>Option</code> for:</h4>
+                            <p class="text-slate-400 text-sm">Lookups that might not find anything, optional configuration, and anywhere a value might legitimately be absent.</p>
+                        </div>
+                        <div>
+                            <h4 class="text-purple-400 font-medium mb-1">Use <code>Result</code> for:</h4>
+                            <p class="text-slate-400 text-sm">Pure parsing/validation functions, libraries that want to give callers full control, and when you need typed error information that propagates through function calls.</p>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
-                    <p class="text-slate-400 text-sm"><strong>Design Note:</strong> I/O operations throw exceptions because they interact with the external world where failures are common (network timeouts, missing files, permission errors). Using exceptions keeps your code clean while ensuring you explicitly handle failure cases at appropriate boundaries.</p>
+                    <p class="text-slate-400 text-sm"><strong>Tip:</strong> Start with <code>try/catch</code>. It's simple and handles most cases. Reach for <code>Option</code> and <code>Result</code> when you need more structure - you'll know when you need them.</p>
                 </div>
             </div>
 
