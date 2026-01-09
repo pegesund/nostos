@@ -1045,7 +1045,7 @@ impl ReplEngine {
         } else {
             format!("{}() = {{\n    {}{}\n}}", eval_name, bindings_preamble, input)
         };
-        
+
         let (wrapper_module_opt, errors) = parse(&wrapper);
 
         if !errors.is_empty() {

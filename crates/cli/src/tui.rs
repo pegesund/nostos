@@ -990,17 +990,22 @@ fn create_nostos_panel_view_by_id(engine: &Rc<RefCell<ReplEngine>>, panel_id: u6
             }
 
             // Convert event to key name for handler
-            let key_name = match event {
-                Event::Key(Key::Up) => Some("up"),
-                Event::Key(Key::Down) => Some("down"),
-                Event::Key(Key::Left) => Some("left"),
-                Event::Key(Key::Right) => Some("right"),
-                Event::Key(Key::Enter) => Some("enter"),
-                Event::Char('j') => Some("j"),
-                Event::Char('k') => Some("k"),
-                Event::Char('h') => Some("h"),
-                Event::Char('l') => Some("l"),
-                Event::Char('q') => Some("q"),
+            let key_name: Option<String> = match event {
+                Event::Key(Key::Up) => Some("up".to_string()),
+                Event::Key(Key::Down) => Some("down".to_string()),
+                Event::Key(Key::Left) => Some("left".to_string()),
+                Event::Key(Key::Right) => Some("right".to_string()),
+                Event::Key(Key::Enter) => Some("enter".to_string()),
+                Event::Key(Key::Backspace) => Some("backspace".to_string()),
+                Event::Key(Key::Tab) => Some("tab".to_string()),
+                Event::Key(Key::Del) => Some("delete".to_string()),
+                Event::Key(Key::Home) => Some("home".to_string()),
+                Event::Key(Key::End) => Some("end".to_string()),
+                Event::Key(Key::PageUp) => Some("pageup".to_string()),
+                Event::Key(Key::PageDown) => Some("pagedown".to_string()),
+                Event::Char(c) => Some(c.to_string()),
+                Event::CtrlChar(c) => Some(format!("ctrl+{}", c)),
+                Event::AltChar(c) => Some(format!("alt+{}", c)),
                 _ => None,
             };
 
@@ -1010,16 +1015,15 @@ fn create_nostos_panel_view_by_id(engine: &Rc<RefCell<ReplEngine>>, panel_id: u6
                 let _ = engine_for_keys.borrow_mut().eval(&call_expr);
 
                 // Refresh the panel content after handling key
-                // We need to drain commands and rebuild if content changed
                 let commands = engine_for_keys.borrow_mut().drain_panel_commands();
                 for cmd in commands {
                     if let PanelCommand::SetContent { id, content: new_content } = cmd {
                         if id == panel_id {
-                            // Update the view content
                             view.get_inner_mut().set_content(new_content);
                         }
                     }
                 }
+
                 return Some(EventResult::Consumed(None));
             }
 
