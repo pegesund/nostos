@@ -27,6 +27,15 @@ pub enum Constraint {
     HasField(Type, String, Type),
 }
 
+/// A pending method call to be type-checked after constraint solving.
+#[derive(Debug, Clone)]
+pub struct PendingMethodCall {
+    pub receiver_ty: Type,
+    pub method_name: String,
+    pub arg_types: Vec<Type>,
+    pub ret_ty: Type,
+}
+
 /// Type inference context.
 pub struct InferCtx<'a> {
     pub env: &'a mut TypeEnv,
@@ -35,6 +44,8 @@ pub struct InferCtx<'a> {
     pub trait_bounds: HashMap<u32, Vec<String>>,
     /// Name of the function currently being inferred (for handling recursive calls)
     current_function: Option<String>,
+    /// Pending method calls to check after solve() - for UFCS type checking
+    pending_method_calls: Vec<PendingMethodCall>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -44,6 +55,7 @@ impl<'a> InferCtx<'a> {
             constraints: Vec::new(),
             trait_bounds: HashMap::new(),
             current_function: None,
+            pending_method_calls: Vec::new(),
         }
     }
 
@@ -361,6 +373,60 @@ impl<'a> InferCtx<'a> {
                 }
             }
         }
+
+        // Post-solve: check pending method calls now that types are resolved
+        self.check_pending_method_calls()?;
+
+        Ok(())
+    }
+
+    /// Check pending method calls after constraint solving.
+    /// This enables UFCS type checking for cases where the receiver type
+    /// wasn't known during initial inference (e.g., status from Server.bind).
+    fn check_pending_method_calls(&mut self) -> Result<(), TypeError> {
+        // Take ownership of pending calls to avoid borrow issues
+        let pending = std::mem::take(&mut self.pending_method_calls);
+
+        for call in pending {
+            // Resolve the receiver type now that constraints are solved
+            let resolved_receiver = self.env.apply_subst(&call.receiver_ty);
+
+            // Try to get the type name
+            if let Some(type_name) = self.get_type_name(&resolved_receiver) {
+                let qualified_name = format!("{}.{}", type_name, call.method_name);
+
+                // Look up the function
+                if let Some(fn_type) = self.env.functions.get(&qualified_name).cloned() {
+                    let func_ty = self.instantiate_function(&fn_type);
+                    if let Type::Function(ft) = func_ty {
+                        // Check arity
+                        if ft.params.len() != call.arg_types.len() {
+                            return Err(TypeError::ArityMismatch {
+                                expected: ft.params.len(),
+                                found: call.arg_types.len(),
+                            });
+                        }
+
+                        // Resolve arg types and check against params
+                        for (param_ty, arg_ty) in ft.params.iter().zip(call.arg_types.iter()) {
+                            let resolved_arg = self.env.apply_subst(arg_ty);
+                            let resolved_param = self.env.apply_subst(param_ty);
+
+                            // Try to unify - this will fail if types are incompatible
+                            self.unify_types(&resolved_arg, &resolved_param)?;
+                        }
+
+                        // Unify return type
+                        let resolved_ret = self.env.apply_subst(&call.ret_ty);
+                        self.unify_types(&resolved_ret, &ft.ret)?;
+                    }
+                }
+                // If function not found, we don't error here - let the existing
+                // unknown function checks handle it
+            }
+            // If type still not resolved, skip the check
+        }
+
         Ok(())
     }
 
@@ -1001,7 +1067,10 @@ impl<'a> InferCtx<'a> {
                     arg_types.push(self.infer_expr(arg)?);
                 }
 
-                // Try UFCS lookup: resolve receiver type and look up Type.method
+                // Create a fresh return type variable
+                let ret_ty = self.fresh();
+
+                // Try immediate UFCS lookup if receiver type is already resolved
                 if let Some(type_name) = self.get_type_name(&receiver_ty) {
                     let qualified_name = format!("{}.{}", type_name, method.node);
                     if let Some(fn_type) = self.env.functions.get(&qualified_name).cloned() {
@@ -1019,13 +1088,22 @@ impl<'a> InferCtx<'a> {
                             for (param_ty, arg_ty) in ft.params.iter().zip(arg_types.iter()) {
                                 self.unify(arg_ty.clone(), param_ty.clone());
                             }
-                            return Ok(*ft.ret);
+                            // Unify return type
+                            self.unify(ret_ty.clone(), *ft.ret);
+                            return Ok(ret_ty);
                         }
                     }
                 }
 
-                // Fallback: unknown method or unresolved type - return fresh var
-                let ret_ty = self.fresh();
+                // Record method call for post-solve UFCS type checking
+                // This handles cases where receiver type is not yet resolved
+                self.pending_method_calls.push(PendingMethodCall {
+                    receiver_ty: receiver_ty.clone(),
+                    method_name: method.node.clone(),
+                    arg_types: arg_types.clone(),
+                    ret_ty: ret_ty.clone(),
+                });
+
                 Ok(ret_ty)
             }
 

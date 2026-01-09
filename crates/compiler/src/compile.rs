@@ -9887,6 +9887,45 @@ impl Compiler {
             return nostos_types::Type::List(Box::new(elem_type));
         }
 
+        // Handle tuple types: (A, B, C) but not function types (A -> B)
+        // Also exclude "()" which is Unit
+        if ty.starts_with('(') && ty.ends_with(')') && ty != "()" && !ty.contains("->") {
+            let inner = &ty[1..ty.len() - 1];
+            // Parse comma-separated elements at depth 0
+            let mut elems = Vec::new();
+            let mut current = String::new();
+            let mut depth = 0;
+            for ch in inner.chars() {
+                match ch {
+                    '(' | '[' | '{' => {
+                        depth += 1;
+                        current.push(ch);
+                    }
+                    ')' | ']' | '}' => {
+                        depth -= 1;
+                        current.push(ch);
+                    }
+                    ',' if depth == 0 => {
+                        if !current.trim().is_empty() {
+                            elems.push(self.type_name_to_type(current.trim()));
+                        }
+                        current.clear();
+                    }
+                    _ => current.push(ch),
+                }
+            }
+            if !current.trim().is_empty() {
+                elems.push(self.type_name_to_type(current.trim()));
+            }
+            if elems.len() >= 2 {
+                return nostos_types::Type::Tuple(elems);
+            }
+            // Single element in parens - just return the element type
+            if elems.len() == 1 {
+                return elems.into_iter().next().unwrap();
+            }
+        }
+
         // Handle function type syntax: "(params) -> ret" or "param -> ret"
         // This includes parenthesized function types like "(() -> a)"
         if let Some(func_type) = self.parse_function_type_string(ty) {

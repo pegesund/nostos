@@ -9590,8 +9590,9 @@ main() = {
 
     #[test]
     fn test_status_contains_single_arg() {
-        // status.contains(1) should still be wrong - String.contains expects a String arg
-        // But for unknown type, we allow any single arg
+        // status.contains(1) is now caught as a type error!
+        // foo() returns (String, Int), so status is String
+        // String.contains expects String, not Int
         let engine = ReplEngine::new(ReplConfig::default());
         let code = r#"
 foo() = ("ok", 123)
@@ -9602,8 +9603,11 @@ main() = {
 "#;
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
-        // With unknown type and 1 arg, this should pass (we don't check arg types)
-        assert!(result.is_ok(), "Unknown type with 1 arg should pass arity check");
+        // Now we properly infer status as String and catch the type error
+        assert!(result.is_err(), "String.contains(Int) should be a type error");
+        let err = result.unwrap_err();
+        assert!(err.contains("unify") || err.contains("Int") || err.contains("String"),
+            "Error should mention type mismatch: {}", err);
     }
 
     #[test]
@@ -9808,5 +9812,45 @@ main() = {
         println!("Error: {}", err);
         assert!(err.contains("unify") || err.contains("String") || err.contains("Int"),
             "Error should mention type mismatch: {}", err);
+    }
+
+    #[test]
+    fn test_status_from_server_bind_contains_int() {
+        // User's exact scenario: status comes from Server.bind tuple
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        let code = r#"
+main() = {
+  (status, server) = Server.bind(8888)
+  status.contains(123)
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        // status should be inferred as String from Server.bind's (String, Int) return
+        // and contains(Int) should fail type check
+        if result.is_err() {
+            println!("Error: {}", result.as_ref().unwrap_err());
+        }
+    }
+
+    #[test]
+    fn test_status_from_tuple_literal_contains_int() {
+        // Same but with tuple literal instead of Server.bind
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        let code = r#"
+main() = {
+  (status, server) = ("ok", 123)
+  status.contains(456)
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result from tuple literal: {:?}", result);
+        // status should be inferred as String from the tuple literal
+        // and contains(Int) should fail type check
+        assert!(result.is_err(), "Expected type error for status.contains(Int)");
     }
 }
