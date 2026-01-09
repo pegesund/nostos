@@ -8,6 +8,13 @@
       "author": "nostos",
       "url": "https://raw.githubusercontent.com/pegesund/nostos/master/examples/nostlets/hello.nos",
       "tags": ["example", "starter"]
+    },
+    {
+      "name": "runtime-stats",
+      "description": "Display runtime statistics and counters",
+      "author": "pegesund",
+      "url": "https://raw.githubusercontent.com/pegesund/nostos-runtime-stats/master/runtime-stats.nos",
+      "tags": ["stats", "monitoring"]
     }
   ]
 }
