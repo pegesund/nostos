@@ -945,9 +945,8 @@ impl ReplEngine {
     /// Returns list of updated definition names
     pub fn save_group_source(&mut self, primary_name: &str, source: &str) -> Result<Vec<String>, String> {
         if let Some(ref mut sm) = self.source_manager {
-            // Strip module prefix if present
-            let simple_name = primary_name.rsplit('.').next().unwrap_or(primary_name);
-            sm.update_group_source(simple_name, source)
+            // Pass full qualified name so SourceManager can determine the correct module
+            sm.update_group_source(primary_name, source)
         } else {
             Err("No project loaded (use directory mode)".to_string())
         }
@@ -961,6 +960,26 @@ impl ReplEngine {
         } else {
             vec![name.to_string()]
         }
+    }
+
+    /// Delete a definition from the project
+    pub fn delete_definition(&mut self, name: &str) -> Result<(), String> {
+        // Strip module prefix if present
+        let simple_name = name.rsplit('.').next().unwrap_or(name);
+
+        // Delete from SourceManager (removes file and commits)
+        if let Some(ref mut sm) = self.source_manager {
+            sm.delete_definition(simple_name)?;
+        } else {
+            return Err("No project loaded".to_string());
+        }
+
+        // Also remove from compiler memory so browser shows updated state
+        self.compiler.remove_function(name);
+        self.compiler.remove_type(name);
+        self.compiler.remove_trait(name);
+
+        Ok(())
     }
 
     /// Save module metadata (together directives)

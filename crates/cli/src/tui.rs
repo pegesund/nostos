@@ -704,15 +704,54 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
             debug_log(&format!("Eval content (stripped together): {} chars", eval_content.len()));
 
             // Use eval_in_module to ensure definitions go to the correct module
+            // Wrap in catch_unwind to prevent panics from crashing the TUI
             debug_log(&format!("Calling eval_in_module with module hint: {}", name_for_save));
-            match engine.eval_in_module(&eval_content, Some(&name_for_save)) {
+            let eval_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                engine.eval_in_module(&eval_content, Some(&name_for_save))
+            }));
+
+            let eval_result = match eval_result {
+                Ok(result) => result,
+                Err(panic_info) => {
+                    let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "Unknown panic".to_string()
+                    };
+                    debug_log(&format!("eval_in_module PANIC: {}", panic_msg));
+                    Err(format!("Internal error (panic): {}", panic_msg))
+                }
+            };
+
+            match eval_result {
                 Ok(output) => {
                     debug_log(&format!("eval_in_module OK, output: {}", if output.is_empty() { "(empty)" } else { &output }));
                     // Save to SourceManager if available (auto-commits to .nostos/defs/)
                     // Uses save_group_source to handle together directives and multiple definitions
                     if engine.has_source_manager() {
                         debug_log(&format!("Calling save_group_source for: {}", name_for_save));
-                        match engine.save_group_source(&name_for_save, &content) {
+                        let save_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            engine.save_group_source(&name_for_save, &content)
+                        }));
+
+                        let save_result = match save_result {
+                            Ok(result) => result,
+                            Err(panic_info) => {
+                                let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                                    s.to_string()
+                                } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                                    s.clone()
+                                } else {
+                                    "Unknown panic".to_string()
+                                };
+                                debug_log(&format!("save_group_source PANIC: {}", panic_msg));
+                                Err(format!("Internal error (panic): {}", panic_msg))
+                            }
+                        };
+
+                        match save_result {
                             Ok(updated_names) => {
                                 debug_log(&format!("save_group_source OK, updated: {:?}", updated_names));
                                 if updated_names.is_empty() {
@@ -960,14 +999,16 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let dialog = Dialog::around(
         LinearLayout::vertical()
             .child(select_scroll)
-            .child(TextView::new("Enter: Select | Esc: Close | Left: Up | n: New"))
+            .child(TextView::new("Enter: Select | n: New | d: Delete | Esc: Close"))
     )
     .title(&title);
 
     // Wrap in OnEventView for keyboard navigation
     let path_for_back = path.clone();
     let path_for_new = path.clone();
+    let path_for_delete = path.clone();
     let engine_for_back = engine.clone();
+    let engine_for_delete = engine.clone();
     let dialog_with_keys = OnEventView::new(dialog)
         .on_event(Key::Esc, |s| {
             s.pop_layer();
@@ -985,35 +1026,96 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
             // Show dialog to enter new function name
             let path_for_create = path_for_new.clone();
             debug_log(&format!("New function dialog opened, current path: {:?}", path_for_create));
-            s.add_layer(
-                Dialog::new()
-                    .title("New Function")
-                    .content(
-                        LinearLayout::vertical()
-                            .child(TextView::new("Function name:"))
-                            .child(EditView::new().with_name("new_func_name").fixed_width(30))
-                    )
-                    .button("Create", move |s| {
-                        let name = s.call_on_name("new_func_name", |v: &mut EditView| {
-                            v.get_content()
-                        }).unwrap();
-                        let name = name.trim();
-                        if name.is_empty() {
-                            return;
-                        }
-                        // Build full name with module path
-                        let full_name = if path_for_create.is_empty() {
-                            name.to_string()
-                        } else {
-                            format!("{}.{}", path_for_create.join("."), name)
-                        };
-                        debug_log(&format!("Creating new function: name='{}', full_name='{}'", name, full_name));
-                        s.pop_layer(); // Remove new function dialog
-                        s.pop_layer(); // Remove browser dialog
-                        open_editor(s, &full_name);
-                    })
-                    .button("Cancel", |s| { s.pop_layer(); })
-            );
+
+            let edit_view = EditView::new()
+                .on_submit(move |s, name| {
+                    let name = name.trim();
+                    if name.is_empty() {
+                        return;
+                    }
+                    // Build full name with module path
+                    let full_name = if path_for_create.is_empty() {
+                        name.to_string()
+                    } else {
+                        format!("{}.{}", path_for_create.join("."), name)
+                    };
+                    debug_log(&format!("Creating new function: name='{}', full_name='{}'", name, full_name));
+                    s.pop_layer(); // Remove new function dialog
+                    s.pop_layer(); // Remove browser dialog
+                    open_editor(s, &full_name);
+                })
+                .with_name("new_func_name")
+                .fixed_width(30);
+
+            let dialog = Dialog::new()
+                .title("New Function (Enter to create, Esc to cancel)")
+                .content(
+                    LinearLayout::vertical()
+                        .child(TextView::new("Function name:"))
+                        .child(edit_view)
+                );
+
+            let dialog_with_esc = OnEventView::new(dialog)
+                .on_event(Key::Esc, |s| { s.pop_layer(); });
+
+            s.add_layer(dialog_with_esc);
+        })
+        .on_event(Event::Char('d'), move |s| {
+            // Get selected item from browser
+            let selected = s.call_on_name("browser_select", |v: &mut SelectView<BrowserItem>| {
+                v.selection().map(|rc| (*rc).clone())
+            }).flatten();
+
+            if let Some(item) = selected {
+                // Only allow deleting functions, types, traits, variables
+                let (name, kind) = match &item {
+                    BrowserItem::Function { name, .. } => (name.clone(), "function"),
+                    BrowserItem::Type { name } => (name.clone(), "type"),
+                    BrowserItem::Trait { name } => (name.clone(), "trait"),
+                    BrowserItem::Variable { name, .. } => (name.clone(), "variable"),
+                    _ => return, // Can't delete modules or metadata
+                };
+
+                // Build full name
+                let full_name = if path_for_delete.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}.{}", path_for_delete.join("."), name)
+                };
+
+                let engine_confirm = engine_for_delete.clone();
+                let path_for_refresh = path_for_delete.clone();
+
+                // Show confirmation dialog
+                s.add_layer(
+                    Dialog::text(format!("Delete {} '{}'?\n\nThis cannot be undone.", kind, full_name))
+                        .title("Confirm Delete")
+                        .button("Delete", move |s| {
+                            s.pop_layer(); // Remove confirm dialog
+                            // Perform delete - scope the borrow to avoid RefCell panic
+                            // Also wrap in catch_unwind for stability
+                            let delete_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                engine_confirm.borrow_mut().delete_definition(&full_name)
+                            }));
+                            let delete_result = match delete_result {
+                                Ok(result) => result,
+                                Err(_) => Err("Internal error during delete".to_string()),
+                            };
+                            match delete_result {
+                                Ok(()) => {
+                                    log_to_repl(s, &format!("Deleted {}", full_name));
+                                    // Refresh browser at the same path
+                                    s.pop_layer(); // Remove browser
+                                    show_browser_dialog(s, engine_confirm.clone(), path_for_refresh.clone());
+                                }
+                                Err(e) => {
+                                    s.add_layer(Dialog::info(format!("Error: {}", e)));
+                                }
+                            }
+                        })
+                        .button("Cancel", |s| { s.pop_layer(); })
+                );
+            }
         });
 
     s.add_layer(dialog_with_keys);

@@ -708,8 +708,25 @@ impl SourceManager {
     /// For new definitions, extracts module from qualified name
     pub fn update_group_source(&mut self, primary_name: &str, source: &str) -> Result<Vec<String>, String> {
         use nostos_syntax::parse;
+        use std::io::Write;
 
-        eprintln!("[SourceManager] update_group_source called with primary_name='{}'", primary_name);
+        // Debug to file
+        let mut debug_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/source_manager_debug.log")
+            .ok();
+
+        macro_rules! debug_log {
+            ($($arg:tt)*) => {
+                if let Some(ref mut f) = debug_file {
+                    let _ = writeln!(f, $($arg)*);
+                }
+                eprintln!($($arg)*);
+            };
+        }
+
+        debug_log!("[SourceManager] update_group_source called with primary_name='{}'", primary_name);
 
         // Parse the qualified name to extract module path and simple name
         // e.g., "utils.sub.foo" -> module_path=["utils", "sub"], simple_name="foo"
@@ -720,16 +737,17 @@ impl SourceManager {
             (&[][..], parts[0])
         };
 
-        eprintln!("[SourceManager] Parsed: module_path_parts={:?}, simple_name='{}'", module_path_parts, simple_name);
+        debug_log!("[SourceManager] Parsed: module_path_parts={:?}, simple_name='{}'", module_path_parts, simple_name);
+        debug_log!("[SourceManager] Source to save ({} chars): {:?}", source.len(), &source[..source.len().min(100)]);
 
         // Try to find existing definition first
         let module_key = if let Some(key) = self.def_index.get(simple_name) {
-            eprintln!("[SourceManager] Found existing definition in module '{}'", key);
+            debug_log!("[SourceManager] Found existing definition in module '{}'", key);
             key.clone()
         } else {
             // New definition - use module path from qualified name
             let key = module_path_parts.join(".");
-            eprintln!("[SourceManager] New definition, using module key from qualified name: '{}'", key);
+            debug_log!("[SourceManager] New definition, using module key from qualified name: '{}'", key);
             key
         };
 
@@ -741,12 +759,13 @@ impl SourceManager {
         };
 
         let module_existed = self.modules.contains_key(&module_key);
+        debug_log!("[SourceManager] Module '{}' existed: {}, modules: {:?}", module_key, module_existed, self.modules.keys().collect::<Vec<_>>());
         self.modules
             .entry(module_key.clone())
             .or_insert_with(|| Module::new(module_path));
 
         if !module_existed {
-            eprintln!("[SourceManager] Created new module: '{}'", module_key);
+            debug_log!("[SourceManager] Created new module: '{}'", module_key);
         }
 
         // Parse together directives from the source
@@ -760,7 +779,11 @@ impl SourceManager {
             .collect::<Vec<_>>()
             .join("\n");
 
+        debug_log!("[SourceManager] Parsing code_only ({} chars)", code_only.len());
         let (parsed, errors) = parse(&code_only);
+        if !errors.is_empty() {
+            debug_log!("[SourceManager] Parse errors: {:?}", errors);
+        }
         let parsed = parsed.ok_or_else(|| {
             if errors.is_empty() {
                 "Failed to parse source".to_string()
@@ -768,6 +791,7 @@ impl SourceManager {
                 format!("Parse errors: {:?}", errors)
             }
         })?;
+        debug_log!("[SourceManager] Parsed {} items", parsed.items.len());
 
         // Extract definitions from parsed content
         // Track which definitions actually changed (for git commit)
@@ -805,7 +829,7 @@ impl SourceManager {
                 ));
             }
 
-            eprintln!("[SourceManager] Processing {} parsed items", parsed.items.len());
+            debug_log!("[SourceManager] Processing {} parsed items, module has {} defs", parsed.items.len(), module.definition_names().count());
             // Update or add each definition from parsed items
             for item in &parsed.items {
                 match item {
@@ -813,9 +837,10 @@ impl SourceManager {
                         let name = fn_def.name.node.clone();
                         let span = &fn_def.span;
                         let def_source = code_only[span.start..span.end].to_string();
+                        debug_log!("[SourceManager] Found FnDef: '{}', checking if module has it: {}", name, module.has_definition(&name));
 
                         if module.has_definition(&name) {
-                            eprintln!("[SourceManager] Updating existing function: {}", name);
+                            debug_log!("[SourceManager] Updating existing function: {}", name);
                             if let Some(def_group) = module.get_definition_mut(&name) {
                                 if def_group.update_from_source(&def_source) {
                                     changed_names.push(name.clone());
@@ -823,7 +848,7 @@ impl SourceManager {
                             }
                         } else {
                             // Add new definition
-                            eprintln!("[SourceManager] Adding NEW function: {} to module '{}'", name, module_key);
+                            debug_log!("[SourceManager] Adding NEW function: {} to module '{}'", name, module_key);
                             let group = DefinitionGroup::new(name.clone(), DefKind::Function, def_source);
                             module.add_definition(group);
                             new_defs.push(name.clone());
@@ -909,15 +934,15 @@ impl SourceManager {
         }
 
         // Update def_index for new definitions
-        eprintln!("[SourceManager] new_defs={:?}, changed_names={:?}", new_defs, changed_names);
+        debug_log!("[SourceManager] new_defs={:?}, changed_names={:?}", new_defs, changed_names);
         for name in &new_defs {
-            eprintln!("[SourceManager] Adding to def_index: {} -> {}", name, module_key);
+            debug_log!("[SourceManager] Adding to def_index: {} -> {}", name, module_key);
             self.def_index.insert(name.clone(), module_key.clone());
         }
 
         // Write and commit only definitions that actually changed
         for name in &changed_names {
-            eprintln!("[SourceManager] Writing definition to defs: {}", name);
+            debug_log!("[SourceManager] Writing definition to defs: {}", name);
             self.write_definition_to_defs(&module_key, name)?;
             self.commit_definition(&module_key, name)?;
         }
@@ -932,7 +957,7 @@ impl SourceManager {
             self.write_module_files()?;
         }
 
-        eprintln!("[SourceManager] update_group_source completed, returning {:?}", changed_names);
+        debug_log!("[SourceManager] update_group_source completed, returning {:?}", changed_names);
         Ok(changed_names)
     }
 
@@ -972,6 +997,7 @@ impl SourceManager {
         if let Some(module_key) = self.def_index.remove(name) {
             if let Some(module) = self.modules.get_mut(&module_key) {
                 module.remove_definition(name);
+                module.dirty = true;
 
                 // Delete from .nostos/defs/
                 let module_path: ModulePath = module_key.split('.').map(String::from).collect();
@@ -987,6 +1013,9 @@ impl SourceManager {
                     &relative_path,
                     &format!("Delete {}.{}", module_key, name),
                 )?;
+
+                // Also update the main .nos source file
+                self.write_module_files()?;
 
                 return Ok(());
             }
