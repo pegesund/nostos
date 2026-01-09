@@ -1,0 +1,4 @@
+# expect_error: Division by zero
+# Modulo by zero should throw error
+
+main() = 10 % 0

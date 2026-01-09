@@ -1,0 +1,8 @@
+# expect: 1000000000000000000n
+# BigInt handles large numbers - multiplication
+
+main() = {
+    a = 1000000000n
+    b = 1000000000n
+    a * b
+}

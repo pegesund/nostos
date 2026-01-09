@@ -1,0 +1,9 @@
+# expect: 15
+# Deeply nested tuple pattern matching
+
+main() = {
+    data = (1, (2, (3, (4, 5))))
+    match data
+        (a, (b, (c, (d, e)))) -> a + b + c + d + e
+    end
+}

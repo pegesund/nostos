@@ -1,0 +1,15 @@
+# expect: ()
+# Nested try - exception propagates to outer catch
+
+main() = {
+    result = try
+        try
+            throw("escape")
+        catch
+            "wrong" -> "not this"
+        end
+    catch
+        e -> "outer caught: " ++ e
+    end
+    assert_eq("outer caught: escape", result)
+}

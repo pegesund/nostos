@@ -1,0 +1,16 @@
+# expect: 33
+# Deeply nested function calls
+# f1(x) = x + 1
+# f2(x) = f1(f1(x)) = x + 2
+# f3(x) = f2(f2(x)) = x + 4
+# f4(x) = f3(f3(x)) = x + 8
+# f5(x) = f4(f4(x)) = x + 16
+# f5(f5(1)) = f5(17) = 33
+
+f1(x) = x + 1
+f2(x) = f1(f1(x))
+f3(x) = f2(f2(x))
+f4(x) = f3(f3(x))
+f5(x) = f4(f4(x))
+
+main() = f5(f5(1))

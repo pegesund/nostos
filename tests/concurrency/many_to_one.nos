@@ -1,0 +1,31 @@
+# expect: ()
+# Test: Many senders to one receiver
+
+sender(target, id, count) = {
+    if count > 0 then {
+        target <- (id, count)
+        sender(target, id, count - 1)
+    }
+}
+
+count_messages(n, acc) = {
+    if n == 0 then acc
+    else {
+        (id, val) = receive m -> m end
+        count_messages(n - 1, acc + val)
+    }
+}
+
+main() = {
+    me = self()
+
+    # 10 senders each sending 10 messages
+    for i = 0 to 10 {
+        spawn { sender(me, i, 10) }
+    }
+
+    # Receive all 100 messages
+    # Sum of 1..10 = 55, times 10 senders = 550
+    total = count_messages(100, 0)
+    assert_eq(550, total)
+}

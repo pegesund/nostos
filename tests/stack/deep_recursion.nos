@@ -1,0 +1,8 @@
+# expect: 1000
+# Deep recursion without tail call optimization
+
+count_down(n, acc) =
+    if n <= 0 then acc
+    else count_down(n - 1, acc + 1)
+
+main() = count_down(1000, 0)

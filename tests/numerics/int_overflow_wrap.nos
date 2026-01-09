@@ -1,0 +1,9 @@
+# expect: true
+# Integer overflow wraps around (Rust default behavior)
+
+main() = {
+    max_i64 = 9223372036854775807
+    # Adding 1 wraps to minimum (negative)
+    wrapped = max_i64 + 1
+    wrapped < 0
+}

@@ -1,0 +1,13 @@
+# expect: ()
+# Exception with record value
+
+type Error = { code: Int, message: String }
+
+main() = {
+    result = try
+        throw(Error(404, "not found"))
+    catch
+        Error(code, msg) -> code
+    end
+    assert_eq(404, result)
+}

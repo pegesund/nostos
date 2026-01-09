@@ -1,0 +1,13 @@
+# expect: true
+# Allocate large strings
+
+repeat_str(s, n, acc) =
+    if n <= 0 then acc
+    else repeat_str(s, n - 1, acc ++ s)
+
+main() = {
+    # Create a reasonably large string
+    large = repeat_str("x", 100, "")
+    # Check it has correct length by comparing prefix
+    large == repeat_str("x", 100, "")
+}

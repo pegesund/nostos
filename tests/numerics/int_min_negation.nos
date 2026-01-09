@@ -1,0 +1,10 @@
+# expect: true
+# Negating INT_MIN wraps to itself (two's complement)
+
+main() = {
+    # Get INT64_MIN by overflow: MAX + 1
+    min_i64 = 9223372036854775807 + 1
+    # Negating min gives min again (overflow wraps)
+    negated = 0 - min_i64
+    min_i64 == negated
+}

@@ -1,0 +1,12 @@
+# expect: true
+# Deep mutual recursion
+
+is_even(n) =
+    if n == 0 then true
+    else is_odd(n - 1)
+
+is_odd(n) =
+    if n == 0 then false
+    else is_even(n - 1)
+
+main() = is_even(1000)

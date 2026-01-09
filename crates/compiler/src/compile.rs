@@ -2871,18 +2871,18 @@ impl Compiler {
         self.chunk.emit(Instruction::GetException(exc_reg), 0);
 
         // 7. Pattern match on the exception (similar to compile_match)
+        // We need to track jumps to re-throw if no pattern matches
         let mut end_jumps = Vec::new();
+        let mut rethrow_jumps = Vec::new();
+
         for (i, arm) in catch_arms.iter().enumerate() {
             let is_last = i == catch_arms.len() - 1;
 
             // Try to match the pattern
             let (match_success, bindings) = self.compile_pattern_test(&arm.pattern, exc_reg)?;
 
-            let next_arm_jump = if !is_last {
-                Some(self.chunk.emit(Instruction::JumpIfFalse(match_success, 0), 0))
-            } else {
-                None
-            };
+            // Always emit JumpIfFalse, even for last arm (to handle no-match case)
+            let next_arm_jump = self.chunk.emit(Instruction::JumpIfFalse(match_success, 0), 0);
 
             // Bind pattern variables with type info from pattern
             for (name, reg, is_float) in bindings {
@@ -2892,29 +2892,39 @@ impl Compiler {
             // Compile guard if present
             if let Some(guard) = &arm.guard {
                 let guard_reg = self.compile_expr_tail(guard, false)?;
-                if let Some(jump) = next_arm_jump {
-                    self.chunk.patch_jump(jump, self.chunk.code.len());
-                }
+                // If guard fails, jump to next arm (or rethrow for last arm)
                 let guard_jump = self.chunk.emit(Instruction::JumpIfFalse(guard_reg, 0), 0);
-                end_jumps.push(guard_jump);
+                if is_last {
+                    rethrow_jumps.push(guard_jump);
+                } else {
+                    // Patch to same location as pattern mismatch
+                    rethrow_jumps.push(guard_jump);
+                }
             }
 
             // Compile catch arm body
             let body_reg = self.compile_expr_tail(&arm.body, is_tail && finally_expr.is_none())?;
             self.chunk.emit(Instruction::Move(dst, body_reg), 0);
 
-            if !is_last {
-                end_jumps.push(self.chunk.emit(Instruction::Jump(0), 0));
-            }
+            // Jump to end (skip other arms and rethrow)
+            end_jumps.push(self.chunk.emit(Instruction::Jump(0), 0));
 
-            // Patch jump to next arm
-            if let Some(jump) = next_arm_jump {
-                if arm.guard.is_none() {
-                    let next_target = self.chunk.code.len();
-                    self.chunk.patch_jump(jump, next_target);
-                }
+            // Patch jump to next arm (or rethrow block for last arm)
+            if is_last {
+                rethrow_jumps.push(next_arm_jump);
+            } else {
+                let next_target = self.chunk.code.len();
+                self.chunk.patch_jump(next_arm_jump, next_target);
             }
         }
+
+        // 7.5 Re-throw block: if no pattern matched, re-throw the exception
+        let rethrow_start = self.chunk.code.len();
+        for jump in rethrow_jumps {
+            self.chunk.patch_jump(jump, rethrow_start);
+        }
+        // Re-throw the exception (exc_reg still holds it)
+        self.chunk.emit(Instruction::Throw(exc_reg), 0);
 
         // 8. Patch all end jumps from catch arms
         let after_catch = self.chunk.code.len();

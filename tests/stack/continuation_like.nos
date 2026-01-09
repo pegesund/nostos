@@ -1,0 +1,10 @@
+# expect: 15
+# Continuation-passing style recursion
+
+sum_cps(list, k) =
+    match list
+        [] -> k(0)
+        [x | xs] -> sum_cps(xs, (rest) => k(x + rest))
+    end
+
+main() = sum_cps([1, 2, 3, 4, 5], (x) => x)

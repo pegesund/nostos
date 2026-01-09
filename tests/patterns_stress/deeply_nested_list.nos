@@ -1,0 +1,17 @@
+# expect: 10
+# Deeply nested list pattern matching
+
+main() = {
+    data = [[1, 2], [3, 4]]
+    match data
+        [first | [second | _]] -> {
+            match first
+                [a, b] -> {
+                    match second
+                        [c, d] -> a + b + c + d
+                    end
+                }
+            end
+        }
+    end
+}

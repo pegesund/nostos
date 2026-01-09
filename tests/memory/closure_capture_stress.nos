@@ -1,0 +1,15 @@
+# expect: 5050
+# Stress closure captures
+
+make_adder(x) = (y) => x + y
+
+# Create many closures that capture different values
+sum_with_closures(n, acc) =
+    if n <= 0 then acc
+    else {
+        adder = make_adder(n)
+        sum_with_closures(n - 1, acc + adder(0))
+    }
+
+# Sum 1..100 = 5050
+main() = sum_with_closures(100, 0)

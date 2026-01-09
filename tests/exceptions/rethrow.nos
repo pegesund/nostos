@@ -1,0 +1,15 @@
+# expect: ()
+# Catch and rethrow exception
+
+main() = {
+    result = try
+        try
+            throw("original")
+        catch
+            e -> throw("wrapped: " ++ e)
+        end
+    catch
+        msg -> msg
+    end
+    assert_eq("wrapped: original", result)
+}

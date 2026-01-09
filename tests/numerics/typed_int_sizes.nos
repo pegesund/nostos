@@ -1,0 +1,14 @@
+# expect: ()
+# Different integer sizes
+
+main() = {
+    a = 127i8
+    b = 32767i16
+    c = 2147483647i32
+    d = 9223372036854775807
+
+    assert_eq(127i8, a)
+    assert_eq(32767i16, b)
+    assert_eq(2147483647i32, c)
+    assert_eq(9223372036854775807, d)
+}

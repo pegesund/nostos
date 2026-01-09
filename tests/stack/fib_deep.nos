@@ -1,0 +1,8 @@
+# expect: 55
+# Fibonacci with natural recursion (tests stack with branching)
+
+fib(n) =
+    if n <= 1 then n
+    else fib(n - 1) + fib(n - 2)
+
+main() = fib(10)

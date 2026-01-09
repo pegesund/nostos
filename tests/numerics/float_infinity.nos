@@ -1,0 +1,8 @@
+# expect: true
+# Float division by zero produces infinity
+
+main() = {
+    inf = 1.0 / 0.0
+    # Infinity is greater than any finite number
+    inf > 999999999999.0
+}

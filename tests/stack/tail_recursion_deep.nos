@@ -1,0 +1,10 @@
+# expect: 50000
+# Tail call optimization - should handle very deep recursion
+# sum(1..100000) = 100000 * 100001 / 2 = 5000050000
+# 5000050000 / 100000 = 50000 (integer division)
+
+sum_to(n, acc) =
+    if n <= 0 then acc
+    else sum_to(n - 1, acc + n)
+
+main() = sum_to(100000, 0) / 100000
