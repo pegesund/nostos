@@ -76,7 +76,8 @@ footer(children: List[Html]) = Element("footer", [], children)
 section(children: List[Html]) = Element("section", [], children)
 article(children: List[Html]) = Element("article", [], children)
 aside(children: List[Html]) = Element("aside", [], children)
-head(children: List[Html]) = Element("head", [], children)
+# Note: Named headEl to avoid conflict with stdlib head() for lists
+headEl(children: List[Html]) = Element("head", [], children)
 body(children: List[Html]) = Element("body", [], children)
 
 button(children: List[Html]) = Element("button", [], children)

@@ -2787,7 +2787,16 @@ impl Compiler {
                     }
                 } else {
                     // Unknown argument type - accept any candidate type, give lower score
-                    score += 1;
+                    // But prefer primitive types (String, Int, Bool, etc.) over container types (List, Map, etc.)
+                    // This heuristic helps when lambda parameters have unknown types
+                    let is_primitive = matches!(cand_type.as_str(),
+                        "String" | "Int" | "Float" | "Bool" | "Char" | "()" |
+                        "Int64" | "Float64" | "Float32");
+                    if is_primitive {
+                        score += 2; // Prefer primitive types when arg type is unknown
+                    } else {
+                        score += 1;
+                    }
                 }
             }
 
@@ -2822,11 +2831,33 @@ impl Compiler {
 
     /// Check if two type strings are compatible.
     /// Returns true if:
-    /// - arg_type is a polymorphic type (e.g., "Map k v", "List a", "Tree t")
+    /// - arg_type is a polymorphic type (e.g., "Map k v", "List a", "Tree t", "List[b]", "Map[k, v]")
     /// - cand_type is a concrete type with the same base (e.g., "Map[String, String]", "List[Int]", "Tree[Node]")
     /// This handles both built-in types and user-defined generic types.
     fn types_are_compatible(arg_type: &str, cand_type: &str) -> bool {
-        // Extract base type name from arg_type (space-separated format: "Map k v" -> "Map")
+        // First try bracket format: "List[b]" or "Map[k, v]"
+        if let Some(arg_bracket_pos) = arg_type.find('[') {
+            let arg_base = &arg_type[..arg_bracket_pos];
+            let arg_inner = &arg_type[arg_bracket_pos + 1..arg_type.len() - 1]; // Remove [ and ]
+
+            // Check if the type params are all type variables (single lowercase letters)
+            let arg_type_params: Vec<&str> = arg_inner.split(',').map(|s| s.trim()).collect();
+            let all_type_vars = arg_type_params.iter().all(|p| {
+                p.len() == 1 && p.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false)
+            });
+
+            if all_type_vars {
+                // Extract base type from cand_type
+                let cand_base = if let Some(cand_bracket_pos) = cand_type.find('[') {
+                    &cand_type[..cand_bracket_pos]
+                } else {
+                    cand_type
+                };
+                return arg_base == cand_base;
+            }
+        }
+
+        // Fall back to space-separated format: "Map k v" -> "Map"
         let arg_parts: Vec<&str> = arg_type.split_whitespace().collect();
         if arg_parts.len() < 2 {
             // Not a space-separated polymorphic type
@@ -2920,6 +2951,44 @@ impl Compiler {
         } else {
             Some(arities)
         }
+    }
+
+    /// Find a function by base name and arity, returning the full function key.
+    /// Used when we know a function exists with matching arity but types don't match.
+    fn find_function_by_arity(&self, base_name: &str, arity: usize) -> Option<String> {
+        let prefix = format!("{}/", base_name);
+
+        // Check compiled functions first
+        for key in self.functions.keys() {
+            if let Some(suffix) = key.strip_prefix(&prefix) {
+                let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
+                if param_count == arity {
+                    return Some(key.clone());
+                }
+            }
+        }
+
+        // Check fn_asts
+        for key in self.fn_asts.keys() {
+            if let Some(suffix) = key.strip_prefix(&prefix) {
+                let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
+                if param_count == arity {
+                    return Some(key.clone());
+                }
+            }
+        }
+
+        // Check current function
+        if let Some(current) = &self.current_function_name {
+            if let Some(suffix) = current.strip_prefix(&prefix) {
+                let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
+                if param_count == arity {
+                    return Some(current.clone());
+                }
+            }
+        }
+
+        None
     }
 
     /// Check if a user-defined function exists with the given name and arity.
@@ -7095,11 +7164,20 @@ impl Compiler {
                         });
                     }
                     // Function exists with matching arity but types don't match
-                    // Fall through to wildcard resolution
+                    // Try to find the actual function by arity (for type variable args like List[b])
+                    if let Some(actual_fn) = self.find_function_by_arity(&resolved_name, call_arity) {
+                        actual_fn
+                    } else {
+                        // Fall back to trying with all wildcards (for backward compatibility)
+                        let wildcard_sig = vec!["_".to_string(); arg_types.len()].join(",");
+                        format!("{}/{}", resolved_name, wildcard_sig)
+                    }
+                } else {
+                    // No function with this name exists at all
+                    // Fall back to trying with all wildcards (for backward compatibility)
+                    let wildcard_sig = vec!["_".to_string(); arg_types.len()].join(",");
+                    format!("{}/{}", resolved_name, wildcard_sig)
                 }
-                // Fall back to trying with all wildcards (for backward compatibility)
-                let wildcard_sig = vec!["_".to_string(); arg_types.len()].join(",");
-                format!("{}/{}", resolved_name, wildcard_sig)
             };
 
             // Check if this is a polymorphic function that needs monomorphization
@@ -11704,7 +11782,7 @@ impl Compiler {
         "div", "span", "p", "h1", "h2", "h3", "h4", "h5", "h6",
         "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td",
         "form", "nav", "header", "footer", "section", "article", "aside",
-        "head", "body", "button", "label",
+        "headEl", "body", "button", "label",  // headEl avoids conflict with stdlib head()
         // Text-only tags
         "title", "strong", "em", "code", "pre", "small",
         // Self-closing tags
