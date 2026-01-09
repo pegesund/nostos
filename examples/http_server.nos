@@ -1,94 +1,85 @@
-# HTTP Server
+# HTTP Server with VM Stats Monitoring
 #
 # HTTP server with spawn-per-request pattern:
 # - /       : Hello message
 # - /health : Health check
 # - /echo   : Echo request body
-# - /work   : CPU-bound work (fib(25))
+# - /stats  : VM process stats
 # - /shutdown: Gracefully shuts down the server
 #
-# Uses spawn-per-request pattern for scalability and proper memory management.
-# Each request is handled in its own spawned process.
-
-# Simulate CPU work - compute fib(n)
-fib(0) = 0
-fib(1) = 1
-fib(n) = fib(n - 1) + fib(n - 2)
+# Run with: ./target/release/nostos examples/http_server.nos
+# Test with: wrk -t4 -c100 -d30s http://localhost:8080/
 
 # Handle a single request
 handleRequest(req, mainPid) = {
-  path = req.path
+    path = req.path
 
-  # Shutdown route
-  if path == "/shutdown" then {
-    Server.respond(req.id, 200, [("Content-Type", "text/plain")], "Shutting down...")
-    mainPid <- "shutdown"
-  }
-  else {
-    (body, status) = if path == "/" then
-      ("Hello from Nostos HTTP Server!", 200)
-    else if path == "/health" then
-      ("OK", 200)
-    else if path == "/echo" then
-      (req.body, 200)
-    else if path == "/work" then
-      # Do actual CPU work - should use multiple cores
-      (show(fib(25)), 200)
-    else
-      ("Not Found", 404)
+    if path == "/shutdown" then {
+        Server.respond(req.id, 200, [("Content-Type", "text/plain")], "Shutting down...")
+        mainPid <- "shutdown"
+    }
+    else if path == "/stats" then {
+        (spawned, exited, active) = vmStats()
+        body = "Spawned: " ++ show(spawned) ++ "\nExited: " ++ show(exited) ++ "\nActive: " ++ show(active)
+        Server.respond(req.id, 200, [("Content-Type", "text/plain")], body)
+    }
+    else {
+        (body, status) = if path == "/" then
+            ("Hello from Nostos HTTP Server!", 200)
+        else if path == "/health" then
+            ("OK", 200)
+        else if path == "/echo" then
+            (req.body, 200)
+        else
+            ("Not Found", 404)
 
-    headers = [("Content-Type", "text/plain")]
-    Server.respond(req.id, status, headers, body)
-  }
+        Server.respond(req.id, status, [("Content-Type", "text/plain")], body)
+    }
 }
 
-# Server loop with spawn-per-request pattern (proper tail recursion)
+# Server loop with spawn-per-request pattern
 serverLoop(server, mainPid) = {
-  ok = try {
-    req = Server.accept(server)
-    spawn { handleRequest(req, mainPid) }
-    true
-  } catch { _ -> false }
-  # Tail call is OUTSIDE try-catch - this is important for memory!
-  if ok then serverLoop(server, mainPid) else ()
+    ok = try {
+        req = Server.accept(server)
+        spawn { handleRequest(req, mainPid) }
+        true
+    } catch { _ -> false }
+    if ok then serverLoop(server, mainPid) else ()
 }
 
-# Send shutdown request to terminate the server
-sendShutdown() = {
-  sleep(100)  # Give server time to start
-  try {
-    response = Http.get("http://localhost:8080/shutdown")
-    ()
-  } catch { e -> () }
+# Monitor loop - prints VM stats every 5 seconds
+monitorLoop() = {
+    sleep(5000)
+    (spawned, exited, active) = vmStats()
+    println("[Stats] Spawned: " ++ show(spawned) ++ " | Exited: " ++ show(exited) ++ " | Active: " ++ show(active))
+    monitorLoop()
 }
 
 main() = {
-  mainPid = self()
+    mainPid = self()
 
-  result = try {
-    server = Server.bind(8080)
-    println("Server started on http://localhost:8080")
+    result = try {
+        server = Server.bind(8080)
+        println("Server started on http://localhost:8080")
+        println("Endpoints: / /health /echo /stats /shutdown")
+        println("Stats printed every 5 seconds...")
 
-    # Spawn server loop
-    spawn { serverLoop(server, mainPid) }
+        # Spawn server loop
+        spawn { serverLoop(server, mainPid) }
 
-    # Spawn a client to test and then shutdown
-    spawn { sendShutdown() }
+        # Spawn monitor loop
+        spawn { monitorLoop() }
 
-    # Wait for shutdown signal
-    receive {
-      "shutdown" -> {
-        sleep(100)  # Let response complete
-        Server.close(server)
-        println("Server shutdown complete.")
-      }
-      after 10000 -> {
-        Server.close(server)
-        println("Timeout - shutting down.")
-      }
+        # Wait for shutdown signal
+        receive {
+            "shutdown" -> {
+                sleep(100)
+                Server.close(server)
+                println("Server shutdown complete.")
+            }
+        }
+    } catch { (kind, msg) ->
+        println("Error [" ++ kind ++ "]: " ++ msg)
     }
-  } catch { e ->
-    println("Error: Failed to bind server on port 8080: " ++ e)
-  }
-  result
+    result
 }

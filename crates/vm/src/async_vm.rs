@@ -137,6 +137,10 @@ pub struct AsyncSharedState {
     /// Protected by tokio RwLock for async access.
     pub process_registry: TokioRwLock<HashMap<Pid, MailboxSender>>,
 
+    /// Debug counters for process lifecycle tracking
+    pub spawned_count: AtomicU64,
+    pub exited_count: AtomicU64,
+
     /// Module-level mutable variables (mvars).
     /// Key is "module_name.var_name", value is protected by tokio RwLock.
     pub mvars: HashMap<String, Arc<TokioRwLock<ThreadSafeValue>>>,
@@ -192,12 +196,23 @@ impl AsyncSharedState {
 
     /// Register a process in the registry.
     pub async fn register_process(&self, pid: Pid, sender: MailboxSender) {
+        self.spawned_count.fetch_add(1, Ordering::Relaxed);
         self.process_registry.write().await.insert(pid, sender);
     }
 
     /// Unregister a process from the registry.
     pub async fn unregister_process(&self, pid: Pid) {
+        self.exited_count.fetch_add(1, Ordering::Relaxed);
         self.process_registry.write().await.remove(&pid);
+    }
+
+    /// Get process statistics for debugging.
+    /// Returns (spawned, exited, currently_active)
+    pub async fn process_stats(&self) -> (u64, u64, usize) {
+        let spawned = self.spawned_count.load(Ordering::Relaxed);
+        let exited = self.exited_count.load(Ordering::Relaxed);
+        let active = self.process_registry.read().await.len();
+        (spawned, exited, active)
     }
 
     /// Send a message to a process by PID.
@@ -1104,6 +1119,9 @@ impl AsyncProcess {
                 if interrupted {
                     return Err(RuntimeError::Interrupted);
                 }
+
+                // Run garbage collection if threshold exceeded
+                self.maybe_gc();
 
                 // Yield for fairness
                 tokio::task::yield_now().await;
@@ -3891,6 +3909,18 @@ impl AsyncProcess {
                 tokio::time::sleep(Duration::from_millis(ms)).await;
             }
 
+            // === VM Stats ===
+            VmStats(dst) => {
+                let (spawned, exited, active) = self.shared.process_stats().await;
+                let values = vec![
+                    GcValue::Int64(spawned as i64),
+                    GcValue::Int64(exited as i64),
+                    GcValue::Int64(active as i64),
+                ];
+                let tuple = self.heap.alloc_tuple(values);
+                set_reg!(dst, GcValue::Tuple(tuple));
+            }
+
             // === Type constructors ===
             MakeVariant(dst, type_idx, ctor_idx, ref field_regs) => {
                 let type_name = match get_const!(type_idx) {
@@ -5582,6 +5612,8 @@ impl AsyncProcess {
                     if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
                         set_reg!(dst, gc_value);
                     }
+                    // Trigger GC after accepting request (allocates ServerRequest with lists)
+                    self.maybe_gc();
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
                 }
@@ -6920,7 +6952,7 @@ impl AsyncProcess {
                     Ok(s) => GcValue::String(self.heap.alloc_string(s)),
                     Err(_) => {
                         let values: Vec<GcValue> = bytes.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                        GcValue::List(GcList::from_vec(values))
+                        GcValue::List(self.heap.make_list(values))
                     }
                 }
             }
@@ -6933,7 +6965,7 @@ impl AsyncProcess {
                     .into_iter()
                     .map(|s| GcValue::String(self.heap.alloc_string(s)))
                     .collect();
-                GcValue::List(GcList::from_vec(values))
+                GcValue::List(self.heap.make_list(values))
             }
             IoResponseValue::HttpResponse { status, headers, body } => {
                 let header_tuples: Vec<GcValue> = headers
@@ -6944,13 +6976,13 @@ impl AsyncProcess {
                         GcValue::Tuple(self.heap.alloc_tuple(vec![key, val]))
                     })
                     .collect();
-                let headers_list = GcValue::List(GcList::from_vec(header_tuples));
+                let headers_list = GcValue::List(self.heap.make_list(header_tuples));
 
                 let body_value = match std::string::String::from_utf8(body.clone()) {
                     Ok(s) => GcValue::String(self.heap.alloc_string(s)),
                     Err(_) => {
                         let bytes: Vec<GcValue> = body.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                        GcValue::List(GcList::from_vec(bytes))
+                        GcValue::List(self.heap.make_list(bytes))
                     }
                 };
 
@@ -6977,13 +7009,13 @@ impl AsyncProcess {
                         GcValue::Tuple(self.heap.alloc_tuple(vec![key, val]))
                     })
                     .collect();
-                let headers_list = GcValue::List(GcList::from_vec(header_tuples));
+                let headers_list = GcValue::List(self.heap.make_list(header_tuples));
 
                 let body_value = match std::string::String::from_utf8(body.clone()) {
                     Ok(s) => GcValue::String(self.heap.alloc_string(s)),
                     Err(_) => {
                         let bytes: Vec<GcValue> = body.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                        GcValue::List(GcList::from_vec(bytes))
+                        GcValue::List(self.heap.make_list(bytes))
                     }
                 };
 
@@ -6996,7 +7028,7 @@ impl AsyncProcess {
                         GcValue::Tuple(self.heap.alloc_tuple(vec![key, val]))
                     })
                     .collect();
-                let query_params_list = GcValue::List(GcList::from_vec(query_param_tuples));
+                let query_params_list = GcValue::List(self.heap.make_list(query_param_tuples));
 
                 // Convert cookies to list of tuples
                 let cookie_tuples: Vec<GcValue> = cookies
@@ -7007,7 +7039,7 @@ impl AsyncProcess {
                         GcValue::Tuple(self.heap.alloc_tuple(vec![key, val]))
                     })
                     .collect();
-                let cookies_list = GcValue::List(GcList::from_vec(cookie_tuples));
+                let cookies_list = GcValue::List(self.heap.make_list(cookie_tuples));
 
                 // Convert form params to list of tuples
                 let form_param_tuples: Vec<GcValue> = form_params
@@ -7018,7 +7050,7 @@ impl AsyncProcess {
                         GcValue::Tuple(self.heap.alloc_tuple(vec![key, val]))
                     })
                     .collect();
-                let form_params_list = GcValue::List(GcList::from_vec(form_param_tuples));
+                let form_params_list = GcValue::List(self.heap.make_list(form_param_tuples));
 
                 let method_str = GcValue::String(self.heap.alloc_string(method));
                 let path_str = GcValue::String(self.heap.alloc_string(path));
@@ -7035,7 +7067,7 @@ impl AsyncProcess {
                     Ok(s) => GcValue::String(self.heap.alloc_string(s)),
                     Err(_) => {
                         let bytes: Vec<GcValue> = stdout.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                        GcValue::List(GcList::from_vec(bytes))
+                        GcValue::List(self.heap.make_list(bytes))
                     }
                 };
 
@@ -7043,7 +7075,7 @@ impl AsyncProcess {
                     Ok(s) => GcValue::String(self.heap.alloc_string(s)),
                     Err(_) => {
                         let bytes: Vec<GcValue> = stderr.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
-                        GcValue::List(GcList::from_vec(bytes))
+                        GcValue::List(self.heap.make_list(bytes))
                     }
                 };
 
@@ -7069,7 +7101,7 @@ impl AsyncProcess {
                         GcValue::Tuple(self.heap.alloc_tuple(col_values))
                     })
                     .collect();
-                GcValue::List(GcList::from_vec(row_values))
+                GcValue::List(self.heap.make_list(row_values))
             }
             IoResponseValue::PgAffected(count) => GcValue::Int64(count as i64),
             IoResponseValue::PgNotification { channel, payload } => {
@@ -7305,6 +7337,38 @@ impl AsyncProcess {
                 found: "other type".to_string(),
             }),
         }
+    }
+
+    /// Run garbage collection if threshold exceeded.
+    /// Collects roots from all stack frames and runs mark-sweep.
+    fn maybe_gc(&mut self) {
+        if !self.heap.should_collect() {
+            return;
+        }
+
+        // Collect all GC pointers from registers in all frames as roots
+        let mut roots = Vec::new();
+        for frame in &self.frames {
+            for val in &frame.registers {
+                roots.extend(val.gc_pointers());
+            }
+            for val in &frame.captures {
+                roots.extend(val.gc_pointers());
+            }
+        }
+
+        // Also include current exception if any
+        if let Some(ref exc) = self.current_exception {
+            roots.extend(exc.gc_pointers());
+        }
+
+        // Also include exit value if any
+        if let Some(ref val) = self.exit_value {
+            roots.extend(val.gc_pointers());
+        }
+
+        self.heap.set_roots(roots);
+        self.heap.collect();
     }
 
     /// Try to handle an exception with registered handlers.
@@ -8213,6 +8277,8 @@ impl AsyncVM {
             shutdown: AtomicBool::new(false),
             interrupt: AtomicBool::new(false),
             process_registry: TokioRwLock::new(HashMap::new()),
+            spawned_count: AtomicU64::new(0),
+            exited_count: AtomicU64::new(0),
             mvars: HashMap::new(),
             dynamic_mvars: Arc::new(RwLock::new(HashMap::new())),
             dynamic_functions: Arc::new(RwLock::new(HashMap::new())),

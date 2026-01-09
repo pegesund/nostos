@@ -1454,6 +1454,13 @@ impl Heap {
         self.bytes_since_gc
     }
 
+    /// Track additional memory for inline structures (like GcList with imbl::Vector).
+    /// Call this when creating inline values that consume significant memory.
+    #[inline]
+    pub fn track_inline_memory(&mut self, bytes: usize) {
+        self.bytes_since_gc += bytes;
+    }
+
     /// Allocate a new object on the heap.
     #[inline]
     fn alloc(&mut self, data: HeapData) -> RawGcPtr {
@@ -1507,15 +1514,23 @@ impl Heap {
         GcPtr::from_raw(self.alloc(data))
     }
 
-    /// Create a list (no heap allocation - lists are inline in GcValue).
+    /// Create a list with memory tracking.
+    /// Lists are inline in GcValue but we track their memory for GC triggering.
     #[inline]
-    pub fn make_list(&self, items: Vec<GcValue>) -> GcList {
+    pub fn make_list(&mut self, items: Vec<GcValue>) -> GcList {
+        // Track memory: each element is a GcValue, plus imbl::Vector overhead
+        // imbl::Vector uses ~64 bytes base + 32 bytes per chunk of 64 elements
+        let mem_size = std::mem::size_of::<GcList>()
+            + items.len() * std::mem::size_of::<GcValue>()
+            + 64; // imbl overhead estimate
+        self.track_inline_memory(mem_size);
         GcList::from_vec(items)
     }
 
-    /// Create an empty list (no heap allocation).
+    /// Create an empty list (no heap allocation, minimal tracking).
     #[inline]
-    pub fn make_empty_list(&self) -> GcList {
+    pub fn make_empty_list(&mut self) -> GcList {
+        self.track_inline_memory(std::mem::size_of::<GcList>());
         GcList::new()
     }
 

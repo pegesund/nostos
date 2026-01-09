@@ -35,6 +35,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "assert_eq", signature: "a -> a -> ()", doc: "Assert two values are equal, panic if not" },
     BuiltinInfo { name: "panic", signature: "a -> ()", doc: "Panic with a message (terminates execution)" },
     BuiltinInfo { name: "sleep", signature: "Int -> ()", doc: "Sleep for N milliseconds" },
+    BuiltinInfo { name: "vmStats", signature: "() -> (Int, Int, Int)", doc: "Get VM stats: (spawned, exited, active) process counts" },
     BuiltinInfo { name: "self", signature: "() -> Pid", doc: "Get the current process ID" },
     BuiltinInfo { name: "spawn", signature: "(() -> a) -> Pid", doc: "Spawn a new lightweight process" },
     BuiltinInfo { name: "send", signature: "Pid -> a -> ()", doc: "Send a message to a process (also: pid <- msg)" },
@@ -6680,6 +6681,12 @@ impl Compiler {
                         self.chunk.emit(Instruction::Sleep(arg_regs[0]), line);
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::LoadUnit(dst), line);
+                        return Ok(dst);
+                    }
+                    "vmStats" if arg_regs.is_empty() => {
+                        // vmStats() - get process stats
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::VmStats(dst), line);
                         return Ok(dst);
                     }
                     "assert_eq" if arg_regs.len() == 2 => {
