@@ -27,6 +27,10 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     // === Core ===
     BuiltinInfo { name: "println", signature: "a -> ()", doc: "Print a value to stdout followed by a newline" },
     BuiltinInfo { name: "print", signature: "a -> ()", doc: "Print a value to stdout without newline" },
+    BuiltinInfo { name: "eprintln", signature: "a -> ()", doc: "Print a value to stderr followed by a newline (auto-flushes)" },
+    BuiltinInfo { name: "eprint", signature: "a -> ()", doc: "Print a value to stderr without newline (auto-flushes)" },
+    BuiltinInfo { name: "flushStdout", signature: "() -> ()", doc: "Flush stdout buffer" },
+    BuiltinInfo { name: "flushStderr", signature: "() -> ()", doc: "Flush stderr buffer" },
     BuiltinInfo { name: "show", signature: "a -> String", doc: "Convert any value to its string representation" },
     BuiltinInfo { name: "copy", signature: "a -> a", doc: "Create a deep copy of a value" },
     BuiltinInfo { name: "hash", signature: "a -> Int", doc: "Compute hash code for a value" },
@@ -7048,6 +7052,26 @@ impl Compiler {
                     "print" if arg_regs.len() == 1 => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::Print(dst, arg_regs[0]), line);
+                        return Ok(dst);
+                    }
+                    "eprintln" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.emit_call_native(dst, "eprintln", arg_regs.into(), line);
+                        return Ok(dst);
+                    }
+                    "eprint" if arg_regs.len() == 1 => {
+                        let dst = self.alloc_reg();
+                        self.emit_call_native(dst, "eprint", arg_regs.into(), line);
+                        return Ok(dst);
+                    }
+                    "flushStdout" if arg_regs.is_empty() => {
+                        let dst = self.alloc_reg();
+                        self.emit_call_native(dst, "flushStdout", arg_regs.into(), line);
+                        return Ok(dst);
+                    }
+                    "flushStderr" if arg_regs.is_empty() => {
+                        let dst = self.alloc_reg();
+                        self.emit_call_native(dst, "flushStderr", arg_regs.into(), line);
                         return Ok(dst);
                     }
                     "inspect" if arg_regs.len() == 2 => {
