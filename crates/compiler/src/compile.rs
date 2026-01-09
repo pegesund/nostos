@@ -211,6 +211,8 @@ pub struct Compiler {
     polymorphic_fns: HashSet<String>,
     /// Current function name being compiled (for self-recursion optimization)
     current_function_name: Option<String>,
+    /// Current function's type parameters (for checking nested trait bounds)
+    current_fn_type_params: Vec<TypeParam>,
     /// Loop context stack for break/continue
     loop_stack: Vec<LoopContext>,
     /// Line starts: byte offsets where each line begins (line 1 is at index 0)
@@ -305,6 +307,7 @@ impl Compiler {
             fn_type_params: HashMap::new(),
             polymorphic_fns: HashSet::new(),
             current_function_name: None,
+            current_fn_type_params: Vec::new(),
             loop_stack: Vec::new(),
             line_starts: vec![0],
             pending_functions: Vec::new(),
@@ -403,6 +406,7 @@ impl Compiler {
             fn_type_params: HashMap::new(),
             polymorphic_fns: HashSet::new(),
             current_function_name: None,
+            current_fn_type_params: Vec::new(),
             loop_stack: Vec::new(),
             line_starts,
             pending_functions: Vec::new(),
@@ -1556,6 +1560,19 @@ impl Compiler {
             }
         }
 
+        // Check if type_name is a type parameter in the current function with the required bound
+        // This handles nested calls like: double_hash[T: Hash](x) calling hashable[T: Hash](x)
+        for type_param in &self.current_fn_type_params {
+            if type_param.name.node == type_name {
+                // Check if this type parameter has the required trait bound
+                for constraint in &type_param.constraints {
+                    if constraint.node == trait_name {
+                        return true;
+                    }
+                }
+            }
+        }
+
         false
     }
 
@@ -1658,6 +1675,9 @@ impl Compiler {
             self.fn_type_params.insert(name.clone(), def.type_params.clone());
         }
 
+        // Set current function's type parameters for nested trait bound checking
+        let saved_fn_type_params = std::mem::replace(&mut self.current_fn_type_params, def.type_params.clone());
+
         // Check if we need pattern matching dispatch
         let needs_dispatch = def.clauses.len() > 1 || def.clauses.iter().any(|clause| {
             clause.params.iter().any(|p| !self.is_simple_pattern(&p.pattern)) || clause.guard.is_some()
@@ -1739,6 +1759,7 @@ impl Compiler {
                         self.next_reg = saved_next_reg;
                         self.current_function_name = saved_function_name;
                         self.param_types = saved_param_types;
+                        self.current_fn_type_params = saved_fn_type_params;
                         return Ok(());
                     }
                     Err(e) => return Err(e),
@@ -1796,6 +1817,7 @@ impl Compiler {
                     self.next_reg = saved_next_reg;
                     self.current_function_name = saved_function_name;
                     self.param_types = saved_param_types;
+                    self.current_fn_type_params = saved_fn_type_params;
                     return Ok(());
                 }
                 Err(e) => return Err(e),
@@ -1858,6 +1880,7 @@ impl Compiler {
         self.next_reg = saved_next_reg;
         self.current_function_name = saved_function_name;
         self.param_types = saved_param_types;
+        self.current_fn_type_params = saved_fn_type_params;
 
         Ok(())
     }

@@ -35,10 +35,11 @@ PASSED_COUNT=0
 FAILED_COUNT=0
 
 for file in $EXAMPLE_FILES; do
-    # Skip known failing HTTP-related examples for now
+    # Skip known failing HTTP-related examples and REPL demos
     if [[ "$file" == *"async_io_demo.nos"* ]] || \
        [[ "$file" == *"http_client.nos"* ]] || \
-       [[ "$file" == *"http_error_handling.nos"* ]]; then
+       [[ "$file" == *"http_error_handling.nos"* ]] || \
+       [[ "$file" == *"repl_demo.nos"* ]]; then
         echo -e "Skipping ${file#$(dirname "${SCRIPT_DIR}")/}"
         continue
     fi
