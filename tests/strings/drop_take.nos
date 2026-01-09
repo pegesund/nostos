@@ -1,0 +1,31 @@
+# expect: 0
+# Test String.drop and String.take
+
+main() = {
+    s = "hello world"
+
+    # Test take
+    assert_eq("hello", String.take(s, 5))
+    assert_eq("h", String.take(s, 1))
+    assert_eq("", String.take(s, 0))
+    assert_eq("hello world", String.take(s, 100))  # more than length
+
+    # Test drop
+    assert_eq(" world", String.drop(s, 5))
+    assert_eq("ello world", String.drop(s, 1))
+    assert_eq("hello world", String.drop(s, 0))
+    assert_eq("", String.drop(s, 100))  # more than length
+
+    # Test combination: take + drop = original
+    n = 5
+    first = String.take(s, n)
+    rest = String.drop(s, n)
+    assert_eq(s, first ++ rest)
+
+    # Test with unicode
+    emoji = "🎉hello"
+    assert_eq("🎉", String.take(emoji, 1))
+    assert_eq("hello", String.drop(emoji, 1))
+
+    0
+}

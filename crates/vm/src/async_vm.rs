@@ -11161,6 +11161,56 @@ impl AsyncVM {
             }),
         }));
 
+        // String.drop - drop first n characters
+        self.register_native("String.drop", Arc::new(GcNativeFn {
+            name: "String.drop".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let n = match &args[1] {
+                    GcValue::Int64(n) => *n as usize,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                match s {
+                    Some(s) => {
+                        let chars: Vec<char> = s.chars().collect();
+                        let start = n.min(chars.len());
+                        let result: String = chars[start..].iter().collect();
+                        Ok(GcValue::String(heap.alloc_string(result)))
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // String.take - take first n characters
+        self.register_native("String.take", Arc::new(GcNativeFn {
+            name: "String.take".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let n = match &args[1] {
+                    GcValue::Int64(n) => *n as usize,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                match s {
+                    Some(s) => {
+                        let chars: Vec<char> = s.chars().collect();
+                        let end = n.min(chars.len());
+                        let result: String = chars[..end].iter().collect();
+                        Ok(GcValue::String(heap.alloc_string(result)))
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
         // String.split - split string by delimiter
         self.register_native("String.split", Arc::new(GcNativeFn {
             name: "String.split".to_string(),

@@ -270,6 +270,8 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "String.isEmpty", signature: "String -> Bool", doc: "Check if string is empty" },
     BuiltinInfo { name: "String.split", signature: "String -> String -> [String]", doc: "Split string by delimiter" },
     BuiltinInfo { name: "String.join", signature: "[String] -> String -> String", doc: "Join list of strings with delimiter" },
+    BuiltinInfo { name: "String.drop", signature: "String -> Int -> String", doc: "Drop first n characters" },
+    BuiltinInfo { name: "String.take", signature: "String -> Int -> String", doc: "Take first n characters" },
 
     // === Time Functions ===
     BuiltinInfo { name: "Time.now", signature: "() -> Int", doc: "Get current Unix timestamp in milliseconds" },
@@ -5218,7 +5220,7 @@ impl Compiler {
                         // String functions (2 args)
                         "String.contains" | "String.startsWith" | "String.endsWith"
                         | "String.indexOf" | "String.lastIndexOf" | "String.repeat"
-                        | "String.split" | "String.join" if args.len() == 2 => {
+                        | "String.split" | "String.join" | "String.drop" | "String.take" if args.len() == 2 => {
                             let arg0_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let arg1_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
                             let dst = self.alloc_reg();

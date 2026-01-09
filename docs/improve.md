@@ -66,20 +66,6 @@ isOdd(n) = if n == 0 then false else isEven(n - 1)
 
 ## Standard Library
 
-### String.drop and String.take
-Convenient string slicing.
-
-```nostos
-# Current workaround
-rest = String.substring(s, 5, String.length(s))
-
-# Desired
-rest = String.drop(s, 5)
-first5 = String.take(s, 5)
-```
-
-**Priority**: Low - substring works fine
-
 ### Set Type
 Unique collection type.
 
@@ -174,3 +160,4 @@ Some callback patterns in the VM may have stale frame references.
 - ✅ MVar atomic update operation
 - ✅ PostgreSQL with connection pooling
 - ✅ String.split and String.join
+- ✅ String.drop and String.take
