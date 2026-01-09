@@ -22,19 +22,20 @@ use crate::inspector_panel::InspectorPanel;
 use crate::nostos_panel::NostosPanel;
 use crate::debug_panel::{DebugPanel, DebugPanelCommand};
 
-/// Debug logging to /tmp/nostos_tui_debug.log
-fn debug_log(msg: &str) {
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/nostos_tui_debug.log")
-    {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let _ = writeln!(f, "[{}] {}", timestamp, msg);
-    }
+/// Debug logging disabled. Uncomment to enable file logging.
+#[allow(unused)]
+fn debug_log(_msg: &str) {
+    // if let Ok(mut f) = std::fs::OpenOptions::new()
+    //     .create(true)
+    //     .append(true)
+    //     .open("/tmp/nostos_tui_debug.log")
+    // {
+    //     let timestamp = std::time::SystemTime::now()
+    //         .duration_since(std::time::UNIX_EPOCH)
+    //         .map(|d| d.as_secs())
+    //         .unwrap_or(0);
+    //     let _ = writeln!(f, "[{}] {}", timestamp, _msg);
+    // }
 }
 
 /// Apply syntax highlighting to source code, returning a StyledString

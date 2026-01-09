@@ -476,6 +476,27 @@ impl AsyncProcess {
             .unwrap_or(0)
     }
 
+    /// Get the first non-zero line number of the current function.
+    /// This is used when the current instruction has no line info (line 0).
+    fn debug_function_first_nonzero_line(&self) -> usize {
+        self.frames.last()
+            .and_then(|f| f.function.code.lines.iter().find(|&&line| line > 0).copied())
+            .unwrap_or(1)
+    }
+
+    #[allow(unused)]
+    fn debug_log(_msg: &str) {
+        // Debug logging disabled. Uncomment to enable file logging:
+        // if let Ok(mut f) = std::fs::OpenOptions::new()
+        //     .create(true)
+        //     .append(true)
+        //     .open("/tmp/nostos_vm_debug.log")
+        // {
+        //     use std::io::Write;
+        //     let _ = writeln!(f, "{}", _msg);
+        // }
+    }
+
     /// Check if we should pause execution (breakpoint or step mode).
     fn debug_should_pause(&mut self) -> bool {
         use crate::shared_types::StepMode;
@@ -485,27 +506,49 @@ impl AsyncProcess {
             return false;
         }
 
+        let fn_name = self.debug_current_function();
+        Self::debug_log(&format!("debug_should_pause: fn={}, step_mode={:?}, breakpoints={:?}",
+            fn_name, self.step_mode, self.breakpoints));
+
+        // Check for Paused mode FIRST - this is the initial state and should always pause
+        // regardless of line info availability
+        if self.step_mode == StepMode::Paused {
+            Self::debug_log("  -> Paused mode, returning true");
+            return true;
+        }
+
         // Skip breakpoint check once after Continue (to avoid re-hitting same breakpoint)
         if self.skip_next_breakpoint_check {
             self.skip_next_breakpoint_check = false;
+            Self::debug_log("  -> skipping breakpoint check");
             return false;
         }
 
         let current_line = match self.debug_current_line() {
             Some(line) => line,
-            None => return false,
+            None => {
+                Self::debug_log("  -> no current line, returning false");
+                return false;
+            }
         };
+        Self::debug_log(&format!("  current_line={}, first_line={}", current_line, self.debug_function_first_line()));
 
         match self.step_mode {
             StepMode::Run => {
                 // Check function breakpoints
                 let fn_name = self.debug_current_function();
+                Self::debug_log(&format!("  Run mode: checking breakpoints for fn={}", fn_name));
                 if fn_name != "<unknown>" {
                     // Check for exact match
                     let fn_bp = crate::shared_types::Breakpoint::Function(fn_name.clone());
-                    if self.breakpoints.contains(&fn_bp) {
+                    let exact_match = self.breakpoints.contains(&fn_bp);
+                    Self::debug_log(&format!("  exact_match({:?})={}", fn_bp, exact_match));
+                    if exact_match {
                         // Only break on function entry (first line of function)
-                        if current_line == self.debug_function_first_line() {
+                        let first_line = self.debug_function_first_line();
+                        Self::debug_log(&format!("  checking first_line: current={} first={}", current_line, first_line));
+                        if current_line == first_line {
+                            Self::debug_log("  -> BREAKPOINT HIT (exact)");
                             self.step_mode = StepMode::Paused;
                             return true;
                         }
@@ -513,8 +556,13 @@ impl AsyncProcess {
                     // Also check without arity suffix (e.g., "foo" matches "foo/2")
                     if let Some(base_name) = fn_name.split('/').next() {
                         let base_bp = crate::shared_types::Breakpoint::Function(base_name.to_string());
-                        if self.breakpoints.contains(&base_bp) {
-                            if current_line == self.debug_function_first_line() {
+                        let base_match = self.breakpoints.contains(&base_bp);
+                        Self::debug_log(&format!("  base_match({:?})={}", base_bp, base_match));
+                        if base_match {
+                            let first_line = self.debug_function_first_line();
+                            Self::debug_log(&format!("  checking first_line: current={} first={}", current_line, first_line));
+                            if current_line == first_line {
+                                Self::debug_log("  -> BREAKPOINT HIT (base name)");
                                 self.step_mode = StepMode::Paused;
                                 return true;
                             }
@@ -547,8 +595,8 @@ impl AsyncProcess {
                 true
             }
             StepMode::StepLine => {
-                // Pause when line changes
-                if current_line != self.debug_last_line {
+                // Pause when line changes (skip line 0 which means "no line info")
+                if current_line > 0 && current_line != self.debug_last_line {
                     self.debug_last_line = current_line;
                     self.step_mode = StepMode::Paused;
                     return true;
@@ -556,8 +604,8 @@ impl AsyncProcess {
                 false
             }
             StepMode::StepOver => {
-                // Pause when line changes at same or lower call depth
-                if self.frames.len() <= self.debug_step_frame_depth && current_line != self.debug_last_line {
+                // Pause when line changes at same or lower call depth (skip line 0)
+                if current_line > 0 && self.frames.len() <= self.debug_step_frame_depth && current_line != self.debug_last_line {
                     self.debug_last_line = current_line;
                     self.step_mode = StepMode::Paused;
                     return true;
@@ -592,7 +640,11 @@ impl AsyncProcess {
         };
 
         // Send paused event with current location
-        let line = self.debug_current_line().unwrap_or(0);
+        // If current line is 0 (no line info), use the first non-zero line of the function
+        let line = match self.debug_current_line() {
+            Some(0) | None => self.debug_function_first_nonzero_line(),
+            Some(line) => line,
+        };
         let function = self.debug_current_function();
         let file = self.debug_current_file();
         self.debug_send_event(DebugEvent::Paused { pid: self.pid.0, file: file.clone(), line, function: function.clone() });
@@ -1972,8 +2024,14 @@ impl AsyncProcess {
                 self.output.push(s.clone());
                 // Send to output channel if available (for REPL/TUI)
                 if let Some(ref sender) = self.shared.output_sender {
-                    let _ = sender.send(s.clone());
+                    let sender_ptr = sender as *const _ as usize;
+                    Self::debug_log(&format!("[Println] sender_ptr={:#x}, sending: {}", sender_ptr, s));
+                    match sender.send(s.clone()) {
+                        Ok(()) => Self::debug_log(&format!("[Println] send OK")),
+                        Err(e) => Self::debug_log(&format!("[Println] send FAILED: {:?}", e)),
+                    }
                 } else {
+                    Self::debug_log(&format!("[Println] no output_sender, using stdout: {}", s));
                     println!("{}", s);
                 }
             }
@@ -6942,11 +7000,29 @@ impl AsyncVM {
     pub fn setup_output(&mut self) -> crate::shared_types::OutputReceiver {
         let (sender, receiver) = crossbeam::channel::unbounded();
 
-        Arc::get_mut(&mut self.shared)
-            .expect("Cannot setup output after execution started")
-            .output_sender = Some(sender);
+        let shared = Arc::get_mut(&mut self.shared)
+            .expect("Cannot setup output after execution started");
+        shared.output_sender = Some(sender);
+
+        // Log AFTER the sender is stored
+        let shared_ptr = &*shared as *const _ as usize;
+        if let Some(ref s) = shared.output_sender {
+            let sender_ptr = s as *const _ as usize;
+            AsyncProcess::debug_log(&format!("[setup_output] shared_ptr={:#x}, sender_ptr={:#x}", shared_ptr, sender_ptr));
+        }
 
         receiver
+    }
+
+    /// Test the output channel by sending a message through the sender.
+    pub fn test_output_channel(&self, msg: &str) {
+        if let Some(ref sender) = self.shared.output_sender {
+            let sender_ptr = sender as *const _ as usize;
+            AsyncProcess::debug_log(&format!("[test_output_channel] sender_ptr={:#x}, sending: {}", sender_ptr, msg));
+            let _ = sender.send(msg.to_string());
+        } else {
+            AsyncProcess::debug_log("[test_output_channel] NO sender!");
+        }
     }
 
     /// Setup panel channel and register Panel.* native functions.
@@ -9567,6 +9643,15 @@ impl AsyncVM {
     pub fn run_debug(&self, main_fn_name: &str) -> Result<DebugSession, String> {
         use crate::shared_types::{DebugCommand, DebugEvent, StepMode};
 
+        // Log shared state info
+        let shared_ptr = Arc::as_ptr(&self.shared) as usize;
+        let has_output = self.shared.output_sender.is_some();
+        AsyncProcess::debug_log(&format!("[run_debug] shared_ptr={:#x}, has_output_sender={}", shared_ptr, has_output));
+        if let Some(ref sender) = self.shared.output_sender {
+            let sender_ptr = sender as *const _ as usize;
+            AsyncProcess::debug_log(&format!("[run_debug] output_sender_ptr={:#x}", sender_ptr));
+        }
+
         // Create debug channels
         let (cmd_tx, cmd_rx) = crossbeam::channel::unbounded::<DebugCommand>();
         let (event_tx, event_rx) = crossbeam::channel::unbounded::<DebugEvent>();
@@ -9591,6 +9676,15 @@ impl AsyncVM {
                 // Create main process with debug channels
                 let pid = shared.alloc_pid();
                 let mut process = AsyncProcess::new(pid, Arc::clone(&shared));
+
+                // Log output_sender status after process creation
+                if process.shared.output_sender.is_some() {
+                    let sender_ptr = process.shared.output_sender.as_ref().unwrap() as *const _ as usize;
+                    AsyncProcess::debug_log(&format!("[run_debug spawned] output_sender_ptr={:#x}", sender_ptr));
+                } else {
+                    AsyncProcess::debug_log("[run_debug spawned] NO output_sender!");
+                }
+
                 process.debug_command_receiver = Some(cmd_rx);
                 process.debug_event_sender = Some(event_tx.clone());
                 // Start paused so debugger can set breakpoints

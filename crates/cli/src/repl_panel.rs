@@ -3,16 +3,17 @@
 //! Provides a notebook-style REPL where each input/output pair is displayed
 //! in a scrollable view with syntax highlighting.
 
-/// Debug logging to /tmp/nostos_repl_panel.log
-fn debug_log(msg: &str) {
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/nostos_repl_panel.log")
-    {
-        use std::io::Write;
-        let _ = writeln!(f, "{}", msg);
-    }
+/// Debug logging disabled. Uncomment to enable file logging.
+#[allow(unused)]
+fn debug_log(_msg: &str) {
+    // if let Ok(mut f) = std::fs::OpenOptions::new()
+    //     .create(true)
+    //     .append(true)
+    //     .open("/tmp/nostos_repl_panel.log")
+    // {
+    //     use std::io::Write;
+    //     let _ = writeln!(f, "{}", _msg);
+    // }
 }
 
 use cursive::event::{Callback, Event, EventResult, Key};
