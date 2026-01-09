@@ -1,0 +1,27 @@
+# RWeb Counter WITHOUT components - tests full page update fallback
+use stdlib.rweb
+use stdlib.rhtml
+
+reactive Counter = { count: Int }
+
+session() = {
+    counter = Counter(0)
+
+    (
+        () => RHtml(div([
+            h1("No-Component Counter"),
+            span("Count: " ++ show(counter.count), dataTestid: "count"),
+            button("+1", dataAction: "increment", dataTestid: "increment"),
+            button("-1", dataAction: "decrement", dataTestid: "decrement"),
+            button("Reset", dataAction: "reset", dataTestid: "reset")
+        ])),
+        (action, params) => match action {
+            "increment" -> { counter.count = counter.count + 1 }
+            "decrement" -> { counter.count = counter.count - 1 }
+            "reset" -> { counter.count = 0 }
+            _ -> ()
+        }
+    )
+}
+
+main() = startRWeb(8100, "No-Component Counter", session)
