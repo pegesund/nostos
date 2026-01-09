@@ -1481,6 +1481,20 @@ impl Repl {
 
         self.sync_vm();
 
+        // Verify the tuple thunk works before committing the bindings
+        // This prevents broken bindings from poisoning future evaluations
+        let tuple_fn_name = format!("{}/", tuple_thunk);
+        if let Err(e) = self.vm.run(&tuple_fn_name) {
+            eprintln!("Runtime error evaluating tuple: {}", e);
+            // Remove the bindings we just added since they're broken
+            for name in names {
+                if name != "_" {
+                    self.var_bindings.remove(name);
+                }
+            }
+            return false;
+        }
+
         // Report the binding
         let names_str = names.join(", ");
         println!("({}) = {}", names_str, expr);
@@ -1529,6 +1543,14 @@ impl Repl {
 
         // Sync VM
         self.sync_vm();
+
+        // Verify the thunk works before adding to bindings
+        // This prevents broken bindings from poisoning future evaluations
+        let fn_name = format!("{}/", thunk_name);
+        if let Err(e) = self.vm.run(&fn_name) {
+            eprintln!("Runtime error: {}", e);
+            return false;
+        }
 
         // Infer type from expression pattern for known builtins
         let type_annotation = Self::infer_type_from_expr(expr);
