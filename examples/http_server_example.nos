@@ -1,123 +1,114 @@
 # HTTP Server Example
 #
-# Demonstrates server and client in the same VM:
+# Demonstrates low-level server API with proper spawn-per-request pattern:
 # - Server.bind(port) starts listening, returns handle
 # - Server.accept(handle) waits for requests, returns request
 # - Server.respond(reqId, status, headers, body) sends response
 # - Server.close(handle) stops the server
 #
 # Request fields: req.id, req.method, req.path, req.headers, req.body
+#
+# This example runs server + client in the same VM for testing.
 
 # Route handler - determines response based on path
-handleRoute(method, path, body) = {
-  if path == "/" then
-    (200, "Welcome to Nostos HTTP Server!")
-  else if path == "/hello" then
-    (200, "Hello, World!")
-  else if path == "/echo" then
-    (200, body)
-  else if path == "/json" then
-    (200, '{"status": "ok", "message": "Hello from Nostos"}')
-  else
-    (404, "Not Found: " ++ path)
-}
-
-# Server loop - accepts requests and dispatches to handler
-serverLoop(server) = {
-  result = try {
-    req = Server.accept(server)
-    (statusCode, responseBody) = handleRoute(req.method, req.path, req.body)
+handleRoute(req) = {
+    (statusCode, responseBody) = match req.path {
+        "/" -> (200, "Welcome to Nostos HTTP Server!")
+        "/hello" -> (200, "Hello, World!")
+        "/echo" -> (200, req.body)
+        "/json" -> (200, "{\"status\": \"ok\", \"message\": \"Hello from Nostos\"}")
+        _ -> (404, "Not Found: " ++ req.path)
+    }
     headers = [("Content-Type", "text/plain")]
     Server.respond(req.id, statusCode, headers, responseBody)
-    serverLoop(server)
-  } catch { e -> () }
-  result
+}
+
+# Server loop with spawn-per-request pattern (proper tail recursion)
+serverLoop(server) = {
+    ok = try {
+        req = Server.accept(server)
+        spawn { handleRoute(req) }
+        true
+    } catch { _ -> false }
+    # Tail call is OUTSIDE try-catch - this is important for memory!
+    if ok then serverLoop(server) else ()
 }
 
 # Client that makes a request to the server
 clientRequest(parent, path) = {
-  url = "http://localhost:8888" ++ path
-  try {
-    response = Http.get(url)
-    parent <- ("response", path, response.status)
-  } catch { e ->
-    parent <- ("error", path, 0)
-  }
+    url = "http://localhost:8888" ++ path
+    try {
+        response = Http.get(url)
+        parent <- ("response", path, response.status)
+    } catch { e ->
+        parent <- ("error", path, 0)
+    }
 }
 
 # Collect responses from client workers
 collectResponses(count, expected) = {
-  if count == expected then
-    count
-  else
-    receive {
-      ("response", path, status) -> {
-        print("  ")
-        print(path)
-        print(" -> ")
-        println(status)
-        collectResponses(count + 1, expected)
-      }
-      ("error", path, _) -> {
-        print("  ")
-        print(path)
-        println(" -> ERROR")
-        collectResponses(count + 1, expected)
-      }
-      after 5000 -> count
+    if count == expected then count
+    else receive {
+        ("response", path, status) -> {
+            println("  " ++ path ++ " -> " ++ show(status))
+            collectResponses(count + 1, expected)
+        }
+        ("error", path, _) -> {
+            println("  " ++ path ++ " -> ERROR")
+            collectResponses(count + 1, expected)
+        }
+        after 5000 -> count
     }
 }
 
 # Main - demonstrates server + client in same VM
 main() = {
-  println("=== HTTP Server Example ===")
-  println("")
-  println("Server API:")
-  println("  Server.bind(port) -> handle")
-  println("  Server.accept(handle) -> request")
-  println("  Server.respond(reqId, status, headers, body)")
-  println("  Server.close(handle)")
-  println("")
-
-  result = try {
-    # Step 1: Bind to port
-    server = Server.bind(8888)
-    println("Server started on http://localhost:8888")
+    println("=== HTTP Server Example ===")
+    println("")
+    println("Server API:")
+    println("  Server.bind(port) -> handle")
+    println("  Server.accept(handle) -> request")
+    println("  Server.respond(reqId, status, headers, body)")
+    println("  Server.close(handle)")
     println("")
 
-    # Step 2: Spawn server loop in background process
-    spawn { serverLoop(server) }
+    result = try {
+        # Step 1: Bind to port
+        server = Server.bind(8888)
+        println("Server started on http://localhost:8888")
+        println("")
 
-    # Give server time to start accepting
-    sleep(50)
+        # Step 2: Spawn server loop in background process
+        spawn { serverLoop(server) }
 
-    # Step 3: Make concurrent client requests from same VM
-    println("Making client requests...")
-    me = self()
+        # Give server time to start accepting
+        sleep(50)
 
-    spawn { clientRequest(me, "/") }
-    spawn { clientRequest(me, "/hello") }
-    spawn { clientRequest(me, "/echo") }
-    spawn { clientRequest(me, "/json") }
-    spawn { clientRequest(me, "/notfound") }
+        # Step 3: Make concurrent client requests from same VM
+        println("Making client requests...")
+        me = self()
 
-    # Collect all responses
-    completed = collectResponses(0, 5)
+        spawn { clientRequest(me, "/") }
+        spawn { clientRequest(me, "/hello") }
+        spawn { clientRequest(me, "/echo") }
+        spawn { clientRequest(me, "/json") }
+        spawn { clientRequest(me, "/notfound") }
 
-    println("")
-    print("Completed ")
-    print(completed)
-    println(" requests")
+        # Collect all responses
+        completed = collectResponses(0, 5)
 
-    if completed == 5 then
-      println("SUCCESS! Server and clients work in same VM!")
-    else
-      println("Some requests failed")
+        println("")
+        println("Completed " ++ show(completed) ++ " requests")
 
-    # Clean up
-    Server.close(server)
-  } catch { e ->
-    println("Error: " ++ e)
-  }
-  result
+        if completed == 5 then
+            println("SUCCESS! Server and clients work in same VM!")
+        else
+            println("Some requests failed")
+
+        # Clean up
+        Server.close(server)
+    } catch { e ->
+        println("Error: " ++ e)
+    }
+    result
 }

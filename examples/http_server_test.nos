@@ -3,75 +3,86 @@
 # Simple HTTP server for manual testing:
 # - Listens on port 8080
 # - /hello returns "hello world"
+# - /shutdown stops the server
 # - Other paths return 404
 #
 # Test with: curl http://localhost:8080/hello
 
-serverLoop(server, count) = {
-  println("Waiting for request...")
-  result = try {
-    req = Server.accept(server)
+# Handle a single request
+handleRequest(req, shutdownPid) = {
+    println("Request: " ++ req.method ++ " " ++ req.path)
 
     if req.path == "/shutdown" then {
-      Server.respond(req.id, 200, [("Content-Type", "text/plain")], "Shutting down...")
-      () # Exit by returning from the recursive loop
+        Server.respond(req.id, 200, [("Content-Type", "text/plain")], "Shutting down...")
+        shutdownPid <- "shutdown"
     }
     else {
-      print("Request #")
-      print(count)
-      print(": ")
-      print(req.method)
-      print(" ")
-      println(req.path)
+        (body, statusCode) = if req.path == "/hello" then
+            ("hello world", 200)
+        else
+            ("not found", 404)
 
-      body = if req.path == "/hello" then "hello world" else "not found"
-      statusCode = if req.path == "/hello" then 200 else 404
-
-      Server.respond(req.id, statusCode, [("Content-Type", "text/plain")], body)
-      serverLoop(server, count + 1)
+        Server.respond(req.id, statusCode, [("Content-Type", "text/plain")], body)
     }
-  } catch { e ->
-    println("Error accepting request: " ++ e)
-  }
-  result
+}
+
+# Server loop with spawn-per-request pattern (proper tail recursion)
+serverLoop(server, shutdownPid) = {
+    ok = try {
+        req = Server.accept(server)
+        spawn { handleRequest(req, shutdownPid) }
+        true
+    } catch { _ -> false }
+    # Tail call is OUTSIDE try-catch - this is important for memory!
+    if ok then serverLoop(server, shutdownPid) else ()
 }
 
 # Send test request and then shutdown
 sendTestAndShutdown() = {
-  sleep(100)  # Give server time to start
-  try {
-    println("Client: Sending test request...")
-    response = Http.get("http://localhost:8080/hello")
-    println("Client: Got response with status " ++ show(response.status))
-    println("Client: Sending shutdown...")
-    Http.get("http://localhost:8080/shutdown")
-    ()
-  } catch { e ->
-    println("Client error: " ++ e)
-  }
+    sleep(100)  # Give server time to start
+    try {
+        println("Client: Sending test request...")
+        response = Http.get("http://localhost:8080/hello")
+        println("Client: Got response with status " ++ show(response.status))
+        println("Client: Sending shutdown...")
+        Http.get("http://localhost:8080/shutdown")
+        ()
+    } catch { e ->
+        println("Client error: " ++ e)
+    }
 }
 
 main() = {
-  println("=== HTTP Server Test ===")
-  println("")
-  println("Starting server on http://localhost:8080")
-  println("")
-
-  result = try {
-    server = Server.bind(8080)
-    println("Server ready!")
+    println("=== HTTP Server Test ===")
+    println("")
+    println("Starting server on http://localhost:8080")
     println("")
 
-    # Spawn a client to test and then shutdown
-    spawn { sendTestAndShutdown() }
+    result = try {
+        server = Server.bind(8080)
+        println("Server ready!")
+        println("")
 
-    serverLoop(server, 1)
+        # Spawn a client to test and then shutdown
+        spawn { sendTestAndShutdown() }
 
-    # Clean up
-    Server.close(server)
-    println("Server shutdown complete.")
-  } catch { e ->
-    println("Error starting server: " ++ e)
-  }
-  result
+        # Spawn server loop
+        spawn { serverLoop(server, self()) }
+
+        # Wait for shutdown signal
+        receive {
+            "shutdown" -> {
+                sleep(100)  # Let response complete
+                Server.close(server)
+                println("Server shutdown complete.")
+            }
+            after 10000 -> {
+                Server.close(server)
+                println("Timeout - shutting down.")
+            }
+        }
+    } catch { e ->
+        println("Error starting server: " ++ e)
+    }
+    result
 }

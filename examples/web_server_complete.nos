@@ -1,8 +1,14 @@
 # Complete Web Application
 #
-# PostgreSQL + Html(...) templating + routing + forms + cookies
+# PostgreSQL + Html(...) templating + routing + forms + cookies + connection pooling
 #
 # Requires: PostgreSQL at localhost (user: postgres, pw: postgres)
+#
+# Features:
+# - Connection pooling via stdlib.pool (no per-request connection overhead)
+# - spawn-per-request pattern for scalable request handling
+# - Html templating with components
+# - Form handling with POST requests
 #
 # Test:
 #   curl http://localhost:8080/
@@ -11,11 +17,12 @@
 
 use stdlib.html.{Html, render}
 use stdlib.server.{serve, getParam, respondHtml, redirect, redirectWith, respond400, respond405, setCookieWithAge}
+use stdlib.pool.{init, query, execute, withConn, transaction}
 
 # --- Database Setup ---
 
-setupDatabase(conn) = {
-    Pg.execute(conn, "
+setupDatabase() = {
+    execute("
         CREATE TABLE IF NOT EXISTS web_users (
             id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
@@ -24,12 +31,12 @@ setupDatabase(conn) = {
         )
     ", [])
 
-    rows = Pg.query(conn, "SELECT COUNT(*) FROM web_users", [])
+    rows = query("SELECT COUNT(*) FROM web_users", [])
     count = head(rows).0
 
     if count == 0 then {
-        Pg.execute(conn, "INSERT INTO web_users (name, email) VALUES ($1, $2)", ["Alice", "alice@example.com"])
-        Pg.execute(conn, "INSERT INTO web_users (name, email) VALUES ($1, $2)", ["Bob", "bob@example.com"])
+        execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", ["Alice", "alice@example.com"])
+        execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", ["Bob", "bob@example.com"])
         println("Inserted sample users")
     } else ()
 }
@@ -38,7 +45,7 @@ setupDatabase(conn) = {
 
 layout(pageTitle: String, content: Html) = Html(
     el("html", [], [
-        head([
+        headEl([
             meta([("charset", "UTF-8")]),
             title(pageTitle ++ " - Nostos App"),
             el("style", [], [raw("
@@ -70,8 +77,8 @@ userCard(userId: Int, name: String, email: String) = Html(
 
 # --- Route Handlers ---
 
-handleHome(req, conn) = {
-    rows = Pg.query(conn, "SELECT COUNT(*) FROM web_users", [])
+handleHome(req) = {
+    rows = query("SELECT COUNT(*) FROM web_users", [])
     userCount = head(rows).0
 
     content = Html(div([
@@ -82,8 +89,8 @@ handleHome(req, conn) = {
     respondHtml(req, render(layout("Home", content)))
 }
 
-handleUsers(req, conn) = {
-    rows = Pg.query(conn, "SELECT id, name, email FROM web_users ORDER BY id", [])
+handleUsers(req) = {
+    rows = query("SELECT id, name, email FROM web_users ORDER BY id", [])
     cards = map(rows, row => userCard(row.0, row.1, row.2))
 
     content = Html(div([
@@ -100,13 +107,13 @@ handleUsers(req, conn) = {
     respondHtml(req, render(layout("Users", content)))
 }
 
-handleUserDetail(req, conn, userId: String) = {
+handleUserDetail(req, userId: String) = {
     userIdInt = match String.toInt(userId) {
         Some(n) -> n
         None -> 0
     }
 
-    rows = Pg.query(conn, "SELECT id, name, email FROM web_users WHERE id = $1", [userIdInt])
+    rows = query("SELECT id, name, email FROM web_users WHERE id = $1", [userIdInt])
 
     content = match rows {
         [] -> Html(div([
@@ -126,7 +133,7 @@ handleUserDetail(req, conn, userId: String) = {
     respondHtml(req, render(layout("User " ++ userId, content)))
 }
 
-handleCreateUser(req, conn) = {
+handleCreateUser(req) = {
     if req.method != "POST" then respond405(req)
     else {
         name = getParam(req.formParams, "name")
@@ -135,7 +142,7 @@ handleCreateUser(req, conn) = {
         if name == "" then respond400(req, "Name is required")
         else if email == "" then respond400(req, "Email is required")
         else {
-            Pg.execute(conn, "INSERT INTO web_users (name, email) VALUES ($1, $2)", [name, email])
+            execute("INSERT INTO web_users (name, email) VALUES ($1, $2)", [name, email])
             redirect(req, "/users")
         }
     }
@@ -152,30 +159,28 @@ handle404(req) = {
 # --- Router ---
 
 route(req) = {
-    conn = Pg.connect("host=localhost user=postgres password=postgres")
     path = req.path
 
-    if path == "/" then handleHome(req, conn)
+    if path == "/" then handleHome(req)
     else if path == "/users" then {
-        if req.method == "POST" then handleCreateUser(req, conn)
-        else handleUsers(req, conn)
+        if req.method == "POST" then handleCreateUser(req)
+        else handleUsers(req)
     }
     else {
         params = Server.matchPath(path, "/users/:id")
         if length(params) > 0 then {
             (_, userId) = head(params)
-            handleUserDetail(req, conn, userId)
+            handleUserDetail(req, userId)
         } else handle404(req)
     }
-
-    Pg.close(conn)
 }
 
 main() = {
-    setupConn = Pg.connect("host=localhost user=postgres password=postgres")
-    setupDatabase(setupConn)
-    Pg.close(setupConn)
+    # Initialize connection pool
+    init("host=localhost user=postgres password=postgres")
+    setupDatabase()
 
     println("Web App: http://localhost:8080")
+    println("Using connection pooling via stdlib.pool")
     serve(8080, route)
 }
