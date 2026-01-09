@@ -6933,7 +6933,8 @@ impl Compiler {
                 // Type-based builtin method dispatch for receiver-style calls
                 // Handles m.get(k) where m is a Map, s.toUpper() where s is a String, etc.
                 if let Some(type_name) = self.expr_type_name(obj) {
-                    let builtin_name: Option<&str> = if type_name.starts_with("Map[") || type_name == "Map" {
+                    // Check for Map type - handles "Map[K, V]", "Map", and "Map k v" (with type vars)
+                    let builtin_name: Option<&str> = if type_name.starts_with("Map[") || type_name == "Map" || type_name.starts_with("Map ") {
                         match method.node.as_str() {
                             "get" => Some("Map.get"),
                             "insert" => Some("Map.insert"),
@@ -6949,7 +6950,7 @@ impl Compiler {
                             "toList" => Some("Map.toList"),
                             _ => None,
                         }
-                    } else if type_name.starts_with("Set[") || type_name == "Set" {
+                    } else if type_name.starts_with("Set[") || type_name == "Set" || type_name.starts_with("Set ") {
                         match method.node.as_str() {
                             "contains" => Some("Set.contains"),
                             "insert" => Some("Set.insert"),
