@@ -262,6 +262,20 @@ pub struct GcVariant {
     pub type_name: String,
     pub constructor: String,
     pub fields: Vec<GcValue>,
+    /// Cached discriminant for fast pattern matching (hash of constructor name)
+    pub discriminant: u16,
+}
+
+/// Compute discriminant from constructor name (fast hash for pattern matching)
+#[inline]
+pub fn constructor_discriminant(name: &str) -> u16 {
+    // FNV-1a hash truncated to u16 - fast and good distribution
+    let mut hash: u32 = 2166136261;
+    for byte in name.bytes() {
+        hash ^= byte as u32;
+        hash = hash.wrapping_mul(16777619);
+    }
+    hash as u16
 }
 
 /// A GC-managed BigInt.
@@ -1041,10 +1055,12 @@ impl Heap {
         constructor: String,
         fields: Vec<GcValue>,
     ) -> GcPtr<GcVariant> {
+        let discriminant = constructor_discriminant(&constructor);
         let data = HeapData::Variant(GcVariant {
             type_name,
             constructor,
             fields,
+            discriminant,
         });
         GcPtr::from_raw(self.alloc(data))
     }

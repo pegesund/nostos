@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use crossbeam::deque::{Injector, Stealer, Worker as WorkQueue};
 use parking_lot::Mutex;
 
-use crate::gc::{GcValue, InlineOp};
+use crate::gc::{constructor_discriminant, GcValue, InlineOp};
 use crate::process::{CallFrame, ExceptionHandler, ExitReason, ProcessState};
 use crate::scheduler::Scheduler;
 use crate::value::{FunctionValue, Pid, RuntimeError};
@@ -2657,25 +2657,19 @@ impl Worker {
             }
 
             // === Pattern matching ===
-            Instruction::TestTag(dst, value, tag_idx) => {
-                let tag = match constants.get(tag_idx as usize) {
-                    Some(Value::String(s)) => (**s).clone(),
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "String".to_string(),
-                        found: "non-string".to_string(),
-                    }),
-                };
+            Instruction::TestTag(dst, value, discriminant) => {
+                // Discriminant is computed at compile time - just compare u16 directly!
                 let val = get_reg!(value);
                 let result = self.scheduler.with_process(pid, |proc| {
                     match &val {
                         GcValue::Variant(ptr) => {
                             proc.heap.get_variant(*ptr)
-                                .map(|v| v.constructor == tag)
+                                .map(|v| v.discriminant == discriminant)
                                 .unwrap_or(false)
                         }
                         GcValue::Record(ptr) => {
                             proc.heap.get_record(*ptr)
-                                .map(|r| r.type_name == tag)
+                                .map(|r| constructor_discriminant(&r.type_name) == discriminant)
                                 .unwrap_or(false)
                         }
                         _ => false,
