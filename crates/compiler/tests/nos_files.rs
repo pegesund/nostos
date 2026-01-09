@@ -5,7 +5,7 @@
 
 use nostos_compiler::compile::compile_module;
 use nostos_syntax::parse;
-use nostos_vm::{value::Value, VM, Runtime, GcValue};
+use nostos_vm::{value::Value, Runtime, GcValue};
 use std::fs;
 use std::path::Path;
 
@@ -74,8 +74,41 @@ fn gc_value_to_string(value: &GcValue) -> String {
     }
 }
 
-/// Compile and run a Nostos source file using the Runtime (supports concurrency).
-fn run_nos_source_concurrent(source: &str) -> Result<String, String> {
+/// Compile and run a Nostos source file using the Runtime, returning a Value.
+fn run_nos_source(source: &str) -> Result<Value, String> {
+    // Parse
+    let (module_opt, errors) = parse(source);
+    if !errors.is_empty() {
+        return Err(format!("Parse error: {:?}", errors));
+    }
+    let module = module_opt.ok_or_else(|| "Parse returned no module".to_string())?;
+
+    // Compile
+    let compiler = compile_module(&module).map_err(|e| format!("Compile error: {:?}", e))?;
+
+    // Create Runtime and load functions/types
+    let mut runtime = Runtime::new();
+    for (name, func) in compiler.get_all_functions() {
+        runtime.register_function(name, func.clone());
+    }
+    runtime.set_function_list(compiler.get_function_list());
+    for (name, type_val) in compiler.get_vm_types() {
+        runtime.register_type(&name, type_val);
+    }
+
+    // Get main function
+    let main_func = compiler.get_function("main")
+        .ok_or_else(|| "No main function".to_string())?;
+
+    // Spawn initial process and run, returning Value
+    runtime.spawn_initial(main_func);
+    let result = runtime.run_to_value().map_err(|e| format!("Runtime error: {:?}", e))?;
+
+    result.ok_or_else(|| "No result returned".to_string())
+}
+
+/// Compile and run a Nostos source file using the Runtime (returns GcValue string).
+fn run_nos_source_gc(source: &str) -> Result<String, String> {
     // Parse
     let (module_opt, errors) = parse(source);
     if !errors.is_empty() {
@@ -111,36 +144,6 @@ fn run_nos_source_concurrent(source: &str) -> Result<String, String> {
     }
 }
 
-/// Compile and run a Nostos source file, returning the result of main().
-fn run_nos_source(source: &str) -> Result<Value, String> {
-    // Parse
-    let (module_opt, errors) = parse(source);
-    if !errors.is_empty() {
-        return Err(format!("Parse error: {:?}", errors));
-    }
-    let module = module_opt.ok_or_else(|| "Parse returned no module".to_string())?;
-
-    // Compile
-    let compiler = compile_module(&module).map_err(|e| format!("Compile error: {:?}", e))?;
-
-    // Create VM and load functions/types
-    let mut vm = VM::new();
-    for (name, func) in compiler.get_all_functions() {
-        vm.functions.insert(name.clone(), func.clone());
-    }
-    vm.function_list = compiler.get_function_list();
-    for (name, type_val) in compiler.get_vm_types() {
-        vm.types.insert(name, type_val);
-    }
-
-    // Run main
-    if vm.functions.contains_key("main") {
-        vm.call("main", vec![]).map_err(|e| format!("Runtime error: {:?}", e))
-    } else {
-        Err("No main function".to_string())
-    }
-}
-
 /// Run a single test file.
 fn run_test_file(path: &Path) -> Result<(), String> {
     let source = fs::read_to_string(path)
@@ -165,7 +168,7 @@ fn run_test_file(path: &Path) -> Result<(), String> {
     }
 }
 
-/// Run a single test file with concurrency support (using Runtime).
+/// Run a single test file for concurrency tests (checks Pid output).
 fn run_test_file_concurrent(path: &Path) -> Result<(), String> {
     let source = fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
@@ -173,7 +176,7 @@ fn run_test_file_concurrent(path: &Path) -> Result<(), String> {
     let expected = parse_expected(&source)
         .ok_or_else(|| format!("{}: Missing '# expect:' comment", path.display()))?;
 
-    let actual = run_nos_source_concurrent(&source)?;
+    let actual = run_nos_source_gc(&source)?;
 
     if actual == expected {
         Ok(())
@@ -624,7 +627,7 @@ mod concurrency {
         let workspace_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
         let file = workspace_root.join("tests").join("concurrency").join(format!("{}.nos", name));
 
-        // Use concurrent runner for concurrency tests
+        // Use concurrent runner for concurrency tests (returns Pid format)
         if let Err(e) = run_test_file_concurrent(&file) {
             panic!("{}", e);
         }

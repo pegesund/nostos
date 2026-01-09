@@ -4,7 +4,6 @@ use nostos_compiler::compile::compile_module;
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::gc::GcValue;
 use nostos_vm::runtime::Runtime;
-use nostos_vm::VM;
 use std::env;
 use std::fs;
 use std::process::ExitCode;
@@ -18,29 +17,22 @@ fn main() -> ExitCode {
         eprintln!("Run a Nostos program file.");
         eprintln!();
         eprintln!("Options:");
-        eprintln!("  --runtime  Use the multi-process runtime instead of simple VM");
         eprintln!("  --help     Show this help message");
         eprintln!("  --version  Show version information");
         return ExitCode::FAILURE;
     }
 
     // Parse options
-    let mut use_runtime = false;
     let mut file_idx = 1;
 
     for (i, arg) in args.iter().enumerate().skip(1) {
-        if arg == "--runtime" {
-            use_runtime = true;
-            file_idx = i + 1;
-        } else if arg.starts_with("--") || arg.starts_with("-") {
-            // Handle other flags
+        if arg.starts_with("--") || arg.starts_with("-") {
             if arg == "--help" || arg == "-h" {
                 println!("Usage: nostos [options] <file.nos> [args...]");
                 println!();
                 println!("Run a Nostos program file.");
                 println!();
                 println!("Options:");
-                println!("  --runtime  Use the multi-process runtime instead of simple VM");
                 println!("  --help     Show this help message");
                 println!("  --version  Show version information");
                 return ExitCode::SUCCESS;
@@ -97,74 +89,40 @@ fn main() -> ExitCode {
         }
     };
 
-    if use_runtime {
-        // Use multi-process runtime
-        let mut runtime = Runtime::new();
+    // Create runtime and load functions/types
+    let mut runtime = Runtime::new();
 
-        for (name, func) in compiler.get_all_functions() {
-            runtime.register_function(&name, func.clone());
-        }
-        // Set function list for direct indexed calls (CallDirect)
-        runtime.set_function_list(compiler.get_function_list());
-        for (name, type_val) in compiler.get_vm_types() {
-            runtime.register_type(&name, type_val);
-        }
+    for (name, func) in compiler.get_all_functions() {
+        runtime.register_function(&name, func.clone());
+    }
+    runtime.set_function_list(compiler.get_function_list());
+    for (name, type_val) in compiler.get_vm_types() {
+        runtime.register_type(&name, type_val);
+    }
 
-        // Get main function
-        let main_func = match compiler.get_all_functions().get("main") {
-            Some(func) => func.clone(),
-            None => {
-                eprintln!("Error: No 'main' function found in '{}'", file_path);
-                return ExitCode::FAILURE;
-            }
-        };
-
-        runtime.spawn_initial(main_func);
-
-        match runtime.run() {
-            Ok(result) => {
-                if let Some(val) = result {
-                    if !matches!(val, GcValue::Unit) {
-                        println!("{:?}", val);
-                    }
-                }
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("Runtime error: {}", e);
-                ExitCode::FAILURE
-            }
-        }
-    } else {
-        // Use simple VM
-        let mut vm = VM::new();
-        for (name, func) in compiler.get_all_functions() {
-            vm.functions.insert(name.clone(), func.clone());
-        }
-        // Populate function_list for direct indexed calls (CallDirect)
-        vm.function_list = compiler.get_function_list();
-        for (name, type_val) in compiler.get_vm_types() {
-            vm.types.insert(name, type_val);
-        }
-
-        // Run main
-        if !vm.functions.contains_key("main") {
+    // Get main function
+    let main_func = match compiler.get_all_functions().get("main") {
+        Some(func) => func.clone(),
+        None => {
             eprintln!("Error: No 'main' function found in '{}'", file_path);
             return ExitCode::FAILURE;
         }
+    };
 
-        match vm.call("main", vec![]) {
-            Ok(result) => {
-                // Only print the result if it's not Unit
-                if !matches!(result, nostos_vm::value::Value::Unit) {
-                    println!("{}", result);
+    runtime.spawn_initial(main_func);
+
+    match runtime.run() {
+        Ok(result) => {
+            if let Some(val) = result {
+                if !matches!(val, GcValue::Unit) {
+                    println!("{:?}", val);
                 }
-                ExitCode::SUCCESS
             }
-            Err(e) => {
-                eprintln!("Runtime error: {}", e);
-                ExitCode::FAILURE
-            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("Runtime error: {}", e);
+            ExitCode::FAILURE
         }
     }
 }
