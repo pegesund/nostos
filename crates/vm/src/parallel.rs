@@ -5021,6 +5021,13 @@ impl ThreadWorker {
                 }
             }
 
+            Panic(msg_reg) => {
+                let msg = reg!(*msg_reg).clone();
+                let proc = self.get_process(local_id).unwrap();
+                let msg_str = proc.heap.display_value(&msg);
+                return Err(RuntimeError::Panic(msg_str));
+            }
+
             Nop => {}
 
             // === Pattern Matching ===

@@ -1,0 +1,10 @@
+# expect: 999
+# When an immutable variable is used in a pattern, it acts as a constraint
+
+main() = {
+    x = 1
+    match (2, 3)
+        (x, y) -> x + y   # x must equal 1, so this doesn't match
+        _ -> 999
+    end
+}

@@ -1,0 +1,10 @@
+# expect: 4
+# When an immutable variable is used in a pattern and values match
+
+main() = {
+    x = 1
+    match (1, 3)
+        (x, y) -> x + y   # x=1 matches tuple's first element
+        _ -> 999
+    end
+}

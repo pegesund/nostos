@@ -1,0 +1,9 @@
+# expect_error: Non-exhaustive match: no pattern matched
+# Match without wildcard should panic if no pattern matches
+
+main() = {
+    x = 1
+    match (2, 3)
+        (x, y) -> x + y   # x must equal 1, so this doesn't match, no other arms
+    end
+}
