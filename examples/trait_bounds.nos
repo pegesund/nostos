@@ -8,21 +8,24 @@
 #
 # Syntax:
 #   function_name[T: TraitName](x: T) -> ReturnType
-#   function_name[T: Trait1 + Trait2](x: T) -> ReturnType
+#   function_name[T: Trait1, Trait2](x: T) -> ReturnType
 #   function_name[T: Trait1, U: Trait2](x: T, y: U) -> ReturnType
 #
 # Benefits:
 #   - Errors are caught at compile time, not runtime
 #   - Clear error messages show which trait is missing
 #   - Documents what capabilities a function requires
+#
+# Note: In Nostos, all types automatically have Hash, Eq, Show, and Copy,
+# so trait bounds are mainly used for documentation and custom traits.
 
-# ========== Types with Derived Traits ==========
+# ========== Types ==========
 
-type Point = Point(Int, Int) deriving (Hash + Eq + Show)
-type Color = Red | Green | Blue deriving (Hash + Eq + Show)
-type Person = { name: String, age: Int } deriving (Hash + Eq + Show + Copy)
+type Point = Point(Int, Int)
+type Color = Red | Green | Blue
+type Person = { name: String, age: Int }
 
-# Type WITHOUT any derived traits (used to demonstrate errors)
+# All types have builtin traits (Hash, Eq, Show, Copy)
 type NoTraits = NoTraits(Int)
 
 # ========== Generic Functions with Bounds ==========
@@ -58,7 +61,7 @@ apply_to_hashable[T: Hash](f: (T) -> Int, x: T) -> Int = f(x)
 
 # ========== Practical Example: Generic Container ==========
 
-type Box = Box(Int) deriving (Hash + Eq + Show)
+type Box = Box(Int)
 
 # A function that works with any Eq type
 find_in_list[T: Eq](list: List, target: T) -> Bool = {

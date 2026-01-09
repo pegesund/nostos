@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Deriving - Nostos Tutorial</title>
+    <title>Builtin Traits - Nostos Tutorial</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <style>
         .hljs-operator {
@@ -70,7 +70,7 @@
                     <li><a href="09_type_system.html" class="block text-slate-400 hover:text-white transition">9. Type System</a></li>
                     <li><a href="10_error_handling.html" class="block text-slate-400 hover:text-white transition">10. Error Handling</a></li>
                     <li><a href="11_traits.html" class="block text-slate-400 hover:text-white transition">11. Traits</a></li>
-                    <li><a href="12_deriving.html" class="block text-blue-400 font-medium">12. Deriving</a></li>
+                    <li><a href="12_deriving.html" class="block text-blue-400 font-medium">12. Builtin Traits</a></li>
                     <li><a href="13_trait_bounds.html" class="block text-slate-400 hover:text-white transition">13. Trait Bounds</a></li>
                 </ul>
             </div>
@@ -79,33 +79,21 @@
         <!-- Main Content -->
         <main class="flex-1 md:ml-64 p-8 max-w-4xl">
             <div class="mb-12">
-                <h1 class="text-4xl font-bold text-white mb-6">Deriving</h1>
+                <h1 class="text-4xl font-bold text-white mb-6">Builtin Traits</h1>
                 <p class="text-lg text-slate-400 leading-relaxed mb-8">
-                    Instead of manually implementing traits like <code class="text-emerald-400">Hash</code>, <code class="text-emerald-400">Eq</code>, <code class="text-emerald-400">Show</code>, or <code class="text-emerald-400">Copy</code>, you can use the <code class="text-emerald-400">deriving</code> keyword to have them generated automatically. This saves boilerplate and ensures consistent implementations.
+                    In Nostos, all types automatically have implementations for the core traits <code class="text-emerald-400">Hash</code>, <code class="text-emerald-400">Eq</code>, <code class="text-emerald-400">Show</code>, and <code class="text-emerald-400">Copy</code>. No special syntax is needed - these capabilities are always available for every type you define.
                 </p>
 
-                <!-- Basic Syntax -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Basic Syntax</h2>
-                <p class="text-slate-400 mb-4">Add <code class="text-emerald-400">deriving</code> after your type definition to automatically generate trait implementations.</p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos"># Derive a single trait
-type Point = Point(Int, Int) deriving Hash
-
-# Derive multiple traits using + to combine them
-type Person = { name: String, age: Int } deriving (Hash + Show + Eq + Copy)
-</code></pre>
-                </div>
-
-                <!-- Derivable Traits -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Derivable Traits</h2>
-                <p class="text-slate-400 mb-4">Four traits can be automatically derived:</p>
+                <!-- Available Traits -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Available Builtin Traits</h2>
+                <p class="text-slate-400 mb-4">Every type in Nostos automatically supports these four traits:</p>
 
                 <div class="overflow-x-auto mb-8">
                     <table class="w-full text-left border-collapse">
                         <thead>
                             <tr class="border-b border-slate-700">
                                 <th class="py-3 px-4 text-slate-300 font-semibold">Trait</th>
-                                <th class="py-3 px-4 text-slate-300 font-semibold">Generated Function</th>
+                                <th class="py-3 px-4 text-slate-300 font-semibold">Function</th>
                                 <th class="py-3 px-4 text-slate-300 font-semibold">Description</th>
                             </tr>
                         </thead>
@@ -134,25 +122,53 @@ type Person = { name: String, age: Int } deriving (Hash + Show + Eq + Copy)
                     </table>
                 </div>
 
-                <!-- Variant Types -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Deriving for Variant Types</h2>
-                <p class="text-slate-400 mb-4">Deriving works with all kinds of variant (sum) types - from simple enums to complex variants with fields.</p>
+                <!-- Basic Usage -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Basic Usage</h2>
+                <p class="text-slate-400 mb-4">Just define your types - all traits are available automatically.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos"># Simple enum-like variants
-type Color = Red | Green | Blue deriving (Hash + Show + Eq)
-
-# Variants with fields
-type Result = Ok(Int) | Err(String) deriving (Hash + Show + Eq + Copy)
-
-# Complex variants
-type Expression = Number(Int) | Variable(String) | Add(Expression, Expression) deriving (Eq + Show)
+<pre><code class="language-nostos"># All types automatically have Hash, Show, Eq, Copy
+type Point = Point(Int, Int)
+type Color = Red | Green | Blue
+type Person = { name: String, age: Int }
 
 main() = {
-    # Using derived Show
+    p = Point(3, 4)
+
+    # Using Show
+    println(show(p))           # Point(3, 4)
+
+    # Using Eq
+    println(show(p == Point(3, 4)))  # true
+
+    # Using Hash
+    println(show(hash(p)))     # some integer
+
+    # Using Copy
+    p2 = copy(p)
+    println(show(p == p2))     # true
+}
+</code></pre>
+                </div>
+
+                <!-- Variant Types -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Variant Types</h2>
+                <p class="text-slate-400 mb-4">All variant (sum) types have builtin traits - from simple enums to complex variants with fields.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Simple enum-like variants
+type Color = Red | Green | Blue
+
+# Variants with fields
+type Result = Ok(Int) | Err(String)
+
+# Complex variants
+type Expression = Number(Int) | Variable(String) | Add(Expression, Expression)
+
+main() = {
+    # Using Show
     println(show(Red))           # "Red"
     println(show(Ok(42)))        # "Ok(42)"
 
-    # Using derived Eq
+    # Using Eq
     println(show(Red == Red))    # true
     println(show(Red == Blue))   # false
 }
@@ -160,10 +176,10 @@ main() = {
                 </div>
 
                 <!-- Record Types -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Deriving for Record Types</h2>
-                <p class="text-slate-400 mb-4">Records with named fields also support deriving. The generated implementations use all fields.</p>
+                <h2 class="text-2xl font-semibold text-white mb-4">Record Types</h2>
+                <p class="text-slate-400 mb-4">Records with named fields also have all builtin traits. The implementations use all fields.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">type Person = { name: String, age: Int } deriving (Hash + Show + Eq + Copy)
+<pre><code class="language-nostos">type Person = { name: String, age: Int }
 
 main() = {
     alice = Person("Alice", 30)
@@ -171,7 +187,7 @@ main() = {
     alice2 = Person("Alice", 30)
 
     # Show displays all fields
-    println(show(alice))  # Person { name: Alice, age: 30 }
+    println(show(alice))  # Person{name: Alice, age: 30}
 
     # Eq compares all fields
     println(show(alice == alice2))  # true
@@ -186,14 +202,14 @@ main() = {
 
                 <!-- Nested Types -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Nested Types</h2>
-                <p class="text-slate-400 mb-4">When you derive traits for a type that contains another type, the inner type's derived methods are called automatically. This means composition works naturally.</p>
+                <p class="text-slate-400 mb-4">When a type contains another type, the inner type's trait methods are called automatically. This means composition works naturally.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos"># Inner types with derived traits
-type Email = Email(String) deriving (Hash + Eq + Show)
-type Address = { street: String, city: String, zip: Int } deriving (Hash + Eq + Show)
+<pre><code class="language-nostos"># Inner types
+type Email = Email(String)
+type Address = { street: String, city: String, zip: Int }
 
 # Outer type that uses them
-type Contact = { name: String, email: Email, address: Address } deriving (Hash + Eq + Show)
+type Contact = { name: String, email: Email, address: Address }
 
 main() = {
     email = Email("alice@example.com")
@@ -212,9 +228,9 @@ main() = {
 
                 <!-- Hash Consistency -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Hash Consistency</h2>
-                <p class="text-slate-400 mb-4">The derived <code class="text-emerald-400">Hash</code> trait ensures that equal values always produce equal hash codes - a requirement for correct behavior in maps and sets.</p>
+                <p class="text-slate-400 mb-4">The builtin <code class="text-emerald-400">Hash</code> trait ensures that equal values always produce equal hash codes - a requirement for correct behavior in maps and sets.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">type UserId = UserId(Int) deriving (Hash + Eq)
+<pre><code class="language-nostos">type UserId = UserId(Int)
 
 main() = {
     u1 = UserId(42)
@@ -234,12 +250,12 @@ main() = {
 
                 <!-- Practical Example -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Practical Example: Custom Map Key</h2>
-                <p class="text-slate-400 mb-4">Here's a practical example using derived traits to create a type suitable for use as a map key.</p>
+                <p class="text-slate-400 mb-4">Here's a practical example using builtin traits to create a type suitable for use as a map key.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">type UserId = UserId(Int) deriving (Hash + Eq + Show)
-type UserData = { name: String, score: Int } deriving (Eq + Show)
+<pre><code class="language-nostos">type UserId = UserId(Int)
+type UserData = { name: String, score: Int }
 
-# Simple association list lookup using derived Eq
+# Simple association list lookup using builtin Eq
 lookup([], key) = "not found"
 lookup([(k, v) | rest], key) = if k == key then v else lookup(rest, key)
 
@@ -248,9 +264,9 @@ main() = {
              (UserId(2), UserData("Bob", 85)),
              (UserId(3), UserData("Charlie", 92))]
 
-    # lookup uses the derived == from Eq
+    # lookup uses the builtin == from Eq
     result = lookup(users, UserId(2))
-    println(show(result))  # UserData { name: Bob, score: 85 }
+    println(show(result))  # UserData{name: Bob, score: 85}
 }
 </code></pre>
                 </div>

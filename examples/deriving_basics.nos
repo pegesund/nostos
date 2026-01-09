@@ -1,37 +1,31 @@
-# Deriving Basics
+# Builtin Traits
 #
-# Demonstrates automatic trait derivation - a powerful feature that
-# automatically generates trait implementations for your types.
+# Demonstrates the builtin traits that all types automatically have.
+# In Nostos, every type automatically supports Hash, Show, Eq, and Copy
+# without needing any special syntax.
 #
-# Instead of manually writing Hash, Show, Eq, or Copy implementations,
-# you can use the 'deriving' keyword to have them generated automatically.
-#
-# Syntax:
-#   type MyType = ... deriving TraitName
-#   type MyType = ... deriving (Trait1 + Trait2 + ...)
-#
-# Supported derivable traits:
-#   - Hash: Generates hash function for use in maps/sets
-#   - Show: Generates string representation
-#   - Eq: Generates equality comparison (==)
-#   - Copy: Generates copy function
+# Builtin traits:
+#   - Hash: hash function for use in maps/sets
+#   - Show: string representation via show()
+#   - Eq: equality comparison (==)
+#   - Copy: copy function via copy()
 
-# ========== Simple Example: Single Trait ==========
-# Derive Hash for a simple point type
+# ========== Simple Example ==========
+# A simple point type - automatically has all traits
 
-type Point = Point(Int, Int) deriving Hash
+type Point = Point(Int, Int)
 
-# ========== Multiple Traits ==========
-# You can derive multiple traits at once using parentheses
+# ========== Record Types ==========
+# Records also have all traits automatically
 
-type Person = { name: String, age: Int } deriving (Hash + Show + Eq + Copy)
+type Person = { name: String, age: Int }
 
 # ========== Variant Types ==========
-# Deriving also works with variant (sum) types
+# Variant (sum) types also have all traits
 
-type Color = Red | Green | Blue deriving (Hash + Show + Eq)
+type Color = Red | Green | Blue
 
-type Result = Ok(Int) | Err(String) deriving (Hash + Show + Eq + Copy)
+type Result = Ok(Int) | Err(String)
 
 # ========== Helper Functions ==========
 # A simple lookup function for our color example

@@ -44,30 +44,22 @@ for file in $EXAMPLE_FILES; do
     if [[ "$file" == *"http_server.nos"* ]] || [[ "$file" == *"http_server_test.nos"* ]]; then
         printf "Running %-50s" "${file#${SCRIPT_DIR}/}"
         # --- Server Test Logic ---
-        # Start server in background
-        "$NOSTOS_BIN" "$file" > /tmp/nostos_server_output.log 2>&1 &
-        SERVER_PID=$!
-        sleep 5 # Give server time to start
-
-        # Send shutdown request
-        if curl -s -o /dev/null http://localhost:8080/shutdown; then
-            # Wait for server to exit
-            wait "$SERVER_PID"
-            SERVER_EXIT_CODE=$?
-            if [ "$SERVER_EXIT_CODE" -eq 0 ]; then
-                echo -e "[${GREEN}PASS${NC}]"
-                ((PASSED_COUNT++))
+        # These examples spawn their own clients that trigger shutdown,
+        # so we just run them with a timeout and check exit code
+        if timeout 15s "$NOSTOS_BIN" "$file" > /tmp/nostos_server_output.log 2>&1; then
+            echo -e "[${GREEN}PASS${NC}]"
+            ((PASSED_COUNT++))
+        else
+            EXIT_CODE=$?
+            if [ "$EXIT_CODE" -eq 124 ]; then
+                echo -e "[${RED}FAIL${NC}] (Timed out)"
+                FAILURES+=("${file#${SCRIPT_DIR}/}:\nServer timed out (hung).\n")
             else
-                echo -e "[${RED}FAIL${NC}] (Server exited with code $SERVER_EXIT_CODE)"
+                echo -e "[${RED}FAIL${NC}] (Exit code $EXIT_CODE)"
                 FAILURE_MSG=$(cat /tmp/nostos_server_output.log)
                 FAILURES+=("${file#${SCRIPT_DIR}/}:\n$FAILURE_MSG\n")
-                ((FAILED_COUNT++))
             fi
-        else
-            echo -e "[${RED}FAIL${NC}] (Failed to send shutdown request)"
-            FAILURES+=("${file#${SCRIPT_DIR}/}:\nFailed to send shutdown request.\n")
             ((FAILED_COUNT++))
-            kill "$SERVER_PID" # Kill hung server
         fi
         rm -f /tmp/nostos_server_output.log
     else
