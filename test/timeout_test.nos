@@ -1,0 +1,146 @@
+# Timeout Test - Tests receive timeout with HTTP and async operations
+# Uses httpbin.org/delay/N for controlled server delays
+
+# Test 1: Basic receive timeout with after
+testReceiveTimeout() = {
+  println("Test 1: Basic receive timeout (500ms)")
+  result = receive
+    msg -> ("got_message", msg)
+  after 500 ->
+    ("timeout", 500)
+  end
+
+  print("  Result: ")
+  println(result)
+
+  assert(result == ("timeout", 500))
+  println("  PASS")
+}
+
+# Test 2: HTTP request with slow server (should complete normally)
+testSlowHttp() = {
+  println("Test 2: Slow HTTP request (1s delay)")
+  (status, response) = Http.get("https://httpbin.org/delay/1")
+
+  print("  Status: ")
+  println(response.status)
+
+  assert(response.status == 200)
+  println("  PASS")
+}
+
+# Test 3: Spawn HTTP in process, timeout in parent
+testHttpWithParentTimeout() = {
+  println("Test 3: HTTP (3s) with parent timeout (1s) - should timeout")
+  me = self()
+
+  spawn(() => {
+    (status, response) = Http.get("https://httpbin.org/delay/3")
+    me <- ("done", response.status)
+  })
+
+  result = receive
+    ("done", status) -> ("completed", status)
+  after 1000 ->
+    ("timeout", 0)
+  end
+
+  print("  Result: ")
+  println(result)
+
+  # Should timeout since HTTP takes 3s but we only wait 1s
+  assert(result == ("timeout", 0))
+  println("  PASS")
+}
+
+# Test 4: Spawn HTTP in process, message arrives before timeout
+testHttpWithLongTimeout() = {
+  println("Test 4: HTTP (1s) with long timeout (5s) - should complete")
+  me = self()
+
+  spawn(() => {
+    (status, response) = Http.get("https://httpbin.org/delay/1")
+    me <- ("done", response.status)
+  })
+
+  result = receive
+    ("done", status) -> ("completed", status)
+  after 5000 ->
+    ("timeout", 0)
+  end
+
+  print("  Result: ")
+  println(result)
+
+  # Should complete since HTTP takes 1s and we wait 5s
+  assert(result == ("completed", 200))
+  println("  PASS")
+}
+
+# Helper for test 5
+collectWithTimeout5(count, expected) = {
+  if count >= expected then
+    count
+  else
+    receive
+      (worker, status) -> {
+        print("  Received from: ")
+        println(worker)
+        collectWithTimeout5(count + 1, expected)
+      }
+    after 2500 ->
+      count
+    end
+}
+
+# Test 5: Multiple concurrent HTTP with timeout racing
+testConcurrentHttpTimeout() = {
+  println("Test 5: Multiple concurrent HTTP with selective timeout")
+  me = self()
+
+  # Spawn 3 workers: 1s, 2s, 3s delays
+  spawn(() => {
+    (status, response) = Http.get("https://httpbin.org/delay/1")
+    me <- ("worker1", response.status)
+  })
+  spawn(() => {
+    (status, response) = Http.get("https://httpbin.org/delay/2")
+    me <- ("worker2", response.status)
+  })
+  spawn(() => {
+    (status, response) = Http.get("https://httpbin.org/delay/3")
+    me <- ("worker3", response.status)
+  })
+
+  # Collect with 2.5s timeout - should get worker1 and worker2
+  completed = collectWithTimeout5(0, 3)
+  print("  Completed: ")
+  println(completed)
+
+  # Should get at least 2 (worker1 at 1s, worker2 at 2s)
+  assert(completed >= 2)
+  println("  PASS")
+}
+
+main() = {
+  println("=== Timeout Integration Tests ===")
+  println("Uses httpbin.org for controlled HTTP delays")
+  println("")
+
+  testReceiveTimeout()
+  println("")
+
+  testSlowHttp()
+  println("")
+
+  testHttpWithParentTimeout()
+  println("")
+
+  testHttpWithLongTimeout()
+  println("")
+
+  testConcurrentHttpTimeout()
+  println("")
+
+  println("=== All Timeout Tests Passed ===")
+}

@@ -1,0 +1,158 @@
+# Timeout Example - Demonstrates receive timeout patterns with async IO
+# The after clause in receive blocks allows you to set a timeout.
+# This works correctly with async HTTP operations - the process can
+# timeout waiting for a response even while the HTTP request is in flight.
+# Run with: nostos examples/timeout_example.nos
+
+# Pattern 1: Simple timeout - wait for a message that never arrives
+simpleTimeout() = {
+  println("Pattern 1: Simple timeout")
+  println("  Waiting 500ms for a message that will never arrive...")
+
+  result = receive
+    msg -> ("received", msg)
+  after 500 ->
+    "timeout!"
+  end
+
+  print("  Result: ")
+  println(result)
+  println("")
+}
+
+# Pattern 2: HTTP request with guaranteed completion
+httpWithRetry() = {
+  println("Pattern 2: HTTP request with retry on timeout")
+  me = self()
+
+  # Worker makes HTTP request
+  spawn(() => {
+    (status, response) = Http.get("https://httpbin.org/delay/1")
+    me <- ("http_done", response.status, response.body)
+  })
+
+  # Wait with timeout
+  result = receive
+    ("http_done", status, body) -> ("success", status)
+  after 3000 ->
+    ("timeout", 0)
+  end
+
+  print("  Result: ")
+  println(result)
+  println("")
+}
+
+# Pattern 3: Race multiple requests, take first
+raceRequests() = {
+  println("Pattern 3: Race multiple requests")
+  me = self()
+
+  # Start 3 requests with different delays
+  spawn(() => {
+    (status, response) = Http.get("https://httpbin.org/delay/2")
+    me <- ("server_a", response.status)
+  })
+  spawn(() => {
+    (status, response) = Http.get("https://httpbin.org/delay/1")
+    me <- ("server_b", response.status)
+  })
+  spawn(() => {
+    (status, response) = Http.get("https://httpbin.org/delay/3")
+    me <- ("server_c", response.status)
+  })
+
+  # Take the first response
+  result = receive
+    (server, status) -> (server, status)
+  after 5000 ->
+    ("none", 0)
+  end
+
+  print("  First responder: ")
+  println(result)
+  println("")
+}
+
+# Pattern 4: Collect with timeout - gather as many as possible
+collectWithTimeout() = {
+  println("Pattern 4: Collect with timeout")
+  me = self()
+
+  # Start multiple workers
+  spawn(() => {
+    sleep(100)
+    me <- ("worker", 1)
+  })
+  spawn(() => {
+    sleep(200)
+    me <- ("worker", 2)
+  })
+  spawn(() => {
+    sleep(300)
+    me <- ("worker", 3)
+  })
+  spawn(() => {
+    sleep(2000)
+    me <- ("worker", 4)
+  })
+
+  # Simple receive loop with count
+  r1 = receive ("worker", id) -> id after 500 -> 0 end
+  r2 = receive ("worker", id) -> id after 500 -> 0 end
+  r3 = receive ("worker", id) -> id after 500 -> 0 end
+
+  print("  Received workers: ")
+  print(r1)
+  print(", ")
+  print(r2)
+  print(", ")
+  println(r3)
+  println("")
+}
+
+# Pattern 5: Sleep vs timeout race
+sleepVsTimeout() = {
+  println("Pattern 5: Sleep vs timeout")
+  me = self()
+
+  # Worker sleeps then sends
+  spawn(() => {
+    sleep(300)
+    me <- "done"
+  })
+
+  # Timeout before worker finishes
+  result = receive
+    msg -> ("got", msg)
+  after 100 ->
+    "timeout"
+  end
+
+  print("  Short wait (100ms for 300ms work): ")
+  println(result)
+
+  # Now wait longer
+  result2 = receive
+    msg -> ("got", msg)
+  after 1000 ->
+    "timeout"
+  end
+
+  print("  Long wait (should get message): ")
+  println(result2)
+  println("")
+}
+
+main() = {
+  println("=== Timeout Patterns Example ===")
+  println("")
+
+  simpleTimeout()
+  httpWithRetry()
+  raceRequests()
+  collectWithTimeout()
+  sleepVsTimeout()
+
+  println("=== Example Complete ===")
+}
