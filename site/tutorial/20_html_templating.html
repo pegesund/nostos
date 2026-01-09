@@ -260,22 +260,25 @@ main() = {
 
                 <!-- Components -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Components</h2>
-                <p class="text-slate-400 mb-4">Create reusable components as functions. Components can call other components.</p>
+                <p class="text-slate-400 mb-4">Create reusable components as functions. Each component uses <code>Html(...)</code> for automatic tag resolution - no need to import individual tags!</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.html.{Html, render, div, h1, h2, p}
+<pre><code class="language-nostos">use stdlib.html.{Html, render}
 
-# A reusable card component
-# Type annotations help overload resolution for h2(String) vs h2(List)
-card(title: String, content: String) =
+# A reusable card component - uses Html(...) for tag resolution
+# Type annotations help choose h2(String) over h2(List[Html])
+card(title: String, content: String) = Html(
     div([h2(title), p(content)])
+)
 
-# Page that uses the card component multiple times
+# Page that uses the card component
 main() = {
-    page = div([
-        h1("My Page"),
-        card("Welcome", "Thanks for visiting!"),
-        card("Features", "Check out our cool features.")
-    ])
+    page = Html(
+        div([
+            h1("My Page"),
+            card("Welcome", "Thanks for visiting!"),
+            card("Features", "Check out our cool features.")
+        ])
+    )
 
     println(render(page))
     # &lt;div&gt;&lt;h1&gt;My Page&lt;/h1&gt;&lt;div&gt;&lt;h2&gt;Welcome&lt;/h2&gt;&lt;p&gt;Thanks...&lt;/p&gt;&lt;/div&gt;...&lt;/div&gt;

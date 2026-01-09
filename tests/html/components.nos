@@ -1,0 +1,16 @@
+# expect: <div><h1>My Page</h1><div><h2>Welcome</h2><p>Hello!</p></div></div>
+# Components can call other components - only Html and render need importing!
+
+use stdlib.html.{Html, render}
+
+# Component uses Html(...) for tag resolution
+# Type annotations help overload resolution (h2(String) vs h2(List))
+card(title: String, content: String) = Html(div([h2(title), p(content)]))
+
+main() = {
+    page = Html(div([
+        h1("My Page"),
+        card("Welcome", "Hello!")
+    ]))
+    render(page)
+}
