@@ -727,27 +727,217 @@ impl ThreadWorker {
 
     /// Execute one instruction.
     fn execute_one(&mut self, local_id: u64) -> Result<StepResult, RuntimeError> {
-        // Get current instruction
-        let (instr, constants) = {
-            let proc = self.processes.get(&local_id).unwrap();
-            if proc.frames.is_empty() {
-                return Ok(StepResult::Finished(GcValue::Unit));
-            }
-            let frame = proc.frames.last().unwrap();
+        use Instruction::*;
+
+        // Single HashMap lookup - get instruction and increment IP together
+        let proc = self.processes.get_mut(&local_id).unwrap();
+
+        if proc.frames.is_empty() {
+            return Ok(StepResult::Finished(GcValue::Unit));
+        }
+
+        let frame_idx = proc.frames.len() - 1;
+        {
+            let frame = &proc.frames[frame_idx];
             if frame.ip >= frame.function.code.code.len() {
                 return Ok(StepResult::Finished(GcValue::Unit));
             }
-            let instr = frame.function.code.code[frame.ip].clone();
-            let constants = frame.function.code.constants.clone();
-            (instr, constants)
-        };
-
-        // Increment IP
-        {
-            let proc = self.processes.get_mut(&local_id).unwrap();
-            let frame = proc.frames.last_mut().unwrap();
-            frame.ip += 1;
         }
+
+        let instr = proc.frames[frame_idx].function.code.code[proc.frames[frame_idx].ip].clone();
+        proc.frames[frame_idx].ip += 1;
+
+        // ULTRA-FAST PATH: Handle the most critical instructions inline
+        // These don't need constants and avoid ALL extra lookups
+        macro_rules! fast_reg {
+            ($r:expr) => {
+                &proc.frames[frame_idx].registers[$r as usize]
+            };
+        }
+
+        macro_rules! fast_set {
+            ($r:expr, $v:expr) => {
+                proc.frames[frame_idx].registers[$r as usize] = $v
+            };
+        }
+
+        match &instr {
+            AddInt(dst, l, r) => {
+                let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                    (GcValue::Int64(a), GcValue::Int64(b)) => GcValue::Int64(a.wrapping_add(*b)),
+                    _ => {
+                        let constants = proc.frames[frame_idx].function.code.constants.clone();
+                        drop(proc);
+                        return self.execute_instruction(local_id, &instr, &constants);
+                    }
+                };
+                fast_set!(*dst, result);
+                return Ok(StepResult::Continue);
+            }
+            SubInt(dst, l, r) => {
+                let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                    (GcValue::Int64(a), GcValue::Int64(b)) => GcValue::Int64(a.wrapping_sub(*b)),
+                    _ => {
+                        let constants = proc.frames[frame_idx].function.code.constants.clone();
+                        drop(proc);
+                        return self.execute_instruction(local_id, &instr, &constants);
+                    }
+                };
+                fast_set!(*dst, result);
+                return Ok(StepResult::Continue);
+            }
+            MulInt(dst, l, r) => {
+                let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                    (GcValue::Int64(a), GcValue::Int64(b)) => GcValue::Int64(a.wrapping_mul(*b)),
+                    _ => {
+                        let constants = proc.frames[frame_idx].function.code.constants.clone();
+                        drop(proc);
+                        return self.execute_instruction(local_id, &instr, &constants);
+                    }
+                };
+                fast_set!(*dst, result);
+                return Ok(StepResult::Continue);
+            }
+            LtInt(dst, l, r) => {
+                let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                    (GcValue::Int64(a), GcValue::Int64(b)) => a < b,
+                    _ => {
+                        let constants = proc.frames[frame_idx].function.code.constants.clone();
+                        drop(proc);
+                        return self.execute_instruction(local_id, &instr, &constants);
+                    }
+                };
+                fast_set!(*dst, GcValue::Bool(result));
+                return Ok(StepResult::Continue);
+            }
+            GeInt(dst, l, r) => {
+                let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                    (GcValue::Int64(a), GcValue::Int64(b)) => a >= b,
+                    _ => {
+                        let constants = proc.frames[frame_idx].function.code.constants.clone();
+                        drop(proc);
+                        return self.execute_instruction(local_id, &instr, &constants);
+                    }
+                };
+                fast_set!(*dst, GcValue::Bool(result));
+                return Ok(StepResult::Continue);
+            }
+            Move(dst, src) => {
+                let val = fast_reg!(*src).clone();
+                fast_set!(*dst, val);
+                return Ok(StepResult::Continue);
+            }
+            Jump(offset) => {
+                proc.frames[frame_idx].ip = (proc.frames[frame_idx].ip as isize + *offset as isize) as usize;
+                return Ok(StepResult::Continue);
+            }
+            JumpIfFalse(cond, offset) => {
+                if let GcValue::Bool(false) = fast_reg!(*cond) {
+                    proc.frames[frame_idx].ip = (proc.frames[frame_idx].ip as isize + *offset as isize) as usize;
+                }
+                return Ok(StepResult::Continue);
+            }
+            JumpIfTrue(cond, offset) => {
+                if let GcValue::Bool(true) = fast_reg!(*cond) {
+                    proc.frames[frame_idx].ip = (proc.frames[frame_idx].ip as isize + *offset as isize) as usize;
+                }
+                return Ok(StepResult::Continue);
+            }
+            Index(dst, coll, idx) => {
+                let idx_val = match fast_reg!(*idx) {
+                    GcValue::Int64(i) => *i as usize,
+                    _ => {
+                        let constants = proc.frames[frame_idx].function.code.constants.clone();
+                        drop(proc);
+                        return self.execute_instruction(local_id, &instr, &constants);
+                    }
+                };
+                let value = match fast_reg!(*coll) {
+                    GcValue::Int64Array(ptr) => {
+                        let array = proc.heap.get_int64_array(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid int64 array reference".to_string()))?;
+                        GcValue::Int64(*array.items.get(idx_val)
+                            .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?)
+                    }
+                    _ => {
+                        let constants = proc.frames[frame_idx].function.code.constants.clone();
+                        drop(proc);
+                        return self.execute_instruction(local_id, &instr, &constants);
+                    }
+                };
+                fast_set!(*dst, value);
+                return Ok(StepResult::Continue);
+            }
+            IndexSet(coll, idx, val) => {
+                let idx_val = match fast_reg!(*idx) {
+                    GcValue::Int64(i) => *i as usize,
+                    _ => {
+                        let constants = proc.frames[frame_idx].function.code.constants.clone();
+                        drop(proc);
+                        return self.execute_instruction(local_id, &instr, &constants);
+                    }
+                };
+                match fast_reg!(*coll) {
+                    GcValue::Int64Array(ptr) => {
+                        let new_value = match fast_reg!(*val) {
+                            GcValue::Int64(v) => *v,
+                            _ => {
+                                let constants = proc.frames[frame_idx].function.code.constants.clone();
+                                drop(proc);
+                                return self.execute_instruction(local_id, &instr, &constants);
+                            }
+                        };
+                        let ptr = *ptr;
+                        let array = proc.heap.get_int64_array_mut(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid int64 array reference".to_string()))?;
+                        if idx_val >= array.items.len() {
+                            return Err(RuntimeError::Panic(format!("Index {} out of bounds", idx_val)));
+                        }
+                        array.items[idx_val] = new_value;
+                    }
+                    _ => {
+                        let constants = proc.frames[frame_idx].function.code.constants.clone();
+                        drop(proc);
+                        return self.execute_instruction(local_id, &instr, &constants);
+                    }
+                }
+                return Ok(StepResult::Continue);
+            }
+            TailCallSelf(args) => {
+                let arg_values: Vec<GcValue> = args.iter().map(|r| proc.frames[frame_idx].registers[*r as usize].clone()).collect();
+                let frame = &mut proc.frames[frame_idx];
+                let reg_count = frame.function.code.register_count;
+                frame.ip = 0;
+                frame.registers.clear();
+                frame.registers.resize(reg_count, GcValue::Unit);
+                for (i, arg) in arg_values.into_iter().enumerate() {
+                    if i < reg_count {
+                        frame.registers[i] = arg;
+                    }
+                }
+                return Ok(StepResult::Continue);
+            }
+            Return(src) => {
+                let ret_val = fast_reg!(*src).clone();
+                let return_reg = proc.frames[frame_idx].return_reg;
+                proc.frames.pop();
+
+                if proc.frames.is_empty() {
+                    return Ok(StepResult::Finished(ret_val));
+                }
+
+                if let Some(dst) = return_reg {
+                    let parent_frame = proc.frames.last_mut().unwrap();
+                    parent_frame.registers[dst as usize] = ret_val;
+                }
+                return Ok(StepResult::Continue);
+            }
+            _ => {}
+        }
+
+        // Slow path - clone constants
+        let constants = proc.frames[frame_idx].function.code.constants.clone();
+        drop(proc);
 
         // Execute instruction
         self.execute_instruction(local_id, &instr, &constants)
@@ -762,20 +952,312 @@ impl ThreadWorker {
     ) -> Result<StepResult, RuntimeError> {
         use Instruction::*;
 
-        // Macro to access register in current frame
+        // FAST PATH: Handle hot-path instructions with minimal overhead
+        // These instructions only need register access, no &mut self methods
+        {
+            let proc = self.processes.get_mut(&local_id).unwrap();
+            let frame_idx = proc.frames.len() - 1;
+
+            macro_rules! fast_reg {
+                ($r:expr) => {
+                    &proc.frames[frame_idx].registers[$r as usize]
+                };
+            }
+
+            macro_rules! fast_set {
+                ($r:expr, $v:expr) => {
+                    proc.frames[frame_idx].registers[$r as usize] = $v
+                };
+            }
+
+            // Handle arithmetic and comparison instructions inline
+            match instr {
+                AddInt(dst, l, r) => {
+                    let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                        (GcValue::Int64(a), GcValue::Int64(b)) => GcValue::Int64(a.wrapping_add(*b)),
+                        (GcValue::Int32(a), GcValue::Int32(b)) => GcValue::Int32(a.wrapping_add(*b)),
+                        (GcValue::Int16(a), GcValue::Int16(b)) => GcValue::Int16(a.wrapping_add(*b)),
+                        (GcValue::Int8(a), GcValue::Int8(b)) => GcValue::Int8(a.wrapping_add(*b)),
+                        (GcValue::UInt64(a), GcValue::UInt64(b)) => GcValue::UInt64(a.wrapping_add(*b)),
+                        (GcValue::UInt32(a), GcValue::UInt32(b)) => GcValue::UInt32(a.wrapping_add(*b)),
+                        (GcValue::UInt16(a), GcValue::UInt16(b)) => GcValue::UInt16(a.wrapping_add(*b)),
+                        (GcValue::UInt8(a), GcValue::UInt8(b)) => GcValue::UInt8(a.wrapping_add(*b)),
+                        (GcValue::BigInt(a), GcValue::BigInt(b)) => {
+                            let a_val = proc.heap.get_bigint(*a).unwrap();
+                            let b_val = proc.heap.get_bigint(*b).unwrap();
+                            let result = &a_val.value + &b_val.value;
+                            GcValue::BigInt(proc.heap.alloc_bigint(result))
+                        }
+                        (GcValue::Decimal(a), GcValue::Decimal(b)) => GcValue::Decimal(*a + *b),
+                        _ => return Err(RuntimeError::TypeError { expected: "numeric".into(), found: "other".into() }),
+                    };
+                    fast_set!(*dst, result);
+                    return Ok(StepResult::Continue);
+                }
+                SubInt(dst, l, r) => {
+                    let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                        (GcValue::Int64(a), GcValue::Int64(b)) => GcValue::Int64(a.wrapping_sub(*b)),
+                        (GcValue::Int32(a), GcValue::Int32(b)) => GcValue::Int32(a.wrapping_sub(*b)),
+                        (GcValue::Int16(a), GcValue::Int16(b)) => GcValue::Int16(a.wrapping_sub(*b)),
+                        (GcValue::Int8(a), GcValue::Int8(b)) => GcValue::Int8(a.wrapping_sub(*b)),
+                        (GcValue::UInt64(a), GcValue::UInt64(b)) => GcValue::UInt64(a.wrapping_sub(*b)),
+                        (GcValue::UInt32(a), GcValue::UInt32(b)) => GcValue::UInt32(a.wrapping_sub(*b)),
+                        (GcValue::UInt16(a), GcValue::UInt16(b)) => GcValue::UInt16(a.wrapping_sub(*b)),
+                        (GcValue::UInt8(a), GcValue::UInt8(b)) => GcValue::UInt8(a.wrapping_sub(*b)),
+                        (GcValue::BigInt(a), GcValue::BigInt(b)) => {
+                            let a_val = proc.heap.get_bigint(*a).unwrap();
+                            let b_val = proc.heap.get_bigint(*b).unwrap();
+                            let result = &a_val.value - &b_val.value;
+                            GcValue::BigInt(proc.heap.alloc_bigint(result))
+                        }
+                        (GcValue::Decimal(a), GcValue::Decimal(b)) => GcValue::Decimal(*a - *b),
+                        _ => return Err(RuntimeError::TypeError { expected: "numeric".into(), found: "other".into() }),
+                    };
+                    fast_set!(*dst, result);
+                    return Ok(StepResult::Continue);
+                }
+                MulInt(dst, l, r) => {
+                    let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                        (GcValue::Int64(a), GcValue::Int64(b)) => GcValue::Int64(a.wrapping_mul(*b)),
+                        (GcValue::Int32(a), GcValue::Int32(b)) => GcValue::Int32(a.wrapping_mul(*b)),
+                        (GcValue::Int16(a), GcValue::Int16(b)) => GcValue::Int16(a.wrapping_mul(*b)),
+                        (GcValue::Int8(a), GcValue::Int8(b)) => GcValue::Int8(a.wrapping_mul(*b)),
+                        (GcValue::UInt64(a), GcValue::UInt64(b)) => GcValue::UInt64(a.wrapping_mul(*b)),
+                        (GcValue::UInt32(a), GcValue::UInt32(b)) => GcValue::UInt32(a.wrapping_mul(*b)),
+                        (GcValue::UInt16(a), GcValue::UInt16(b)) => GcValue::UInt16(a.wrapping_mul(*b)),
+                        (GcValue::UInt8(a), GcValue::UInt8(b)) => GcValue::UInt8(a.wrapping_mul(*b)),
+                        (GcValue::BigInt(a), GcValue::BigInt(b)) => {
+                            let a_val = proc.heap.get_bigint(*a).unwrap();
+                            let b_val = proc.heap.get_bigint(*b).unwrap();
+                            let result = &a_val.value * &b_val.value;
+                            GcValue::BigInt(proc.heap.alloc_bigint(result))
+                        }
+                        (GcValue::Decimal(a), GcValue::Decimal(b)) => GcValue::Decimal(*a * *b),
+                        _ => return Err(RuntimeError::TypeError { expected: "numeric".into(), found: "other".into() }),
+                    };
+                    fast_set!(*dst, result);
+                    return Ok(StepResult::Continue);
+                }
+                AddFloat(dst, l, r) => {
+                    let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                        (GcValue::Float64(a), GcValue::Float64(b)) => GcValue::Float64(a + b),
+                        (GcValue::Float32(a), GcValue::Float32(b)) => GcValue::Float32(a + b),
+                        _ => return Err(RuntimeError::TypeError { expected: "float".into(), found: "other".into() }),
+                    };
+                    fast_set!(*dst, result);
+                    return Ok(StepResult::Continue);
+                }
+                SubFloat(dst, l, r) => {
+                    let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                        (GcValue::Float64(a), GcValue::Float64(b)) => GcValue::Float64(a - b),
+                        (GcValue::Float32(a), GcValue::Float32(b)) => GcValue::Float32(a - b),
+                        _ => return Err(RuntimeError::TypeError { expected: "float".into(), found: "other".into() }),
+                    };
+                    fast_set!(*dst, result);
+                    return Ok(StepResult::Continue);
+                }
+                MulFloat(dst, l, r) => {
+                    let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                        (GcValue::Float64(a), GcValue::Float64(b)) => GcValue::Float64(a * b),
+                        (GcValue::Float32(a), GcValue::Float32(b)) => GcValue::Float32(a * b),
+                        _ => return Err(RuntimeError::TypeError { expected: "float".into(), found: "other".into() }),
+                    };
+                    fast_set!(*dst, result);
+                    return Ok(StepResult::Continue);
+                }
+                DivFloat(dst, l, r) => {
+                    let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                        (GcValue::Float64(a), GcValue::Float64(b)) => GcValue::Float64(a / b),
+                        (GcValue::Float32(a), GcValue::Float32(b)) => GcValue::Float32(a / b),
+                        _ => return Err(RuntimeError::TypeError { expected: "float".into(), found: "other".into() }),
+                    };
+                    fast_set!(*dst, result);
+                    return Ok(StepResult::Continue);
+                }
+                LtInt(dst, l, r) => {
+                    let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                        (GcValue::Int64(a), GcValue::Int64(b)) => a < b,
+                        (GcValue::Int32(a), GcValue::Int32(b)) => a < b,
+                        _ => return Err(RuntimeError::TypeError { expected: "integer".into(), found: "other".into() }),
+                    };
+                    fast_set!(*dst, GcValue::Bool(result));
+                    return Ok(StepResult::Continue);
+                }
+                LeInt(dst, l, r) => {
+                    let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                        (GcValue::Int64(a), GcValue::Int64(b)) => a <= b,
+                        (GcValue::Int32(a), GcValue::Int32(b)) => a <= b,
+                        _ => return Err(RuntimeError::TypeError { expected: "integer".into(), found: "other".into() }),
+                    };
+                    fast_set!(*dst, GcValue::Bool(result));
+                    return Ok(StepResult::Continue);
+                }
+                GtInt(dst, l, r) => {
+                    let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                        (GcValue::Int64(a), GcValue::Int64(b)) => a > b,
+                        (GcValue::Int32(a), GcValue::Int32(b)) => a > b,
+                        _ => return Err(RuntimeError::TypeError { expected: "integer".into(), found: "other".into() }),
+                    };
+                    fast_set!(*dst, GcValue::Bool(result));
+                    return Ok(StepResult::Continue);
+                }
+                GeInt(dst, l, r) => {
+                    let result = match (fast_reg!(*l), fast_reg!(*r)) {
+                        (GcValue::Int64(a), GcValue::Int64(b)) => a >= b,
+                        (GcValue::Int32(a), GcValue::Int32(b)) => a >= b,
+                        _ => return Err(RuntimeError::TypeError { expected: "integer".into(), found: "other".into() }),
+                    };
+                    fast_set!(*dst, GcValue::Bool(result));
+                    return Ok(StepResult::Continue);
+                }
+                Move(dst, src) => {
+                    let val = fast_reg!(*src).clone();
+                    fast_set!(*dst, val);
+                    return Ok(StepResult::Continue);
+                }
+                LoadUnit(dst) => {
+                    fast_set!(*dst, GcValue::Unit);
+                    return Ok(StepResult::Continue);
+                }
+                LoadTrue(dst) => {
+                    fast_set!(*dst, GcValue::Bool(true));
+                    return Ok(StepResult::Continue);
+                }
+                LoadFalse(dst) => {
+                    fast_set!(*dst, GcValue::Bool(false));
+                    return Ok(StepResult::Continue);
+                }
+                Index(dst, coll, idx) => {
+                    let idx_val = match fast_reg!(*idx) {
+                        GcValue::Int64(i) => *i as usize,
+                        _ => return Err(RuntimeError::Panic("Index must be integer".to_string())),
+                    };
+                    let value = match fast_reg!(*coll) {
+                        GcValue::List(ptr) => {
+                            let list = proc.heap.get_list(*ptr)
+                                .ok_or_else(|| RuntimeError::Panic("Invalid list reference".to_string()))?;
+                            list.items.get(idx_val).cloned()
+                                .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?
+                        }
+                        GcValue::Tuple(ptr) => {
+                            let tuple = proc.heap.get_tuple(*ptr)
+                                .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".to_string()))?;
+                            tuple.items.get(idx_val).cloned()
+                                .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?
+                        }
+                        GcValue::Int64Array(ptr) => {
+                            let array = proc.heap.get_int64_array(*ptr)
+                                .ok_or_else(|| RuntimeError::Panic("Invalid int64 array reference".to_string()))?;
+                            let val = *array.items.get(idx_val)
+                                .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?;
+                            GcValue::Int64(val)
+                        }
+                        GcValue::Float64Array(ptr) => {
+                            let array = proc.heap.get_float64_array(*ptr)
+                                .ok_or_else(|| RuntimeError::Panic("Invalid float64 array reference".to_string()))?;
+                            let val = *array.items.get(idx_val)
+                                .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds", idx_val)))?;
+                            GcValue::Float64(val)
+                        }
+                        _ => return Err(RuntimeError::Panic("Index expects list, tuple, or array".to_string())),
+                    };
+                    fast_set!(*dst, value);
+                    return Ok(StepResult::Continue);
+                }
+                IndexSet(coll, idx, val) => {
+                    let idx_val = match fast_reg!(*idx) {
+                        GcValue::Int64(i) => *i as usize,
+                        _ => return Err(RuntimeError::Panic("Index must be integer".to_string())),
+                    };
+                    let coll_val = fast_reg!(*coll).clone();
+                    match coll_val {
+                        GcValue::Int64Array(ptr) => {
+                            let new_value = match fast_reg!(*val) {
+                                GcValue::Int64(v) => *v,
+                                _ => return Err(RuntimeError::Panic("Int64Array expects Int64 value".to_string())),
+                            };
+                            let array = proc.heap.get_int64_array_mut(ptr)
+                                .ok_or_else(|| RuntimeError::Panic("Invalid int64 array reference".to_string()))?;
+                            if idx_val >= array.items.len() {
+                                return Err(RuntimeError::Panic(format!("Index {} out of bounds", idx_val)));
+                            }
+                            array.items[idx_val] = new_value;
+                        }
+                        GcValue::Float64Array(ptr) => {
+                            let new_value = match fast_reg!(*val) {
+                                GcValue::Float64(v) => *v,
+                                _ => return Err(RuntimeError::Panic("Float64Array expects Float64 value".to_string())),
+                            };
+                            let array = proc.heap.get_float64_array_mut(ptr)
+                                .ok_or_else(|| RuntimeError::Panic("Invalid float64 array reference".to_string()))?;
+                            if idx_val >= array.items.len() {
+                                return Err(RuntimeError::Panic(format!("Index {} out of bounds", idx_val)));
+                            }
+                            array.items[idx_val] = new_value;
+                        }
+                        _ => return Err(RuntimeError::Panic("IndexSet expects array".to_string())),
+                    }
+                    return Ok(StepResult::Continue);
+                }
+                TailCallSelf(args) => {
+                    // Self tail-recursion: reuse current frame
+                    let arg_values: Vec<GcValue> = args.iter().map(|r| proc.frames[frame_idx].registers[*r as usize].clone()).collect();
+                    let frame = &mut proc.frames[frame_idx];
+                    let reg_count = frame.function.code.register_count;
+                    frame.ip = 0;
+                    frame.registers.clear();
+                    frame.registers.resize(reg_count, GcValue::Unit);
+                    for (i, arg) in arg_values.into_iter().enumerate() {
+                        if i < reg_count {
+                            frame.registers[i] = arg;
+                        }
+                    }
+                    return Ok(StepResult::Continue);
+                }
+                Jump(offset) => {
+                    proc.frames[frame_idx].ip = (proc.frames[frame_idx].ip as isize + *offset as isize) as usize;
+                    return Ok(StepResult::Continue);
+                }
+                JumpIfFalse(cond, offset) => {
+                    if let GcValue::Bool(false) = fast_reg!(*cond) {
+                        proc.frames[frame_idx].ip = (proc.frames[frame_idx].ip as isize + *offset as isize) as usize;
+                    }
+                    return Ok(StepResult::Continue);
+                }
+                JumpIfTrue(cond, offset) => {
+                    if let GcValue::Bool(true) = fast_reg!(*cond) {
+                        proc.frames[frame_idx].ip = (proc.frames[frame_idx].ip as isize + *offset as isize) as usize;
+                    }
+                    return Ok(StepResult::Continue);
+                }
+                Return(src) => {
+                    let ret_val = fast_reg!(*src).clone();
+                    let return_reg = proc.frames[frame_idx].return_reg;
+                    proc.frames.pop();
+
+                    if proc.frames.is_empty() {
+                        // Main process finished
+                        return Ok(StepResult::Finished(ret_val));
+                    }
+
+                    // Set return value in parent frame
+                    if let Some(dst) = return_reg {
+                        let parent_frame = proc.frames.last_mut().unwrap();
+                        parent_frame.registers[dst as usize] = ret_val;
+                    }
+                    return Ok(StepResult::Continue);
+                }
+                _ => {} // Fall through to slow path
+            }
+        }
+
+        // SLOW PATH: Instructions that need &mut self or call methods
+        // Re-acquire process reference with macros that do HashMap lookup
         macro_rules! reg {
             ($r:expr) => {{
                 let proc = self.processes.get(&local_id).unwrap();
                 let frame = proc.frames.last().unwrap();
                 &frame.registers[$r as usize]
-            }};
-        }
-
-        macro_rules! reg_mut {
-            ($r:expr) => {{
-                let proc = self.processes.get_mut(&local_id).unwrap();
-                let frame = proc.frames.last_mut().unwrap();
-                &mut frame.registers[$r as usize]
             }};
         }
 
