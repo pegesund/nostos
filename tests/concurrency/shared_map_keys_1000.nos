@@ -1,0 +1,46 @@
+# expect: 0
+# 1000 processes each add a unique key-value pair to a shared map
+
+mvar counter: Int = 0
+mvar data: Map = %{}
+
+# Get next unique ID and insert it as key and value
+add_entry() = {
+    id = counter
+    counter = counter + 1
+    data = Map.insert(data, id, id)
+}
+
+spawn_workers(parent, n: Int) = if n <= 0 then () else {
+    spawn { add_entry(); parent <- true }
+    spawn_workers(parent, n - 1)
+}
+
+wait_all(n: Int) = if n <= 0 then () else {
+    receive _ -> wait_all(n - 1) end
+}
+
+main() = {
+    me = self()
+
+    # Verify initial state
+    assert_eq(0, counter)
+    assert_eq(0, Map.size(data))
+
+    # Spawn 1000 workers, each adds unique key-value
+    spawn_workers(me, 1000)
+    wait_all(1000)
+
+    # Verify counter reached 1000
+    assert_eq(1000, counter)
+
+    # Verify map has exactly 1000 keys
+    assert_eq(1000, Map.size(data))
+
+    # Verify a few specific entries exist (0, 500, 999)
+    assert_eq(0, Map.get(data, 0))
+    assert_eq(500, Map.get(data, 500))
+    assert_eq(999, Map.get(data, 999))
+
+    0
+}

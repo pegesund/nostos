@@ -31,6 +31,8 @@ use std::sync::Arc;
 
 use num_bigint::BigInt;
 
+use crate::shared_types::{SharedMap, SharedMapKey, SharedMapValue};
+
 /// Cached inline operation for closures - avoids pattern matching on every call
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[repr(u8)]
@@ -72,7 +74,7 @@ impl InlineOp {
 use rust_decimal::Decimal;
 
 use crate::value::{
-    ClosureValue, FunctionValue, MapKey, RecordValue, RuntimeError, TypeValue, Value, VariantValue,
+    ClosureValue, FunctionValue, MapKey, Pid, RecordValue, RuntimeError, TypeValue, Value, VariantValue,
 };
 
 /// Raw index into the heap. Used for type-erased operations.
@@ -313,6 +315,42 @@ impl GcMapKey {
             GcMapKey::String(s) => GcValue::String(heap.alloc_string(s.clone())),
         }
     }
+
+    /// Convert to a SharedMapKey for cross-thread sharing.
+    pub fn to_shared_key(&self) -> SharedMapKey {
+        match self {
+            GcMapKey::Unit => SharedMapKey::Unit,
+            GcMapKey::Bool(b) => SharedMapKey::Bool(*b),
+            GcMapKey::Char(c) => SharedMapKey::Char(*c),
+            GcMapKey::Int8(n) => SharedMapKey::Int8(*n),
+            GcMapKey::Int16(n) => SharedMapKey::Int16(*n),
+            GcMapKey::Int32(n) => SharedMapKey::Int32(*n),
+            GcMapKey::Int64(n) => SharedMapKey::Int64(*n),
+            GcMapKey::UInt8(n) => SharedMapKey::UInt8(*n),
+            GcMapKey::UInt16(n) => SharedMapKey::UInt16(*n),
+            GcMapKey::UInt32(n) => SharedMapKey::UInt32(*n),
+            GcMapKey::UInt64(n) => SharedMapKey::UInt64(*n),
+            GcMapKey::String(s) => SharedMapKey::String(s.clone()),
+        }
+    }
+
+    /// Convert from a SharedMapKey.
+    pub fn from_shared_key(key: &SharedMapKey) -> Self {
+        match key {
+            SharedMapKey::Unit => GcMapKey::Unit,
+            SharedMapKey::Bool(b) => GcMapKey::Bool(*b),
+            SharedMapKey::Char(c) => GcMapKey::Char(*c),
+            SharedMapKey::Int8(n) => GcMapKey::Int8(*n),
+            SharedMapKey::Int16(n) => GcMapKey::Int16(*n),
+            SharedMapKey::Int32(n) => GcMapKey::Int32(*n),
+            SharedMapKey::Int64(n) => GcMapKey::Int64(*n),
+            SharedMapKey::UInt8(n) => GcMapKey::UInt8(*n),
+            SharedMapKey::UInt16(n) => GcMapKey::UInt16(*n),
+            SharedMapKey::UInt32(n) => GcMapKey::UInt32(*n),
+            SharedMapKey::UInt64(n) => GcMapKey::UInt64(*n),
+            SharedMapKey::String(s) => GcMapKey::String(s.clone()),
+        }
+    }
 }
 
 /// A GC-managed record.
@@ -430,6 +468,9 @@ pub enum GcValue {
     Float64Array(GcPtr<GcFloat64Array>),
     Tuple(GcPtr<GcTuple>),
     Map(GcPtr<GcMap>),
+    /// A shared map from an MVar - Arc-wrapped for O(1) sharing across threads.
+    /// Values are converted to GcValue lazily when accessed.
+    SharedMap(SharedMap),
     Set(GcPtr<GcSet>),
     Record(GcPtr<GcRecord>),
     Variant(GcPtr<GcVariant>),
@@ -565,6 +606,7 @@ impl fmt::Debug for GcValue {
             GcValue::Float64Array(ptr) => write!(f, "Float64Array({:?})", ptr),
             GcValue::Tuple(ptr) => write!(f, "Tuple({:?})", ptr),
             GcValue::Map(ptr) => write!(f, "Map({:?})", ptr),
+            GcValue::SharedMap(map) => write!(f, "SharedMap({} entries)", map.len()),
             GcValue::Set(ptr) => write!(f, "Set({:?})", ptr),
             GcValue::Record(ptr) => write!(f, "Record({:?})", ptr),
             GcValue::Variant(ptr) => write!(f, "Variant({:?})", ptr),
@@ -620,6 +662,8 @@ impl GcValue {
             GcValue::Array(ptr) => vec![ptr.as_raw()],
             GcValue::Tuple(ptr) => vec![ptr.as_raw()],
             GcValue::Map(ptr) => vec![ptr.as_raw()],
+            // SharedMap is Arc-managed, no GC pointers
+            GcValue::SharedMap(_) => vec![],
             GcValue::Set(ptr) => vec![ptr.as_raw()],
             GcValue::Record(ptr) => vec![ptr.as_raw()],
             GcValue::Variant(ptr) => vec![ptr.as_raw()],
@@ -691,6 +735,7 @@ impl GcValue {
             GcValue::Float64Array(_) => "Float64Array",
             GcValue::Tuple(_) => "Tuple",
             GcValue::Map(_) => "Map",
+            GcValue::SharedMap(_) => "Map",
             GcValue::Set(_) => "Set",
             GcValue::Record(ptr) => {
                 heap.get_record(*ptr)
@@ -1609,6 +1654,9 @@ impl Heap {
                     "<invalid map>".to_string()
                 }
             }
+            GcValue::SharedMap(map) => {
+                format!("%{{...{} entries}}", map.len())
+            }
             GcValue::Set(ptr) => {
                 if let Some(set) = self.get_set(*ptr) {
                     format!("#{{...{} items}}", set.items.len())
@@ -1664,6 +1712,169 @@ impl Heap {
             GcValue::Ref(r) => format!("<ref {}>", r),
             GcValue::Type(t) => format!("<type {}>", t.name),
             GcValue::Pointer(p) => format!("<ptr 0x{:x}>", p),
+        }
+    }
+
+    /// Convert a GcValue to a SharedMapValue for cross-thread sharing.
+    /// Returns None if the value type cannot be converted (e.g., closures with GC captures).
+    pub fn gc_value_to_shared(&self, value: &GcValue) -> Option<SharedMapValue> {
+        Some(match value {
+            GcValue::Unit => SharedMapValue::Unit,
+            GcValue::Bool(b) => SharedMapValue::Bool(*b),
+            GcValue::Char(c) => SharedMapValue::Char(*c),
+            GcValue::Int8(n) => SharedMapValue::Int64(*n as i64),
+            GcValue::Int16(n) => SharedMapValue::Int64(*n as i64),
+            GcValue::Int32(n) => SharedMapValue::Int64(*n as i64),
+            GcValue::Int64(n) => SharedMapValue::Int64(*n),
+            GcValue::UInt8(n) => SharedMapValue::Int64(*n as i64),
+            GcValue::UInt16(n) => SharedMapValue::Int64(*n as i64),
+            GcValue::UInt32(n) => SharedMapValue::Int64(*n as i64),
+            GcValue::UInt64(n) => SharedMapValue::Int64(*n as i64),
+            GcValue::Float32(f) => SharedMapValue::Float64(*f as f64),
+            GcValue::Float64(f) => SharedMapValue::Float64(*f),
+            GcValue::Pid(p) => SharedMapValue::Pid(*p),
+            GcValue::String(ptr) => {
+                let s = self.get_string(*ptr)?;
+                SharedMapValue::String(s.data.clone())
+            }
+            GcValue::List(list) => {
+                let items: Option<Vec<_>> = list.items().iter()
+                    .map(|v| self.gc_value_to_shared(v))
+                    .collect();
+                SharedMapValue::List(items?)
+            }
+            GcValue::Tuple(ptr) => {
+                let tuple = self.get_tuple(*ptr)?;
+                let items: Option<Vec<_>> = tuple.items.iter()
+                    .map(|v| self.gc_value_to_shared(v))
+                    .collect();
+                SharedMapValue::Tuple(items?)
+            }
+            GcValue::Record(ptr) => {
+                let rec = self.get_record(*ptr)?;
+                let fields: Option<Vec<_>> = rec.fields.iter()
+                    .map(|v| self.gc_value_to_shared(v))
+                    .collect();
+                SharedMapValue::Record {
+                    type_name: rec.type_name.clone(),
+                    field_names: rec.field_names.clone(),
+                    fields: fields?,
+                }
+            }
+            GcValue::Variant(ptr) => {
+                let var = self.get_variant(*ptr)?;
+                let fields: Option<Vec<_>> = var.fields.iter()
+                    .map(|v| self.gc_value_to_shared(v))
+                    .collect();
+                SharedMapValue::Variant {
+                    type_name: var.type_name.to_string(),
+                    constructor: var.constructor.to_string(),
+                    fields: fields?,
+                }
+            }
+            GcValue::Map(ptr) => {
+                let map = self.get_map(*ptr)?;
+                let entries: Option<ImblHashMap<SharedMapKey, SharedMapValue>> = map.entries.iter()
+                    .map(|(k, v)| {
+                        let shared_v = self.gc_value_to_shared(v)?;
+                        Some((k.to_shared_key(), shared_v))
+                    })
+                    .collect();
+                SharedMapValue::Map(Arc::new(entries?))
+            }
+            GcValue::SharedMap(map) => SharedMapValue::Map(map.clone()),
+            GcValue::Set(ptr) => {
+                let set = self.get_set(*ptr)?;
+                let items: Vec<_> = set.items.iter()
+                    .map(|k| k.to_shared_key())
+                    .collect();
+                SharedMapValue::Set(items)
+            }
+            GcValue::Int64Array(ptr) => {
+                let arr = self.get_int64_array(*ptr)?;
+                SharedMapValue::Int64Array(arr.items.clone())
+            }
+            GcValue::Float64Array(ptr) => {
+                let arr = self.get_float64_array(*ptr)?;
+                SharedMapValue::Float64Array(arr.items.clone())
+            }
+            // Types that can't be shared
+            GcValue::Decimal(_) | GcValue::BigInt(_) | GcValue::Array(_) |
+            GcValue::Closure(_, _) | GcValue::Function(_) | GcValue::NativeFunction(_) |
+            GcValue::Ref(_) | GcValue::Type(_) | GcValue::Pointer(_) => {
+                return None;
+            }
+        })
+    }
+
+    /// Convert a SharedMapValue to a GcValue, allocating on this heap.
+    pub fn shared_to_gc_value(&mut self, value: &SharedMapValue) -> GcValue {
+        match value {
+            SharedMapValue::Unit => GcValue::Unit,
+            SharedMapValue::Bool(b) => GcValue::Bool(*b),
+            SharedMapValue::Char(c) => GcValue::Char(*c),
+            SharedMapValue::Int64(n) => GcValue::Int64(*n),
+            SharedMapValue::Float64(f) => GcValue::Float64(*f),
+            SharedMapValue::Pid(p) => GcValue::Pid(*p),
+            SharedMapValue::String(s) => {
+                let ptr = self.alloc_string(s.clone());
+                GcValue::String(ptr)
+            }
+            SharedMapValue::List(items) => {
+                let gc_items: Vec<_> = items.iter()
+                    .map(|v| self.shared_to_gc_value(v))
+                    .collect();
+                GcValue::List(self.make_list(gc_items))
+            }
+            SharedMapValue::Tuple(items) => {
+                let gc_items: Vec<_> = items.iter()
+                    .map(|v| self.shared_to_gc_value(v))
+                    .collect();
+                let ptr = self.alloc_tuple(gc_items);
+                GcValue::Tuple(ptr)
+            }
+            SharedMapValue::Record { type_name, field_names, fields } => {
+                let gc_fields: Vec<_> = fields.iter()
+                    .map(|v| self.shared_to_gc_value(v))
+                    .collect();
+                let ptr = self.alloc_record(
+                    type_name.clone(),
+                    field_names.clone(),
+                    gc_fields,
+                    vec![false; field_names.len()], // Assume immutable by default
+                );
+                GcValue::Record(ptr)
+            }
+            SharedMapValue::Variant { type_name, constructor, fields } => {
+                let gc_fields: Vec<_> = fields.iter()
+                    .map(|v| self.shared_to_gc_value(v))
+                    .collect();
+                let ptr = self.alloc_variant(
+                    Arc::new(type_name.clone()),
+                    Arc::new(constructor.clone()),
+                    gc_fields,
+                );
+                GcValue::Variant(ptr)
+            }
+            SharedMapValue::Map(map) => {
+                // Keep as SharedMap for O(1) sharing - don't convert!
+                GcValue::SharedMap(map.clone())
+            }
+            SharedMapValue::Set(items) => {
+                let gc_items: ImblHashSet<GcMapKey> = items.iter()
+                    .map(|k| GcMapKey::from_shared_key(k))
+                    .collect();
+                let ptr = self.alloc_set(gc_items);
+                GcValue::Set(ptr)
+            }
+            SharedMapValue::Int64Array(items) => {
+                let ptr = self.alloc_int64_array(items.clone());
+                GcValue::Int64Array(ptr)
+            }
+            SharedMapValue::Float64Array(items) => {
+                let ptr = self.alloc_float64_array(items.clone());
+                GcValue::Float64Array(ptr)
+            }
         }
     }
 
@@ -1882,6 +2093,8 @@ impl Heap {
                     GcValue::Unit
                 }
             }
+            // SharedMap is Arc-managed, just clone the reference (O(1))
+            GcValue::SharedMap(map) => GcValue::SharedMap(map.clone()),
             GcValue::Set(ptr) => {
                 if let Some(set) = source.get_set(*ptr) {
                     let items: ImblHashSet<GcMapKey> = set
@@ -2073,6 +2286,8 @@ impl Heap {
                     GcValue::Unit
                 }
             }
+            // SharedMap is Arc-managed with structural sharing - clone is O(1)
+            GcValue::SharedMap(map) => GcValue::SharedMap(map.clone()),
             GcValue::Set(ptr) => {
                 let items = self.get_set(*ptr).map(|s| s.items.clone());
                 if let Some(items) = items {
@@ -2404,6 +2619,15 @@ impl Heap {
                 Value::Map(Arc::new(entries))
             }
 
+            // SharedMap - convert entries to Value::Map
+            GcValue::SharedMap(map) => {
+                let entries: HashMap<MapKey, Value> = map
+                    .iter()
+                    .map(|(k, v)| (shared_key_to_map_key(k), shared_value_to_value(v)))
+                    .collect();
+                Value::Map(Arc::new(entries))
+            }
+
             // Set
             GcValue::Set(ptr) => {
                 let set = self.get_set(*ptr).expect("invalid set pointer");
@@ -2486,6 +2710,87 @@ impl Heap {
             GcMapKey::String(s) => {
                 MapKey::String(Arc::new(s.clone()))
             }
+        }
+    }
+}
+
+/// Convert a SharedMapKey to a Value::MapKey for returning results.
+fn shared_key_to_map_key(key: &SharedMapKey) -> MapKey {
+    match key {
+        SharedMapKey::Unit => MapKey::Unit,
+        SharedMapKey::Bool(b) => MapKey::Bool(*b),
+        SharedMapKey::Char(c) => MapKey::Char(*c),
+        SharedMapKey::Int8(n) => MapKey::Int8(*n),
+        SharedMapKey::Int16(n) => MapKey::Int16(*n),
+        SharedMapKey::Int32(n) => MapKey::Int32(*n),
+        SharedMapKey::Int64(n) => MapKey::Int64(*n),
+        SharedMapKey::UInt8(n) => MapKey::UInt8(*n),
+        SharedMapKey::UInt16(n) => MapKey::UInt16(*n),
+        SharedMapKey::UInt32(n) => MapKey::UInt32(*n),
+        SharedMapKey::UInt64(n) => MapKey::UInt64(*n),
+        SharedMapKey::String(s) => MapKey::String(Arc::new(s.clone())),
+    }
+}
+
+/// Convert a SharedMapValue to a Value for returning results.
+fn shared_value_to_value(value: &SharedMapValue) -> Value {
+    match value {
+        SharedMapValue::Unit => Value::Unit,
+        SharedMapValue::Bool(b) => Value::Bool(*b),
+        SharedMapValue::Char(c) => Value::Char(*c),
+        SharedMapValue::Int64(n) => Value::Int64(*n),
+        SharedMapValue::Float64(f) => Value::Float64(*f),
+        SharedMapValue::Pid(p) => Value::Pid(Pid(*p)),
+        SharedMapValue::String(s) => Value::String(Arc::new(s.clone())),
+        SharedMapValue::List(items) => {
+            let values: Vec<Value> = items.iter().map(shared_value_to_value).collect();
+            Value::List(Arc::new(values))
+        }
+        SharedMapValue::Tuple(items) => {
+            let values: Vec<Value> = items.iter().map(shared_value_to_value).collect();
+            Value::Tuple(Arc::new(values))
+        }
+        SharedMapValue::Record { type_name, field_names, fields } => {
+            let values: Vec<Value> = fields.iter().map(shared_value_to_value).collect();
+            Value::Record(Arc::new(RecordValue {
+                type_name: type_name.clone(),
+                field_names: field_names.clone(),
+                fields: values,
+                mutable_fields: vec![false; field_names.len()],
+            }))
+        }
+        SharedMapValue::Variant { type_name, constructor, fields } => {
+            let values: Vec<Value> = fields.iter().map(shared_value_to_value).collect();
+            Value::Variant(Arc::new(VariantValue {
+                type_name: Arc::new(type_name.clone()),
+                constructor: Arc::new(constructor.clone()),
+                fields: values,
+                named_fields: None,
+            }))
+        }
+        SharedMapValue::Map(map) => {
+            let entries: HashMap<MapKey, Value> = map
+                .iter()
+                .map(|(k, v)| (shared_key_to_map_key(k), shared_value_to_value(v)))
+                .collect();
+            Value::Map(Arc::new(entries))
+        }
+        SharedMapValue::Set(items) => {
+            let keys: std::collections::HashSet<MapKey> = items
+                .iter()
+                .map(shared_key_to_map_key)
+                .collect();
+            Value::Set(Arc::new(keys))
+        }
+        SharedMapValue::Int64Array(items) => {
+            // Convert to list of Int64 values
+            let values: Vec<Value> = items.iter().map(|n| Value::Int64(*n)).collect();
+            Value::List(Arc::new(values))
+        }
+        SharedMapValue::Float64Array(items) => {
+            // Convert to list of Float64 values
+            let values: Vec<Value> = items.iter().map(|f| Value::Float64(*f)).collect();
+            Value::List(Arc::new(values))
         }
     }
 }

@@ -5,7 +5,7 @@ use cursive::theme::{Color, ColorStyle};
 use cursive::view::{View, CannotFocus};
 use cursive::direction::Direction;
 use cursive::{Printer, Vec2};
-use nostos_repl::{InspectEntry, ThreadSafeValue, ThreadSafeMapKey};
+use nostos_repl::{InspectEntry, ThreadSafeValue, ThreadSafeMapKey, SharedMapKey, SharedMapValue, SharedMap};
 use std::collections::VecDeque;
 /// Maximum number of tabs in the inspector
 const MAX_TABS: usize = 10;
@@ -63,10 +63,10 @@ impl InspectorTab {
                 let idx = field_names.iter().position(|n| n == field_name)?;
                 fields.get(idx).cloned()
             }
-            ThreadSafeValue::Map(entries) => {
+            ThreadSafeValue::Map(shared_map) => {
                 // For maps, we navigate by index for simplicity
                 let idx: usize = segment.trim_start_matches('[').trim_end_matches(']').parse().ok()?;
-                entries.get(idx).map(|(_, v)| v.clone())
+                shared_map.iter().nth(idx).map(|(_, v)| self.shared_value_to_thread_safe(v))
             }
             ThreadSafeValue::Variant { fields, .. } => {
                 let idx: usize = segment.trim_start_matches('.').parse().ok()?;
@@ -110,6 +110,205 @@ impl InspectorTab {
         }
     }
 
+    // ---- SharedMap helpers ----
+
+    fn shared_value_to_thread_safe(&self, value: &SharedMapValue) -> ThreadSafeValue {
+        match value {
+            SharedMapValue::Unit => ThreadSafeValue::Unit,
+            SharedMapValue::Bool(b) => ThreadSafeValue::Bool(*b),
+            SharedMapValue::Int64(i) => ThreadSafeValue::Int64(*i),
+            SharedMapValue::Float64(f) => ThreadSafeValue::Float64(*f),
+            SharedMapValue::Pid(p) => ThreadSafeValue::Pid(*p),
+            SharedMapValue::String(s) => ThreadSafeValue::String(s.clone()),
+            SharedMapValue::Char(c) => ThreadSafeValue::Char(*c),
+            SharedMapValue::List(items) => {
+                ThreadSafeValue::List(items.iter().map(|v| self.shared_value_to_thread_safe(v)).collect())
+            }
+            SharedMapValue::Tuple(items) => {
+                ThreadSafeValue::Tuple(items.iter().map(|v| self.shared_value_to_thread_safe(v)).collect())
+            }
+            SharedMapValue::Record { type_name, field_names, fields } => {
+                ThreadSafeValue::Record {
+                    type_name: type_name.clone(),
+                    field_names: field_names.clone(),
+                    fields: fields.iter().map(|v| self.shared_value_to_thread_safe(v)).collect(),
+                    mutable_fields: vec![false; field_names.len()],
+                }
+            }
+            SharedMapValue::Variant { type_name, constructor, fields } => {
+                ThreadSafeValue::Variant {
+                    type_name: std::sync::Arc::new(type_name.clone()),
+                    constructor: std::sync::Arc::new(constructor.clone()),
+                    fields: fields.iter().map(|v| self.shared_value_to_thread_safe(v)).collect(),
+                }
+            }
+            SharedMapValue::Map(map) => ThreadSafeValue::Map(map.clone()),
+            SharedMapValue::Set(items) => {
+                ThreadSafeValue::Set(items.iter().map(|k| self.shared_key_to_thread_safe_key(k)).collect())
+            }
+            SharedMapValue::Int64Array(items) => ThreadSafeValue::Int64Array(items.clone()),
+            SharedMapValue::Float64Array(items) => ThreadSafeValue::Float64Array(items.clone()),
+        }
+    }
+
+    fn shared_key_to_thread_safe_key(&self, key: &SharedMapKey) -> ThreadSafeMapKey {
+        match key {
+            SharedMapKey::Unit => ThreadSafeMapKey::Unit,
+            SharedMapKey::Bool(b) => ThreadSafeMapKey::Bool(*b),
+            SharedMapKey::Char(c) => ThreadSafeMapKey::Char(*c),
+            SharedMapKey::Int8(i) => ThreadSafeMapKey::Int8(*i),
+            SharedMapKey::Int16(i) => ThreadSafeMapKey::Int16(*i),
+            SharedMapKey::Int32(i) => ThreadSafeMapKey::Int32(*i),
+            SharedMapKey::Int64(i) => ThreadSafeMapKey::Int64(*i),
+            SharedMapKey::UInt8(i) => ThreadSafeMapKey::UInt8(*i),
+            SharedMapKey::UInt16(i) => ThreadSafeMapKey::UInt16(*i),
+            SharedMapKey::UInt32(i) => ThreadSafeMapKey::UInt32(*i),
+            SharedMapKey::UInt64(i) => ThreadSafeMapKey::UInt64(*i),
+            SharedMapKey::String(s) => ThreadSafeMapKey::String(s.clone()),
+        }
+    }
+
+    fn shared_key_preview(&self, key: &SharedMapKey) -> String {
+        match key {
+            SharedMapKey::Unit => "()".to_string(),
+            SharedMapKey::Bool(b) => b.to_string(),
+            SharedMapKey::Char(c) => format!("'{}'", c),
+            SharedMapKey::Int8(n) => n.to_string(),
+            SharedMapKey::Int16(n) => n.to_string(),
+            SharedMapKey::Int32(n) => n.to_string(),
+            SharedMapKey::Int64(n) => n.to_string(),
+            SharedMapKey::UInt8(n) => n.to_string(),
+            SharedMapKey::UInt16(n) => n.to_string(),
+            SharedMapKey::UInt32(n) => n.to_string(),
+            SharedMapKey::UInt64(n) => n.to_string(),
+            SharedMapKey::String(s) => if s.len() > 20 { format!("\"{}...\"", &s[..17]) } else { format!("\"{}\"", s) },
+        }
+    }
+
+    fn shared_type_name(&self, value: &SharedMapValue) -> String {
+        match value {
+            SharedMapValue::Unit => "Unit".to_string(),
+            SharedMapValue::Bool(_) => "Bool".to_string(),
+            SharedMapValue::Int64(_) => "Int64".to_string(),
+            SharedMapValue::Float64(_) => "Float64".to_string(),
+            SharedMapValue::Pid(_) => "Pid".to_string(),
+            SharedMapValue::String(_) => "String".to_string(),
+            SharedMapValue::Char(_) => "Char".to_string(),
+            SharedMapValue::List(items) => format!("List({})", items.len()),
+            SharedMapValue::Tuple(items) => format!("Tuple({})", items.len()),
+            SharedMapValue::Record { type_name, fields, .. } => format!("{}({})", type_name, fields.len()),
+            SharedMapValue::Variant { type_name, constructor, .. } => format!("{}::{}", type_name, constructor),
+            SharedMapValue::Map(m) => format!("Map({})", m.len()),
+            SharedMapValue::Set(items) => format!("Set({})", items.len()),
+            SharedMapValue::Int64Array(items) => format!("Int64Array({})", items.len()),
+            SharedMapValue::Float64Array(items) => format!("Float64Array({})", items.len()),
+        }
+    }
+
+    fn shared_preview(&self, value: &SharedMapValue) -> String {
+        match value {
+            SharedMapValue::Unit => "()".to_string(),
+            SharedMapValue::Bool(b) => b.to_string(),
+            SharedMapValue::Int64(n) => n.to_string(),
+            SharedMapValue::Float64(f) => f.to_string(),
+            SharedMapValue::Pid(p) => format!("<{}>", p),
+            SharedMapValue::String(s) => if s.len() > 30 { format!("\"{}...\"", &s[..27]) } else { format!("\"{}\"", s) },
+            SharedMapValue::Char(c) => format!("'{}'", c),
+            SharedMapValue::List(items) if items.is_empty() => "[]".to_string(),
+            SharedMapValue::List(items) => format!("[...] ({} items)", items.len()),
+            SharedMapValue::Tuple(items) if items.is_empty() => "()".to_string(),
+            SharedMapValue::Tuple(items) => format!("(...) ({} items)", items.len()),
+            SharedMapValue::Record { type_name, .. } => format!("{}{{...}}", type_name),
+            SharedMapValue::Variant { constructor, fields, .. } if fields.is_empty() => constructor.clone(),
+            SharedMapValue::Variant { constructor, .. } => format!("{}(...)", constructor),
+            SharedMapValue::Map(m) if m.is_empty() => "{}".to_string(),
+            SharedMapValue::Map(m) => format!("{{...}} ({} entries)", m.len()),
+            SharedMapValue::Set(items) if items.is_empty() => "Set{}".to_string(),
+            SharedMapValue::Set(items) => format!("Set{{...}} ({} items)", items.len()),
+            SharedMapValue::Int64Array(items) => format!("Int64Array({} items)", items.len()),
+            SharedMapValue::Float64Array(items) => format!("Float64Array({} items)", items.len()),
+        }
+    }
+
+    fn shared_is_leaf(&self, value: &SharedMapValue) -> bool {
+        match value {
+            SharedMapValue::Unit | SharedMapValue::Bool(_) | SharedMapValue::Int64(_) |
+            SharedMapValue::Float64(_) | SharedMapValue::Pid(_) | SharedMapValue::Char(_) => true,
+            SharedMapValue::String(s) => s.len() <= 50,
+            SharedMapValue::List(items) => items.is_empty(),
+            SharedMapValue::Tuple(items) => items.is_empty(),
+            SharedMapValue::Record { fields, .. } => fields.is_empty(),
+            SharedMapValue::Variant { fields, .. } => fields.is_empty(),
+            SharedMapValue::Map(m) => m.is_empty(),
+            SharedMapValue::Set(items) => items.is_empty(),
+            SharedMapValue::Int64Array(items) => items.is_empty(),
+            SharedMapValue::Float64Array(items) => items.is_empty(),
+        }
+    }
+
+    fn shared_full_format_key(&self, key: &SharedMapKey) -> String {
+        match key {
+            SharedMapKey::Unit => "()".to_string(),
+            SharedMapKey::Bool(b) => b.to_string(),
+            SharedMapKey::Char(c) => format!("{:?}", c),
+            SharedMapKey::Int8(n) => n.to_string(),
+            SharedMapKey::Int16(n) => n.to_string(),
+            SharedMapKey::Int32(n) => n.to_string(),
+            SharedMapKey::Int64(n) => n.to_string(),
+            SharedMapKey::UInt8(n) => n.to_string(),
+            SharedMapKey::UInt16(n) => n.to_string(),
+            SharedMapKey::UInt32(n) => n.to_string(),
+            SharedMapKey::UInt64(n) => n.to_string(),
+            SharedMapKey::String(s) => format!("{:?}", s),
+        }
+    }
+
+    fn shared_full_format(&self, value: &SharedMapValue) -> String {
+        match value {
+            SharedMapValue::Unit => "()".to_string(),
+            SharedMapValue::Bool(b) => b.to_string(),
+            SharedMapValue::Int64(n) => n.to_string(),
+            SharedMapValue::Float64(f) => f.to_string(),
+            SharedMapValue::Pid(p) => format!("<{}>", p),
+            SharedMapValue::String(s) => format!("{:?}", s),
+            SharedMapValue::Char(c) => format!("{:?}", c),
+            SharedMapValue::List(items) => {
+                let items_str: Vec<String> = items.iter().map(|v| self.shared_full_format(v)).collect();
+                format!("[{}]", items_str.join(", "))
+            }
+            SharedMapValue::Tuple(items) => {
+                let items_str: Vec<String> = items.iter().map(|v| self.shared_full_format(v)).collect();
+                format!("({})", items_str.join(", "))
+            }
+            SharedMapValue::Record { type_name, fields, field_names } => {
+                let fields_str: Vec<String> = field_names.iter().zip(fields.iter())
+                    .map(|(k, v)| format!("{}: {}", k, self.shared_full_format(v)))
+                    .collect();
+                format!("{} {{ {} }}", type_name, fields_str.join(", "))
+            }
+            SharedMapValue::Variant { type_name, constructor, fields } => {
+                if fields.is_empty() {
+                    format!("{}::{}", type_name, constructor)
+                } else {
+                    let fields_str: Vec<String> = fields.iter().map(|v| self.shared_full_format(v)).collect();
+                    format!("{}::{}({})", type_name, constructor, fields_str.join(", "))
+                }
+            }
+            SharedMapValue::Map(entries) => {
+                let entries_str: Vec<String> = entries.iter()
+                    .map(|(k, v)| format!("{} => {}", self.shared_full_format_key(k), self.shared_full_format(v)))
+                    .collect();
+                format!("Map {{ {} }}", entries_str.join(", "))
+            }
+            SharedMapValue::Set(items) => {
+                let items_str: Vec<String> = items.iter().map(|v| self.shared_full_format_key(v)).collect();
+                format!("Set {{ {} }}", items_str.join(", "))
+            }
+            SharedMapValue::Int64Array(items) => format!("{:?}", items),
+            SharedMapValue::Float64Array(items) => format!("{:?}", items),
+        }
+    }
+
     /// Get slots (children) of a value
     fn get_slots(&self, value: &ThreadSafeValue) -> Vec<(String, String, String, bool)> {
         // Returns: (path_segment, type_name, preview, is_leaf)
@@ -129,9 +328,9 @@ impl InspectorTab {
                     (format!(".{}", name), self.type_name(v), self.preview(v), self.is_leaf(v))
                 }).collect()
             }
-            ThreadSafeValue::Map(entries) => {
-                entries.iter().enumerate().map(|(i, (k, v))| {
-                    (format!("[{}]", i), format!("{} -> {}", self.map_key_preview(k), self.type_name(v)), self.preview(v), self.is_leaf(v))
+            ThreadSafeValue::Map(shared_map) => {
+                shared_map.iter().enumerate().map(|(i, (k, v))| {
+                    (format!("[{}]", i), format!("{} -> {}", self.shared_key_preview(k), self.shared_type_name(v)), self.shared_preview(v), self.shared_is_leaf(v))
                 }).collect()
             }
             ThreadSafeValue::Variant { fields, .. } => {
@@ -324,7 +523,7 @@ impl InspectorTab {
             ThreadSafeValue::NativeFunction(f) => format!("<native {}>", f.name),
             ThreadSafeValue::Map(entries) => {
                  let entries_str: Vec<String> = entries.iter()
-                    .map(|(k, v)| format!("{} => {}", self.full_format_key(k), self.full_format(v)))
+                    .map(|(k, v)| format!("{} => {}", self.shared_full_format_key(k), self.shared_full_format(v)))
                     .collect();
                 format!("Map {{ {} }}", entries_str.join(", "))
             }

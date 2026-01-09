@@ -20,6 +20,7 @@ use crossbeam_channel; // Added
 
 use crate::gc::{GcConfig, GcValue, Heap, RawGcPtr, InlineOp, GcNativeFn, GcMapKey};
 use crate::io_runtime::IoResult;
+use crate::shared_types::{SharedMap, SharedMapKey, SharedMapValue};
 use crate::value::{FunctionValue, Pid, RefId, Reg};
 
 // ============================================================================
@@ -343,6 +344,7 @@ fn format_value_short(value: &GcValue) -> String {
         GcValue::Pid(p) => format!("<Pid {}>", p),
         GcValue::Ref(r) => format!("<Ref {}>", r),
         GcValue::Map(_) => "<Map>".to_string(),
+        GcValue::SharedMap(m) => format!("<SharedMap {} entries>", m.len()),
         GcValue::Set(_) => "<Set>".to_string(),
         GcValue::BigInt(_) => "<BigInt>".to_string(),
         GcValue::Type(t) => format!("<Type {}>", t.name),
@@ -450,8 +452,8 @@ pub enum ThreadSafeValue {
     Function(Arc<FunctionValue>),
     /// A native function (already thread-safe via Arc)
     NativeFunction(Arc<GcNativeFn>),
-    /// A map with key-value pairs
-    Map(Vec<(ThreadSafeMapKey, ThreadSafeValue)>),
+    /// A map with key-value pairs (Arc-wrapped for O(1) sharing)
+    Map(SharedMap),
     /// A set of keys
     Set(Vec<ThreadSafeMapKey>),
     /// Int64 typed array (deep copy of data)
@@ -572,14 +574,16 @@ impl ThreadSafeValue {
             // Maps
             GcValue::Map(ptr) => {
                 let map = heap.get_map(*ptr)?;
-                let entries: Option<Vec<_>> = map.entries.iter()
-                    .map(|(k, v)| {
-                        let safe_key = ThreadSafeMapKey::from_gc_map_key(k);
-                        let safe_value = ThreadSafeValue::from_gc_value(v, heap)?;
-                        Some((safe_key, safe_value))
-                    })
-                    .collect();
-                ThreadSafeValue::Map(entries?)
+                let shared_map = heap.gc_value_to_shared(&GcValue::Map(*ptr))?;
+                if let SharedMapValue::Map(m) = shared_map {
+                    ThreadSafeValue::Map(m)
+                } else {
+                    return None;
+                }
+            }
+            // SharedMap - already in the right format, just clone the Arc (O(1))
+            GcValue::SharedMap(map) => {
+                ThreadSafeValue::Map(map.clone())
             }
             // Sets
             GcValue::Set(ptr) => {
@@ -668,11 +672,16 @@ impl ThreadSafeValue {
             }
             ThreadSafeValue::Function(func) => GcValue::Function(func.clone()),
             ThreadSafeValue::NativeFunction(func) => GcValue::NativeFunction(func.clone()),
-            ThreadSafeValue::Map(entries) => {
-                let gc_entries: ImblHashMap<GcMapKey, GcValue> = entries.iter()
-                    .map(|(k, v)| (k.to_gc_map_key(), v.to_gc_value(heap)))
-                    .collect();
-                let ptr = heap.alloc_map(gc_entries);
+            ThreadSafeValue::Map(shared_map) => {
+                // For message passing: convert to regular Map (deep copy)
+                // MVars use SharedMap directly via MvarRead instruction
+                let mut entries = ImblHashMap::new();
+                for (k, v) in shared_map.iter() {
+                    let gc_key = GcMapKey::from_shared_key(k);
+                    let gc_val = heap.shared_to_gc_value(v);
+                    entries.insert(gc_key, gc_val);
+                }
+                let ptr = heap.alloc_map(entries);
                 GcValue::Map(ptr)
             }
             ThreadSafeValue::Set(items) => {

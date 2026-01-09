@@ -989,49 +989,84 @@ impl Worker {
                     let map_val = &frame.registers[*map_reg as usize];
                     let key_val = &frame.registers[*key_reg as usize];
                     
-                    let result = if let GcValue::Map(ptr) = map_val {
-                        if let Some(map) = proc.heap.get_map(*ptr) {
-                            if let Some(key) = key_val.to_gc_map_key(&proc.heap) {
-                                map.entries.contains_key(&key)
+                    let result = match map_val {
+                        GcValue::Map(ptr) => {
+                            if let Some(map) = proc.heap.get_map(*ptr) {
+                                if let Some(key) = key_val.to_gc_map_key(&proc.heap) {
+                                    map.entries.contains_key(&key)
+                                } else {
+                                    false
+                                }
                             } else {
                                 false
                             }
-                        } else {
-                            false
                         }
-                    } else {
-                        return Err(RuntimeError::TypeError {
-                            expected: "Map".to_string(),
-                            found: map_val.type_name(&proc.heap).to_string(),
-                        });
-                    };
-                    proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::Bool(result);
-                }
-
-                Instruction::MapGet(dst, map_reg, key_reg) => {
-                    let result = {
-                        let frame = proc.frames.last().unwrap();
-                        let map_val = &frame.registers[*map_reg as usize];
-                        let key_val = &frame.registers[*key_reg as usize];
-                        
-                        if let GcValue::Map(ptr) = map_val {
-                            if let Some(map) = proc.heap.get_map(*ptr) {
-                                if let Some(key) = key_val.to_gc_map_key(&proc.heap) {
-                                    map.entries.get(&key).cloned()
-                                } else {
-                                    None
-                                }
+                        GcValue::SharedMap(shared_map) => {
+                            if let Some(gc_key) = key_val.to_gc_map_key(&proc.heap) {
+                                let shared_key = gc_key.to_shared_key();
+                                shared_map.contains_key(&shared_key)
                             } else {
-                                None
+                                false
                             }
-                        } else {
+                        }
+                        _ => {
                             return Err(RuntimeError::TypeError {
                                 expected: "Map".to_string(),
                                 found: map_val.type_name(&proc.heap).to_string(),
                             });
                         }
                     };
-                    
+                    proc.frames.last_mut().unwrap().registers[*dst as usize] = GcValue::Bool(result);
+                }
+
+                Instruction::MapGet(dst, map_reg, key_reg) => {
+                    // Get the shared value first (if SharedMap), then convert outside the borrow
+                    let shared_value_opt: Option<crate::shared_types::SharedMapValue>;
+                    let gc_result: Option<GcValue>;
+
+                    {
+                        let frame = proc.frames.last().unwrap();
+                        let map_val = &frame.registers[*map_reg as usize];
+                        let key_val = &frame.registers[*key_reg as usize];
+
+                        match map_val {
+                            GcValue::Map(ptr) => {
+                                shared_value_opt = None;
+                                gc_result = if let Some(map) = proc.heap.get_map(*ptr) {
+                                    if let Some(key) = key_val.to_gc_map_key(&proc.heap) {
+                                        map.entries.get(&key).cloned()
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                };
+                            }
+                            GcValue::SharedMap(shared_map) => {
+                                gc_result = None;
+                                shared_value_opt = if let Some(gc_key) = key_val.to_gc_map_key(&proc.heap) {
+                                    let shared_key = gc_key.to_shared_key();
+                                    shared_map.get(&shared_key).cloned()
+                                } else {
+                                    None
+                                };
+                            }
+                            _ => {
+                                return Err(RuntimeError::TypeError {
+                                    expected: "Map".to_string(),
+                                    found: map_val.type_name(&proc.heap).to_string(),
+                                });
+                            }
+                        }
+                    }
+
+                    // Now convert SharedMapValue to GcValue outside the borrow
+                    let result = if let Some(shared_val) = shared_value_opt {
+                        Some(proc.heap.shared_to_gc_value(&shared_val))
+                    } else {
+                        gc_result
+                    };
+
                     match result {
                         Some(val) => proc.frames.last_mut().unwrap().registers[*dst as usize] = val,
                         None => return Err(RuntimeError::Panic("Key not found in map".to_string())),

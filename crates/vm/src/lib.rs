@@ -15,6 +15,7 @@ pub mod io_runtime;
 pub mod parallel;
 pub mod process;
 pub mod scheduler;
+pub mod shared_types;
 pub mod supervisor;
 pub mod value;
 pub mod worker;
@@ -22,6 +23,7 @@ pub mod worker;
 pub use gc::*;
 pub use inspect::*;
 pub use io_runtime::*;
+pub use shared_types::*;
 pub use parallel::{
     ParallelVM, ParallelConfig, SharedState, RunResult,
     SendableValue, SendableRecord, SendableVariant, SendableMapKey,

@@ -364,6 +364,17 @@ impl AsyncProcess {
         }
     }
 
+    /// Convert ThreadSafeValue to GcValue for mvar read.
+    /// Maps are returned as SharedMap (O(1) Arc clone) instead of deep copy.
+    fn mvar_value_to_gc(&mut self, value: &ThreadSafeValue) -> GcValue {
+        match value {
+            // For maps: return SharedMap directly (O(1) sharing for mvars)
+            ThreadSafeValue::Map(shared_map) => GcValue::SharedMap(shared_map.clone()),
+            // For everything else: use standard conversion
+            _ => value.to_gc_value(&mut self.heap),
+        }
+    }
+
     /// Read from an mvar (async - yields if locked).
     pub async fn mvar_read(&mut self, name: &str) -> Result<GcValue, RuntimeError> {
         // Check if we already hold a lock on this mvar
@@ -373,16 +384,19 @@ impl AsyncProcess {
                 HeldMvarLock::Read(g) => (**g).clone(),
                 HeldMvarLock::Write(g) => (**g).clone(),
             };
-            let gc_value = value.to_gc_value(&mut self.heap);
+            let gc_value = self.mvar_value_to_gc(&value);
             return Ok(gc_value);
         }
 
         let var = self.shared.mvars.get(name)
-            .ok_or_else(|| RuntimeError::Panic(format!("Unknown mvar: {}", name)))?;
+            .ok_or_else(|| RuntimeError::Panic(format!("Unknown mvar: {}", name)))?
+            .clone();
 
         // Async read - will yield if write-locked
         let guard = var.read().await;
-        let gc_value = guard.to_gc_value(&mut self.heap);
+        let value = (*guard).clone();
+        drop(guard);  // Release lock before converting
+        let gc_value = self.mvar_value_to_gc(&value);
         Ok(gc_value)
     }
 
@@ -2537,7 +2551,7 @@ impl AsyncProcess {
             // === Type checking instructions ===
             IsMap(dst, src) => {
                 let val = reg!(src);
-                let is_map = matches!(val, GcValue::Map(_));
+                let is_map = matches!(val, GcValue::Map(_) | GcValue::SharedMap(_));
                 set_reg!(dst, GcValue::Bool(is_map));
             }
 
@@ -2616,18 +2630,27 @@ impl AsyncProcess {
             MapContainsKey(dst, map_reg, key_reg) => {
                 let map_val = reg!(map_reg);
                 let key_val = reg!(key_reg);
-                let result = if let GcValue::Map(ptr) = &map_val {
-                    if let Some(map) = self.heap.get_map(*ptr) {
-                        if let Some(key) = key_val.to_gc_map_key(&self.heap) {
-                            map.entries.contains_key(&key)
+                let result = match &map_val {
+                    GcValue::Map(ptr) => {
+                        if let Some(map) = self.heap.get_map(*ptr) {
+                            if let Some(key) = key_val.to_gc_map_key(&self.heap) {
+                                map.entries.contains_key(&key)
+                            } else {
+                                false
+                            }
                         } else {
                             false
                         }
-                    } else {
-                        false
                     }
-                } else {
-                    false
+                    GcValue::SharedMap(shared_map) => {
+                        if let Some(gc_key) = key_val.to_gc_map_key(&self.heap) {
+                            let shared_key = gc_key.to_shared_key();
+                            shared_map.contains_key(&shared_key)
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false
                 };
                 set_reg!(dst, GcValue::Bool(result));
             }
@@ -2635,18 +2658,27 @@ impl AsyncProcess {
             MapGet(dst, map_reg, key_reg) => {
                 let map_val = reg!(map_reg);
                 let key_val = reg!(key_reg);
-                let result = if let GcValue::Map(ptr) = &map_val {
-                    if let Some(map) = self.heap.get_map(*ptr) {
-                        if let Some(key) = key_val.to_gc_map_key(&self.heap) {
-                            map.entries.get(&key).cloned()
+                let result = match &map_val {
+                    GcValue::Map(ptr) => {
+                        if let Some(map) = self.heap.get_map(*ptr) {
+                            if let Some(key) = key_val.to_gc_map_key(&self.heap) {
+                                map.entries.get(&key).cloned()
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
-                    } else {
-                        None
                     }
-                } else {
-                    None
+                    GcValue::SharedMap(shared_map) => {
+                        if let Some(gc_key) = key_val.to_gc_map_key(&self.heap) {
+                            let shared_key = gc_key.to_shared_key();
+                            shared_map.get(&shared_key).map(|v| self.heap.shared_to_gc_value(v))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None
                 };
                 match result {
                     Some(val) => set_reg!(dst, val),
@@ -6232,20 +6264,28 @@ impl AsyncVM {
             name: "Map.insert".to_string(),
             arity: 3,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
                 let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
                     expected: "hashable".to_string(),
                     found: args[1].type_name(heap).to_string()
                 })?;
                 let value = args[2].clone();
 
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                let new_entries = map.entries.update(key, value);
-                let new_ptr = heap.alloc_map(new_entries);
-                Ok(GcValue::Map(new_ptr))
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        let new_entries = map.entries.update(key, value);
+                        let new_ptr = heap.alloc_map(new_entries);
+                        Ok(GcValue::Map(new_ptr))
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        let shared_key = key.to_shared_key();
+                        let shared_value = heap.gc_value_to_shared(&value).ok_or_else(||
+                            RuntimeError::Panic("Cannot convert value to shared type".to_string()))?;
+                        let new_map = std::sync::Arc::new((**shared_map).clone().update(shared_key, shared_value));
+                        Ok(GcValue::SharedMap(new_map))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
             }),
         }));
 
@@ -6254,19 +6294,25 @@ impl AsyncVM {
             name: "Map.remove".to_string(),
             arity: 2,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
                 let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
                     expected: "hashable".to_string(),
                     found: args[1].type_name(heap).to_string()
                 })?;
 
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                let new_entries = map.entries.without(&key);
-                let new_ptr = heap.alloc_map(new_entries);
-                Ok(GcValue::Map(new_ptr))
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        let new_entries = map.entries.without(&key);
+                        let new_ptr = heap.alloc_map(new_entries);
+                        Ok(GcValue::Map(new_ptr))
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        let shared_key = key.to_shared_key();
+                        let new_map = std::sync::Arc::new((**shared_map).clone().without(&shared_key));
+                        Ok(GcValue::SharedMap(new_map))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
             }),
         }));
 
@@ -6275,19 +6321,27 @@ impl AsyncVM {
             name: "Map.get".to_string(),
             arity: 2,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
                 let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
                     expected: "hashable".to_string(),
                     found: args[1].type_name(heap).to_string()
                 })?;
 
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                match map.entries.get(&key) {
-                    Some(value) => Ok(value.clone()),
-                    None => Ok(GcValue::Unit)
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        match map.entries.get(&key) {
+                            Some(value) => Ok(value.clone()),
+                            None => Ok(GcValue::Unit)
+                        }
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        let shared_key = key.to_shared_key();
+                        match shared_map.get(&shared_key) {
+                            Some(value) => Ok(heap.shared_to_gc_value(value)),
+                            None => Ok(GcValue::Unit)
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
                 }
             }),
         }));
@@ -6297,17 +6351,22 @@ impl AsyncVM {
             name: "Map.contains".to_string(),
             arity: 2,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
                 let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
                     expected: "hashable".to_string(),
                     found: args[1].type_name(heap).to_string()
                 })?;
 
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                Ok(GcValue::Bool(map.entries.contains_key(&key)))
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        Ok(GcValue::Bool(map.entries.contains_key(&key)))
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        let shared_key = key.to_shared_key();
+                        Ok(GcValue::Bool(shared_map.contains_key(&shared_key)))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
             }),
         }));
 
@@ -6316,18 +6375,21 @@ impl AsyncVM {
             name: "Map.keys".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
-
-                // Clone keys first to release borrow on heap
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                let keys_cloned: Vec<_> = map.entries.keys().cloned().collect();
-                let _ = map;
-                // Now convert to GcValues
-                let keys: Vec<GcValue> = keys_cloned.into_iter().map(|k| k.to_gc_value(heap)).collect();
-                Ok(GcValue::List(heap.make_list(keys)))
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        let keys_cloned: Vec<_> = map.entries.keys().cloned().collect();
+                        let keys: Vec<GcValue> = keys_cloned.into_iter().map(|k| k.to_gc_value(heap)).collect();
+                        Ok(GcValue::List(heap.make_list(keys)))
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        let keys: Vec<GcValue> = shared_map.keys()
+                            .map(|k| crate::gc::GcMapKey::from_shared_key(k).to_gc_value(heap))
+                            .collect();
+                        Ok(GcValue::List(heap.make_list(keys)))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
             }),
         }));
 
@@ -6336,14 +6398,20 @@ impl AsyncVM {
             name: "Map.values".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
-
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                let values: Vec<GcValue> = map.entries.values().cloned().collect();
-                Ok(GcValue::List(heap.make_list(values)))
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        let values: Vec<GcValue> = map.entries.values().cloned().collect();
+                        Ok(GcValue::List(heap.make_list(values)))
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        let values: Vec<GcValue> = shared_map.values()
+                            .map(|v| heap.shared_to_gc_value(v))
+                            .collect();
+                        Ok(GcValue::List(heap.make_list(values)))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
             }),
         }));
 
@@ -6352,13 +6420,16 @@ impl AsyncVM {
             name: "Map.size".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
-
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                Ok(GcValue::Int64(map.entries.len() as i64))
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        Ok(GcValue::Int64(map.entries.len() as i64))
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        Ok(GcValue::Int64(shared_map.len() as i64))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
             }),
         }));
 
@@ -6367,13 +6438,16 @@ impl AsyncVM {
             name: "Map.isEmpty".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
-
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                Ok(GcValue::Bool(map.entries.is_empty()))
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        Ok(GcValue::Bool(map.entries.is_empty()))
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        Ok(GcValue::Bool(shared_map.is_empty()))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
             }),
         }));
 

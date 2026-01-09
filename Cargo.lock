@@ -1608,6 +1608,7 @@ dependencies = [
  "crossterm 0.27.0",
  "cursive",
  "cursive-tabs",
+ "imbl",
  "nostos-compiler",
  "nostos-jit",
  "nostos-repl",
@@ -1623,6 +1624,7 @@ dependencies = [
 name = "nostos-compiler"
 version = "0.1.0"
 dependencies = [
+ "imbl",
  "nostos-syntax",
  "nostos-types",
  "nostos-vm",
@@ -1649,6 +1651,7 @@ dependencies = [
 name = "nostos-repl"
 version = "0.1.0"
 dependencies = [
+ "imbl",
  "nostos-compiler",
  "nostos-jit",
  "nostos-source",

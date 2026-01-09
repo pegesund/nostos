@@ -37,9 +37,10 @@ thread_local! {
 
 use tokio::sync::mpsc as tokio_mpsc;
 
-use crate::gc::{GcConfig, GcList, GcNativeFn, GcValue, Heap, InlineOp};
+use crate::gc::{GcConfig, GcList, GcMapKey, GcNativeFn, GcValue, Heap, InlineOp};
 use crate::io_runtime::{IoRequest, IoRuntime};
 use crate::process::{CallFrame, ExitReason, IoResponseValue, Process, ProcessState, ThreadSafeMapKey, ThreadSafeValue};
+use crate::shared_types::{SharedMap, SharedMapKey, SharedMapValue};
 use crate::value::{FunctionValue, Instruction, Pid, RuntimeError, TypeValue, Value};
 
 /// An entry for the inspect queue - a named value to display in the inspector
@@ -437,6 +438,17 @@ impl SendableValue {
                     SendableValue::String("<map>".to_string())
                 }
             }
+            GcValue::SharedMap(shared_map) => {
+                // Convert SharedMap entries to SendableValue::Map
+                let entries: std::collections::HashMap<SendableMapKey, SendableValue> = shared_map
+                    .iter()
+                    .filter_map(|(k, v)| {
+                        Self::shared_key_to_sendable_key(k)
+                            .map(|sk| (sk, Self::shared_value_to_sendable(v, heap)))
+                    })
+                    .collect();
+                SendableValue::Map(entries)
+            }
             // For other values, use their display representation
             _ => SendableValue::String(heap.display_value(value)),
         }
@@ -457,6 +469,75 @@ impl SendableValue {
             GcMapKey::UInt32(i) => Some(SendableMapKey::Int64(*i as i64)),
             GcMapKey::UInt64(i) => Some(SendableMapKey::Int64(*i as i64)),
             GcMapKey::String(s) => Some(SendableMapKey::String(s.clone())),
+        }
+    }
+
+    fn shared_key_to_sendable_key(key: &SharedMapKey) -> Option<SendableMapKey> {
+        match key {
+            SharedMapKey::Unit => Some(SendableMapKey::Unit),
+            SharedMapKey::Bool(b) => Some(SendableMapKey::Bool(*b)),
+            SharedMapKey::Char(c) => Some(SendableMapKey::Char(*c)),
+            SharedMapKey::Int64(i) => Some(SendableMapKey::Int64(*i)),
+            SharedMapKey::Int8(i) => Some(SendableMapKey::Int64(*i as i64)),
+            SharedMapKey::Int16(i) => Some(SendableMapKey::Int64(*i as i64)),
+            SharedMapKey::Int32(i) => Some(SendableMapKey::Int64(*i as i64)),
+            SharedMapKey::UInt8(i) => Some(SendableMapKey::Int64(*i as i64)),
+            SharedMapKey::UInt16(i) => Some(SendableMapKey::Int64(*i as i64)),
+            SharedMapKey::UInt32(i) => Some(SendableMapKey::Int64(*i as i64)),
+            SharedMapKey::UInt64(i) => Some(SendableMapKey::Int64(*i as i64)),
+            SharedMapKey::String(s) => Some(SendableMapKey::String(s.clone())),
+        }
+    }
+
+    fn shared_value_to_sendable(value: &SharedMapValue, heap: &Heap) -> SendableValue {
+        match value {
+            SharedMapValue::Unit => SendableValue::Unit,
+            SharedMapValue::Bool(b) => SendableValue::Bool(*b),
+            SharedMapValue::Int64(i) => SendableValue::Int64(*i),
+            SharedMapValue::Float64(f) => SendableValue::Float64(*f),
+            SharedMapValue::Pid(p) => SendableValue::Pid(*p),
+            SharedMapValue::String(s) => SendableValue::String(s.clone()),
+            SharedMapValue::Char(c) => SendableValue::Char(*c),
+            SharedMapValue::List(items) => {
+                SendableValue::List(items.iter().map(|v| Self::shared_value_to_sendable(v, heap)).collect())
+            }
+            SharedMapValue::Tuple(items) => {
+                SendableValue::Tuple(items.iter().map(|v| Self::shared_value_to_sendable(v, heap)).collect())
+            }
+            SharedMapValue::Record { type_name, field_names, fields } => {
+                SendableValue::Record(SendableRecord {
+                    type_name: type_name.clone(),
+                    field_names: field_names.clone(),
+                    fields: fields.iter().map(|v| Self::shared_value_to_sendable(v, heap)).collect(),
+                })
+            }
+            SharedMapValue::Variant { type_name, constructor, fields } => {
+                SendableValue::Variant(SendableVariant {
+                    type_name: type_name.clone(),
+                    constructor: constructor.clone(),
+                    fields: fields.iter().map(|v| Self::shared_value_to_sendable(v, heap)).collect(),
+                })
+            }
+            SharedMapValue::Map(map) => {
+                let entries: std::collections::HashMap<SendableMapKey, SendableValue> = map
+                    .iter()
+                    .filter_map(|(k, v)| {
+                        Self::shared_key_to_sendable_key(k)
+                            .map(|sk| (sk, Self::shared_value_to_sendable(v, heap)))
+                    })
+                    .collect();
+                SendableValue::Map(entries)
+            }
+            SharedMapValue::Set(items) => {
+                SendableValue::Set(items.iter().filter_map(Self::shared_key_to_sendable_key).collect())
+            }
+            // Convert typed arrays to lists of their element types
+            SharedMapValue::Int64Array(items) => {
+                SendableValue::List(items.iter().map(|i| SendableValue::Int64(*i)).collect())
+            }
+            SharedMapValue::Float64Array(items) => {
+                SendableValue::List(items.iter().map(|f| SendableValue::Float64(*f)).collect())
+            }
         }
     }
 
@@ -663,9 +744,10 @@ impl SendableValue {
                 ThreadSafeValue::Set(items.iter().map(|k| Self::sendable_key_to_thread_safe_key(k)).collect())
             }
             SendableValue::Map(entries) => {
-                ThreadSafeValue::Map(entries.iter()
-                    .map(|(k, v)| (Self::sendable_key_to_thread_safe_key(k), v.to_thread_safe()))
-                    .collect())
+                let shared_entries: ImblHashMap<SharedMapKey, SharedMapValue> = entries.iter()
+                    .map(|(k, v)| (Self::sendable_key_to_shared_key(k), Self::sendable_to_shared(v)))
+                    .collect();
+                ThreadSafeValue::Map(Arc::new(shared_entries))
             }
             SendableValue::Error(e) => ThreadSafeValue::String(format!("Error: {}", e)),
         }
@@ -678,6 +760,68 @@ impl SendableValue {
             SendableMapKey::Char(c) => ThreadSafeMapKey::Char(*c),
             SendableMapKey::Int64(i) => ThreadSafeMapKey::Int64(*i),
             SendableMapKey::String(s) => ThreadSafeMapKey::String(s.clone()),
+        }
+    }
+
+    fn sendable_key_to_shared_key(key: &SendableMapKey) -> SharedMapKey {
+        match key {
+            SendableMapKey::Unit => SharedMapKey::Unit,
+            SendableMapKey::Bool(b) => SharedMapKey::Bool(*b),
+            SendableMapKey::Char(c) => SharedMapKey::Char(*c),
+            SendableMapKey::Int64(i) => SharedMapKey::Int64(*i),
+            SendableMapKey::String(s) => SharedMapKey::String(s.clone()),
+        }
+    }
+
+    fn sendable_to_shared(&self) -> SharedMapValue {
+        match self {
+            SendableValue::Unit => SharedMapValue::Unit,
+            SendableValue::Bool(b) => SharedMapValue::Bool(*b),
+            SendableValue::Char(c) => SharedMapValue::Char(*c),
+            SendableValue::Int8(i) => SharedMapValue::Int64(*i as i64),
+            SendableValue::Int16(i) => SharedMapValue::Int64(*i as i64),
+            SendableValue::Int32(i) => SharedMapValue::Int64(*i as i64),
+            SendableValue::Int64(i) => SharedMapValue::Int64(*i),
+            SendableValue::UInt8(i) => SharedMapValue::Int64(*i as i64),
+            SendableValue::UInt16(i) => SharedMapValue::Int64(*i as i64),
+            SendableValue::UInt32(i) => SharedMapValue::Int64(*i as i64),
+            SendableValue::UInt64(i) => SharedMapValue::Int64(*i as i64),
+            SendableValue::Float32(f) => SharedMapValue::Float64(*f as f64),
+            SendableValue::Float64(f) => SharedMapValue::Float64(*f),
+            SendableValue::BigInt(_) => SharedMapValue::String(self.display()),
+            SendableValue::Decimal(_) => SharedMapValue::String(self.display()),
+            SendableValue::Pid(p) => SharedMapValue::Pid(*p),
+            SendableValue::String(s) => SharedMapValue::String(s.clone()),
+            SendableValue::List(items) => {
+                SharedMapValue::List(items.iter().map(|v| v.sendable_to_shared()).collect())
+            }
+            SendableValue::Tuple(items) => {
+                SharedMapValue::Tuple(items.iter().map(|v| v.sendable_to_shared()).collect())
+            }
+            SendableValue::Record(r) => {
+                SharedMapValue::Record {
+                    type_name: r.type_name.clone(),
+                    field_names: r.field_names.clone(),
+                    fields: r.fields.iter().map(|v| v.sendable_to_shared()).collect(),
+                }
+            }
+            SendableValue::Variant(v) => {
+                SharedMapValue::Variant {
+                    type_name: v.type_name.clone(),
+                    constructor: v.constructor.clone(),
+                    fields: v.fields.iter().map(|f| f.sendable_to_shared()).collect(),
+                }
+            }
+            SendableValue::Set(items) => {
+                SharedMapValue::Set(items.iter().map(Self::sendable_key_to_shared_key).collect())
+            }
+            SendableValue::Map(entries) => {
+                let shared_entries: ImblHashMap<SharedMapKey, SharedMapValue> = entries.iter()
+                    .map(|(k, v)| (Self::sendable_key_to_shared_key(k), v.sendable_to_shared()))
+                    .collect();
+                SharedMapValue::Map(Arc::new(shared_entries))
+            }
+            SendableValue::Error(e) => SharedMapValue::String(format!("Error: {}", e)),
         }
     }
 }
@@ -2721,20 +2865,29 @@ impl ParallelVM {
             name: "Map.insert".to_string(),
             arity: 3,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
                 let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
                     expected: "hashable".to_string(),
                     found: args[1].type_name(heap).to_string()
                 })?;
                 let value = args[2].clone();
 
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                let new_entries = map.entries.update(key, value);
-                let new_ptr = heap.alloc_map(new_entries);
-                Ok(GcValue::Map(new_ptr))
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        let new_entries = map.entries.update(key, value);
+                        let new_ptr = heap.alloc_map(new_entries);
+                        Ok(GcValue::Map(new_ptr))
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        // Convert key and value to shared types, update the shared map
+                        let shared_key = key.to_shared_key();
+                        let shared_value = heap.gc_value_to_shared(&value).ok_or_else(||
+                            RuntimeError::Panic("Cannot convert value to shared type".to_string()))?;
+                        let new_map = Arc::new((**shared_map).clone().update(shared_key, shared_value));
+                        Ok(GcValue::SharedMap(new_map))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
             }),
         }));
 
@@ -2743,19 +2896,25 @@ impl ParallelVM {
             name: "Map.remove".to_string(),
             arity: 2,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
                 let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
                     expected: "hashable".to_string(),
                     found: args[1].type_name(heap).to_string()
                 })?;
 
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                let new_entries = map.entries.without(&key);
-                let new_ptr = heap.alloc_map(new_entries);
-                Ok(GcValue::Map(new_ptr))
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        let new_entries = map.entries.without(&key);
+                        let new_ptr = heap.alloc_map(new_entries);
+                        Ok(GcValue::Map(new_ptr))
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        let shared_key = key.to_shared_key();
+                        let new_map = Arc::new((**shared_map).clone().without(&shared_key));
+                        Ok(GcValue::SharedMap(new_map))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
             }),
         }));
 
@@ -2764,19 +2923,27 @@ impl ParallelVM {
             name: "Map.get".to_string(),
             arity: 2,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
                 let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
                     expected: "hashable".to_string(),
                     found: args[1].type_name(heap).to_string()
                 })?;
 
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                match map.entries.get(&key) {
-                    Some(value) => Ok(value.clone()),
-                    None => Ok(GcValue::Unit)
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        match map.entries.get(&key) {
+                            Some(value) => Ok(value.clone()),
+                            None => Ok(GcValue::Unit)
+                        }
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        let shared_key = key.to_shared_key();
+                        match shared_map.get(&shared_key) {
+                            Some(value) => Ok(heap.shared_to_gc_value(value)),
+                            None => Ok(GcValue::Unit)
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
                 }
             }),
         }));
@@ -2786,17 +2953,22 @@ impl ParallelVM {
             name: "Map.contains".to_string(),
             arity: 2,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
                 let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
                     expected: "hashable".to_string(),
                     found: args[1].type_name(heap).to_string()
                 })?;
 
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                Ok(GcValue::Bool(map.entries.contains_key(&key)))
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        Ok(GcValue::Bool(map.entries.contains_key(&key)))
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        let shared_key = key.to_shared_key();
+                        Ok(GcValue::Bool(shared_map.contains_key(&shared_key)))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
             }),
         }));
 
@@ -2805,18 +2977,25 @@ impl ParallelVM {
             name: "Map.keys".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
-
-                // Clone keys first to release borrow on heap
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                let keys_cloned: Vec<_> = map.entries.keys().cloned().collect();
-                let _ = map;
-                // Now convert to GcValues
-                let keys: Vec<GcValue> = keys_cloned.into_iter().map(|k| k.to_gc_value(heap)).collect();
-                Ok(GcValue::List(heap.make_list(keys)))
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        // Clone keys first to release borrow on heap
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        let keys_cloned: Vec<_> = map.entries.keys().cloned().collect();
+                        let _ = map;
+                        // Now convert to GcValues
+                        let keys: Vec<GcValue> = keys_cloned.into_iter().map(|k| k.to_gc_value(heap)).collect();
+                        Ok(GcValue::List(heap.make_list(keys)))
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        // Convert SharedMapKeys to GcValues
+                        let keys: Vec<GcValue> = shared_map.keys()
+                            .map(|k| GcMapKey::from_shared_key(k).to_gc_value(heap))
+                            .collect();
+                        Ok(GcValue::List(heap.make_list(keys)))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
             }),
         }));
 
@@ -2825,14 +3004,21 @@ impl ParallelVM {
             name: "Map.values".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
-
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                let values: Vec<GcValue> = map.entries.values().cloned().collect();
-                Ok(GcValue::List(heap.make_list(values)))
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        let values: Vec<GcValue> = map.entries.values().cloned().collect();
+                        Ok(GcValue::List(heap.make_list(values)))
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        // Convert SharedMapValues to GcValues
+                        let values: Vec<GcValue> = shared_map.values()
+                            .map(|v| heap.shared_to_gc_value(v))
+                            .collect();
+                        Ok(GcValue::List(heap.make_list(values)))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
             }),
         }));
 
@@ -2841,13 +3027,16 @@ impl ParallelVM {
             name: "Map.size".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
-
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                Ok(GcValue::Int64(map.entries.len() as i64))
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        Ok(GcValue::Int64(map.entries.len() as i64))
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        Ok(GcValue::Int64(shared_map.len() as i64))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
             }),
         }));
 
@@ -2856,13 +3045,16 @@ impl ParallelVM {
             name: "Map.isEmpty".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
-                let map_ptr = match &args[0] {
-                    GcValue::Map(ptr) => *ptr,
-                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
-                };
-
-                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
-                Ok(GcValue::Bool(map.entries.is_empty()))
+                match &args[0] {
+                    GcValue::Map(ptr) => {
+                        let map = heap.get_map(*ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                        Ok(GcValue::Bool(map.entries.is_empty()))
+                    }
+                    GcValue::SharedMap(shared_map) => {
+                        Ok(GcValue::Bool(shared_map.is_empty()))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                }
             }),
         }));
 
@@ -9589,141 +9781,97 @@ impl ThreadWorker {
             
 
                         MapContainsKey(dst, map_reg, key_reg) => {
-
                             let map_val = reg!(*map_reg).clone();
-
                             let key_val = reg!(*key_reg).clone();
 
-                            
-
                             let result = {
-
                                 let proc = self.get_process(local_id).unwrap();
-
-                                if let GcValue::Map(ptr) = &map_val {
-
-                                    if let Some(map) = proc.heap.get_map(*ptr) {
-
-                                        if let Some(key) = key_val.to_gc_map_key(&proc.heap) {
-
-                                            map.entries.contains_key(&key)
-
+                                match &map_val {
+                                    GcValue::Map(ptr) => {
+                                        if let Some(map) = proc.heap.get_map(*ptr) {
+                                            if let Some(key) = key_val.to_gc_map_key(&proc.heap) {
+                                                map.entries.contains_key(&key)
+                                            } else {
+                                                false
+                                            }
                                         } else {
-
                                             false
-
                                         }
-
-                                    } else {
-
-                                        false
-
                                     }
-
+                                    GcValue::SharedMap(shared_map) => {
+                                        if let Some(gc_key) = key_val.to_gc_map_key(&proc.heap) {
+                                            let shared_key = gc_key.to_shared_key();
+                                            shared_map.contains_key(&shared_key)
+                                        } else {
+                                            false
+                                        }
+                                    }
+                                    _ => {
+                                        return Err(RuntimeError::TypeError {
+                                            expected: "Map".to_string(),
+                                            found: map_val.type_name(&proc.heap).to_string(),
+                                        });
+                                    }
                                 }
-
-                                else {
-
-                                    false
-
-                                }
-
                             };
-
-                            
-
-                            if let GcValue::Map(_) = map_val {
-
-                                set_reg!(*dst, GcValue::Bool(result));
-
-                            } else {
-
-                                let proc = self.get_process(local_id).unwrap();
-
-                                return Err(RuntimeError::TypeError {
-
-                                    expected: "Map".to_string(),
-
-                                    found: map_val.type_name(&proc.heap).to_string(),
-
-                                });
-
-                            }
-
+                            set_reg!(*dst, GcValue::Bool(result));
                         }
 
             
 
                         MapGet(dst, map_reg, key_reg) => {
-
                             let map_val = reg!(*map_reg).clone();
-
                             let key_val = reg!(*key_reg).clone();
 
-                            
+                            // For SharedMap, we need to get the value first, then convert outside borrow
+                            let shared_value_opt: Option<SharedMapValue>;
+                            let gc_result: Option<GcValue>;
 
-                            let result = {
-
+                            {
                                 let proc = self.get_process(local_id).unwrap();
-
-                                if let GcValue::Map(ptr) = &map_val {
-
-                                    if let Some(map) = proc.heap.get_map(*ptr) {
-
-                                        if let Some(key) = key_val.to_gc_map_key(&proc.heap) {
-
-                                            map.entries.get(&key).cloned()
-
+                                match &map_val {
+                                    GcValue::Map(ptr) => {
+                                        shared_value_opt = None;
+                                        gc_result = if let Some(map) = proc.heap.get_map(*ptr) {
+                                            if let Some(key) = key_val.to_gc_map_key(&proc.heap) {
+                                                map.entries.get(&key).cloned()
+                                            } else {
+                                                None
+                                            }
                                         } else {
-
                                             None
-
-                                        }
-
+                                        };
                                     }
-
-                                    else {
-
-                                        None
-
+                                    GcValue::SharedMap(shared_map) => {
+                                        gc_result = None;
+                                        shared_value_opt = if let Some(gc_key) = key_val.to_gc_map_key(&proc.heap) {
+                                            let shared_key = gc_key.to_shared_key();
+                                            shared_map.get(&shared_key).cloned()
+                                        } else {
+                                            None
+                                        };
                                     }
-
+                                    _ => {
+                                        return Err(RuntimeError::TypeError {
+                                            expected: "Map".to_string(),
+                                            found: map_val.type_name(&proc.heap).to_string(),
+                                        });
+                                    }
                                 }
-
-                                else {
-
-                                    None
-
-                                }
-
-                            };
-
-                            
-
-                            if let GcValue::Map(_) = map_val {
-
-                                match result {
-
-                                    Some(val) => set_reg!(*dst, val),
-
-                                    None => return Err(RuntimeError::Panic("Key not found in map".to_string())),
-
-                                }
-
-                            } else {
-
-                                let proc = self.get_process(local_id).unwrap();
-
-                                return Err(RuntimeError::TypeError {
-
-                                    expected: "Map".to_string(),
-
-                                    found: map_val.type_name(&proc.heap).to_string(),
-
-                                });
-
                             }
 
+                            // Convert SharedMapValue to GcValue outside the borrow
+                            let result = if let Some(shared_val) = shared_value_opt {
+                                let proc = self.get_process_mut(local_id).unwrap();
+                                Some(proc.heap.shared_to_gc_value(&shared_val))
+                            } else {
+                                gc_result
+                            };
+
+                            match result {
+                                Some(val) => set_reg!(*dst, val),
+                                None => return Err(RuntimeError::Panic("Key not found in map".to_string())),
+                            }
                         }
 
             

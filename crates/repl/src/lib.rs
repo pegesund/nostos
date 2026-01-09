@@ -13,4 +13,4 @@ pub use session::{
     extract_dependencies_from_fn,
 };
 pub use engine::{ReplEngine, ReplConfig, BrowserItem, CompileStatus, SaveCompileResult, SearchResult, PanelInfo, PanelState};
-pub use nostos_vm::{InspectEntry, ThreadSafeValue, ThreadSafeMapKey};
+pub use nostos_vm::{InspectEntry, ThreadSafeValue, ThreadSafeMapKey, SharedMap, SharedMapKey, SharedMapValue};

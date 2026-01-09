@@ -12,3 +12,4 @@ num-bigint = { workspace = true }
 rust_decimal = { workspace = true }
 
 [dev-dependencies]
+imbl = "3"
