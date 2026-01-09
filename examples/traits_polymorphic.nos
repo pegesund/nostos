@@ -1,6 +1,11 @@
 # Polymorphic Functions with Traits
-# Shows how to write functions that work with any type implementing a trait.
-# The compiler generates specialized versions for each concrete type used.
+#
+# Demonstrates polymorphic dispatch with traits:
+# - Describable trait for media items (Book, Movie, Song)
+# - Functions call trait methods on their arguments
+# - Compiler generates specialized versions for each type
+#
+# This enables writing generic code that works with any implementing type.
 
 # ========== Type Definitions ==========
 
@@ -73,27 +78,21 @@ main() = {
     movie = Movie("Inception", 148)
     song = Song("Bohemian Rhapsody", 354)
 
-    # Use polymorphic formatting function
-    println("Formatted items:")
-    println(format_item_book(book))
-    println(format_item_movie(movie))
-    println(format_item_song(song))
+    # Test short_name returns title
+    assert_eq("The Rust Programming Language", book.short_name())
+    assert_eq("Inception", movie.short_name())
+    assert_eq("Bohemian Rhapsody", song.short_name())
 
-    println("")
+    # Test describe format
+    assert_eq("Book: \"The Rust Programming Language\" (552 pages)", book.describe())
+    assert_eq("Movie: \"Inception\" (148 min)", movie.describe())
+    assert_eq("Song: \"Bohemian Rhapsody\" (354s)", song.describe())
 
-    # Use polymorphic print function
-    println("Short names with prefix:")
-    print_with_prefix_book("  - ", book)
-    print_with_prefix_movie("  - ", movie)
-    print_with_prefix_song("  - ", song)
+    # Test polymorphic formatting function
+    assert_eq(">> Book: \"The Rust Programming Language\" (552 pages) <<", format_item_book(book))
+    assert_eq(">> Movie: \"Inception\" (148 min) <<", format_item_movie(movie))
+    assert_eq(">> Song: \"Bohemian Rhapsody\" (354s) <<", format_item_song(song))
 
-    println("")
-
-    # Direct trait method calls still work
-    println("Direct trait calls:")
-    println("  " ++ book.describe())
-    println("  " ++ movie.describe())
-    println("  " ++ song.describe())
-
+    println("Polymorphic trait tests passed!")
     0
 }

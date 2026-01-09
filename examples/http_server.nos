@@ -1,3 +1,13 @@
+# HTTP Server
+#
+# Multi-worker HTTP server with routing:
+# - /       : Hello message
+# - /health : Health check
+# - /echo   : Echo request body
+# - /work   : CPU-bound work (fib(25))
+#
+# Spawns 8 worker processes for parallel request handling.
+
 # Simulate CPU work - compute fib(n)
 fib(0) = 0
 fib(1) = 1

@@ -1,6 +1,12 @@
-# Traits Basics Example
-# Traits define shared behavior that types can implement.
-# This example shows the fundamentals of trait definition and implementation.
+# Traits Basics
+#
+# Demonstrates the trait system for polymorphic behavior:
+# - trait Animal: defines speak() and describe() methods
+# - Multiple types (Dog, Cat, Parrot) implement the same trait
+# - Each implementation provides type-specific behavior
+# - Trait methods are called directly on instances
+#
+# Traits enable ad-hoc polymorphism without inheritance.
 
 # ========== Type Definitions ==========
 
@@ -38,25 +44,21 @@ end
 # ========== Using Traits ==========
 
 main() = {
-    println("=== Traits Basics ===")
-    println("")
-
     # Create instances
     dog = Dog("Buddy", 5)
     cat = Cat("Whiskers", 9)
     parrot = Parrot("Polly", 50)
 
-    # Call trait methods directly on instances
-    println("Speaking:")
-    println("  " ++ dog.speak())
-    println("  " ++ cat.speak())
-    println("  " ++ parrot.speak())
+    # Test speak method
+    assert_eq("Woof! My name is Buddy", dog.speak())
+    assert_eq("Meow! I'm Whiskers with 9 lives", cat.speak())
+    assert_eq("Squawk! Polly knows 50 words!", parrot.speak())
 
-    println("")
-    println("Descriptions:")
-    println("  " ++ dog.describe())
-    println("  " ++ cat.describe())
-    println("  " ++ parrot.describe())
+    # Test describe method
+    assert_eq("Buddy is a 5-year-old dog", dog.describe())
+    assert_eq("Whiskers the cat (9 lives remaining)", cat.describe())
+    assert_eq("Polly the parrot (vocabulary: 50 words)", parrot.describe())
 
+    println("Traits basics tests passed!")
     0
 }

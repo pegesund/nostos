@@ -1,21 +1,23 @@
-# String Encoding Example
-# Demonstrates Base64, URL encoding, and UTF-8 byte operations.
+# String Encoding
+#
+# Demonstrates encoding/decoding operations:
+# - Base64: encode/decode for binary-safe text transmission
+# - URL: encode/decode for query parameters and URLs
+# - UTF-8: toBytes/fromBytes for byte-level string manipulation
+#
+# Essential for web APIs, data serialization, and interoperability.
 
 # Base64 encoding/decoding
 base64Example() = {
     println("=== Base64 Encoding ===")
 
     original = "Hello, Nostos!"
-    println("Original: " ++ original)
-
-    # Encode to Base64
     encoded = Base64.encode(original)
-    println("Encoded:  " ++ encoded)
+    assert_eq("SGVsbG8sIE5vc3RvcyE=", encoded)
 
-    # Decode back
     (status, decoded) = Base64.decode(encoded)
-    println("Decoded:  " ++ decoded)
-    println("Status:   " ++ status)
+    assert_eq("ok", status)
+    assert_eq("Hello, Nostos!", decoded)
     println("")
 }
 
@@ -24,16 +26,12 @@ urlExample() = {
     println("=== URL Encoding ===")
 
     original = "Hello World! name=value&foo=bar"
-    println("Original: " ++ original)
-
-    # Encode for URL
     encoded = Url.encode(original)
-    println("Encoded:  " ++ encoded)
+    assert_eq("Hello%20World%21%20name%3Dvalue%26foo%3Dbar", encoded)
 
-    # Decode back
     (status, decoded) = Url.decode(encoded)
-    println("Decoded:  " ++ decoded)
-    println("Status:   " ++ status)
+    assert_eq("ok", status)
+    assert_eq("Hello World! name=value&foo=bar", decoded)
     println("")
 }
 
@@ -42,17 +40,13 @@ utf8Example() = {
     println("=== UTF-8 Bytes ===")
 
     original = "Hi!"
-    println("Original: " ++ original)
-
-    # Convert to bytes
     bytes = Encoding.toBytes(original)
-    print("Bytes:    ")
-    println(bytes)
+    # "Hi!" = [72, 105, 33]
+    assert_eq([72, 105, 33], bytes)
 
-    # Convert back to string
     (status, decoded) = Encoding.fromBytes(bytes)
-    println("Decoded:  " ++ decoded)
-    println("Status:   " ++ status)
+    assert_eq("ok", status)
+    assert_eq("Hi!", decoded)
     println("")
 }
 
@@ -81,5 +75,5 @@ main() = {
     utf8Example()
     practicalExample()
 
-    println("All encoding examples completed!")
+    println("String encoding tests passed!")
 }

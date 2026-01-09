@@ -1,11 +1,28 @@
-# Example demonstrating I/O capabilities (planned feature)
-# Note: File I/O functions are not yet implemented
+# Hello IO
+#
+# Simple demonstration of basic IO operations.
+# See file_io.nos for comprehensive file system operations.
 
 main() = {
-    println("File I/O functions are planned but not yet implemented:")
-    println("  - writeFile(path, content)")
-    println("  - readFile(path)")
-    println("  - appendFile(path, content)")
-    println("  - fileExists(path)")
-    ()
+    # Basic file write and read
+    path = "/tmp/nostos_hello.txt"
+    File.writeAll(path, "Hello from Nostos!")
+
+    (status, content) = File.readAll(path)
+    assert_eq("ok", status)
+    assert_eq("Hello from Nostos!", content)
+
+    # Verify file exists
+    (s1, exists) = File.exists(path)
+    assert_eq(true, exists)
+
+    # Clean up
+    File.remove(path)
+
+    # Verify removed
+    (s2, exists2) = File.exists(path)
+    assert_eq(false, exists2)
+
+    println("Hello IO tests passed!")
+    0
 }

@@ -1,5 +1,12 @@
-# List operations example
-# Demonstrates higher-order functions and pattern matching
+# List Operations
+#
+# Demonstrates higher-order functions and pattern matching on lists:
+# - map: apply a function to each element
+# - filter: keep elements matching a predicate
+# - fold: reduce a list to a single value
+# - reverse, take, drop: common list manipulations
+#
+# These are fundamental building blocks for functional programming.
 
 # Map a function over a list
 map(_, []) = []
@@ -39,12 +46,28 @@ drop(n, [_ | t]) = drop(n - 1, t)
 main() = {
     nums = [1, 2, 3, 4, 5]
 
-    # Double each number
+    # Test map
     doubled = map(x => x * 2, nums)
+    assert_eq([2, 4, 6, 8, 10], doubled)
 
-    # Filter even numbers
-    evens = filter(x => x % 2 == 0, doubled)
+    # Test filter - filter evens from original list
+    evens = filter(x => x % 2 == 0, nums)
+    assert_eq([2, 4], evens)
 
-    # Sum the result
-    sum(evens)
+    # Test sum and product
+    assert_eq(15, sum(nums))
+    assert_eq(120, product(nums))
+
+    # Test length
+    assert_eq(5, length(nums))
+
+    # Test reverse
+    assert_eq([5, 4, 3, 2, 1], reverse(nums))
+
+    # Test take and drop
+    assert_eq([1, 2, 3], take(3, nums))
+    assert_eq([4, 5], drop(3, nums))
+
+    println("List operations tests passed!")
+    sum(evens)  # 2 + 4 = 6
 }

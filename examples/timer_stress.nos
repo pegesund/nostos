@@ -1,4 +1,12 @@
-# Timer Stress Test - Tests sleep and timeout under load
+# Timer Stress Test
+#
+# Tests sleep and timeout under load:
+# - Concurrent sleepers with different durations
+# - Timeout precision verification
+# - Interleaved sleep and receive patterns
+# - Rapid-fire short timeouts (20 x 10ms)
+# - Sleep ordering verification
+#
 # Run with: nostos --parallel-affinity 4 examples/timer_stress.nos
 
 # Counter that increments and reports

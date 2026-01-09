@@ -1,5 +1,11 @@
-# Counter Server example
-# A stateful process that maintains a counter
+# Counter Server
+#
+# Demonstrates stateful server processes:
+# - counter_loop: maintains state via recursive message handling
+# - Inc/Dec/Get/Stop messages for state manipulation
+# - Client functions for clean API (increment, decrement, get_value)
+#
+# This is the OTP GenServer pattern: state as function arguments.
 
 # Counter loop with state
 counter_loop(state) = receive
@@ -51,22 +57,28 @@ stop(counter) = {
 main() = {
     # Start counter at 0
     c = start_counter(0)
+    assert_eq(0, get_value(c))
 
     # Increment 3 times
-    increment(c)
-    increment(c)
-    increment(c)
+    assert_eq(1, increment(c))
+    assert_eq(2, increment(c))
+    assert_eq(3, increment(c))
 
-    # Get value (should be 3)
-    v1 = get_value(c)
+    # Verify value
+    assert_eq(3, get_value(c))
 
     # Decrement once
-    decrement(c)
+    assert_eq(2, decrement(c))
+    assert_eq(2, get_value(c))
 
-    # Get final value (should be 2)
-    v2 = get_value(c)
+    # Start another counter at 100
+    c2 = start_counter(100)
+    assert_eq(100, get_value(c2))
+    assert_eq(99, decrement(c2))
 
     stop(c)
+    stop(c2)
 
-    v1 + v2
+    println("Counter server tests passed!")
+    5  # 3 + 2
 }

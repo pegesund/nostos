@@ -1,4 +1,11 @@
-# Simple chain test to debug messaging
+# Simple Chain
+#
+# Minimal test for process chain messaging:
+# - Two forwarder processes in a chain
+# - Message passes through chain, incrementing at each hop
+# - Tests spawn, send (<-), receive with timeout
+#
+# Used to debug basic cross-process communication.
 
 forwarder(next) = {
     println("Forwarder waiting...")
@@ -41,13 +48,9 @@ main() = {
 
     println("Waiting for result...")
     result = receive n -> n after 5000 -> -999 end
-    println("Got result:")
-    println(result)
+    # 10 -> node2 (+1) -> node1 (+1) -> me = 12
+    assert_eq(12, result)
 
-    if result == 12 then {
-        println("SUCCESS!")
-    } else {
-        println("FAILED - expected 12")
-    }
+    println("Simple chain test passed!")
     ()
 }

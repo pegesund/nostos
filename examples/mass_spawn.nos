@@ -1,11 +1,11 @@
-# Mass Spawn Example - Demonstrates spawning 100,000 lightweight processes
-# This example shows Nostos's Erlang-style concurrency:
-#   - Spawns 100,000 processes (each with ~2KB memory footprint)
-#   - Passes a secret value to each process
-#   - Each process echoes it back
-#   - Main verifies all responses match the original
-# Note: By default, the scheduler runs on a single CPU thread.
-# Use --parallel to enable multi-CPU work-stealing execution.
+# Mass Spawn
+#
+# Stress test for lightweight process creation:
+# - Spawns 100,000 processes (~2KB memory each)
+# - Each process echoes a secret value back
+# - Verifies all 100,000 responses are correct
+#
+# Demonstrates Erlang-style massive concurrency.
 # Run with: nostos examples/mass_spawn.nos
 # Or parallel: nostos --parallel examples/mass_spawn.nos
 

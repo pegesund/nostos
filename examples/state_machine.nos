@@ -1,5 +1,11 @@
-# State machine example
-# Demonstrates encoding state machines with variant types
+# State Machines
+#
+# Demonstrates encoding finite state machines with algebraic data types:
+# - TrafficLight: cyclic state transitions (Red -> Green -> Yellow -> Red)
+# - DoorState: guarded transitions (can't open a locked door)
+# - State equality checking via pattern matching
+#
+# ADTs make illegal states unrepresentable and transitions explicit.
 
 type TrafficLight = Red | Yellow | Green
 
@@ -54,11 +60,35 @@ door_to_int(Closed) = 2
 door_to_int(Locked) = 3
 
 main() = {
+    # Test traffic light transitions
+    assert_eq(Green, next_light(Red))
+    assert_eq(Yellow, next_light(Green))
+    assert_eq(Red, next_light(Yellow))
+
+    # Test state equality
+    assert_eq(true, state_eq(Red, Red))
+    assert_eq(false, state_eq(Red, Green))
+
     # Traffic light cycles back to Red in 3 steps
-    light_cycles = cycles_to_initial(Red, Red, 0)
+    assert_eq(3, cycles_to_initial(Red, Red, 0))
+    assert_eq(3, cycles_to_initial(Green, Green, 0))
 
-    # Door state machine test
-    door_result = test_door()
+    # Test door state machine transitions
+    # Locked door cannot be opened
+    assert_eq(3, door_to_int(open_door(Locked)))  # stays Locked
+    # Closed door can be opened
+    assert_eq(1, door_to_int(open_door(Closed)))  # becomes Open
+    # Open door can be closed
+    assert_eq(2, door_to_int(close_door(Open)))  # becomes Closed
+    # Only closed door can be locked
+    assert_eq(3, door_to_int(lock_door(Closed)))  # becomes Locked
+    assert_eq(1, door_to_int(lock_door(Open)))  # stays Open
+    # Unlocking a locked door returns Closed
+    assert_eq(2, door_to_int(unlock_door(Locked)))
 
-    light_cycles + door_result
+    # Full door sequence test: Closed -> Locked -> Locked -> Closed -> Open
+    assert_eq(1, test_door())
+
+    println("State machine tests passed!")
+    0
 }

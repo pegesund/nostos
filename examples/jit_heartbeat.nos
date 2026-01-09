@@ -1,8 +1,12 @@
 # JIT Heartbeat Monitor
-# Demonstrates that light processes stay responsive while heavy JIT runs
-# The "heart" sends rapid heartbeats while "the beast" crunches fib(30).
-# If JIT blocked everything, we'd see no heartbeats until the beast finishes.
-# Instead, heartbeats flow freely - proving the scheduler keeps things alive.
+#
+# Tests scheduler fairness during JIT-heavy computation:
+# - "Heart" sends 100 rapid heartbeats
+# - "Beast" computes fib(30) (~1M recursive calls)
+# - If JIT blocked everything, no heartbeats until beast finishes
+# - Heartbeats flow freely, proving fair scheduling
+#
+# Demonstrates that light processes stay responsive during heavy JIT work.
 
 # The beast: heavy JIT-compiled fibonacci
 fib(0) = 0
@@ -47,10 +51,8 @@ main() = {
     print("Heartbeats received: ")
     println(beats)
 
-    if beats > 90 then {
-        println("HEALTHY: Heart kept beating while beast computed fib(30)!")
-        println("The scheduler is fair - JIT doesn't block other processes.")
-    } else {
-        println("Some beats lost - but system stayed responsive.")
-    }
+    # All 100 heartbeats should arrive (scheduler is fair)
+    assert_eq(100, beats)
+
+    println("JIT heartbeat test passed!")
 }

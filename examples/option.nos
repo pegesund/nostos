@@ -1,5 +1,13 @@
-# Option type example
-# Demonstrates variant types and null-safe programming
+# Option Type
+#
+# Demonstrates the Option monad for null-safe programming:
+# - Option[T] type with None and Some(T) variants
+# - map_opt: transform the inner value if present
+# - flat_map: chain operations that return Options (monadic bind)
+# - get_or: provide a default for None cases
+# - filter_opt: conditionally keep or discard values
+#
+# This pattern eliminates null pointer errors at compile time.
 
 type Option[T] = None | Some(T)
 
@@ -42,11 +50,42 @@ calculate(a, b, c) = {
 }
 
 main() = {
+    # Test map_opt
+    assert_eq(Some(10), map_opt(x => x * 2, Some(5)))
+    assert_eq(None, map_opt(x => x * 2, None))
+
+    # Test flat_map
+    assert_eq(Some(2), flat_map(x => safe_div(x, 5), Some(10)))
+    assert_eq(None, flat_map(x => safe_div(x, 0), Some(10)))
+    assert_eq(None, flat_map(x => safe_div(x, 5), None))
+
+    # Test get_or
+    assert_eq(42, get_or(Some(42), 0))
+    assert_eq(0, get_or(None, 0))
+
+    # Test is_some and is_none
+    assert_eq(true, is_some(Some(1)))
+    assert_eq(false, is_some(None))
+    assert_eq(true, is_none(None))
+    assert_eq(false, is_none(Some(1)))
+
+    # Test filter_opt
+    assert_eq(Some(10), filter_opt(x => x > 5, Some(10)))
+    assert_eq(None, filter_opt(x => x > 5, Some(3)))
+    assert_eq(None, filter_opt(x => x > 5, None))
+
+    # Test safe_div
+    assert_eq(Some(5), safe_div(10, 2))
+    assert_eq(None, safe_div(10, 0))
+
+    # Test calculate (chained safe operations)
     # 100 / 5 / 2 = 10
-    result1 = calculate(100, 5, 2)
-
+    assert_eq(10, calculate(100, 5, 2))
     # 100 / 0 / 2 = -1 (division by zero handled)
-    result2 = calculate(100, 0, 2)
+    assert_eq(-1, calculate(100, 0, 2))
+    # 100 / 5 / 0 = -1 (second division by zero)
+    assert_eq(-1, calculate(100, 5, 0))
 
-    result1 + result2
+    println("Option tests passed!")
+    0
 }

@@ -1,5 +1,11 @@
-# Binary tree example
-# Demonstrates recursive types and tree operations
+# Binary Tree
+#
+# Demonstrates recursive algebraic data types and tree operations:
+# - Tree[T] type with Leaf and Node constructors
+# - Recursive traversal and aggregation
+# - Tree mapping and transformation
+#
+# Binary trees are a fundamental data structure in computer science.
 
 type Tree[T] = Leaf | Node(T, Tree[T], Tree[T])
 
@@ -30,7 +36,7 @@ map_tree(_, Leaf) = Leaf
 map_tree(f, Node(v, left, right)) = Node(f(v), map_tree(f, left), map_tree(f, right))
 
 main() = {
-    # Create a tree:
+    # Create a balanced binary search tree:
     #       4
     #      / \
     #     2   6
@@ -41,6 +47,22 @@ main() = {
         Node(6, Node(5, Leaf, Leaf), Node(7, Leaf, Leaf))
     )
 
-    # Sum all values: 1+2+3+4+5+6+7 = 28
+    # Test sum: 1+2+3+4+5+6+7 = 28
+    assert_eq(28, sum_tree(tree))
+
+    # Test count: 7 nodes
+    assert_eq(7, count(tree))
+
+    # Test depth: 3 levels
+    assert_eq(3, depth(tree))
+
+    # Test in-order traversal (gives sorted list for BST)
+    assert_eq([1, 2, 3, 4, 5, 6, 7], inorder(tree))
+
+    # Test map_tree
+    doubled = map_tree(x => x * 2, tree)
+    assert_eq(56, sum_tree(doubled))
+
+    println("Binary tree tests passed!")
     sum_tree(tree)
 }

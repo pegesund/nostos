@@ -1,5 +1,10 @@
-# Sleep Test - Demonstrates sleep() in ParallelVM
-# This tests that sleep correctly pauses a process without blocking other processes.
+# Sleep Test
+#
+# Tests that sleep() correctly pauses processes:
+# - Three workers with different sleep durations (100, 200, 300ms)
+# - Workers should wake in order of shortest sleep first
+# - Verifies sleep doesn't block other processes
+#
 # Run with: nostos --parallel-affinity 2 examples/sleep_test.nos
 
 # Worker that sleeps and reports when done

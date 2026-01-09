@@ -1,5 +1,11 @@
-# Timeout Test - Demonstrates receive timeout in ParallelVM
-# This tests that receive with `after` clause correctly times out when no message arrives.
+# Timeout Test
+#
+# Tests receive timeout behavior:
+# - Basic timeout: times out when no message arrives
+# - Message before timeout: receives message in time
+# - Timeout before message: times out when message is late
+# - Zero timeout: immediate mailbox check
+#
 # Run with: nostos --parallel-affinity 2 examples/timeout_test.nos
 
 # Helper: sends a message after a delay
