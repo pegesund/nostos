@@ -2305,14 +2305,23 @@ fn show_module_view_dialog(s: &mut Cursive, module_name: &str, source: &str) {
     let dialog = Dialog::around(
         scroll_view.fixed_size((80, 30))
     )
-    .title(format!("Module: {} (view only)", module_name))
+    .title(format!("Module: {} [Ctrl+Y to copy]", module_name))
     .button("Close", |s| { s.pop_layer(); });
 
-    // Wrap in OnEventView for Esc to close
-    let dialog_with_esc = OnEventView::new(dialog)
-        .on_event(Key::Esc, |s| { s.pop_layer(); });
+    // Capture source for Ctrl+Y copy
+    let source_for_copy = source.to_string();
 
-    s.add_layer(dialog_with_esc);
+    // Wrap in OnEventView for Esc to close and Ctrl+Y to copy
+    let dialog_with_events = OnEventView::new(dialog)
+        .on_event(Key::Esc, |s| { s.pop_layer(); })
+        .on_event(Event::CtrlChar('y'), move |s| {
+            match copy_to_system_clipboard(&source_for_copy) {
+                Ok(_) => log_to_repl(s, &format!("Copied {} chars to clipboard", source_for_copy.len())),
+                Err(e) => log_to_repl(s, &format!("Copy failed: {}", e)),
+            }
+        });
+
+    s.add_layer(dialog_with_events);
 }
 
 /// Open the value inspector dialog
