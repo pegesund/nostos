@@ -1,0 +1,1160 @@
+//! Parser for the Nostos programming language using chumsky.
+
+use chumsky::prelude::*;
+
+use crate::ast::*;
+use crate::lexer::Token;
+
+/// Parse error type
+pub type ParseError<'a> = Simple<Token>;
+
+/// Create an identifier from a token span.
+fn make_ident(name: String, span: Span) -> Ident {
+    Spanned::new(name, span)
+}
+
+/// Convert chumsky span to our Span
+fn to_span(span: std::ops::Range<usize>) -> Span {
+    Span::new(span.start, span.end)
+}
+
+/// Parser for identifiers (lowercase).
+fn ident() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
+    filter_map(|span, tok| match tok {
+        Token::LowerIdent(s) => Ok(make_ident(s, to_span(span))),
+        Token::SelfKw => Ok(make_ident("self".to_string(), to_span(span))),
+        _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+    })
+}
+
+/// Parser for type names (uppercase).
+fn type_name() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
+    filter_map(|span, tok| match tok {
+        Token::UpperIdent(s) => Ok(make_ident(s, to_span(span))),
+        Token::SelfType => Ok(make_ident("Self".to_string(), to_span(span))),
+        _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+    })
+}
+
+/// Parser for any identifier (lower or upper).
+fn any_ident() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
+    filter_map(|span, tok| match tok {
+        Token::LowerIdent(s) => Ok(make_ident(s, to_span(span))),
+        Token::UpperIdent(s) => Ok(make_ident(s, to_span(span))),
+        Token::SelfKw => Ok(make_ident("self".to_string(), to_span(span))),
+        Token::SelfType => Ok(make_ident("Self".to_string(), to_span(span))),
+        _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+    })
+}
+
+/// Parser for type expressions.
+fn type_expr() -> impl Parser<Token, TypeExpr, Error = Simple<Token>> + Clone {
+    recursive(|ty| {
+        // Unit type: ()
+        let unit = just(Token::LParen)
+            .then(just(Token::RParen))
+            .map(|_| TypeExpr::Unit);
+
+        let simple = type_name().map(TypeExpr::Name);
+
+        let generic = type_name()
+            .then(
+                ty.clone()
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .delimited_by(just(Token::LBracket), just(Token::RBracket)),
+            )
+            .map(|(name, args)| TypeExpr::Generic(name, args));
+
+        let record = ident()
+            .then_ignore(just(Token::Colon))
+            .then(ty.clone())
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            .map(TypeExpr::Record);
+
+        // Tuple type: (Int, String) - at least 2 elements
+        let tuple = ty
+            .clone()
+            .separated_by(just(Token::Comma))
+            .at_least(2)
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .map(TypeExpr::Tuple);
+
+        let atom = choice((unit, generic, simple, record, tuple));
+
+        // Function type: T -> U or (T, U) -> V
+        let params = ty
+            .clone()
+            .separated_by(just(Token::Comma))
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .or(atom.clone().map(|t| vec![t]));
+
+        params
+            .clone()
+            .then(just(Token::RightArrow).ignore_then(ty.clone()).or_not())
+            .map(|(params, ret)| {
+                if let Some(ret) = ret {
+                    TypeExpr::Function(params, Box::new(ret))
+                } else if params.len() == 1 {
+                    params.into_iter().next().unwrap()
+                } else {
+                    TypeExpr::Tuple(params)
+                }
+            })
+    })
+}
+
+/// Parser for patterns.
+fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
+    recursive(|pat| {
+        let wildcard =
+            just(Token::Underscore).map_with_span(|_, span| Pattern::Wildcard(to_span(span)));
+
+        let var = ident().map(Pattern::Var);
+
+        // Unit pattern: ()
+        let unit = just(Token::LParen)
+            .then(just(Token::RParen))
+            .map_with_span(|_, span| Pattern::Unit(to_span(span)));
+
+        // Integer patterns (including hex and binary)
+        let int = filter_map(|span, tok| match tok {
+            Token::Int(n) => Ok(Pattern::Int(n, to_span(span))),
+            Token::HexInt(n) => Ok(Pattern::Int(n, to_span(span))),
+            Token::BinInt(n) => Ok(Pattern::Int(n, to_span(span))),
+            _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+        });
+
+        let float = filter_map(|span, tok| match tok {
+            Token::Float(s) => Ok(Pattern::Float(s.parse().unwrap_or(0.0), to_span(span))),
+            _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+        });
+
+        let string = filter_map(|span, tok| match tok {
+            Token::String(s) => Ok(Pattern::String(s, to_span(span))),
+            _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+        });
+
+        let char_pat = filter_map(|span, tok| match tok {
+            Token::Char(c) => Ok(Pattern::Char(c, to_span(span))),
+            _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+        });
+
+        let bool_pat = filter_map(|span, tok| match tok {
+            Token::True => Ok(Pattern::Bool(true, to_span(span))),
+            Token::False => Ok(Pattern::Bool(false, to_span(span))),
+            _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+        });
+
+        // Pin pattern: ^ident
+        let pin = just(Token::Caret)
+            .ignore_then(ident())
+            .map_with_span(|id, span| Pattern::Pin(Box::new(Expr::Var(id)), to_span(span)));
+
+        // Tuple pattern: (a, b)
+        let tuple = pat
+            .clone()
+            .separated_by(just(Token::Comma))
+            .at_least(2)
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .map_with_span(|pats, span| Pattern::Tuple(pats, to_span(span)));
+
+        // Record pattern field
+        let record_field = choice((
+            // Named: name: pattern
+            ident()
+                .then_ignore(just(Token::Colon))
+                .then(pat.clone())
+                .map(|(name, pat)| RecordPatternField::Named(name, pat)),
+            // Rest: _
+            just(Token::Underscore).map_with_span(|_, span| RecordPatternField::Rest(to_span(span))),
+            // Punned: just name
+            ident().map(RecordPatternField::Punned),
+        ));
+
+        let record = record_field
+            .clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            .map_with_span(|fields, span| Pattern::Record(fields, to_span(span)));
+
+        // Variant pattern: Some(x), None, Circle{radius: r}
+        let variant_positional = type_name()
+            .then(
+                pat.clone()
+                    .separated_by(just(Token::Comma))
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map_with_span(|(name, args), span| {
+                Pattern::Variant(name, VariantPatternFields::Positional(args), to_span(span))
+            });
+
+        // Variant with named fields: Circle{radius: r}
+        let variant_named = type_name()
+            .then(
+                record_field
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            )
+            .map_with_span(|(name, fields), span| {
+                Pattern::Variant(name, VariantPatternFields::Named(fields), to_span(span))
+            });
+
+        // Unit variant (just name, no args)
+        let variant_unit = type_name()
+            .map_with_span(|name, span| {
+                Pattern::Variant(name, VariantPatternFields::Unit, to_span(span))
+            });
+
+        // Single element in parens is just grouping
+        let grouped = pat
+            .clone()
+            .delimited_by(just(Token::LParen), just(Token::RParen));
+
+        // Base patterns (without or and without list) - used for list element patterns
+        let literals = choice((wildcard.clone(), bool_pat.clone(), int.clone(), float.clone(), string.clone(), char_pat.clone())).boxed();
+        let base_containers = choice((unit.clone(), tuple.clone(), grouped.clone(), record.clone())).boxed();
+        let variants_box = choice((pin.clone(), variant_positional.clone(), variant_named.clone(), variant_unit.clone(), var.clone())).boxed();
+        let base_no_list = choice((literals.clone(), base_containers, variants_box.clone()));
+
+        // List pattern: [], [h | t], [a, b, c]
+        // Note: list elements use base_no_list to avoid Or pattern conflicts with | cons operator
+        let list_empty = just(Token::LBracket)
+            .then(just(Token::RBracket))
+            .map_with_span(|_, span| Pattern::List(ListPattern::Empty, to_span(span)));
+
+        let list_cons = base_no_list
+            .clone()
+            .separated_by(just(Token::Comma))
+            .at_least(1)
+            .then(just(Token::Pipe).ignore_then(pat.clone()).or_not())
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .map_with_span(|(elems, tail), span| {
+                Pattern::List(ListPattern::Cons(elems, tail.map(Box::new)), to_span(span))
+            });
+
+        // Full containers including list patterns
+        let containers = choice((unit, list_empty, list_cons, tuple, grouped, record)).boxed();
+        let variants_final = choice((pin, variant_positional, variant_named, variant_unit, var)).boxed();
+        let base = choice((literals, containers, variants_final));
+
+        // Or pattern: pattern | pattern | pattern
+        // Note: This needs careful precedence handling
+        base.clone()
+            .then(
+                just(Token::Pipe)
+                    .ignore_then(base.clone())
+                    .repeated()
+            )
+            .map_with_span(|(first, rest), span| {
+                if rest.is_empty() {
+                    first
+                } else {
+                    let mut pats = vec![first];
+                    pats.extend(rest);
+                    Pattern::Or(pats, to_span(span))
+                }
+            })
+    })
+    .boxed()
+}
+
+/// Parser for expressions.
+pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
+    recursive(|expr| {
+        // Integer literals (including hex and binary)
+        let int = filter_map(|span, tok| match tok {
+            Token::Int(n) => Ok(Expr::Int(n, to_span(span))),
+            Token::HexInt(n) => Ok(Expr::Int(n, to_span(span))),
+            Token::BinInt(n) => Ok(Expr::Int(n, to_span(span))),
+            _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+        });
+
+        let float = filter_map(|span, tok| match tok {
+            Token::Float(s) => Ok(Expr::Float(s.parse().unwrap_or(0.0), to_span(span))),
+            _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+        });
+
+        let string = filter_map(|span, tok| match tok {
+            Token::String(s) => Ok(Expr::String(StringLit::Plain(s), to_span(span))),
+            _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+        });
+
+        let char_expr = filter_map(|span, tok| match tok {
+            Token::Char(c) => Ok(Expr::Char(c, to_span(span))),
+            _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+        });
+
+        let bool_expr = filter_map(|span, tok| match tok {
+            Token::True => Ok(Expr::Bool(true, to_span(span))),
+            Token::False => Ok(Expr::Bool(false, to_span(span))),
+            _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+        });
+
+        let var = ident().map(Expr::Var);
+
+        // Unit: ()
+        let unit = just(Token::LParen)
+            .then(just(Token::RParen))
+            .map_with_span(|_, span| Expr::Unit(to_span(span)));
+
+        // Tuple: (a, b, c)
+        let tuple = expr
+            .clone()
+            .separated_by(just(Token::Comma))
+            .at_least(2)
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .map_with_span(|exprs, span| Expr::Tuple(exprs, to_span(span)));
+
+        // Grouped expression: (expr)
+        let grouped = expr
+            .clone()
+            .delimited_by(just(Token::LParen), just(Token::RParen));
+
+        // List: [a, b, c] or [h | t]
+        let list = expr
+            .clone()
+            .separated_by(just(Token::Comma))
+            .then(just(Token::Pipe).ignore_then(expr.clone()).or_not())
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .map_with_span(|(elems, tail), span| {
+                Expr::List(elems, tail.map(Box::new), to_span(span))
+            });
+
+        // Map literal: %{"key": value, "key2": value2}
+        let map_entry = expr.clone()
+            .then_ignore(just(Token::Colon))
+            .then(expr.clone());
+        let map = just(Token::Percent)
+            .ignore_then(
+                map_entry
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            )
+            .map_with_span(|entries, span| Expr::Map(entries, to_span(span)));
+
+        // Set literal: #{1, 2, 3}
+        let set = just(Token::Hash)
+            .ignore_then(
+                expr.clone()
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            )
+            .map_with_span(|elems, span| Expr::Set(elems, to_span(span)));
+
+        // Record field
+        let record_field = choice((
+            ident()
+                .then_ignore(just(Token::Colon))
+                .then(expr.clone())
+                .map(|(name, val)| RecordField::Named(name, val)),
+            expr.clone().map(RecordField::Positional),
+        ));
+
+        // Record/Variant construction: Point(3.0, 4.0) or Point(x: 3.0, y: 4.0)
+        let record = type_name()
+            .then(
+                record_field
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map_with_span(|(name, fields), span| Expr::Record(name, fields, to_span(span)));
+
+        // Unit variant: None, True, False (uppercase identifiers without parens)
+        // Note: must come after `record` in choice to prefer record with args
+        let unit_variant = type_name()
+            .map_with_span(|name, span| Expr::Record(name, vec![], to_span(span)));
+
+        // Block: { stmt; stmt; expr }
+        let stmt = choice((
+            // Let binding: var x = expr or pattern = expr
+            just(Token::Var)
+                .or_not()
+                .then(pattern())
+                .then_ignore(just(Token::Eq))
+                .then(expr.clone())
+                .map(|((mutable, pat), val)| {
+                    Stmt::Let(Binding {
+                        mutable: mutable.is_some(),
+                        pattern: pat,
+                        ty: None,
+                        value: val,
+                        span: Span::default(),
+                    })
+                }),
+            // Expression statement
+            expr.clone().map(Stmt::Expr),
+        ));
+
+        let block = stmt
+            .clone()
+            .separated_by(just(Token::Comma).or(just(Token::Colon)).or_not())
+            .at_least(1)
+            .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            .map_with_span(|stmts, span| Expr::Block(stmts, to_span(span)));
+
+        // Lambda: x => expr or (a, b) => expr
+        let lambda_params = choice((
+            pattern()
+                .separated_by(just(Token::Comma))
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+            pattern().map(|p| vec![p]),
+        ));
+
+        let lambda = lambda_params
+            .then_ignore(just(Token::FatArrow))
+            .then(expr.clone())
+            .map_with_span(|(params, body), span| {
+                Expr::Lambda(params, Box::new(body), to_span(span))
+            });
+
+        // If expression
+        let if_expr = just(Token::If)
+            .ignore_then(expr.clone())
+            .then_ignore(just(Token::Then))
+            .then(expr.clone())
+            .then_ignore(just(Token::Else))
+            .then(expr.clone())
+            .map_with_span(|((cond, then_branch), else_branch), span| {
+                Expr::If(
+                    Box::new(cond),
+                    Box::new(then_branch),
+                    Box::new(else_branch),
+                    to_span(span),
+                )
+            });
+
+        // Match arm: pattern -> expr or pattern when guard -> expr
+        let match_arm = pattern()
+            .then(just(Token::When).ignore_then(expr.clone()).or_not())
+            .then_ignore(just(Token::RightArrow))
+            .then(expr.clone())
+            .map_with_span(|((pat, guard), body), span| MatchArm {
+                pattern: pat,
+                guard,
+                body,
+                span: to_span(span),
+            });
+
+        // Match expression
+        let match_expr = just(Token::Match)
+            .ignore_then(expr.clone())
+            .then(match_arm.clone().repeated().at_least(1))
+            .then_ignore(just(Token::End).or_not())
+            .map_with_span(|(scrutinee, arms), span| {
+                Expr::Match(Box::new(scrutinee), arms, to_span(span))
+            });
+
+        // Try expression: try { expr } catch pattern -> expr finally { expr } end
+        let try_expr = just(Token::Try)
+            .ignore_then(expr.clone())
+            .then_ignore(just(Token::Catch))
+            .then(match_arm.clone().repeated())
+            .then(just(Token::Finally).ignore_then(expr.clone()).or_not())
+            .then_ignore(just(Token::End))
+            .map_with_span(|((body, catches), finally), span| {
+                Expr::Try(Box::new(body), catches, finally.map(Box::new), to_span(span))
+            });
+
+        // Do block: do stmt; stmt; ... end
+        let do_stmt = choice((
+            // Bind: pattern = expr
+            pattern()
+                .then_ignore(just(Token::Eq))
+                .then(expr.clone())
+                .map(|(pat, e)| DoStmt::Bind(pat, e)),
+            // Expression
+            expr.clone().map(DoStmt::Expr),
+        ));
+
+        let do_block = just(Token::Do)
+            .ignore_then(do_stmt.repeated())
+            .then_ignore(just(Token::End))
+            .map_with_span(|stmts, span| Expr::Do(stmts, to_span(span)));
+
+        // Receive expression (concurrency)
+        let receive_expr = just(Token::Receive)
+            .ignore_then(match_arm.clone().repeated())
+            .then(
+                just(Token::After)
+                    .ignore_then(expr.clone())
+                    .then_ignore(just(Token::RightArrow))
+                    .then(expr.clone())
+                    .or_not(),
+            )
+            .then_ignore(just(Token::End))
+            .map_with_span(|(arms, timeout), span| {
+                let timeout = timeout.map(|(t, body)| (Box::new(t), Box::new(body)));
+                Expr::Receive(arms, timeout, to_span(span))
+            });
+
+        // Spawn expressions
+        let spawn_kind = choice((
+            just(Token::SpawnMonitor).to(SpawnKind::Monitored),
+            just(Token::SpawnLink).to(SpawnKind::Linked),
+            just(Token::Spawn).to(SpawnKind::Normal),
+        ));
+
+        let spawn_expr = spawn_kind
+            .then(expr.clone().delimited_by(just(Token::LParen), just(Token::RParen)))
+            .map_with_span(|(kind, func), span| {
+                Expr::Spawn(kind, Box::new(func), vec![], to_span(span))
+            });
+
+        // Quote expression
+        let quote_expr = just(Token::Quote)
+            .ignore_then(expr.clone().delimited_by(just(Token::LParen), just(Token::RParen)))
+            .map_with_span(|inner, span| Expr::Quote(Box::new(inner), to_span(span)));
+
+        // Primary expressions - split into groups to reduce type complexity
+        let control_flow = choice((if_expr, match_expr, try_expr, do_block, receive_expr)).boxed();
+        let special = choice((spawn_expr, quote_expr, lambda)).boxed();
+        let lit = choice((bool_expr, int, float, string, char_expr)).boxed();
+        let collections = choice((map, set, record, unit_variant, tuple, unit, list, block)).boxed();
+        let simple = choice((grouped, var)).boxed();
+        let primary = choice((control_flow, special, lit, collections, simple));
+
+        // Postfix: function calls, method calls, field access, try operator
+        let call_args = expr
+            .clone()
+            .separated_by(just(Token::Comma))
+            .delimited_by(just(Token::LParen), just(Token::RParen));
+
+        let postfix = primary.then(
+            choice((
+                // Function call: f(x, y)
+                call_args
+                    .clone()
+                    .map_with_span(|args, span| (PostfixOp::Call(args), to_span(span))),
+                // Method call or field access: .foo or .foo(args) or tuple index .0 .1
+                just(Token::Dot)
+                    .ignore_then(
+                        // Accept either an identifier or an integer (for tuple indexing)
+                        ident().or(
+                            select! { Token::Int(n) => n }
+                                .map_with_span(|n, span| Ident { node: n.to_string(), span: to_span(span) })
+                        )
+                    )
+                    .then(call_args.clone().or_not())
+                    .map_with_span(|(name, args), span| match args {
+                        Some(args) => (PostfixOp::MethodCall(name, args), to_span(span)),
+                        None => (PostfixOp::FieldAccess(name), to_span(span)),
+                    }),
+                // Index: arr[i]
+                expr.clone()
+                    .delimited_by(just(Token::LBracket), just(Token::RBracket))
+                    .map_with_span(|idx, span| (PostfixOp::Index(idx), to_span(span))),
+                // Try operator: expr?
+                just(Token::Question)
+                    .map_with_span(|_, span| (PostfixOp::Try, to_span(span))),
+            ))
+            .repeated(),
+        );
+
+        let postfix = postfix.foldl(|lhs, (op, span)| match op {
+            PostfixOp::Call(args) => {
+                let full_span = get_span(&lhs).merge(span);
+                Expr::Call(Box::new(lhs), args, full_span)
+            }
+            PostfixOp::MethodCall(name, args) => {
+                let full_span = get_span(&lhs).merge(span);
+                Expr::MethodCall(Box::new(lhs), name, args, full_span)
+            }
+            PostfixOp::FieldAccess(name) => {
+                let full_span = get_span(&lhs).merge(span);
+                Expr::FieldAccess(Box::new(lhs), name, full_span)
+            }
+            PostfixOp::Index(idx) => {
+                let full_span = get_span(&lhs).merge(span);
+                Expr::Index(Box::new(lhs), Box::new(idx), full_span)
+            }
+            PostfixOp::Try => {
+                let full_span = get_span(&lhs).merge(span);
+                Expr::Try_(Box::new(lhs), full_span)
+            }
+        });
+
+        // Unary: -x, !x
+        let unary = choice((
+            just(Token::Minus).to(UnaryOp::Neg),
+            just(Token::Bang).to(UnaryOp::Not),
+        ))
+        .repeated()
+        .then(postfix)
+        .foldr(|op, rhs| {
+            let span = get_span(&rhs);
+            Expr::UnaryOp(op, Box::new(rhs), span)
+        })
+        .boxed(); // Box to reduce type complexity
+
+        // Binary operators with precedence
+        // ** (right associative)
+        let power = unary.clone().then(
+            just(Token::StarStar)
+                .to(BinOp::Pow)
+                .then(unary.clone())
+                .repeated(),
+        );
+        let power = power.foldl(|lhs, (op, rhs)| {
+            let span = get_span(&lhs).merge(get_span(&rhs));
+            Expr::BinOp(Box::new(lhs), op, Box::new(rhs), span)
+        });
+
+        // * / %
+        let factor = power.clone().then(
+            choice((
+                just(Token::Star).to(BinOp::Mul),
+                just(Token::Slash).to(BinOp::Div),
+                just(Token::Percent).to(BinOp::Mod),
+            ))
+            .then(power)
+            .repeated(),
+        );
+        let factor = factor.foldl(|lhs, (op, rhs)| {
+            let span = get_span(&lhs).merge(get_span(&rhs));
+            Expr::BinOp(Box::new(lhs), op, Box::new(rhs), span)
+        });
+
+        // + -
+        let term = factor.clone().then(
+            choice((
+                just(Token::Plus).to(BinOp::Add),
+                just(Token::Minus).to(BinOp::Sub),
+            ))
+            .then(factor)
+            .repeated(),
+        );
+        let term = term.foldl(|lhs, (op, rhs)| {
+            let span = get_span(&lhs).merge(get_span(&rhs));
+            Expr::BinOp(Box::new(lhs), op, Box::new(rhs), span)
+        })
+        .boxed(); // Box to reduce type complexity
+
+        // ++
+        let concat = term
+            .clone()
+            .then(just(Token::PlusPlus).to(BinOp::Concat).then(term).repeated());
+        let concat = concat.foldl(|lhs, (op, rhs)| {
+            let span = get_span(&lhs).merge(get_span(&rhs));
+            Expr::BinOp(Box::new(lhs), op, Box::new(rhs), span)
+        });
+
+        // == != < > <= >=
+        let comparison = concat.clone().then(
+            choice((
+                just(Token::EqEq).to(BinOp::Eq),
+                just(Token::NotEq).to(BinOp::NotEq),
+                just(Token::LtEq).to(BinOp::LtEq),
+                just(Token::GtEq).to(BinOp::GtEq),
+                just(Token::Lt).to(BinOp::Lt),
+                just(Token::Gt).to(BinOp::Gt),
+            ))
+            .then(concat)
+            .repeated(),
+        );
+        let comparison = comparison.foldl(|lhs, (op, rhs)| {
+            let span = get_span(&lhs).merge(get_span(&rhs));
+            Expr::BinOp(Box::new(lhs), op, Box::new(rhs), span)
+        })
+        .boxed(); // Box to reduce type complexity
+
+        // &&
+        let and = comparison
+            .clone()
+            .then(just(Token::AndAnd).to(BinOp::And).then(comparison).repeated());
+        let and = and.foldl(|lhs, (op, rhs)| {
+            let span = get_span(&lhs).merge(get_span(&rhs));
+            Expr::BinOp(Box::new(lhs), op, Box::new(rhs), span)
+        });
+
+        // ||
+        let or = and
+            .clone()
+            .then(just(Token::OrOr).to(BinOp::Or).then(and).repeated());
+        let or = or.foldl(|lhs, (op, rhs)| {
+            let span = get_span(&lhs).merge(get_span(&rhs));
+            Expr::BinOp(Box::new(lhs), op, Box::new(rhs), span)
+        });
+
+        // |> (pipe operator)
+        let pipe = or
+            .clone()
+            .then(just(Token::PipeRight).to(BinOp::Pipe).then(or).repeated());
+        let pipe = pipe.foldl(|lhs, (op, rhs)| {
+            let span = get_span(&lhs).merge(get_span(&rhs));
+            Expr::BinOp(Box::new(lhs), op, Box::new(rhs), span)
+        });
+
+        // Send: pid <- msg
+        let send = pipe
+            .clone()
+            .then(just(Token::LeftArrow).ignore_then(pipe.clone()).or_not())
+            .map(|(lhs, rhs)| {
+                if let Some(rhs) = rhs {
+                    let span = get_span(&lhs).merge(get_span(&rhs));
+                    Expr::Send(Box::new(lhs), Box::new(rhs), span)
+                } else {
+                    lhs
+                }
+            });
+
+        send
+    })
+    .boxed()
+}
+
+/// Helper enum for postfix operations during parsing.
+#[derive(Clone)]
+enum PostfixOp {
+    Call(Vec<Expr>),
+    MethodCall(Ident, Vec<Expr>),
+    FieldAccess(Ident),
+    Index(Expr),
+    Try,
+}
+
+/// Get span from an expression.
+fn get_span(expr: &Expr) -> Span {
+    match expr {
+        Expr::Int(_, s) => *s,
+        Expr::Float(_, s) => *s,
+        Expr::String(_, s) => *s,
+        Expr::Char(_, s) => *s,
+        Expr::Bool(_, s) => *s,
+        Expr::Unit(s) => *s,
+        Expr::Var(id) => id.span,
+        Expr::BinOp(_, _, _, s) => *s,
+        Expr::UnaryOp(_, _, s) => *s,
+        Expr::Call(_, _, s) => *s,
+        Expr::MethodCall(_, _, _, s) => *s,
+        Expr::FieldAccess(_, _, s) => *s,
+        Expr::Index(_, _, s) => *s,
+        Expr::Lambda(_, _, s) => *s,
+        Expr::If(_, _, _, s) => *s,
+        Expr::Match(_, _, s) => *s,
+        Expr::Tuple(_, s) => *s,
+        Expr::List(_, _, s) => *s,
+        Expr::Map(_, s) => *s,
+        Expr::Set(_, s) => *s,
+        Expr::Record(_, _, s) => *s,
+        Expr::RecordUpdate(_, _, _, s) => *s,
+        Expr::Block(_, s) => *s,
+        Expr::Try(_, _, _, s) => *s,
+        Expr::Do(_, s) => *s,
+        Expr::Receive(_, _, s) => *s,
+        Expr::Spawn(_, _, _, s) => *s,
+        Expr::Send(_, _, s) => *s,
+        Expr::Try_(_, s) => *s,
+        Expr::Quote(_, s) => *s,
+        Expr::Splice(_, s) => *s,
+    }
+}
+
+/// Parser for type parameters: `[T]` or `[K: Eq + Hash, V]`
+fn type_params() -> impl Parser<Token, Vec<TypeParam>, Error = Simple<Token>> + Clone {
+    let constraint = type_name();
+    let constraints = constraint
+        .separated_by(just(Token::Plus))
+        .at_least(1);
+
+    let param = any_ident()
+        .then(just(Token::Colon).ignore_then(constraints).or_not())
+        .map(|(name, constraints)| TypeParam {
+            name,
+            constraints: constraints.unwrap_or_default(),
+        });
+
+    param
+        .separated_by(just(Token::Comma))
+        .delimited_by(just(Token::LBracket), just(Token::RBracket))
+        .or_not()
+        .map(|params| params.unwrap_or_default())
+}
+
+/// Parser for function parameter (pattern with optional type).
+fn fn_param() -> impl Parser<Token, FnParam, Error = Simple<Token>> + Clone {
+    pattern()
+        .then(just(Token::Colon).ignore_then(type_expr()).or_not())
+        .map(|(pattern, ty)| FnParam { pattern, ty })
+}
+
+/// Parser for a function definition.
+fn fn_def() -> impl Parser<Token, FnDef, Error = Simple<Token>> + Clone {
+    ident()
+        .then(
+            fn_param()
+                .separated_by(just(Token::Comma))
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .then(just(Token::When).ignore_then(expr()).or_not())
+        .then(just(Token::RightArrow).ignore_then(type_expr()).or_not())
+        .then_ignore(just(Token::Eq))
+        .then(expr())
+        .map_with_span(|((((name, params), guard), return_type), body), span| {
+            let clause = FnClause {
+                params,
+                guard,
+                return_type,
+                body,
+                span: to_span(span.clone()),
+            };
+            FnDef {
+                doc: None,
+                span: to_span(span),
+                name,
+                clauses: vec![clause],
+            }
+        })
+}
+
+/// Parser for variant fields.
+fn variant_fields() -> impl Parser<Token, VariantFields, Error = Simple<Token>> + Clone {
+    let positional = type_expr()
+        .separated_by(just(Token::Comma))
+        .at_least(1)
+        .delimited_by(just(Token::LParen), just(Token::RParen))
+        .map(VariantFields::Positional);
+
+    let field = just(Token::Private)
+        .or_not()
+        .then(ident())
+        .then_ignore(just(Token::Colon))
+        .then(type_expr())
+        .map(|((private, name), ty)| Field {
+            private: private.is_some(),
+            name,
+            ty,
+        });
+
+    let named = field
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .delimited_by(just(Token::LBrace), just(Token::RBrace))
+        .map(VariantFields::Named);
+
+    choice((positional, named))
+        .or_not()
+        .map(|fields| fields.unwrap_or(VariantFields::Unit))
+}
+
+/// Parser for type body (record, variant, alias, or empty).
+fn type_body() -> impl Parser<Token, TypeBody, Error = Simple<Token>> + Clone {
+    let field = just(Token::Private)
+        .or_not()
+        .then(ident())
+        .then_ignore(just(Token::Colon))
+        .then(type_expr())
+        .map(|((private, name), ty)| Field {
+            private: private.is_some(),
+            name,
+            ty,
+        });
+
+    let record = field
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .delimited_by(just(Token::LBrace), just(Token::RBrace))
+        .map(TypeBody::Record);
+
+    let variant_item = type_name()
+        .then(variant_fields())
+        .map(|(name, fields)| Variant { name, fields });
+
+    // Variants: | Variant1 | Variant2(T) | Variant3{field: Type}
+    // Can start with | or not
+    let variant = just(Token::Pipe)
+        .or_not()
+        .ignore_then(variant_item)
+        .separated_by(just(Token::Pipe))
+        .at_least(1)
+        .map(TypeBody::Variant);
+
+    // Type alias: just a type expression
+    let alias = type_expr().map(TypeBody::Alias);
+
+    choice((record, variant, alias))
+}
+
+/// Parser for type definition.
+fn type_def() -> impl Parser<Token, TypeDef, Error = Simple<Token>> + Clone {
+    let mutable = just(Token::Var).or_not().map(|v| v.is_some());
+
+    mutable
+        .then_ignore(just(Token::Type))
+        .then(type_name())
+        .then(type_params())
+        .then(just(Token::Eq).ignore_then(type_body()).or_not())
+        .map_with_span(|(((mutable, name), type_params), body), span| TypeDef {
+            doc: None,
+            mutable,
+            name,
+            type_params,
+            body: body.unwrap_or(TypeBody::Empty),
+            span: to_span(span),
+        })
+}
+
+/// Parser for a binding (top-level or local).
+fn binding() -> impl Parser<Token, Binding, Error = Simple<Token>> + Clone {
+    let mutable = just(Token::Var).or_not().map(|v| v.is_some());
+
+    mutable
+        .then(pattern())
+        .then_ignore(just(Token::Eq))
+        .then(expr())
+        .map_with_span(|((mutable, pattern), value), span| Binding {
+            mutable,
+            pattern,
+            ty: None,
+            value,
+            span: to_span(span),
+        })
+}
+
+/// Parser for method/operator names (identifiers or operators like ==, !=, <, etc.)
+fn method_name() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
+    choice((
+        ident(),
+        filter_map(|span, tok| {
+            let name = match &tok {
+                Token::EqEq => "==",
+                Token::NotEq => "!=",
+                Token::Lt => "<",
+                Token::Gt => ">",
+                Token::LtEq => "<=",
+                Token::GtEq => ">=",
+                Token::Plus => "+",
+                Token::Minus => "-",
+                Token::Star => "*",
+                Token::Slash => "/",
+                Token::Percent => "%",
+                Token::StarStar => "**",
+                Token::PlusPlus => "++",
+                Token::PipeRight => "|>",
+                _ => return Err(Simple::expected_input_found(span, vec![], Some(tok))),
+            };
+            Ok(make_ident(name.to_string(), to_span(span)))
+        }),
+    ))
+}
+
+/// Parser for trait definition.
+fn trait_def() -> impl Parser<Token, TraitDef, Error = Simple<Token>> + Clone {
+    let super_traits = just(Token::Colon)
+        .ignore_then(type_name().separated_by(just(Token::Comma)))
+        .or_not()
+        .map(|t| t.unwrap_or_default());
+
+    let method_param = pattern()
+        .then(just(Token::Colon).ignore_then(type_expr()).or_not())
+        .map(|(pattern, ty)| FnParam { pattern, ty });
+
+    let method = method_name()
+        .then(
+            method_param
+                .separated_by(just(Token::Comma))
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .then(just(Token::RightArrow).ignore_then(type_expr()).or_not())
+        .then(just(Token::Eq).ignore_then(expr()).or_not())
+        .map_with_span(|(((name, params), return_type), default_impl), span| TraitMethod {
+            name,
+            params,
+            return_type,
+            default_impl,
+            span: to_span(span),
+        });
+
+    just(Token::Trait)
+        .ignore_then(type_name())
+        .then(super_traits)
+        .then(method.repeated())
+        .then_ignore(just(Token::End).or_not())
+        .map_with_span(|((name, super_traits), methods), span| TraitDef {
+            doc: None,
+            name,
+            super_traits,
+            methods,
+            span: to_span(span),
+        })
+}
+
+/// Parser for trait implementation.
+fn trait_impl() -> impl Parser<Token, TraitImpl, Error = Simple<Token>> + Clone {
+    let constraint = ident()
+        .then_ignore(just(Token::Colon))
+        .then(type_name().separated_by(just(Token::Plus)).at_least(1));
+
+    let when_clause = just(Token::When)
+        .ignore_then(constraint.separated_by(just(Token::Comma)))
+        .or_not()
+        .map(|w| w.unwrap_or_default());
+
+    type_expr()
+        .then_ignore(just(Token::Colon))
+        .then(type_name())
+        .then(when_clause)
+        .then(fn_def().repeated())
+        .then_ignore(just(Token::End).or_not())
+        .map_with_span(|(((ty, trait_name), when_clause), methods), span| TraitImpl {
+            ty,
+            trait_name,
+            when_clause,
+            methods,
+            span: to_span(span),
+        })
+}
+
+/// Parser for use statement.
+fn use_stmt() -> impl Parser<Token, UseStmt, Error = Simple<Token>> + Clone {
+    let use_item = any_ident()
+        .then(
+            just(Token::LowerIdent("as".to_string()))
+                .ignore_then(any_ident())
+                .or_not(),
+        )
+        .map(|(name, alias)| UseItem { name, alias });
+
+    let imports = choice((
+        just(Token::Star).to(UseImports::All),
+        use_item
+            .separated_by(just(Token::Comma))
+            .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            .map(UseImports::Named),
+    ));
+
+    just(Token::Use)
+        .ignore_then(any_ident().separated_by(just(Token::Dot)).at_least(1))
+        .then_ignore(just(Token::Dot))
+        .then(imports)
+        .map_with_span(|(path, imports), span| UseStmt {
+            path,
+            imports,
+            span: to_span(span),
+        })
+}
+
+/// Parser for test definition.
+fn test_def() -> impl Parser<Token, TestDef, Error = Simple<Token>> + Clone {
+    just(Token::Test)
+        .ignore_then(filter_map(|span, tok| match tok {
+            Token::String(s) => Ok(s),
+            _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+        }))
+        .then_ignore(just(Token::Eq))
+        .then(expr())
+        .map_with_span(|(name, body), span| TestDef {
+            name,
+            body,
+            span: to_span(span),
+        })
+}
+
+/// Parser for extern declaration.
+fn extern_decl() -> impl Parser<Token, ExternDecl, Error = Simple<Token>> + Clone {
+    let extern_type = just(Token::Extern)
+        .then(just(Token::Type))
+        .ignore_then(type_name())
+        .map(|name| ExternKind::Type { name });
+
+    let extern_param = ident()
+        .then_ignore(just(Token::Colon))
+        .then(type_expr());
+
+    let extern_fn = just(Token::Extern)
+        .ignore_then(ident())
+        .then(
+            extern_param
+                .separated_by(just(Token::Comma))
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .then_ignore(just(Token::RightArrow))
+        .then(type_expr())
+        .then_ignore(just(Token::From))
+        .then(filter_map(|span, tok| match tok {
+            Token::String(s) => Ok(s),
+            _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
+        }))
+        .map(|(((name, params), return_type), from)| ExternKind::Function {
+            name,
+            params,
+            return_type,
+            from,
+        });
+
+    choice((extern_type, extern_fn)).map_with_span(|kind, span| ExternDecl {
+        kind,
+        span: to_span(span),
+    })
+}
+
+/// Parser for top-level items (using recursive for nested modules).
+fn item() -> impl Parser<Token, Item, Error = Simple<Token>> + Clone {
+    recursive(|item| {
+        // Module definition (uses recursive item)
+        let module_def = just(Token::Module)
+            .ignore_then(type_name())
+            .then(item.repeated())
+            .then_ignore(just(Token::End))
+            .map_with_span(|(name, items), span| {
+                Item::ModuleDef(ModuleDef {
+                    name,
+                    items,
+                    span: to_span(span),
+                })
+            });
+
+        choice((
+            type_def().map(Item::TypeDef),
+            trait_def().map(Item::TraitDef),
+            trait_impl().map(Item::TraitImpl),
+            test_def().map(Item::Test),
+            extern_decl().map(Item::Extern),
+            module_def,
+            use_stmt().map(Item::Use),
+            fn_def().map(Item::FnDef),
+            binding().map(Item::Binding),
+        ))
+    })
+    .boxed()
+}
+
+/// Parser for a complete module/file.
+fn module() -> impl Parser<Token, Module, Error = Simple<Token>> + Clone {
+    item()
+        .repeated()
+        .then_ignore(end())
+        .map(|items| Module { name: None, items })
+}
+
+/// Parse source code into a module.
+pub fn parse(source: &str) -> (Option<Module>, Vec<Simple<Token>>) {
+    let tokens: Vec<_> = crate::lexer::lex(source).collect();
+    let len = source.len();
+
+    let (result, errors) = module().parse_recovery(chumsky::Stream::from_iter(
+        len..len + 1,
+        tokens.into_iter(),
+    ));
+
+    (result, errors)
+}
+
+/// Parse a single expression (useful for REPL).
+pub fn parse_expr(source: &str) -> (Option<Expr>, Vec<Simple<Token>>) {
+    let tokens: Vec<_> = crate::lexer::lex(source).collect();
+    let len = source.len();
+
+    let (result, errors) = expr()
+        .then_ignore(end())
+        .parse_recovery(chumsky::Stream::from_iter(len..len + 1, tokens.into_iter()));
+
+    (result, errors)
+}
