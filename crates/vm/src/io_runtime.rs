@@ -16,9 +16,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, oneshot};
-use tokio_postgres::{Client as PgClient, NoTls};
+use tokio_postgres::{Client as PgClient, NoTls, Statement};
 
 use crate::process::{IoResponseValue, PgValue};
+
+/// PostgreSQL connection with prepared statements
+struct PgConnection {
+    client: PgClient,
+    prepared: HashMap<String, Statement>,
+}
 
 /// Unique handle for an open file
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -344,6 +350,33 @@ pub enum IoRequest {
         handle: u64,
         response: IoResponse,
     },
+    /// Prepare a statement
+    PgPrepare {
+        handle: u64,
+        name: String,
+        query: String,
+        response: IoResponse,
+    },
+    /// Execute a prepared query (returns rows)
+    PgQueryPrepared {
+        handle: u64,
+        name: String,
+        params: Vec<PgParam>,
+        response: IoResponse,
+    },
+    /// Execute a prepared statement (returns affected rows)
+    PgExecutePrepared {
+        handle: u64,
+        name: String,
+        params: Vec<PgParam>,
+        response: IoResponse,
+    },
+    /// Deallocate a prepared statement
+    PgDeallocate {
+        handle: u64,
+        name: String,
+        response: IoResponse,
+    },
 
     // Shutdown
     Shutdown,
@@ -450,8 +483,8 @@ impl IoRuntime {
         let spawned_processes: Arc<Mutex<HashMap<u64, SpawnedProcess>>> = Arc::new(Mutex::new(HashMap::new()));
         let mut next_process_handle: u64 = 1;
 
-        // PostgreSQL connection state
-        let pg_connections: Arc<Mutex<HashMap<u64, PgClient>>> = Arc::new(Mutex::new(HashMap::new()));
+        // PostgreSQL connection state (with prepared statements)
+        let pg_connections: Arc<Mutex<HashMap<u64, PgConnection>>> = Arc::new(Mutex::new(HashMap::new()));
         let mut next_pg_handle: u64 = 1;
 
         while let Some(request) = request_rx.recv().await {
@@ -1097,7 +1130,11 @@ impl IoRuntime {
                                     }
                                 });
 
-                                pg_conns.lock().await.insert(handle, client);
+                                let pg_conn = PgConnection {
+                                    client,
+                                    prepared: HashMap::new(),
+                                };
+                                pg_conns.lock().await.insert(handle, pg_conn);
                                 let _ = response.send(Ok(IoResponseValue::PgHandle(handle)));
                             }
                             Err(e) => {
@@ -1113,9 +1150,9 @@ impl IoRuntime {
                     tokio::spawn(async move {
                         let conns = pg_conns.lock().await;
                         match conns.get(&handle) {
-                            Some(client) => {
+                            Some(conn) => {
                                 // Build params - we need to keep ownership of the boxed values
-                                let result = Self::execute_pg_query(client, &query, &params).await;
+                                let result = Self::execute_pg_query(&conn.client, &query, &params).await;
                                 match result {
                                     Ok(rows) => {
                                         let _ = response.send(Ok(IoResponseValue::PgRows(rows)));
@@ -1138,8 +1175,8 @@ impl IoRuntime {
                     tokio::spawn(async move {
                         let conns = pg_conns.lock().await;
                         match conns.get(&handle) {
-                            Some(client) => {
-                                let result = Self::execute_pg_execute(client, &query, &params).await;
+                            Some(conn) => {
+                                let result = Self::execute_pg_execute(&conn.client, &query, &params).await;
                                 match result {
                                     Ok(count) => {
                                         let _ = response.send(Ok(IoResponseValue::PgAffected(count)));
@@ -1170,8 +1207,8 @@ impl IoRuntime {
 
                     tokio::spawn(async move {
                         let conns = pg_conns.lock().await;
-                        if let Some(client) = conns.get(&handle) {
-                            match client.batch_execute("BEGIN").await {
+                        if let Some(conn) = conns.get(&handle) {
+                            match conn.client.batch_execute("BEGIN").await {
                                 Ok(_) => {
                                     let _ = response.send(Ok(IoResponseValue::Unit));
                                 }
@@ -1190,8 +1227,8 @@ impl IoRuntime {
 
                     tokio::spawn(async move {
                         let conns = pg_conns.lock().await;
-                        if let Some(client) = conns.get(&handle) {
-                            match client.batch_execute("COMMIT").await {
+                        if let Some(conn) = conns.get(&handle) {
+                            match conn.client.batch_execute("COMMIT").await {
                                 Ok(_) => {
                                     let _ = response.send(Ok(IoResponseValue::Unit));
                                 }
@@ -1210,14 +1247,102 @@ impl IoRuntime {
 
                     tokio::spawn(async move {
                         let conns = pg_conns.lock().await;
-                        if let Some(client) = conns.get(&handle) {
-                            match client.batch_execute("ROLLBACK").await {
+                        if let Some(conn) = conns.get(&handle) {
+                            match conn.client.batch_execute("ROLLBACK").await {
                                 Ok(_) => {
                                     let _ = response.send(Ok(IoResponseValue::Unit));
                                 }
                                 Err(e) => {
                                     let _ = response.send(Err(IoError::PgError(e.to_string())));
                                 }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::PgPrepare { handle, name, query, response } => {
+                    let pg_conns = pg_connections.clone();
+
+                    tokio::spawn(async move {
+                        let mut conns = pg_conns.lock().await;
+                        if let Some(conn) = conns.get_mut(&handle) {
+                            match conn.client.prepare(&query).await {
+                                Ok(stmt) => {
+                                    conn.prepared.insert(name, stmt);
+                                    let _ = response.send(Ok(IoResponseValue::Unit));
+                                }
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::PgError(e.to_string())));
+                                }
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::PgQueryPrepared { handle, name, params, response } => {
+                    let pg_conns = pg_connections.clone();
+
+                    tokio::spawn(async move {
+                        let conns = pg_conns.lock().await;
+                        if let Some(conn) = conns.get(&handle) {
+                            if let Some(stmt) = conn.prepared.get(&name) {
+                                let result = Self::execute_pg_query_prepared(&conn.client, stmt, &params).await;
+                                match result {
+                                    Ok(rows) => {
+                                        let _ = response.send(Ok(IoResponseValue::PgRows(rows)));
+                                    }
+                                    Err(e) => {
+                                        let _ = response.send(Err(IoError::PgError(e)));
+                                    }
+                                }
+                            } else {
+                                let _ = response.send(Err(IoError::PgError(format!("Prepared statement '{}' not found", name))));
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::PgExecutePrepared { handle, name, params, response } => {
+                    let pg_conns = pg_connections.clone();
+
+                    tokio::spawn(async move {
+                        let conns = pg_conns.lock().await;
+                        if let Some(conn) = conns.get(&handle) {
+                            if let Some(stmt) = conn.prepared.get(&name) {
+                                let result = Self::execute_pg_execute_prepared(&conn.client, stmt, &params).await;
+                                match result {
+                                    Ok(count) => {
+                                        let _ = response.send(Ok(IoResponseValue::PgAffected(count)));
+                                    }
+                                    Err(e) => {
+                                        let _ = response.send(Err(IoError::PgError(e)));
+                                    }
+                                }
+                            } else {
+                                let _ = response.send(Err(IoError::PgError(format!("Prepared statement '{}' not found", name))));
+                            }
+                        } else {
+                            let _ = response.send(Err(IoError::InvalidHandle));
+                        }
+                    });
+                }
+
+                IoRequest::PgDeallocate { handle, name, response } => {
+                    let pg_conns = pg_connections.clone();
+
+                    tokio::spawn(async move {
+                        let mut conns = pg_conns.lock().await;
+                        if let Some(conn) = conns.get_mut(&handle) {
+                            if conn.prepared.remove(&name).is_some() {
+                                let _ = response.send(Ok(IoResponseValue::Unit));
+                            } else {
+                                let _ = response.send(Err(IoError::PgError(format!("Prepared statement '{}' not found", name))));
                             }
                         } else {
                             let _ = response.send(Err(IoError::InvalidHandle));
@@ -1380,6 +1505,40 @@ impl IoRuntime {
         };
 
         count.map_err(|e| e.to_string())
+    }
+
+    /// Execute a prepared query with parameters
+    async fn execute_pg_query_prepared(
+        client: &PgClient,
+        stmt: &Statement,
+        params: &[PgParam],
+    ) -> Result<Vec<Vec<PgValue>>, String> {
+        let typed_params = Self::build_typed_params(params, stmt.params());
+        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+            typed_params.iter().map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+
+        match client.query(stmt, &param_refs).await {
+            Ok(rows) => {
+                let result: Vec<Vec<PgValue>> = rows.iter().map(|row| {
+                    (0..row.len()).map(|i| Self::row_value_to_pg_value(row, i)).collect()
+                }).collect();
+                Ok(result)
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Execute a prepared statement with parameters
+    async fn execute_pg_execute_prepared(
+        client: &PgClient,
+        stmt: &Statement,
+        params: &[PgParam],
+    ) -> Result<u64, String> {
+        let typed_params = Self::build_typed_params(params, stmt.params());
+        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+            typed_params.iter().map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+
+        client.execute(stmt, &param_refs).await.map_err(|e| e.to_string())
     }
 
     /// Build typed parameters that match PostgreSQL's expected types

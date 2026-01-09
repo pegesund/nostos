@@ -8505,6 +8505,217 @@ impl ThreadWorker {
                 }
             }
 
+            PgPrepare(dst, handle_reg, name_reg, query_reg) => {
+                let (handle, name, query) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let h = match reg!(*handle_reg) {
+                        GcValue::Int64(h) => *h as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (pg handle)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    };
+                    let n = match reg!(*name_reg) {
+                        GcValue::String(ptr) => {
+                            proc.heap.get_string(*ptr).map(|s| s.data.clone())
+                                .ok_or_else(|| RuntimeError::IOError("Invalid name string".to_string()))?
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    let q = match reg!(*query_reg) {
+                        GcValue::String(ptr) => {
+                            proc.heap.get_string(*ptr).map(|s| s.data.clone())
+                                .ok_or_else(|| RuntimeError::IOError("Invalid query string".to_string()))?
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    (h, n, q)
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::PgPrepare {
+                        handle,
+                        name,
+                        query,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            PgQueryPrepared(dst, handle_reg, name_reg, params_reg) => {
+                use crate::io_runtime::PgParam;
+                let (handle, name, params) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let h = match reg!(*handle_reg) {
+                        GcValue::Int64(h) => *h as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (pg handle)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    };
+                    let n = match reg!(*name_reg) {
+                        GcValue::String(ptr) => {
+                            proc.heap.get_string(*ptr).map(|s| s.data.clone())
+                                .ok_or_else(|| RuntimeError::IOError("Invalid name string".to_string()))?
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    let p = match reg!(*params_reg) {
+                        GcValue::List(list) => {
+                            let mut pg_params = Vec::new();
+                            for item in list.iter() {
+                                let param = Self::gc_value_to_pg_param(&item, &proc.heap)?;
+                                pg_params.push(param);
+                            }
+                            pg_params
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "List".to_string(),
+                            found: "non-list".to_string(),
+                        }),
+                    };
+                    (h, n, p)
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::PgQueryPrepared {
+                        handle,
+                        name,
+                        params,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            PgExecutePrepared(dst, handle_reg, name_reg, params_reg) => {
+                use crate::io_runtime::PgParam;
+                let (handle, name, params) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let h = match reg!(*handle_reg) {
+                        GcValue::Int64(h) => *h as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (pg handle)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    };
+                    let n = match reg!(*name_reg) {
+                        GcValue::String(ptr) => {
+                            proc.heap.get_string(*ptr).map(|s| s.data.clone())
+                                .ok_or_else(|| RuntimeError::IOError("Invalid name string".to_string()))?
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    let p = match reg!(*params_reg) {
+                        GcValue::List(list) => {
+                            let mut pg_params = Vec::new();
+                            for item in list.iter() {
+                                let param = Self::gc_value_to_pg_param(&item, &proc.heap)?;
+                                pg_params.push(param);
+                            }
+                            pg_params
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "List".to_string(),
+                            found: "non-list".to_string(),
+                        }),
+                    };
+                    (h, n, p)
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::PgExecutePrepared {
+                        handle,
+                        name,
+                        params,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
+            PgDeallocate(dst, handle_reg, name_reg) => {
+                let (handle, name) = {
+                    let proc = self.get_process(local_id).unwrap();
+                    let h = match reg!(*handle_reg) {
+                        GcValue::Int64(h) => *h as u64,
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "Int (pg handle)".to_string(),
+                            found: "non-int".to_string(),
+                        }),
+                    };
+                    let n = match reg!(*name_reg) {
+                        GcValue::String(ptr) => {
+                            proc.heap.get_string(*ptr).map(|s| s.data.clone())
+                                .ok_or_else(|| RuntimeError::IOError("Invalid name string".to_string()))?
+                        }
+                        _ => return Err(RuntimeError::TypeError {
+                            expected: "String".to_string(),
+                            found: "non-string".to_string(),
+                        }),
+                    };
+                    (h, n)
+                };
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = crate::io_runtime::IoRequest::PgDeallocate {
+                        handle,
+                        name,
+                        response: tx,
+                    };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let proc = self.get_process_mut(local_id).unwrap();
+                    proc.start_io_wait(rx, *dst);
+                    self.io_waiting.push(local_id);
+                    return Ok(StepResult::Waiting);
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
             // === String Encoding ===
             Base64Encode(dst, str_reg) => {
                 use base64::{Engine as _, engine::general_purpose};
