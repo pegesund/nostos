@@ -1,0 +1,43 @@
+# expect: 0
+# Test cookie parsing with value validation
+
+findCookie(cookies, name) = {
+    if length(cookies) == 0 then ""
+    else {
+        (k, v) = head(cookies)
+        if k == name then v else findCookie(tail(cookies), name)
+    }
+}
+
+handle(req) = {
+    # Extract specific cookies
+    session = findCookie(req.cookies, "session")
+    user = findCookie(req.cookies, "user")
+    theme = findCookie(req.cookies, "theme")
+
+    # Return all values concatenated
+    Server.respond(req.id, 200, [], session ++ "|" ++ user ++ "|" ++ theme)
+}
+
+main() = {
+    server = Server.bind(18101)
+
+    spawn {
+        req = Server.accept(server)
+        handle(req)
+    }
+
+    sleep(100)
+
+    # Send cookies with various formats
+    resp = Http.request("GET", "http://localhost:18101/",
+        [("Cookie", "session=abc123; user=john; theme=dark")], "")
+    Server.close(server)
+
+    expected = "abc123|john|dark"
+    if resp.body == expected then 0 else {
+        println("Expected: " ++ expected)
+        println("Got: " ++ resp.body)
+        1
+    }
+}

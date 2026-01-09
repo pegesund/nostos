@@ -1,0 +1,45 @@
+# expect: 0
+# Test POST form params with value validation and URL decoding
+
+findParam(params, key) = {
+    if length(params) == 0 then ""
+    else {
+        (k, v) = head(params)
+        if k == key then v else findParam(tail(params), key)
+    }
+}
+
+handle(req) = {
+    # Extract specific form params
+    name = findParam(req.formParams, "name")
+    email = findParam(req.formParams, "email")
+    message = findParam(req.formParams, "message")
+
+    # Return all values concatenated
+    Server.respond(req.id, 200, [], name ++ "|" ++ email ++ "|" ++ message)
+}
+
+main() = {
+    server = Server.bind(18102)
+
+    spawn {
+        req = Server.accept(server)
+        handle(req)
+    }
+
+    sleep(100)
+
+    # Send form with URL-encoded values
+    resp = Http.request("POST", "http://localhost:18102/",
+        [("Content-Type", "application/x-www-form-urlencoded")],
+        "name=John%20Doe&email=john%40example.com&message=Hello%20World%21")
+    Server.close(server)
+
+    # Values should be URL-decoded
+    expected = "John Doe|john@example.com|Hello World!"
+    if resp.body == expected then 0 else {
+        println("Expected: " ++ expected)
+        println("Got: " ++ resp.body)
+        1
+    }
+}
