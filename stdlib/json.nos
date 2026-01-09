@@ -61,11 +61,17 @@ collect_digits(chars, acc) = match chars
                   else (acc, chars)
     [] -> (acc, [])
 
-parse_number(chars) = {
-    (digits, rest) = collect_digits(chars, [])
-    num = String.to_int(String.from_chars(digits))
-    (Number(num), rest)
-}
+parse_number(chars) = match chars
+    ['-' | rest] -> {
+        (digits, remaining) = collect_digits(rest, [])
+        num = String.to_int(String.from_chars(digits))
+        (Number(0 - num), remaining)
+    }
+    _ -> {
+        (digits, rest) = collect_digits(chars, [])
+        num = String.to_int(String.from_chars(digits))
+        (Number(num), rest)
+    }
 
 
 # --- String parsing ---
