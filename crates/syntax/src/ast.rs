@@ -85,6 +85,8 @@ pub enum Item {
     ModuleDef(ModuleDef),
     /// Use statement
     Use(UseStmt),
+    /// Import statement (import module)
+    Import(ImportStmt),
     /// Top-level binding
     Binding(Binding),
     /// Module-level mutable variable (thread-safe with RwLock)
@@ -105,6 +107,7 @@ impl Item {
             Item::TraitImpl(impl_) => impl_.span,
             Item::ModuleDef(def) => def.span,
             Item::Use(stmt) => stmt.span,
+            Item::Import(stmt) => stmt.span,
             Item::Binding(binding) => binding.span,
             Item::MvarDef(def) => def.span,
             Item::Test(test) => test.span,
@@ -740,6 +743,15 @@ pub enum UseImports {
 pub struct UseItem {
     pub name: Ident,
     pub alias: Option<Ident>,
+}
+
+/// An import statement: `import modulename`
+/// Imports all public exports from the specified module.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportStmt {
+    /// The module path to import (e.g., ["utils"] or ["math", "advanced"])
+    pub path: Vec<Ident>,
+    pub span: Span,
 }
 
 // =============================================================================

@@ -7601,6 +7601,123 @@ mod call_graph_tests {
         let _ = fs::remove_dir_all(&temp_dir);
     }
 
+    #[test]
+    fn test_load_directory_same_function_different_arities() {
+        // Test that functions with same name but different arities in different modules
+        // resolve correctly. This matches the bench/array_write vs array_write_loop case.
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir().join(format!("nostos_test_diff_arities_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        // Module A: benchmark takes 2 args
+        let defs_a = temp_dir.join(".nostos").join("defs").join("moduleA");
+        fs::create_dir_all(&defs_a).expect("Failed to create moduleA defs dir");
+        fs::write(defs_a.join("benchmark.nos"), "benchmark(iterations, size) = iterations * size").unwrap();
+        fs::write(defs_a.join("main.nos"), "main() = benchmark(10, 5)").unwrap();
+
+        // Module B: benchmark takes 4 args (like array_write)
+        let defs_b = temp_dir.join(".nostos").join("defs").join("moduleB");
+        fs::create_dir_all(&defs_b).expect("Failed to create moduleB defs dir");
+        fs::write(defs_b.join("benchmark.nos"), "benchmark(iterations, size, i, total) = if i >= iterations then total else benchmark(iterations, size, i + 1, total + size)").unwrap();
+        fs::write(defs_b.join("main.nos"), "main() = benchmark(10, 5, 0, 0)").unwrap();
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        let result = engine.load_directory(temp_dir.to_str().unwrap());
+        assert!(result.is_ok(), "Should load directory successfully: {:?}", result);
+
+        // Check compile status - both should compile without errors
+        let status_a_main = engine.get_compile_status("moduleA.main");
+        let status_b_main = engine.get_compile_status("moduleB.main");
+
+        assert!(status_a_main.map(|s| s.is_ok()).unwrap_or(false),
+            "moduleA.main should compile: {:?}", status_a_main);
+        assert!(status_b_main.map(|s| s.is_ok()).unwrap_or(false),
+            "moduleB.main should compile (4-arg benchmark call): {:?}", status_b_main);
+
+        // Evaluate both mains
+        let result_a = engine.eval("moduleA.main()");
+        assert!(result_a.is_ok(), "Should evaluate moduleA.main(): {:?}", result_a);
+        assert_eq!(result_a.unwrap(), "50", "moduleA.main() should return 50 (10 * 5)");
+
+        let result_b = engine.eval("moduleB.main()");
+        assert!(result_b.is_ok(), "Should evaluate moduleB.main(): {:?}", result_b);
+        assert_eq!(result_b.unwrap(), "50", "moduleB.main() should return 50 (10 iterations * 5)");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_load_directory_bench_like_structure() {
+        // Test a structure like bench/ with multiple modules having same-named functions
+        // with different arities: fillArray(arr, i) vs fillArray(arr), etc.
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir().join(format!("nostos_bench_like_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        // array_write module: functions with extra args (recursive style)
+        // Using simpler functions to test the arity conflict
+        let defs_aw = temp_dir.join(".nostos").join("defs").join("array_write");
+        fs::create_dir_all(&defs_aw).expect("Failed to create array_write defs dir");
+        fs::write(defs_aw.join("helper.nos"),
+            "helper(x, i) = if i >= 3 then x else helper(x + i, i + 1)").unwrap();
+        fs::write(defs_aw.join("compute.nos"),
+            "compute(start, i, acc) = if i >= 3 then acc else compute(start, i + 1, acc + i)").unwrap();
+        fs::write(defs_aw.join("runIteration.nos"),
+            "runIteration(size) = helper(size, 0) + compute(size, 0, 0)").unwrap();
+        fs::write(defs_aw.join("main.nos"), "main() = runIteration(10)").unwrap();
+
+        // array_write_loop module: functions with fewer args (loop style)
+        let defs_awl = temp_dir.join(".nostos").join("defs").join("array_write_loop");
+        fs::create_dir_all(&defs_awl).expect("Failed to create array_write_loop defs dir");
+        fs::write(defs_awl.join("helper.nos"),
+            "helper(x) = { var i = 0; var r = x; while i < 3 { r = r + i; i = i + 1 }; r }").unwrap();
+        fs::write(defs_awl.join("compute.nos"),
+            "compute(start) = { var i = 0; var acc = 0; while i < 3 { acc = acc + i; i = i + 1 }; acc }").unwrap();
+        fs::write(defs_awl.join("runIteration.nos"),
+            "runIteration(size) = helper(size) + compute(size)").unwrap();
+        fs::write(defs_awl.join("main.nos"), "main() = runIteration(10)").unwrap();
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        let result = engine.load_directory(temp_dir.to_str().unwrap());
+        assert!(result.is_ok(), "Should load directory successfully: {:?}", result);
+
+        // Check compile status for both modules
+        let status_aw = engine.get_compile_status("array_write.main");
+        let status_awl = engine.get_compile_status("array_write_loop.main");
+
+        assert!(status_aw.map(|s| s.is_ok()).unwrap_or(false),
+            "array_write.main should compile: {:?}", status_aw);
+        assert!(status_awl.map(|s| s.is_ok()).unwrap_or(false),
+            "array_write_loop.main should compile: {:?}", status_awl);
+
+        // Also check intermediate functions (different arities)
+        let status_aw_helper = engine.get_compile_status("array_write.helper");
+        let status_awl_helper = engine.get_compile_status("array_write_loop.helper");
+        assert!(status_aw_helper.map(|s| s.is_ok()).unwrap_or(false),
+            "array_write.helper should compile: {:?}", status_aw_helper);
+        assert!(status_awl_helper.map(|s| s.is_ok()).unwrap_or(false),
+            "array_write_loop.helper should compile: {:?}", status_awl_helper);
+
+        // Evaluate both mains
+        // array_write: helper(10,0)=10+0+1+2=13, compute(10,0,0)=0+1+2=3, total=16
+        // array_write_loop: helper(10)=10+0+1+2=13, compute(10)=0+1+2=3, total=16
+        let result_aw = engine.eval("array_write.main()");
+        assert!(result_aw.is_ok(), "Should evaluate array_write.main(): {:?}", result_aw);
+        assert_eq!(result_aw.unwrap(), "16", "array_write.main() should return 16");
+
+        let result_awl = engine.eval("array_write_loop.main()");
+        assert!(result_awl.is_ok(), "Should evaluate array_write_loop.main(): {:?}", result_awl);
+        assert_eq!(result_awl.unwrap(), "16", "array_write_loop.main() should return 16");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
 }
 
 

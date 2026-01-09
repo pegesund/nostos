@@ -54,7 +54,7 @@ impl Highlighter for NostosHighlighter {
                 // Keywords
                 Token::Type | Token::Var | Token::Mvar | Token::If | Token::Then | Token::Else |
                 Token::Match | Token::When | Token::Trait | Token::Module | Token::End |
-                Token::Use | Token::Private | Token::Pub | Token::SelfKw | Token::SelfType |
+                Token::Use | Token::Import | Token::Private | Token::Pub | Token::SelfKw | Token::SelfType |
                 Token::Try | Token::Catch | Token::Finally | Token::Do |
                 Token::While | Token::For | Token::To | Token::Break | Token::Continue |
                 Token::Spawn | Token::SpawnLink | Token::SpawnMonitor | Token::Receive | Token::After |

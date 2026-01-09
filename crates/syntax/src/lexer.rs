@@ -42,6 +42,8 @@ pub enum Token {
     End,
     #[token("use")]
     Use,
+    #[token("import")]
+    Import,
     #[token("private")]
     Private,
     #[token("pub")]
@@ -397,6 +399,7 @@ impl fmt::Display for Token {
             Token::Module => write!(f, "module"),
             Token::End => write!(f, "end"),
             Token::Use => write!(f, "use"),
+            Token::Import => write!(f, "import"),
             Token::Private => write!(f, "private"),
             Token::Pub => write!(f, "pub"),
             Token::SelfKw => write!(f, "self"),
