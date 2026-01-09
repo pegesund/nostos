@@ -50,6 +50,13 @@ impl<F: Future> Future for AssertSend<F> {
 use crate::extensions::{ext_value_to_vm, vm_value_to_ext, ExtensionManager};
 
 /// Reactive render context for tracking component dependencies during RHtml rendering.
+/// A node in the component tree
+#[derive(Debug, Clone)]
+pub struct ComponentTreeNode {
+    pub name: String,
+    pub children: Vec<ComponentTreeNode>,
+}
+
 /// This enables automatic re-rendering when reactive records change.
 #[derive(Debug, Clone, Default)]
 pub struct ReactiveRenderContext {
@@ -63,6 +70,13 @@ pub struct ReactiveRenderContext {
 
     /// Components queued for re-render due to reactive record changes.
     pub pending_rerenders: Vec<String>,
+
+    /// Stack for building component tree during render.
+    /// Each entry is (component_name, children_so_far).
+    pub component_tree_stack: Vec<(String, Vec<ComponentTreeNode>)>,
+
+    /// Root-level components (when stack is empty, new components go here).
+    pub root_components: Vec<ComponentTreeNode>,
 }
 use crate::gc::{GcConfig, GcInt64List, GcList, GcMapKey, GcValue, Heap, GcNativeFn};
 
@@ -3178,6 +3192,42 @@ impl AsyncProcess {
                                 }
                             }
 
+                            // Invoke onRead callbacks synchronously
+                            let read_callbacks = rec.get_read_callbacks();
+                            if !read_callbacks.is_empty() {
+                                let field_name_gc = self.heap.value_to_gc(&Value::String(field_name.into()));
+                                let value_gc = gc_value.clone();
+
+                                // Push callbacks in reverse order so they execute in forward order
+                                for callback in read_callbacks.into_iter().rev() {
+                                    let (func, captures) = match callback {
+                                        Value::Closure(c) => {
+                                            let gc_captures: Vec<GcValue> = c.captures.iter()
+                                                .map(|v| self.heap.value_to_gc(v))
+                                                .collect();
+                                            (c.function.clone(), gc_captures)
+                                        }
+                                        Value::Function(f) => (f, vec![]),
+                                        _ => continue,
+                                    };
+
+                                    // Set up registers with arguments: (fieldName, value)
+                                    let reg_count = func.code.register_count as usize;
+                                    let mut registers = vec![GcValue::Unit; reg_count];
+                                    if reg_count > 0 { registers[0] = field_name_gc.clone(); }
+                                    if reg_count > 1 { registers[1] = value_gc.clone(); }
+
+                                    // Push frame with return_reg = None (callback, no return value needed)
+                                    self.frames.push(CallFrame {
+                                        function: func,
+                                        ip: 0,
+                                        registers,
+                                        captures,
+                                        return_reg: None,
+                                    });
+                                }
+                            }
+
                             set_reg!(dst, gc_value);
                         }
                     }
@@ -3290,6 +3340,19 @@ impl AsyncProcess {
                         rec.add_callback(callback_value);
                     }
                     _ => return Err(RuntimeError::Panic("ReactiveAddCallback expects reactive record".into())),
+                }
+            }
+
+            ReactiveAddReadCallback(record_reg, callback_reg) => {
+                let callback = reg!(callback_reg);
+                let rec_val = reg!(record_reg);
+                match rec_val {
+                    GcValue::ReactiveRecord(rec) => {
+                        // Convert GcValue callback to Value and store
+                        let callback_value = self.heap.gc_to_value(&callback);
+                        rec.add_read_callback(callback_value);
+                    }
+                    _ => return Err(RuntimeError::Panic("ReactiveAddReadCallback expects reactive record".into())),
                 }
             }
 
@@ -7235,7 +7298,10 @@ impl AsyncProcess {
                 match &id {
                     GcValue::String(s) => {
                         if let Some(str_val) = self.heap.get_string(*s) {
-                            self.reactive_context.render_stack.push(str_val.data.clone());
+                            let name = str_val.data.clone();
+                            self.reactive_context.render_stack.push(name.clone());
+                            // Also push to component tree stack
+                            self.reactive_context.component_tree_stack.push((name, Vec::new()));
                         } else {
                             return Err(RuntimeError::Panic("Invalid string for render stack push".into()));
                         }
@@ -7251,6 +7317,16 @@ impl AsyncProcess {
 
             RenderStackPop => {
                 self.reactive_context.render_stack.pop();
+                // Pop from component tree stack and add to parent's children
+                if let Some((name, children)) = self.reactive_context.component_tree_stack.pop() {
+                    let node = ComponentTreeNode { name, children };
+                    // Add to parent's children, or to root if no parent
+                    if let Some((_, parent_children)) = self.reactive_context.component_tree_stack.last_mut() {
+                        parent_children.push(node);
+                    } else {
+                        self.reactive_context.root_components.push(node);
+                    }
+                }
             }
 
             RenderStackCurrent(dst) => {
@@ -7361,6 +7437,59 @@ impl AsyncProcess {
                 }
                 let map = self.heap.alloc_map(map_entries);
                 set_reg!(dst, GcValue::Map(map));
+            }
+
+            GetComponentTree(dst) => {
+                // Convert component tree to CNode variants
+                fn convert_tree(heap: &mut Heap, nodes: &[ComponentTreeNode]) -> GcValue {
+                    let items: Vec<GcValue> = nodes.iter().map(|node| {
+                        let name = GcValue::String(heap.alloc_string(node.name.clone()));
+                        let children = convert_tree(heap, &node.children);
+                        // Create CNode(name, children) variant
+                        heap.make_variant("stdlib.rhtml.ComponentTree", "CNode", vec![name, children])
+                    }).collect();
+                    GcValue::List(heap.make_list(items))
+                }
+                let tree = convert_tree(&mut self.heap, &self.reactive_context.root_components);
+                set_reg!(dst, tree);
+            }
+
+            RenderContextStart => {
+                // Clear deps, component tree, and stacks for new render
+                self.reactive_context.dependencies.clear();
+                self.reactive_context.pending_rerenders.clear();
+                self.reactive_context.render_stack.clear();
+                self.reactive_context.component_tree_stack.clear();
+                self.reactive_context.root_components.clear();
+            }
+
+            RenderContextFinish(dst) => {
+                // Get deps map
+                let mut map_entries = ImblHashMap::new();
+                for (record_id, comp_ids) in &self.reactive_context.dependencies {
+                    let key = GcMapKey::Int64(*record_id as i64);
+                    let items: Vec<GcValue> = comp_ids.iter()
+                        .map(|s| GcValue::String(self.heap.alloc_string(s.clone())))
+                        .collect();
+                    let list = self.heap.make_list(items);
+                    map_entries.insert(key, GcValue::List(list));
+                }
+                let deps_map = self.heap.alloc_map(map_entries);
+
+                // Get component tree
+                fn convert_tree(heap: &mut Heap, nodes: &[ComponentTreeNode]) -> GcValue {
+                    let items: Vec<GcValue> = nodes.iter().map(|node| {
+                        let name = GcValue::String(heap.alloc_string(node.name.clone()));
+                        let children = convert_tree(heap, &node.children);
+                        heap.make_variant("stdlib.rhtml.ComponentTree", "CNode", vec![name, children])
+                    }).collect();
+                    GcValue::List(heap.make_list(items))
+                }
+                let components = convert_tree(&mut self.heap, &self.reactive_context.root_components);
+
+                // Return tuple (deps, components) - use alloc_tuple for proper GcValue::Tuple
+                let tuple_ptr = self.heap.alloc_tuple(vec![GcValue::Map(deps_map), components]);
+                set_reg!(dst, GcValue::Tuple(tuple_ptr));
             }
 
             // Unimplemented instructions - add as needed

@@ -4087,7 +4087,7 @@ impl Compiler {
             }
 
             // Record construction
-            Expr::Record(type_name, fields, _) => {
+            Expr::Record(type_name, fields, span) => {
                 // Handle Html(...) - transforms bare HTML tag names to stdlib.html.* calls
                 // Returns an Html tree. Use render(Html(...)) to get a String.
                 if type_name.node == "Html" && fields.len() == 1 {
@@ -4097,6 +4097,43 @@ impl Compiler {
 
                         // Compile the transformed expression and return the Html tree
                         return self.compile_expr_tail(&transformed_arg, is_tail);
+                    }
+                }
+
+                // Handle RHtml(...) - transforms bare HTML tag names to stdlib.rhtml.* calls
+                // Returns RHtmlResult { tree, deps, components }
+                if type_name.node == "RHtml" && fields.len() == 1 {
+                    if let RecordField::Positional(inner_expr) = &fields[0] {
+                        // Ensure required modules are registered for name resolution
+                        self.known_modules.insert("stdlib".to_string());
+                        self.known_modules.insert("stdlib.rhtml".to_string());
+                        self.known_modules.insert("RenderStack".to_string());
+
+                        let line = self.span_line(*span);
+
+                        // 1. Start render context (clears deps and component tree)
+                        self.chunk.emit(Instruction::RenderContextStart, line);
+
+                        // 2. Transform and compile the tree
+                        let transformed_arg = self.transform_rhtml_expr(inner_expr);
+                        let tree_reg = self.compile_expr_tail(&transformed_arg, false)?;
+
+                        // 3. Finish render context - returns (deps, components) tuple
+                        let context_reg = self.alloc_reg();
+                        self.chunk.emit(Instruction::RenderContextFinish(context_reg), line);
+
+                        // 4. Extract deps and components from tuple
+                        let deps_reg = self.alloc_reg();
+                        self.chunk.emit(Instruction::GetTupleField(deps_reg, context_reg, 0), line);
+                        let components_reg = self.alloc_reg();
+                        self.chunk.emit(Instruction::GetTupleField(components_reg, context_reg, 1), line);
+
+                        // 5. Construct RHtmlResult { tree, deps, components }
+                        let dst = self.alloc_reg();
+                        let type_idx = self.chunk.add_constant(Value::String(Arc::new("stdlib.rhtml.RHtmlResult".to_string())));
+                        self.chunk.emit(Instruction::MakeRecord(dst, type_idx, vec![tree_reg, deps_reg, components_reg].into()), line);
+
+                        return Ok(dst);
                     }
                 }
 
@@ -5852,6 +5889,18 @@ impl Compiler {
                                 }
                                 None
                             }
+                            "onRead" => {
+                                if args.len() == 1 {
+                                    let obj_reg = self.compile_expr_tail(obj, false)?;
+                                    let callback_reg = self.compile_expr_tail(&args[0], false)?;
+                                    self.chunk.emit(Instruction::ReactiveAddReadCallback(obj_reg, callback_reg), line);
+                                    // Return unit
+                                    let dst = self.alloc_reg();
+                                    self.chunk.emit(Instruction::LoadUnit(dst), line);
+                                    return Ok(dst);
+                                }
+                                None
+                            }
                             _ => None,
                         }
                     } else {
@@ -6813,6 +6862,67 @@ impl Compiler {
 
                 // Compile the transformed expression and return the Html tree
                 return self.compile_expr_tail(&transformed_arg, is_tail);
+            }
+
+            // Handle RHtml(...) - transforms bare HTML tag names to stdlib.rhtml.* calls
+            // Returns RHtmlResult { tree, deps, components }
+            if name == "RHtml" && args.len() == 1 {
+                // Ensure required modules are registered for name resolution
+                self.known_modules.insert("stdlib".to_string());
+                self.known_modules.insert("stdlib.rhtml".to_string());
+                self.known_modules.insert("RenderStack".to_string());
+
+                // 1. Start render context (clears deps and component tree)
+                self.chunk.emit(Instruction::RenderContextStart, line);
+
+                // 2. Transform and compile the tree
+                let transformed_arg = self.transform_rhtml_expr(&args[0]);
+                let tree_reg = self.compile_expr_tail(&transformed_arg, false)?;
+
+                // 3. Finish render context - returns (deps, components) tuple
+                let context_reg = self.alloc_reg();
+                self.chunk.emit(Instruction::RenderContextFinish(context_reg), line);
+
+                // 4. Extract deps and components from tuple
+                let deps_reg = self.alloc_reg();
+                self.chunk.emit(Instruction::GetTupleField(deps_reg, context_reg, 0), line);
+                let components_reg = self.alloc_reg();
+                self.chunk.emit(Instruction::GetTupleField(components_reg, context_reg, 1), line);
+
+                // 5. Construct RHtmlResult { tree, deps, components }
+                let dst = self.alloc_reg();
+                let type_idx = self.chunk.add_constant(Value::String(Arc::new("stdlib.rhtml.RHtmlResult".to_string())));
+                self.chunk.emit(Instruction::MakeRecord(dst, type_idx, vec![tree_reg, deps_reg, components_reg].into()), line);
+
+                return Ok(dst);
+            }
+
+            // Handle stdlib.rhtml.component - wrap with RenderStack.push/pop for dependency tracking
+            if name == "stdlib.rhtml.component" && args.len() == 2 {
+                // component(name, content) compiles to:
+                //   push name to render stack
+                //   compile content (reactive reads tracked here)
+                //   pop render stack
+                //   call Component(name, content)
+
+                // Compile name argument
+                let name_reg = self.compile_expr_tail(&args[0], false)?;
+
+                // Push component name to render stack (for dependency tracking)
+                self.chunk.emit(Instruction::RenderStackPush(name_reg), line);
+
+                // Compile content (reactive reads will be associated with this component)
+                let content_reg = self.compile_expr_tail(&args[1], false)?;
+
+                // Pop render stack
+                self.chunk.emit(Instruction::RenderStackPop, line);
+
+                // Construct Component(name, content) variant directly
+                let dst = self.alloc_reg();
+                let type_idx = self.chunk.add_constant(Value::String(Arc::new("stdlib.rhtml.RNode".to_string())));
+                let ctor_idx = self.chunk.add_constant(Value::String(Arc::new("Component".to_string())));
+                self.chunk.emit(Instruction::MakeVariant(dst, type_idx, ctor_idx, vec![name_reg, content_reg].into()), line);
+                return Ok(dst);
             }
         }
 
@@ -12931,6 +13041,199 @@ impl Compiler {
             }
 
             // All other expressions pass through unchanged
+            _ => expr.clone(),
+        }
+    }
+
+    /// RHTML tag names and helper functions that should be resolved from stdlib.rhtml
+    /// when inside an RHtml(...) scope.
+    const RHTML_SCOPED_NAMES: &'static [&'static str] = &[
+        // Helpers
+        "text", "raw", "el", "empty", "render", "component",
+        // Type constructors
+        "Element", "Text", "Raw", "Empty", "Component",
+        // Container tags (overloaded: tag(List[RNode]) and tag(String))
+        "div", "span", "p", "h1", "h2", "h3", "h4", "h5", "h6",
+        "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td",
+        "form", "nav", "header", "footer", "section", "article", "aside",
+        "headEl", "body", "button", "label", "html",
+        // Text-only tags
+        "title", "strong", "em", "code", "pre", "small",
+        // Self-closing tags
+        "br", "hr", "img", "input", "meta", "linkTag",
+        // Elements with required attrs (overloaded)
+        "a",
+    ];
+
+    /// Transform an expression inside RHtml(...) to resolve bare HTML tag names
+    /// to their qualified stdlib.rhtml.* equivalents.
+    /// IMPORTANT: Only transforms names that are being CALLED as functions, not variable references.
+    fn transform_rhtml_expr(&self, expr: &Expr) -> Expr {
+        match expr {
+            // Transform function calls where the function is a bare HTML tag name
+            Expr::Call(func, type_args, args, span) => {
+                let new_func = if let Expr::Var(ident) = func.as_ref() {
+                    if Self::RHTML_SCOPED_NAMES.contains(&ident.node.as_str()) {
+                        // Transform `div` to `stdlib.rhtml.div`
+                        let fn_span = ident.span;
+                        let stdlib_var = Expr::Var(Spanned::new("stdlib".to_string(), fn_span));
+                        let rhtml_access = Expr::FieldAccess(
+                            Box::new(stdlib_var),
+                            Spanned::new("rhtml".to_string(), fn_span),
+                            fn_span,
+                        );
+                        Expr::FieldAccess(
+                            Box::new(rhtml_access),
+                            ident.clone(),
+                            fn_span,
+                        )
+                    } else {
+                        func.as_ref().clone()
+                    }
+                } else {
+                    self.transform_rhtml_expr(func)
+                };
+                let new_args: Vec<Expr> = args.iter().map(|a| self.transform_rhtml_expr(a)).collect();
+                Expr::Call(Box::new(new_func), type_args.clone(), new_args, *span)
+            }
+
+            Expr::Var(_) => expr.clone(),
+
+            Expr::MethodCall(obj, method, args, span) => {
+                let new_obj = self.transform_rhtml_expr(obj);
+                let new_args: Vec<Expr> = args.iter().map(|a| self.transform_rhtml_expr(a)).collect();
+                Expr::MethodCall(Box::new(new_obj), method.clone(), new_args, *span)
+            }
+
+            Expr::If(cond, then_branch, else_branch, span) => {
+                Expr::If(
+                    Box::new(self.transform_rhtml_expr(cond)),
+                    Box::new(self.transform_rhtml_expr(then_branch)),
+                    Box::new(self.transform_rhtml_expr(else_branch)),
+                    *span,
+                )
+            }
+
+            Expr::Match(scrutinee, arms, span) => {
+                let new_scrutinee = self.transform_rhtml_expr(scrutinee);
+                let new_arms: Vec<MatchArm> = arms.iter().map(|arm| {
+                    MatchArm {
+                        pattern: arm.pattern.clone(),
+                        guard: arm.guard.as_ref().map(|g| self.transform_rhtml_expr(g)),
+                        body: self.transform_rhtml_expr(&arm.body),
+                        span: arm.span,
+                    }
+                }).collect();
+                Expr::Match(Box::new(new_scrutinee), new_arms, *span)
+            }
+
+            Expr::List(items, tail, span) => {
+                let new_items: Vec<Expr> = items.iter().map(|i| self.transform_rhtml_expr(i)).collect();
+                let new_tail = tail.as_ref().map(|t| Box::new(self.transform_rhtml_expr(t)));
+                Expr::List(new_items, new_tail, *span)
+            }
+
+            Expr::Tuple(items, span) => {
+                let new_items: Vec<Expr> = items.iter().map(|i| self.transform_rhtml_expr(i)).collect();
+                Expr::Tuple(new_items, *span)
+            }
+
+            Expr::Map(pairs, span) => {
+                let new_pairs: Vec<(Expr, Expr)> = pairs.iter().map(|(k, v)| {
+                    (self.transform_rhtml_expr(k), self.transform_rhtml_expr(v))
+                }).collect();
+                Expr::Map(new_pairs, *span)
+            }
+
+            Expr::Set(items, span) => {
+                let new_items: Vec<Expr> = items.iter().map(|i| self.transform_rhtml_expr(i)).collect();
+                Expr::Set(new_items, *span)
+            }
+
+            Expr::BinOp(left, op, right, span) => {
+                Expr::BinOp(
+                    Box::new(self.transform_rhtml_expr(left)),
+                    *op,
+                    Box::new(self.transform_rhtml_expr(right)),
+                    *span,
+                )
+            }
+
+            Expr::UnaryOp(op, operand, span) => {
+                Expr::UnaryOp(*op, Box::new(self.transform_rhtml_expr(operand)), *span)
+            }
+
+            Expr::Lambda(params, body, span) => {
+                Expr::Lambda(params.clone(), Box::new(self.transform_rhtml_expr(body)), *span)
+            }
+
+            Expr::Block(stmts, span) => {
+                let new_stmts: Vec<Stmt> = stmts.iter().map(|stmt| {
+                    match stmt {
+                        Stmt::Expr(e) => Stmt::Expr(self.transform_rhtml_expr(e)),
+                        Stmt::Let(binding) => Stmt::Let(Binding {
+                            mutable: binding.mutable,
+                            pattern: binding.pattern.clone(),
+                            ty: binding.ty.clone(),
+                            value: self.transform_rhtml_expr(&binding.value),
+                            span: binding.span,
+                        }),
+                        Stmt::Assign(target, val, s) => {
+                            Stmt::Assign(target.clone(), self.transform_rhtml_expr(val), *s)
+                        }
+                    }
+                }).collect();
+                Expr::Block(new_stmts, *span)
+            }
+
+            Expr::FieldAccess(obj, field, span) => {
+                Expr::FieldAccess(Box::new(self.transform_rhtml_expr(obj)), field.clone(), *span)
+            }
+
+            Expr::Index(obj, idx, span) => {
+                Expr::Index(
+                    Box::new(self.transform_rhtml_expr(obj)),
+                    Box::new(self.transform_rhtml_expr(idx)),
+                    *span,
+                )
+            }
+
+            Expr::Record(name, fields, span) => {
+                let new_fields: Vec<RecordField> = fields.iter().map(|f| {
+                    match f {
+                        RecordField::Positional(e) => RecordField::Positional(self.transform_rhtml_expr(e)),
+                        RecordField::Named(n, e) => RecordField::Named(n.clone(), self.transform_rhtml_expr(e)),
+                    }
+                }).collect();
+                Expr::Record(name.clone(), new_fields, *span)
+            }
+
+            Expr::RecordUpdate(name, base, fields, span) => {
+                let new_base = self.transform_rhtml_expr(base);
+                let new_fields: Vec<RecordField> = fields.iter().map(|f| {
+                    match f {
+                        RecordField::Positional(e) => RecordField::Positional(self.transform_rhtml_expr(e)),
+                        RecordField::Named(n, e) => RecordField::Named(n.clone(), self.transform_rhtml_expr(e)),
+                    }
+                }).collect();
+                Expr::RecordUpdate(name.clone(), Box::new(new_base), new_fields, *span)
+            }
+
+            Expr::String(lit, span) => {
+                match lit {
+                    StringLit::Plain(_) => expr.clone(),
+                    StringLit::Interpolated(parts) => {
+                        let new_parts: Vec<StringPart> = parts.iter().map(|p| {
+                            match p {
+                                StringPart::Lit(s) => StringPart::Lit(s.clone()),
+                                StringPart::Expr(e) => StringPart::Expr(self.transform_rhtml_expr(e)),
+                            }
+                        }).collect();
+                        Expr::String(StringLit::Interpolated(new_parts), *span)
+                    }
+                }
+            }
+
             _ => expr.clone(),
         }
     }

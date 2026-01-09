@@ -1,0 +1,38 @@
+# expect: "<div id=\"app\" data-component=\"true\"><div><h1>App</h1><div id=\"sidebar\" data-component=\"true\"><div><h2>Sidebar</h2><div id=\"menu\" data-component=\"true\"><ul><li>Home</li><li>About</li></ul></div></div></div><div id=\"main\" data-component=\"true\"><p>Main content</p></div></div></div>"
+
+use stdlib.rhtml.{render}
+
+# Component defined as a function - returns RNode
+menu() = component("menu",
+    ul([
+        li("Home"),
+        li("About")
+    ])
+)
+
+# Component with nested component - returns RNode
+sidebar() = component("sidebar",
+    div([
+        h2("Sidebar"),
+        menu()
+    ])
+)
+
+# Another component function - returns RNode
+mainContent() = component("main", p("Main content"))
+
+main() = {
+    # Top-level app with nested components
+    # Only the top level uses RHtml() to get the full RHtmlResult
+    page = RHtml(
+        component("app",
+            div([
+                h1("App"),
+                sidebar(),
+                mainContent()
+            ])
+        )
+    )
+
+    render(page)
+}
