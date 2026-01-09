@@ -1383,6 +1383,7 @@ fn style_input(text: &str) -> StyledString {
 
             Token::Underscore => Color::Rgb(100, 100, 100),
             Token::Newline => Color::TerminalDefault,
+            Token::Comment | Token::MultiLineComment => Color::Rgb(128, 128, 128),
         };
 
         styled.append_styled(&text[span.clone()], color);

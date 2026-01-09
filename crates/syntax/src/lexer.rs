@@ -6,9 +6,13 @@ use std::fmt;
 /// All tokens in the Nostos language.
 #[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
 #[logos(skip r"[ \t\r]+")]                // Skip spaces and tabs, but NOT newlines
-#[logos(skip r"#[^*{\n][^\n]*")]           // Single-line comment: # ... (not #* or #{)
-#[logos(skip r"#\*([^*]|\*[^#])*\*#")]    // Multi-line comment: #* ... *#
 pub enum Token {
+    // Comments - captured as tokens for syntax highlighting
+    #[regex(r"#[^*{\n][^\n]*")]           // Single-line comment: # ... (not #* or #{)
+    Comment,
+
+    #[regex(r"#\*([^*]|\*[^#])*\*#")]    // Multi-line comment: #* ... *#
+    MultiLineComment,
     // Newline token - used as implicit statement separator
     #[regex(r"\n+")]
     Newline,
@@ -475,6 +479,8 @@ impl fmt::Display for Token {
             Token::Underscore => write!(f, "_"),
             Token::Hash => write!(f, "#"),
             Token::Newline => write!(f, "newline"),
+            Token::Comment => write!(f, "comment"),
+            Token::MultiLineComment => write!(f, "comment"),
         }
     }
 }
