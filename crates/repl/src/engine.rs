@@ -3880,26 +3880,53 @@ impl ReplEngine {
         };
 
         // Try to add and compile the module
-        // Only report TYPE errors - ignore missing function errors (might be missing stdlib)
+        // Report TYPE errors and UNKNOWN VARIABLE errors
+        // (Unknown function errors might be due to missing stdlib, but unknown variables are real errors
+        //  unless the variable name is a known function - then it's just a missing stdlib issue)
         if let Err(e) = check_compiler.add_module(&module, module_path, source.clone(), source_name) {
-            // Only report if it's a type error, not a missing function
-            if let nostos_compiler::CompileError::TypeError { message, .. } = &e {
-                let span = e.span();
-                let (line, _col) = offset_to_line_col(content, span.start);
-                return Err(format!("line {}: {}", line, message));
+            let span = e.span();
+            let (line, _col) = offset_to_line_col(content, span.start);
+            match &e {
+                nostos_compiler::CompileError::TypeError { message, .. } => {
+                    return Err(format!("line {}: {}", line, message));
+                }
+                nostos_compiler::CompileError::UnknownVariable { name, .. } => {
+                    // Only report if this is not a known function name
+                    // (stdlib functions like map, filter might appear as "unknown variable"
+                    // when the check_compiler doesn't have stdlib loaded)
+                    // Also check if it's a method name (e.g., "contains" from "String.contains")
+                    let is_known = known_functions.contains(name) ||
+                        known_functions.iter().any(|f| f.ends_with(&format!(".{}", name)));
+                    if !is_known {
+                        return Err(format!("line {}: unknown variable `{}`", line, name));
+                    }
+                }
+                _ => {
+                    // Other errors (like unknown function) might be due to missing stdlib
+                }
             }
-            // Other errors (like unknown variable) might be due to missing stdlib
-            // Already checked by our manual validation above, so skip
         }
 
         // Try to compile - this runs full type checking
         let errors = check_compiler.compile_all_collecting_errors();
         for (_, error, _, _) in &errors {
-            // Only report TYPE errors - ignore missing function/variable errors
-            if let nostos_compiler::CompileError::TypeError { message, .. } = error {
-                let span = error.span();
-                let (line, _col) = offset_to_line_col(content, span.start);
-                return Err(format!("line {}: {}", line, message));
+            let span = error.span();
+            let (line, _col) = offset_to_line_col(content, span.start);
+            match error {
+                nostos_compiler::CompileError::TypeError { message, .. } => {
+                    return Err(format!("line {}: {}", line, message));
+                }
+                nostos_compiler::CompileError::UnknownVariable { name, .. } => {
+                    // Only report if this is not a known function name or method
+                    let is_known = known_functions.contains(name) ||
+                        known_functions.iter().any(|f| f.ends_with(&format!(".{}", name)));
+                    if !is_known {
+                        return Err(format!("line {}: unknown variable `{}`", line, name));
+                    }
+                }
+                _ => {
+                    // Other errors (like unknown function) might be due to missing stdlib
+                }
             }
         }
 
@@ -9871,7 +9898,7 @@ serverLoop(server) = {
     headers = [("Content-Type", "text/plain")]
     Server.respond(req.id, statusCode, headers, responseBody)
     serverLoop(server)
-  } catch e -> () end
+  } catch { e -> () }
   result
 }
 
@@ -9880,14 +9907,14 @@ clientRequest(parent, path) = {
   try {
     response = Http.get(url)
     parent <- ("response", path, response.status)
-  } catch e -> () end
+  } catch { e -> () }
 }
 
 collectResponses(count, expected) = {
   if count == expected then
     count
   else
-    receive
+    receive {
       ("response", path, status) -> {
         print("  ")
         print(path)
@@ -9897,7 +9924,7 @@ collectResponses(count, expected) = {
       }
     after 5000 ->
       count
-    end
+    }
 }
 
 main() = {
@@ -9915,7 +9942,7 @@ main() = {
     status.contains(1, 2)
 
     Server.close(server)
-  } catch e -> () end
+  } catch { e -> () }
 }"#;
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
@@ -10004,7 +10031,7 @@ main() = {
     status.contains("s")
     y = Yess
     Server.close(server)
-  } catch e -> () end
+  } catch { e -> () }
 }
 "#;
         let result = engine.check_module_compiles("", code);
@@ -10066,7 +10093,7 @@ serverLoop(server) = {
     headers = [("Content-Type", "text/plain")]
     Server.respond(req.id, statusCode, headers, responseBody)
     serverLoop(server)
-  } catch e -> () end
+  } catch { e -> () }
   result
 }
 
@@ -10076,7 +10103,7 @@ clientRequest(parent, path) = {
   try {
     response = Http.get(url)
     parent <- ("response", path, response.status)
-  } catch e -> () end
+  } catch { e -> () }
 }
 
 # Collect responses from client workers
@@ -10084,7 +10111,7 @@ collectResponses(count, expected) = {
   if count == expected then
     count
   else
-    receive
+    receive {
       ("response", path, status) -> {
         print("  ")
         print(path)
@@ -10094,7 +10121,7 @@ collectResponses(count, expected) = {
       }
     after 5000 ->
       count
-    end
+    }
 }
 
 # Main - demonstrates server + client in same VM
@@ -10148,7 +10175,7 @@ main() = {
 
     # Clean up
     Server.close(server)
-  } catch e -> () end
+  } catch { e -> () }
 }
 "#;
         let result = engine.check_module_compiles("", code);
@@ -10348,6 +10375,24 @@ main() = {
         assert!(fields.contains(&"exitCode".to_string()), "ExecResult should have 'exitCode' field");
         assert!(fields.contains(&"stdout".to_string()), "ExecResult should have 'stdout' field");
         assert!(fields.contains(&"stderr".to_string()), "ExecResult should have 'stderr' field");
+    }
+
+    #[test]
+    fn test_undefined_variable_in_function_body() {
+        // Test that undefined variables in function bodies are detected
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+greet(name) = {
+    prefix = "Hello, "
+    suffix = "!"
+    huff
+    prefix ++ name ++ suffix
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for undefined variable 'huff'");
+        assert!(result.unwrap_err().contains("huff"), "Error should mention 'huff'");
     }
 }
 
