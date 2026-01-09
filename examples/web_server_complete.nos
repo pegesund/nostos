@@ -94,7 +94,7 @@ handleHome(req) = {
 
 handleUsers(req) = {
     rows = query("SELECT id, name, email, credits FROM web_users ORDER BY id", [])
-    cards = map(rows, row => userCard(row.0, row.1, row.2, row.3))
+    cards = map(rows, (id, name, email, credits) => userCard(id, name, email, credits))
 
     content = Html(div([
         h1("All Users"),
