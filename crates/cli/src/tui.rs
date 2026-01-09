@@ -35,6 +35,60 @@ fn debug_log(msg: &str) {
     }
 }
 
+/// Apply syntax highlighting to source code, returning a StyledString
+fn syntax_highlight_code(source: &str) -> StyledString {
+    use nostos_syntax::lexer::Token;
+
+    let mut styled = StyledString::new();
+
+    for line in source.lines() {
+        for (token, span) in lex(line) {
+            let color = match token {
+                Token::Type | Token::Var | Token::If | Token::Then | Token::Else |
+                Token::Match | Token::When | Token::Trait | Token::Module | Token::End |
+                Token::Use | Token::Private | Token::Pub | Token::SelfKw | Token::SelfType |
+                Token::Try | Token::Catch | Token::Finally | Token::Do |
+                Token::While | Token::For | Token::To | Token::Break | Token::Continue |
+                Token::Spawn | Token::SpawnLink | Token::SpawnMonitor | Token::Receive | Token::After |
+                Token::Panic | Token::Extern | Token::From | Token::Test | Token::Deriving | Token::Quote =>
+                    Color::Rgb(255, 0, 255),  // Keywords: magenta
+
+                Token::True | Token::False |
+                Token::Int(_) | Token::HexInt(_) | Token::BinInt(_) |
+                Token::Int8(_) | Token::Int16(_) | Token::Int32(_) |
+                Token::UInt8(_) | Token::UInt16(_) | Token::UInt32(_) | Token::UInt64(_) |
+                Token::BigInt(_) | Token::Float(_) | Token::Float32(_) | Token::Decimal(_) =>
+                    Color::Rgb(255, 255, 0),  // Numbers/booleans: yellow
+
+                Token::String(_) | Token::Char(_) => Color::Rgb(0, 255, 0),  // Strings: green
+
+                Token::Plus | Token::Minus | Token::Star | Token::Slash | Token::Percent | Token::StarStar |
+                Token::EqEq | Token::NotEq | Token::Lt | Token::Gt | Token::LtEq | Token::GtEq |
+                Token::AndAnd | Token::OrOr | Token::Bang | Token::PlusPlus | Token::PipeRight |
+                Token::Eq | Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq |
+                Token::LeftArrow | Token::RightArrow | Token::FatArrow | Token::Caret | Token::Dollar | Token::Question |
+                Token::LParen | Token::RParen | Token::LBracket | Token::RBracket |
+                Token::LBrace | Token::RBrace | Token::Comma | Token::Colon | Token::Dot |
+                Token::Pipe | Token::Hash =>
+                    Color::Rgb(255, 165, 0),  // Operators: orange
+
+                Token::UpperIdent(_) => Color::Rgb(255, 255, 0),  // Types: yellow
+                Token::LowerIdent(_) => Color::Rgb(255, 255, 255),  // Identifiers: white
+
+                Token::Underscore => Color::Rgb(100, 100, 100),
+                Token::Comment | Token::MultiLineComment => Color::Rgb(128, 128, 128),  // Comments: gray
+                _ => Color::Rgb(255, 255, 255),
+            };
+
+            let text = &line[span.start..span.end];
+            styled.append_styled(text, Style::from(color));
+        }
+        styled.append_plain("\n");
+    }
+
+    styled
+}
+
 /// Format compile error for human-readable display
 /// Cleans up token names and provides friendly messages
 fn format_compile_error(error: &str) -> String {
@@ -1693,48 +1747,54 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     }
     drop(engine_ref);
 
-    // Handle selection change - update preview pane
+    // Handle selection change - update preview pane with syntax highlighting
     let path_for_preview = path.clone();
     let engine_for_preview = engine.clone();
     select.set_on_select(move |s: &mut Cursive, item: &BrowserItem| {
         let engine = engine_for_preview.clone();
         let current_path = path_for_preview.clone();
 
-        let preview_text = match item {
+        let preview_styled: StyledString = match item {
             BrowserItem::Function { .. } => {
                 let full_name = engine.borrow().get_full_name(&current_path, item);
-                engine.borrow().get_source(&full_name)
+                let source = engine.borrow().get_source(&full_name);
+                syntax_highlight_code(&source)
             }
             BrowserItem::Type { .. } => {
                 let full_name = engine.borrow().get_full_name(&current_path, item);
-                engine.borrow().get_source(&full_name)
+                let source = engine.borrow().get_source(&full_name);
+                syntax_highlight_code(&source)
             }
             BrowserItem::Trait { .. } => {
                 let full_name = engine.borrow().get_full_name(&current_path, item);
-                engine.borrow().get_source(&full_name)
+                let source = engine.borrow().get_source(&full_name);
+                syntax_highlight_code(&source)
             }
             BrowserItem::Module(name) if name == ".." => {
-                "(parent directory)".to_string()
+                StyledString::plain("(parent directory)")
             }
             BrowserItem::Module(name) => {
-                format!("Module: {}", name)
+                StyledString::plain(format!("Module: {}", name))
             }
             BrowserItem::Variable { name, .. } => {
                 if let Some(value) = engine.borrow_mut().get_var_value_raw(name) {
-                    format!("{} = {}", name, value)
+                    // Highlight variable value as code
+                    let source = format!("{} = {}", name, value);
+                    syntax_highlight_code(&source)
                 } else {
-                    format!("{} = <unavailable>", name)
+                    StyledString::plain(format!("{} = <unavailable>", name))
                 }
             }
             BrowserItem::Metadata { module } => {
                 let full_name = format!("{}._meta", module);
-                engine.borrow().get_source(&full_name)
+                let source = engine.borrow().get_source(&full_name);
+                syntax_highlight_code(&source)
             }
         };
 
-        // Update preview text
+        // Update preview with styled content
         s.call_on_name("browser_preview", |v: &mut TextView| {
-            v.set_content(preview_text);
+            v.set_content(preview_styled);
         });
     });
 
