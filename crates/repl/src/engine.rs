@@ -3778,8 +3778,8 @@ impl ReplEngine {
             }
         }
 
-        // Run the profiled function
-        let result = async_vm.run("__profile_main__");
+        // Run the profiled function (0-arity, so add "/" suffix)
+        let result = async_vm.run("__profile_main__/");
 
         // Format the result
         match result {
