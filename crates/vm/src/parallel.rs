@@ -1751,6 +1751,53 @@ impl ParallelVM {
             }),
         }));
 
+        // === List utility functions ===
+
+        self.register_native("range", Arc::new(GcNativeFn {
+            name: "range".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let start = match &args[0] {
+                    GcValue::Int64(n) => *n,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let end = match &args[1] {
+                    GcValue::Int64(n) => *n,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let items: Vec<GcValue> = (start..end).map(GcValue::Int64).collect();
+                Ok(GcValue::List(heap.make_list(items)))
+            }),
+        }));
+
+        self.register_native("product", Arc::new(GcNativeFn {
+            name: "product".to_string(),
+            arity: 1,
+            func: Box::new(|args, _heap| {
+                match &args[0] {
+                    GcValue::List(list) => {
+                        let items = list.items();
+                        let mut result: i64 = 1;
+                        for item in items {
+                            match item {
+                                GcValue::Int64(n) => result *= n,
+                                GcValue::Float64(f) => return Ok(GcValue::Float64(items.iter().fold(1.0, |acc, v| {
+                                    match v {
+                                        GcValue::Float64(x) => acc * x,
+                                        GcValue::Int64(x) => acc * (*x as f64),
+                                        _ => acc
+                                    }
+                                }))),
+                                _ => return Err(RuntimeError::TypeError { expected: "Num".to_string(), found: "other".to_string() })
+                            }
+                        }
+                        Ok(GcValue::Int64(result))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "List".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
         // === Environment functions ===
 
         self.register_native("Env.get", Arc::new(GcNativeFn {
@@ -4671,6 +4718,166 @@ impl ThreadWorker {
                 let result = match reg!(*src) {
                     GcValue::Float64(f) => GcValue::Float64(f.sqrt()),
                     GcValue::Float32(f) => GcValue::Float32(f.sqrt()),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(*dst, result);
+            }
+
+            MinInt(dst, a, b) => {
+                let va = match reg!(*a) {
+                    GcValue::Int64(i) => *i,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                let vb = match reg!(*b) {
+                    GcValue::Int64(i) => *i,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(*dst, GcValue::Int64(va.min(vb)));
+            }
+
+            MaxInt(dst, a, b) => {
+                let va = match reg!(*a) {
+                    GcValue::Int64(i) => *i,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                let vb = match reg!(*b) {
+                    GcValue::Int64(i) => *i,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Int64".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(*dst, GcValue::Int64(va.max(vb)));
+            }
+
+            MinFloat(dst, a, b) => {
+                let va = reg!(*a).clone();
+                let vb = reg!(*b).clone();
+                let result = match (&va, &vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x.min(*y)),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x.min(*y)),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching float types".to_string(),
+                        found: "mismatched types".to_string(),
+                    }),
+                };
+                set_reg!(*dst, result);
+            }
+
+            MaxFloat(dst, a, b) => {
+                let va = reg!(*a).clone();
+                let vb = reg!(*b).clone();
+                let result = match (&va, &vb) {
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x.max(*y)),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x.max(*y)),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "matching float types".to_string(),
+                        found: "mismatched types".to_string(),
+                    }),
+                };
+                set_reg!(*dst, result);
+            }
+
+            SinFloat(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Float64(f) => GcValue::Float64(f.sin()),
+                    GcValue::Float32(f) => GcValue::Float32(f.sin()),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(*dst, result);
+            }
+
+            CosFloat(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Float64(f) => GcValue::Float64(f.cos()),
+                    GcValue::Float32(f) => GcValue::Float32(f.cos()),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(*dst, result);
+            }
+
+            TanFloat(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Float64(f) => GcValue::Float64(f.tan()),
+                    GcValue::Float32(f) => GcValue::Float32(f.tan()),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(*dst, result);
+            }
+
+            FloorFloat(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Float64(f) => GcValue::Int64(f.floor() as i64),
+                    GcValue::Float32(f) => GcValue::Int64(f.floor() as i64),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(*dst, result);
+            }
+
+            CeilFloat(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Float64(f) => GcValue::Int64(f.ceil() as i64),
+                    GcValue::Float32(f) => GcValue::Int64(f.ceil() as i64),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(*dst, result);
+            }
+
+            RoundFloat(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Float64(f) => GcValue::Int64(f.round() as i64),
+                    GcValue::Float32(f) => GcValue::Int64(f.round() as i64),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(*dst, result);
+            }
+
+            LogFloat(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Float64(f) => GcValue::Float64(f.ln()),
+                    GcValue::Float32(f) => GcValue::Float32(f.ln()),
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Float".to_string(),
+                        found: "other".to_string(),
+                    }),
+                };
+                set_reg!(*dst, result);
+            }
+
+            Log10Float(dst, src) => {
+                let result = match reg!(*src) {
+                    GcValue::Float64(f) => GcValue::Float64(f.log10()),
+                    GcValue::Float32(f) => GcValue::Float32(f.log10()),
                     _ => return Err(RuntimeError::TypeError {
                         expected: "Float".to_string(),
                         found: "other".to_string(),
