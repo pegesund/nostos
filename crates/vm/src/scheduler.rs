@@ -18,6 +18,7 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::gc::{GcConfig, GcNativeFn, GcValue};
 use crate::process::{ExitReason, Process, ProcessState};
+use crate::runtime::{JitIntFn, JitLoopArrayFn};
 use crate::value::{FunctionValue, Pid, RefId, RuntimeError, TypeValue, Value};
 
 /// Configuration for JIT compilation.
@@ -292,6 +293,10 @@ pub struct Scheduler {
     /// RwLock since these are typically only written at startup.
     pub functions: RwLock<HashMap<String, Arc<FunctionValue>>>,
 
+    /// Functions by index (for CallDirect/TailCallDirect).
+    /// Parallel to functions map, indexed by func_idx.
+    pub function_list: RwLock<Vec<Arc<FunctionValue>>>,
+
     /// Native functions (shared across processes).
     pub natives: RwLock<HashMap<String, Arc<GcNativeFn>>>,
 
@@ -303,6 +308,12 @@ pub struct Scheduler {
 
     /// JIT compilation tracker (hot function detection).
     pub jit_tracker: JitTracker,
+
+    /// JIT-compiled integer functions (func_index -> JIT fn).
+    pub jit_int_functions: RwLock<HashMap<u16, JitIntFn>>,
+
+    /// JIT-compiled loop array functions (func_index -> JIT fn).
+    pub jit_loop_array_functions: RwLock<HashMap<u16, JitLoopArrayFn>>,
 
     /// Active (non-exited) process count - atomic for fast access.
     /// Avoids expensive iteration in process_count().
@@ -325,10 +336,13 @@ impl Scheduler {
             next_pid: AtomicU64::new(1), // Pid 0 is reserved
             next_ref: AtomicU64::new(1),
             functions: RwLock::new(HashMap::new()),
+            function_list: RwLock::new(Vec::new()),
             natives: RwLock::new(HashMap::new()),
             types: RwLock::new(HashMap::new()),
             globals: RwLock::new(HashMap::new()),
             jit_tracker: JitTracker::new(jit_config),
+            jit_int_functions: RwLock::new(HashMap::new()),
+            jit_loop_array_functions: RwLock::new(HashMap::new()),
             active_process_count: AtomicUsize::new(0),
         }
     }
