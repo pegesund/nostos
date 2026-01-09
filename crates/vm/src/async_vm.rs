@@ -3792,8 +3792,1820 @@ impl AsyncVM {
                 Ok(GcValue::Int64(hash_val as i64))
             }),
         }));
-    }
 
+        // === Additional native functions (copied from ParallelVM) ===
+        self.register_native("String.chars", Arc::new(GcNativeFn {
+            name: "String.chars".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                             let chars: Vec<GcValue> = str_val.data.chars().map(GcValue::Char).collect();
+                             Ok(GcValue::List(heap.make_list(chars)))
+                        } else {
+                             Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // String.from_chars
+        self.register_native("String.from_chars", Arc::new(GcNativeFn {
+            name: "String.from_chars".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::List(list) => {
+                        let mut s = String::new();
+                        for item in list.items() {
+                            match item {
+                                GcValue::Char(c) => s.push(*c),
+                                _ => return Err(RuntimeError::TypeError { expected: "Char".to_string(), found: "other".to_string() })
+                            }
+                        }
+                        Ok(GcValue::String(heap.alloc_string(s)))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "List".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // String.to_int
+        self.register_native("String.to_int", Arc::new(GcNativeFn {
+            name: "String.to_int".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                             match str_val.data.parse::<i64>() {
+                                 Ok(n) => Ok(GcValue::Int64(n)),
+                                 Err(_) => Ok(GcValue::Unit)
+                             }
+                        } else {
+                             Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        self.register_native("String.toInt", Arc::new(GcNativeFn {
+            name: "String.toInt".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                            match str_val.data.trim().parse::<i64>() {
+                                Ok(n) => Ok(GcValue::Int64(n)),
+                                Err(_) => Ok(GcValue::Unit)
+                            }
+                        } else {
+                            Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // String.toFloat
+        self.register_native("String.toFloat", Arc::new(GcNativeFn {
+            name: "String.toFloat".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                            match str_val.data.trim().parse::<f64>() {
+                                Ok(n) => Ok(GcValue::Float64(n)),
+                                Err(_) => Ok(GcValue::Unit)
+                            }
+                        } else {
+                            Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // String.trim
+        self.register_native("String.trim", Arc::new(GcNativeFn {
+            name: "String.trim".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                            Ok(GcValue::String(heap.alloc_string(str_val.data.trim().to_string())))
+                        } else {
+                            Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // String.trimStart
+        self.register_native("String.trimStart", Arc::new(GcNativeFn {
+            name: "String.trimStart".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                            Ok(GcValue::String(heap.alloc_string(str_val.data.trim_start().to_string())))
+                        } else {
+                            Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // String.trimEnd
+        self.register_native("String.trimEnd", Arc::new(GcNativeFn {
+            name: "String.trimEnd".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                            Ok(GcValue::String(heap.alloc_string(str_val.data.trim_end().to_string())))
+                        } else {
+                            Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // String.toUpper
+        self.register_native("String.toUpper", Arc::new(GcNativeFn {
+            name: "String.toUpper".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                            Ok(GcValue::String(heap.alloc_string(str_val.data.to_uppercase())))
+                        } else {
+                            Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // String.toLower
+        self.register_native("String.toLower", Arc::new(GcNativeFn {
+            name: "String.toLower".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                            Ok(GcValue::String(heap.alloc_string(str_val.data.to_lowercase())))
+                        } else {
+                            Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // String.contains
+        self.register_native("String.contains", Arc::new(GcNativeFn {
+            name: "String.contains".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let sub = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, sub) {
+                    (Some(s), Some(sub)) => Ok(GcValue::Bool(s.contains(&sub))),
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // String.startsWith
+        self.register_native("String.startsWith", Arc::new(GcNativeFn {
+            name: "String.startsWith".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let prefix = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, prefix) {
+                    (Some(s), Some(p)) => Ok(GcValue::Bool(s.starts_with(&p))),
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // String.endsWith
+        self.register_native("String.endsWith", Arc::new(GcNativeFn {
+            name: "String.endsWith".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let suffix = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, suffix) {
+                    (Some(s), Some(suf)) => Ok(GcValue::Bool(s.ends_with(&suf))),
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // String.replace
+        self.register_native("String.replace", Arc::new(GcNativeFn {
+            name: "String.replace".to_string(),
+            arity: 3,
+            func: Box::new(|args, heap| {
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let from = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let to = match &args[2] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, from, to) {
+                    (Some(s), Some(from), Some(to)) => Ok(GcValue::String(heap.alloc_string(s.replacen(&from, &to, 1)))),
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // String.replaceAll
+        self.register_native("String.replaceAll", Arc::new(GcNativeFn {
+            name: "String.replaceAll".to_string(),
+            arity: 3,
+            func: Box::new(|args, heap| {
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let from = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let to = match &args[2] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, from, to) {
+                    (Some(s), Some(from), Some(to)) => Ok(GcValue::String(heap.alloc_string(s.replace(&from, &to)))),
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // String.indexOf
+        self.register_native("String.indexOf", Arc::new(GcNativeFn {
+            name: "String.indexOf".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let sub = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, sub) {
+                    (Some(s), Some(sub)) => {
+                        let idx = s.find(&sub).map(|i| i as i64).unwrap_or(-1);
+                        Ok(GcValue::Int64(idx))
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // String.lastIndexOf
+        self.register_native("String.lastIndexOf", Arc::new(GcNativeFn {
+            name: "String.lastIndexOf".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let sub = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, sub) {
+                    (Some(s), Some(sub)) => {
+                        let idx = s.rfind(&sub).map(|i| i as i64).unwrap_or(-1);
+                        Ok(GcValue::Int64(idx))
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // String.substring
+        self.register_native("String.substring", Arc::new(GcNativeFn {
+            name: "String.substring".to_string(),
+            arity: 3,
+            func: Box::new(|args, heap| {
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let start = match &args[1] {
+                    GcValue::Int64(n) => *n as usize,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let end = match &args[2] {
+                    GcValue::Int64(n) => *n as usize,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                match s {
+                    Some(s) => {
+                        let chars: Vec<char> = s.chars().collect();
+                        let start = start.min(chars.len());
+                        let end = end.min(chars.len());
+                        let result: String = chars[start..end].iter().collect();
+                        Ok(GcValue::String(heap.alloc_string(result)))
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // String.repeat
+        self.register_native("String.repeat", Arc::new(GcNativeFn {
+            name: "String.repeat".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let n = match &args[1] {
+                    GcValue::Int64(n) => *n as usize,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                match s {
+                    Some(s) => Ok(GcValue::String(heap.alloc_string(s.repeat(n)))),
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // String.padStart
+        self.register_native("String.padStart", Arc::new(GcNativeFn {
+            name: "String.padStart".to_string(),
+            arity: 3,
+            func: Box::new(|args, heap| {
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let len = match &args[1] {
+                    GcValue::Int64(n) => *n as usize,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let pad = match &args[2] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, pad) {
+                    (Some(s), Some(pad)) => {
+                        if s.chars().count() >= len {
+                            Ok(GcValue::String(heap.alloc_string(s)))
+                        } else {
+                            let pad_len = len - s.chars().count();
+                            let pad_char = pad.chars().next().unwrap_or(' ');
+                            let padding: String = std::iter::repeat(pad_char).take(pad_len).collect();
+                            Ok(GcValue::String(heap.alloc_string(format!("{}{}", padding, s))))
+                        }
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // String.padEnd
+        self.register_native("String.padEnd", Arc::new(GcNativeFn {
+            name: "String.padEnd".to_string(),
+            arity: 3,
+            func: Box::new(|args, heap| {
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let len = match &args[1] {
+                    GcValue::Int64(n) => *n as usize,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let pad = match &args[2] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, pad) {
+                    (Some(s), Some(pad)) => {
+                        if s.chars().count() >= len {
+                            Ok(GcValue::String(heap.alloc_string(s)))
+                        } else {
+                            let pad_len = len - s.chars().count();
+                            let pad_char = pad.chars().next().unwrap_or(' ');
+                            let padding: String = std::iter::repeat(pad_char).take(pad_len).collect();
+                            Ok(GcValue::String(heap.alloc_string(format!("{}{}", s, padding))))
+                        }
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // String.reverse
+        self.register_native("String.reverse", Arc::new(GcNativeFn {
+            name: "String.reverse".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                            Ok(GcValue::String(heap.alloc_string(str_val.data.chars().rev().collect())))
+                        } else {
+                            Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // String.lines
+        self.register_native("String.lines", Arc::new(GcNativeFn {
+            name: "String.lines".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                            // Clone data first to avoid borrow issues
+                            let data = str_val.data.clone();
+                            let line_strs: Vec<String> = data.lines().map(|l| l.to_string()).collect();
+                            let lines: Vec<GcValue> = line_strs.into_iter()
+                                .map(|l| GcValue::String(heap.alloc_string(l)))
+                                .collect();
+                            Ok(GcValue::List(heap.make_list(lines)))
+                        } else {
+                            Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // String.words
+        self.register_native("String.words", Arc::new(GcNativeFn {
+            name: "String.words".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                            // Clone data first to avoid borrow issues
+                            let data = str_val.data.clone();
+                            let word_strs: Vec<String> = data.split_whitespace().map(|w| w.to_string()).collect();
+                            let words: Vec<GcValue> = word_strs.into_iter()
+                                .map(|w| GcValue::String(heap.alloc_string(w)))
+                                .collect();
+                            Ok(GcValue::List(heap.make_list(words)))
+                        } else {
+                            Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // String.isEmpty
+        self.register_native("String.isEmpty", Arc::new(GcNativeFn {
+            name: "String.isEmpty".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                            Ok(GcValue::Bool(str_val.data.is_empty()))
+                        } else {
+                            Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // === Time functions ===
+
+        // Time.now - returns milliseconds since Unix epoch
+        self.register_native("Time.now", Arc::new(GcNativeFn {
+            name: "Time.now".to_string(),
+            arity: 0,
+            func: Box::new(|_args, _heap| {
+                use chrono::Utc;
+                Ok(GcValue::Int64(Utc::now().timestamp_millis()))
+            }),
+        }));
+
+        // Time.nowSecs - returns seconds since Unix epoch
+        self.register_native("Time.nowSecs", Arc::new(GcNativeFn {
+            name: "Time.nowSecs".to_string(),
+            arity: 0,
+            func: Box::new(|_args, _heap| {
+                use chrono::Utc;
+                Ok(GcValue::Int64(Utc::now().timestamp()))
+            }),
+        }));
+
+        // Time.format - format timestamp with format string
+        self.register_native("Time.format", Arc::new(GcNativeFn {
+            name: "Time.format".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                use chrono::{Local, TimeZone};
+                let ts = match &args[0] {
+                    GcValue::Int64(n) => *n,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let fmt = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match fmt {
+                    Some(fmt) => {
+                        let dt = Local.timestamp_millis_opt(ts).single()
+                            .ok_or_else(|| RuntimeError::Panic("Invalid timestamp".to_string()))?;
+                        Ok(GcValue::String(heap.alloc_string(dt.format(&fmt).to_string())))
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // Time.formatUtc - format timestamp as UTC
+        self.register_native("Time.formatUtc", Arc::new(GcNativeFn {
+            name: "Time.formatUtc".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                use chrono::{Utc, TimeZone};
+                let ts = match &args[0] {
+                    GcValue::Int64(n) => *n,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let fmt = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match fmt {
+                    Some(fmt) => {
+                        let dt = Utc.timestamp_millis_opt(ts).single()
+                            .ok_or_else(|| RuntimeError::Panic("Invalid timestamp".to_string()))?;
+                        Ok(GcValue::String(heap.alloc_string(dt.format(&fmt).to_string())))
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // Time.parse - parse time string
+        self.register_native("Time.parse", Arc::new(GcNativeFn {
+            name: "Time.parse".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                use chrono::NaiveDateTime;
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let fmt = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, fmt) {
+                    (Some(s), Some(fmt)) => {
+                        match NaiveDateTime::parse_from_str(&s, &fmt) {
+                            Ok(dt) => Ok(GcValue::Int64(dt.and_utc().timestamp_millis())),
+                            Err(_) => Ok(GcValue::Unit) // Return None/Unit on parse failure
+                        }
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // Time component extractors
+        self.register_native("Time.year", Arc::new(GcNativeFn {
+            name: "Time.year".to_string(),
+            arity: 1,
+            func: Box::new(|args, _heap| {
+                use chrono::{Local, TimeZone, Datelike};
+                let ts = match &args[0] {
+                    GcValue::Int64(n) => *n,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let dt = Local.timestamp_millis_opt(ts).single()
+                    .ok_or_else(|| RuntimeError::Panic("Invalid timestamp".to_string()))?;
+                Ok(GcValue::Int64(dt.year() as i64))
+            }),
+        }));
+
+        self.register_native("Time.month", Arc::new(GcNativeFn {
+            name: "Time.month".to_string(),
+            arity: 1,
+            func: Box::new(|args, _heap| {
+                use chrono::{Local, TimeZone, Datelike};
+                let ts = match &args[0] {
+                    GcValue::Int64(n) => *n,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let dt = Local.timestamp_millis_opt(ts).single()
+                    .ok_or_else(|| RuntimeError::Panic("Invalid timestamp".to_string()))?;
+                Ok(GcValue::Int64(dt.month() as i64))
+            }),
+        }));
+
+        self.register_native("Time.day", Arc::new(GcNativeFn {
+            name: "Time.day".to_string(),
+            arity: 1,
+            func: Box::new(|args, _heap| {
+                use chrono::{Local, TimeZone, Datelike};
+                let ts = match &args[0] {
+                    GcValue::Int64(n) => *n,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let dt = Local.timestamp_millis_opt(ts).single()
+                    .ok_or_else(|| RuntimeError::Panic("Invalid timestamp".to_string()))?;
+                Ok(GcValue::Int64(dt.day() as i64))
+            }),
+        }));
+
+        self.register_native("Time.hour", Arc::new(GcNativeFn {
+            name: "Time.hour".to_string(),
+            arity: 1,
+            func: Box::new(|args, _heap| {
+                use chrono::{Local, TimeZone, Timelike};
+                let ts = match &args[0] {
+                    GcValue::Int64(n) => *n,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let dt = Local.timestamp_millis_opt(ts).single()
+                    .ok_or_else(|| RuntimeError::Panic("Invalid timestamp".to_string()))?;
+                Ok(GcValue::Int64(dt.hour() as i64))
+            }),
+        }));
+
+        self.register_native("Time.minute", Arc::new(GcNativeFn {
+            name: "Time.minute".to_string(),
+            arity: 1,
+            func: Box::new(|args, _heap| {
+                use chrono::{Local, TimeZone, Timelike};
+                let ts = match &args[0] {
+                    GcValue::Int64(n) => *n,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let dt = Local.timestamp_millis_opt(ts).single()
+                    .ok_or_else(|| RuntimeError::Panic("Invalid timestamp".to_string()))?;
+                Ok(GcValue::Int64(dt.minute() as i64))
+            }),
+        }));
+
+        self.register_native("Time.second", Arc::new(GcNativeFn {
+            name: "Time.second".to_string(),
+            arity: 1,
+            func: Box::new(|args, _heap| {
+                use chrono::{Local, TimeZone, Timelike};
+                let ts = match &args[0] {
+                    GcValue::Int64(n) => *n,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let dt = Local.timestamp_millis_opt(ts).single()
+                    .ok_or_else(|| RuntimeError::Panic("Invalid timestamp".to_string()))?;
+                Ok(GcValue::Int64(dt.second() as i64))
+            }),
+        }));
+
+        self.register_native("Time.weekday", Arc::new(GcNativeFn {
+            name: "Time.weekday".to_string(),
+            arity: 1,
+            func: Box::new(|args, _heap| {
+                use chrono::{Local, TimeZone, Datelike};
+                let ts = match &args[0] {
+                    GcValue::Int64(n) => *n,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let dt = Local.timestamp_millis_opt(ts).single()
+                    .ok_or_else(|| RuntimeError::Panic("Invalid timestamp".to_string()))?;
+                // Sunday = 0, Saturday = 6
+                Ok(GcValue::Int64(dt.weekday().num_days_from_sunday() as i64))
+            }),
+        }));
+
+        self.register_native("Time.timezone", Arc::new(GcNativeFn {
+            name: "Time.timezone".to_string(),
+            arity: 0,
+            func: Box::new(|_args, heap| {
+                use chrono::Local;
+                let now = Local::now();
+                let tz_name = now.format("%Z").to_string();
+                Ok(GcValue::String(heap.alloc_string(tz_name)))
+            }),
+        }));
+
+        self.register_native("Time.timezoneOffset", Arc::new(GcNativeFn {
+            name: "Time.timezoneOffset".to_string(),
+            arity: 0,
+            func: Box::new(|_args, _heap| {
+                use chrono::Local;
+                let now = Local::now();
+                let offset_secs = now.offset().local_minus_utc();
+                Ok(GcValue::Int64((offset_secs / 60) as i64)) // Return minutes
+            }),
+        }));
+
+        self.register_native("Time.toUtc", Arc::new(GcNativeFn {
+            name: "Time.toUtc".to_string(),
+            arity: 1,
+            func: Box::new(|args, _heap| {
+                // Timestamps are already in UTC internally, this is a no-op
+                match &args[0] {
+                    GcValue::Int64(n) => Ok(GcValue::Int64(*n)),
+                    _ => Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        self.register_native("Time.fromUtc", Arc::new(GcNativeFn {
+            name: "Time.fromUtc".to_string(),
+            arity: 1,
+            func: Box::new(|args, _heap| {
+                // Timestamps are already in UTC internally, this is a no-op
+                match &args[0] {
+                    GcValue::Int64(n) => Ok(GcValue::Int64(*n)),
+                    _ => Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // === Random functions ===
+
+        self.register_native("Random.int", Arc::new(GcNativeFn {
+            name: "Random.int".to_string(),
+            arity: 2,
+            func: Box::new(|args, _heap| {
+                use rand::Rng;
+                let min = match &args[0] {
+                    GcValue::Int64(n) => *n,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let max = match &args[1] {
+                    GcValue::Int64(n) => *n,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let mut rng = rand::thread_rng();
+                Ok(GcValue::Int64(rng.gen_range(min..=max)))
+            }),
+        }));
+
+        self.register_native("Random.float", Arc::new(GcNativeFn {
+            name: "Random.float".to_string(),
+            arity: 0,
+            func: Box::new(|_args, _heap| {
+                use rand::Rng;
+                let mut rng = rand::thread_rng();
+                Ok(GcValue::Float64(rng.gen::<f64>()))
+            }),
+        }));
+
+        self.register_native("Random.bool", Arc::new(GcNativeFn {
+            name: "Random.bool".to_string(),
+            arity: 0,
+            func: Box::new(|_args, _heap| {
+                use rand::Rng;
+                let mut rng = rand::thread_rng();
+                Ok(GcValue::Bool(rng.gen::<bool>()))
+            }),
+        }));
+
+        self.register_native("Random.choice", Arc::new(GcNativeFn {
+            name: "Random.choice".to_string(),
+            arity: 1,
+            func: Box::new(|args, _heap| {
+                use rand::Rng;
+                match &args[0] {
+                    GcValue::List(list) => {
+                        let items = list.items();
+                        if items.is_empty() {
+                            return Err(RuntimeError::Panic("Cannot choose from empty list".to_string()));
+                        }
+                        let mut rng = rand::thread_rng();
+                        let idx = rng.gen_range(0..items.len());
+                        Ok(items[idx].clone())
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "List".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        self.register_native("Random.shuffle", Arc::new(GcNativeFn {
+            name: "Random.shuffle".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use rand::seq::SliceRandom;
+                match &args[0] {
+                    GcValue::List(list) => {
+                        let mut items: Vec<GcValue> = list.items().to_vec();
+                        let mut rng = rand::thread_rng();
+                        items.shuffle(&mut rng);
+                        Ok(GcValue::List(heap.make_list(items)))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "List".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        self.register_native("Random.bytes", Arc::new(GcNativeFn {
+            name: "Random.bytes".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use rand::Rng;
+                let n = match &args[0] {
+                    GcValue::Int64(n) => *n as usize,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let mut rng = rand::thread_rng();
+                let bytes: Vec<GcValue> = (0..n).map(|_| GcValue::Int64(rng.gen_range(0..=255))).collect();
+                Ok(GcValue::List(heap.make_list(bytes)))
+            }),
+        }));
+
+        // === List utility functions ===
+
+        self.register_native("range", Arc::new(GcNativeFn {
+            name: "range".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let start = match &args[0] {
+                    GcValue::Int64(n) => *n,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let end = match &args[1] {
+                    GcValue::Int64(n) => *n,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                let items: Vec<GcValue> = (start..end).map(GcValue::Int64).collect();
+                Ok(GcValue::List(heap.make_list(items)))
+            }),
+        }));
+
+        self.register_native("product", Arc::new(GcNativeFn {
+            name: "product".to_string(),
+            arity: 1,
+            func: Box::new(|args, _heap| {
+                match &args[0] {
+                    GcValue::List(list) => {
+                        let items = list.items();
+                        let mut result: i64 = 1;
+                        for item in items {
+                            match item {
+                                GcValue::Int64(n) => result *= n,
+                                GcValue::Float64(f) => return Ok(GcValue::Float64(items.iter().fold(1.0, |acc, v| {
+                                    match v {
+                                        GcValue::Float64(x) => acc * x,
+                                        GcValue::Int64(x) => acc * (*x as f64),
+                                        _ => acc
+                                    }
+                                }))),
+                                _ => return Err(RuntimeError::TypeError { expected: "Num".to_string(), found: "other".to_string() })
+                            }
+                        }
+                        Ok(GcValue::Int64(result))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "List".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // === Environment functions ===
+
+        self.register_native("Env.get", Arc::new(GcNativeFn {
+            name: "Env.get".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let key = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match key {
+                    Some(key) => {
+                        match std::env::var(&key) {
+                            Ok(val) => Ok(GcValue::String(heap.alloc_string(val))),
+                            Err(_) => Ok(GcValue::Unit) // Return None/Unit if not found
+                        }
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Env.set", Arc::new(GcNativeFn {
+            name: "Env.set".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let key = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let val = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (key, val) {
+                    (Some(key), Some(val)) => {
+                        std::env::set_var(&key, &val);
+                        Ok(GcValue::Unit)
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Env.remove", Arc::new(GcNativeFn {
+            name: "Env.remove".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let key = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match key {
+                    Some(key) => {
+                        std::env::remove_var(&key);
+                        Ok(GcValue::Unit)
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Env.all", Arc::new(GcNativeFn {
+            name: "Env.all".to_string(),
+            arity: 0,
+            func: Box::new(|_args, heap| {
+                let vars: Vec<GcValue> = std::env::vars()
+                    .map(|(k, v)| {
+                        let k_ptr = heap.alloc_string(k);
+                        let v_ptr = heap.alloc_string(v);
+                        let tuple_ptr = heap.alloc_tuple(vec![GcValue::String(k_ptr), GcValue::String(v_ptr)]);
+                        GcValue::Tuple(tuple_ptr)
+                    })
+                    .collect();
+                Ok(GcValue::List(heap.make_list(vars)))
+            }),
+        }));
+
+        self.register_native("Env.cwd", Arc::new(GcNativeFn {
+            name: "Env.cwd".to_string(),
+            arity: 0,
+            func: Box::new(|_args, heap| {
+                match std::env::current_dir() {
+                    Ok(path) => Ok(GcValue::String(heap.alloc_string(path.to_string_lossy().to_string()))),
+                    Err(e) => Err(RuntimeError::Panic(format!("Failed to get cwd: {}", e)))
+                }
+            }),
+        }));
+
+        self.register_native("Env.setCwd", Arc::new(GcNativeFn {
+            name: "Env.setCwd".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let path = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match path {
+                    Some(path) => {
+                        match std::env::set_current_dir(&path) {
+                            Ok(_) => Ok(GcValue::Unit),
+                            Err(e) => Err(RuntimeError::Panic(format!("Failed to set cwd: {}", e)))
+                        }
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Env.home", Arc::new(GcNativeFn {
+            name: "Env.home".to_string(),
+            arity: 0,
+            func: Box::new(|_args, heap| {
+                match std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+                    Ok(home) => Ok(GcValue::String(heap.alloc_string(home))),
+                    Err(_) => Ok(GcValue::Unit) // Return None if not found
+                }
+            }),
+        }));
+
+        self.register_native("Env.args", Arc::new(GcNativeFn {
+            name: "Env.args".to_string(),
+            arity: 0,
+            func: Box::new(|_args, heap| {
+                let args: Vec<GcValue> = std::env::args()
+                    .map(|a| GcValue::String(heap.alloc_string(a)))
+                    .collect();
+                Ok(GcValue::List(heap.make_list(args)))
+            }),
+        }));
+
+        self.register_native("Env.platform", Arc::new(GcNativeFn {
+            name: "Env.platform".to_string(),
+            arity: 0,
+            func: Box::new(|_args, heap| {
+                let platform = if cfg!(target_os = "linux") { "linux" }
+                    else if cfg!(target_os = "macos") { "macos" }
+                    else if cfg!(target_os = "windows") { "windows" }
+                    else { "unknown" };
+                Ok(GcValue::String(heap.alloc_string(platform.to_string())))
+            }),
+        }));
+
+        // === Path functions ===
+
+        self.register_native("Path.join", Arc::new(GcNativeFn {
+            name: "Path.join".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                use std::path::PathBuf;
+                let p1 = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let p2 = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (p1, p2) {
+                    (Some(p1), Some(p2)) => {
+                        let path: PathBuf = [&p1, &p2].iter().collect();
+                        Ok(GcValue::String(heap.alloc_string(path.to_string_lossy().to_string())))
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Path.dirname", Arc::new(GcNativeFn {
+            name: "Path.dirname".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use std::path::Path;
+                let p = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match p {
+                    Some(p) => {
+                        let path = Path::new(&p);
+                        let parent = path.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+                        Ok(GcValue::String(heap.alloc_string(parent)))
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Path.basename", Arc::new(GcNativeFn {
+            name: "Path.basename".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use std::path::Path;
+                let p = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match p {
+                    Some(p) => {
+                        let path = Path::new(&p);
+                        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                        Ok(GcValue::String(heap.alloc_string(name)))
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Path.extension", Arc::new(GcNativeFn {
+            name: "Path.extension".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use std::path::Path;
+                let p = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match p {
+                    Some(p) => {
+                        let path = Path::new(&p);
+                        let ext = path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+                        Ok(GcValue::String(heap.alloc_string(ext)))
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Path.withExtension", Arc::new(GcNativeFn {
+            name: "Path.withExtension".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                use std::path::PathBuf;
+                let p = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let ext = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (p, ext) {
+                    (Some(p), Some(ext)) => {
+                        let mut path = PathBuf::from(&p);
+                        path.set_extension(&ext);
+                        Ok(GcValue::String(heap.alloc_string(path.to_string_lossy().to_string())))
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Path.normalize", Arc::new(GcNativeFn {
+            name: "Path.normalize".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use std::path::PathBuf;
+                let p = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match p {
+                    Some(p) => {
+                        let path = PathBuf::from(&p);
+                        // Use components to normalize
+                        let normalized: PathBuf = path.components().collect();
+                        Ok(GcValue::String(heap.alloc_string(normalized.to_string_lossy().to_string())))
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Path.isAbsolute", Arc::new(GcNativeFn {
+            name: "Path.isAbsolute".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use std::path::Path;
+                let p = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match p {
+                    Some(p) => Ok(GcValue::Bool(Path::new(&p).is_absolute())),
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Path.isRelative", Arc::new(GcNativeFn {
+            name: "Path.isRelative".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use std::path::Path;
+                let p = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match p {
+                    Some(p) => Ok(GcValue::Bool(Path::new(&p).is_relative())),
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Path.split", Arc::new(GcNativeFn {
+            name: "Path.split".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                use std::path::Path;
+                let p = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match p {
+                    Some(p) => {
+                        let path = Path::new(&p);
+                        let parts: Vec<GcValue> = path.components()
+                            .map(|c| GcValue::String(heap.alloc_string(c.as_os_str().to_string_lossy().to_string())))
+                            .collect();
+                        Ok(GcValue::List(heap.make_list(parts)))
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // === Regex functions ===
+
+        self.register_native("Regex.matches", Arc::new(GcNativeFn {
+            name: "Regex.matches".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                use regex::Regex;
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let pattern = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, pattern) {
+                    (Some(s), Some(pattern)) => {
+                        match Regex::new(&pattern) {
+                            Ok(re) => Ok(GcValue::Bool(re.is_match(&s))),
+                            Err(e) => Err(RuntimeError::Panic(format!("Invalid regex: {}", e)))
+                        }
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Regex.find", Arc::new(GcNativeFn {
+            name: "Regex.find".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                use regex::Regex;
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let pattern = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, pattern) {
+                    (Some(s), Some(pattern)) => {
+                        match Regex::new(&pattern) {
+                            Ok(re) => {
+                                match re.find(&s) {
+                                    Some(m) => Ok(GcValue::String(heap.alloc_string(m.as_str().to_string()))),
+                                    None => Ok(GcValue::Unit)
+                                }
+                            },
+                            Err(e) => Err(RuntimeError::Panic(format!("Invalid regex: {}", e)))
+                        }
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Regex.findAll", Arc::new(GcNativeFn {
+            name: "Regex.findAll".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                use regex::Regex;
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let pattern = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, pattern) {
+                    (Some(s), Some(pattern)) => {
+                        match Regex::new(&pattern) {
+                            Ok(re) => {
+                                let matches: Vec<GcValue> = re.find_iter(&s)
+                                    .map(|m| GcValue::String(heap.alloc_string(m.as_str().to_string())))
+                                    .collect();
+                                Ok(GcValue::List(heap.make_list(matches)))
+                            },
+                            Err(e) => Err(RuntimeError::Panic(format!("Invalid regex: {}", e)))
+                        }
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Regex.replace", Arc::new(GcNativeFn {
+            name: "Regex.replace".to_string(),
+            arity: 3,
+            func: Box::new(|args, heap| {
+                use regex::Regex;
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let pattern = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let replacement = match &args[2] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, pattern, replacement) {
+                    (Some(s), Some(pattern), Some(replacement)) => {
+                        match Regex::new(&pattern) {
+                            Ok(re) => {
+                                let result = re.replace(&s, replacement.as_str()).to_string();
+                                Ok(GcValue::String(heap.alloc_string(result)))
+                            },
+                            Err(e) => Err(RuntimeError::Panic(format!("Invalid regex: {}", e)))
+                        }
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Regex.replaceAll", Arc::new(GcNativeFn {
+            name: "Regex.replaceAll".to_string(),
+            arity: 3,
+            func: Box::new(|args, heap| {
+                use regex::Regex;
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let pattern = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let replacement = match &args[2] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, pattern, replacement) {
+                    (Some(s), Some(pattern), Some(replacement)) => {
+                        match Regex::new(&pattern) {
+                            Ok(re) => {
+                                let result = re.replace_all(&s, replacement.as_str()).to_string();
+                                Ok(GcValue::String(heap.alloc_string(result)))
+                            },
+                            Err(e) => Err(RuntimeError::Panic(format!("Invalid regex: {}", e)))
+                        }
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Regex.split", Arc::new(GcNativeFn {
+            name: "Regex.split".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                use regex::Regex;
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let pattern = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, pattern) {
+                    (Some(s), Some(pattern)) => {
+                        match Regex::new(&pattern) {
+                            Ok(re) => {
+                                let parts: Vec<GcValue> = re.split(&s)
+                                    .map(|p| GcValue::String(heap.alloc_string(p.to_string())))
+                                    .collect();
+                                Ok(GcValue::List(heap.make_list(parts)))
+                            },
+                            Err(e) => Err(RuntimeError::Panic(format!("Invalid regex: {}", e)))
+                        }
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        self.register_native("Regex.captures", Arc::new(GcNativeFn {
+            name: "Regex.captures".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                use regex::Regex;
+                let s = match &args[0] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                let pattern = match &args[1] {
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
+                    _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
+                };
+                match (s, pattern) {
+                    (Some(s), Some(pattern)) => {
+                        match Regex::new(&pattern) {
+                            Ok(re) => {
+                                match re.captures(&s) {
+                                    Some(caps) => {
+                                        let groups: Vec<GcValue> = caps.iter()
+                                            .map(|m| match m {
+                                                Some(m) => GcValue::String(heap.alloc_string(m.as_str().to_string())),
+                                                None => GcValue::Unit
+                                            })
+                                            .collect();
+                                        Ok(GcValue::List(heap.make_list(groups)))
+                                    },
+                                    None => Ok(GcValue::Unit)
+                                }
+                            },
+                            Err(e) => Err(RuntimeError::Panic(format!("Invalid regex: {}", e)))
+                        }
+                    },
+                    _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                }
+            }),
+        }));
+
+        // === Map Functions ===
+
+        // Map.insert(map, key, value) -> new map with key-value inserted
+        self.register_native("Map.insert", Arc::new(GcNativeFn {
+            name: "Map.insert".to_string(),
+            arity: 3,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                    expected: "hashable".to_string(),
+                    found: args[1].type_name(heap).to_string()
+                })?;
+                let value = args[2].clone();
+
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                let new_entries = map.entries.update(key, value);
+                let new_ptr = heap.alloc_map(new_entries);
+                Ok(GcValue::Map(new_ptr))
+            }),
+        }));
+
+        // Map.remove(map, key) -> new map with key removed
+        self.register_native("Map.remove", Arc::new(GcNativeFn {
+            name: "Map.remove".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                    expected: "hashable".to_string(),
+                    found: args[1].type_name(heap).to_string()
+                })?;
+
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                let new_entries = map.entries.without(&key);
+                let new_ptr = heap.alloc_map(new_entries);
+                Ok(GcValue::Map(new_ptr))
+            }),
+        }));
+
+        // Map.get(map, key) -> Option value
+        self.register_native("Map.get", Arc::new(GcNativeFn {
+            name: "Map.get".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                    expected: "hashable".to_string(),
+                    found: args[1].type_name(heap).to_string()
+                })?;
+
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                match map.entries.get(&key) {
+                    Some(value) => Ok(value.clone()),
+                    None => Ok(GcValue::Unit)
+                }
+            }),
+        }));
+
+        // Map.contains(map, key) -> Bool
+        self.register_native("Map.contains", Arc::new(GcNativeFn {
+            name: "Map.contains".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let key = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                    expected: "hashable".to_string(),
+                    found: args[1].type_name(heap).to_string()
+                })?;
+
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                Ok(GcValue::Bool(map.entries.contains_key(&key)))
+            }),
+        }));
+
+        // Map.keys(map) -> [keys]
+        self.register_native("Map.keys", Arc::new(GcNativeFn {
+            name: "Map.keys".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+
+                // Clone keys first to release borrow on heap
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                let keys_cloned: Vec<_> = map.entries.keys().cloned().collect();
+                drop(map);
+                // Now convert to GcValues
+                let keys: Vec<GcValue> = keys_cloned.into_iter().map(|k| k.to_gc_value(heap)).collect();
+                Ok(GcValue::List(heap.make_list(keys)))
+            }),
+        }));
+
+        // Map.values(map) -> [values]
+        self.register_native("Map.values", Arc::new(GcNativeFn {
+            name: "Map.values".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                let values: Vec<GcValue> = map.entries.values().cloned().collect();
+                Ok(GcValue::List(heap.make_list(values)))
+            }),
+        }));
+
+        // Map.size(map) -> Int
+        self.register_native("Map.size", Arc::new(GcNativeFn {
+            name: "Map.size".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                Ok(GcValue::Int64(map.entries.len() as i64))
+            }),
+        }));
+
+        // Map.isEmpty(map) -> Bool
+        self.register_native("Map.isEmpty", Arc::new(GcNativeFn {
+            name: "Map.isEmpty".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let map_ptr = match &args[0] {
+                    GcValue::Map(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Map".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+
+                let map = heap.get_map(map_ptr).ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
+                Ok(GcValue::Bool(map.entries.is_empty()))
+            }),
+        }));
+
+        // === Set Functions ===
+
+        // Set.insert(set, elem) -> new set with element inserted
+        self.register_native("Set.insert", Arc::new(GcNativeFn {
+            name: "Set.insert".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let set_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let elem = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                    expected: "hashable".to_string(),
+                    found: args[1].type_name(heap).to_string()
+                })?;
+
+                let set = heap.get_set(set_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let new_items = set.items.update(elem);
+                let new_ptr = heap.alloc_set(new_items);
+                Ok(GcValue::Set(new_ptr))
+            }),
+        }));
+
+        // Set.remove(set, elem) -> new set with element removed
+        self.register_native("Set.remove", Arc::new(GcNativeFn {
+            name: "Set.remove".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let set_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let elem = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                    expected: "hashable".to_string(),
+                    found: args[1].type_name(heap).to_string()
+                })?;
+
+                let set = heap.get_set(set_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let new_items = set.items.without(&elem);
+                let new_ptr = heap.alloc_set(new_items);
+                Ok(GcValue::Set(new_ptr))
+            }),
+        }));
+
+        // Set.contains(set, elem) -> Bool
+        self.register_native("Set.contains", Arc::new(GcNativeFn {
+            name: "Set.contains".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let set_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let elem = args[1].to_gc_map_key(heap).ok_or_else(|| RuntimeError::TypeError {
+                    expected: "hashable".to_string(),
+                    found: args[1].type_name(heap).to_string()
+                })?;
+
+                let set = heap.get_set(set_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                Ok(GcValue::Bool(set.items.contains(&elem)))
+            }),
+        }));
+
+        // Set.size(set) -> Int
+        self.register_native("Set.size", Arc::new(GcNativeFn {
+            name: "Set.size".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let set_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+
+                let set = heap.get_set(set_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                Ok(GcValue::Int64(set.items.len() as i64))
+            }),
+        }));
+
+        // Set.isEmpty(set) -> Bool
+        self.register_native("Set.isEmpty", Arc::new(GcNativeFn {
+            name: "Set.isEmpty".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let set_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+
+                let set = heap.get_set(set_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                Ok(GcValue::Bool(set.items.is_empty()))
+            }),
+        }));
+
+        // Set.toList(set) -> [elements]
+        self.register_native("Set.toList", Arc::new(GcNativeFn {
+            name: "Set.toList".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let set_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+
+                // Clone items first to release borrow on heap
+                let set = heap.get_set(set_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let items_cloned: Vec<_> = set.items.iter().cloned().collect();
+                drop(set);
+                // Now convert to GcValues
+                let elements: Vec<GcValue> = items_cloned.into_iter().map(|k| k.to_gc_value(heap)).collect();
+                Ok(GcValue::List(heap.make_list(elements)))
+            }),
+        }));
+
+        // Set.union(set1, set2) -> new set with all elements from both
+        self.register_native("Set.union", Arc::new(GcNativeFn {
+            name: "Set.union".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let set1_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let set2_ptr = match &args[1] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[1].type_name(heap).to_string() })
+                };
+
+                let set1 = heap.get_set(set1_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let set2 = heap.get_set(set2_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let new_items = set1.items.clone().union(set2.items.clone());
+                let new_ptr = heap.alloc_set(new_items);
+                Ok(GcValue::Set(new_ptr))
+            }),
+        }));
+
+        // Set.intersection(set1, set2) -> new set with elements in both
+        self.register_native("Set.intersection", Arc::new(GcNativeFn {
+            name: "Set.intersection".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let set1_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let set2_ptr = match &args[1] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[1].type_name(heap).to_string() })
+                };
+
+                let set1 = heap.get_set(set1_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let set2 = heap.get_set(set2_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let new_items = set1.items.clone().intersection(set2.items.clone());
+                let new_ptr = heap.alloc_set(new_items);
+                Ok(GcValue::Set(new_ptr))
+            }),
+        }));
+
+        // Set.difference(set1, set2) -> new set with elements in set1 but not set2
+        self.register_native("Set.difference", Arc::new(GcNativeFn {
+            name: "Set.difference".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let set1_ptr = match &args[0] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[0].type_name(heap).to_string() })
+                };
+                let set2_ptr = match &args[1] {
+                    GcValue::Set(ptr) => *ptr,
+                    _ => return Err(RuntimeError::TypeError { expected: "Set".to_string(), found: args[1].type_name(heap).to_string() })
+                };
+
+                let set1 = heap.get_set(set1_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let set2 = heap.get_set(set2_ptr).ok_or_else(|| RuntimeError::Panic("Invalid set pointer".to_string()))?;
+                let new_items = set1.items.clone().relative_complement(set2.items.clone());
+                let new_ptr = heap.alloc_set(new_items);
+                Ok(GcValue::Set(new_ptr))
+            }),
+        }));
+    }
     /// Run the main function and return the result.
     pub fn run(&mut self, main_fn_name: &str) -> Result<SendableValue, String> {
         // Create multi-threaded tokio runtime for parallel execution
