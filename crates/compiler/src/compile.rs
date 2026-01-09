@@ -12230,47 +12230,23 @@ impl Compiler {
                         // String cons pattern like ["hello", "world" | rest]
                         // Concatenate prefix strings to form the expected prefix
                         let prefix: String = prefix_strings.concat();
-                        let prefix_len = prefix.chars().count();
 
-                        // First, check if the string is long enough
-                        let len_reg = self.alloc_reg();
-                        self.chunk.emit(Instruction::Length(len_reg, scrut_reg), 0);
-                        let expected_len_reg = self.alloc_reg();
-                        let expected_len_idx = self.chunk.add_constant(Value::Int64(prefix_len as i64));
-                        self.chunk.emit(Instruction::LoadConst(expected_len_reg, expected_len_idx), 0);
-                        self.chunk.emit(Instruction::GeInt(success_reg, len_reg, expected_len_reg), 0);
+                        // Use optimized TestStringPrefix instruction
+                        // This does prefix match + tail extraction in one operation
+                        let tail_reg = self.alloc_reg();
+                        let prefix_idx = self.chunk.add_constant(Value::String(Arc::new(prefix)));
+                        self.chunk.emit(Instruction::TestStringPrefix(success_reg, tail_reg, scrut_reg, prefix_idx), 0);
 
-                        // Guard: skip if string is too short
-                        let skip_decons_jump = self.chunk.emit(Instruction::JumpIfFalse(success_reg, 0), 0);
+                        // Guard: skip tail pattern if prefix didn't match
+                        let skip_tail_jump = self.chunk.emit(Instruction::JumpIfFalse(success_reg, 0), 0);
 
-                        // Decons the string character by character and match against prefix
-                        let mut current_str = scrut_reg;
-                        for (i, c) in prefix.chars().enumerate() {
-                            let head_reg = self.alloc_reg();
-                            let tail_reg = self.alloc_reg();
-                            self.chunk.emit(Instruction::StringDecons(head_reg, tail_reg, current_str), 0);
-
-                            // Test if head matches expected character
-                            let expected_char_reg = self.alloc_reg();
-                            let char_str = c.to_string();
-                            let char_idx = self.chunk.add_constant(Value::String(Arc::new(char_str)));
-                            self.chunk.emit(Instruction::LoadConst(expected_char_reg, char_idx), 0);
-                            let char_match_reg = self.alloc_reg();
-                            self.chunk.emit(Instruction::EqStr(char_match_reg, head_reg, expected_char_reg), 0);
-                            self.chunk.emit(Instruction::And(success_reg, success_reg, char_match_reg), 0);
-
-                            // If last character, compile tail pattern binding
-                            if i == prefix_len - 1 {
-                                let (tail_success, mut tail_bindings) = self.compile_pattern_test(tail_pat, tail_reg)?;
-                                self.chunk.emit(Instruction::And(success_reg, success_reg, tail_success), 0);
-                                bindings.append(&mut tail_bindings);
-                            } else {
-                                current_str = tail_reg;
-                            }
-                        }
+                        // Compile tail pattern binding
+                        let (tail_success, mut tail_bindings) = self.compile_pattern_test(tail_pat, tail_reg)?;
+                        self.chunk.emit(Instruction::And(success_reg, success_reg, tail_success), 0);
+                        bindings.append(&mut tail_bindings);
 
                         // Patch skip jump
-                        self.chunk.patch_jump(skip_decons_jump, self.chunk.code.len());
+                        self.chunk.patch_jump(skip_tail_jump, self.chunk.code.len());
                     }
                 }
             }

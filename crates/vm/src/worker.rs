@@ -3160,27 +3160,34 @@ impl Worker {
                 let str_val = get_reg!(str_reg);
                 match str_val {
                     GcValue::String(str_ptr) => {
-                        // Get the string data via scheduler
-                        let s = self.scheduler.with_process(pid, |proc| {
-                            proc.heap.get_string(str_ptr).map(|h| h.data.clone()).unwrap_or_default()
-                        }).unwrap_or_default();
-                        if s.is_empty() {
-                            return Err(RuntimeError::Panic("Cannot decons empty string".to_string()));
-                        }
-                        let mut chars = s.chars();
-                        let head_char = chars.next().unwrap();
-                        let tail_str = chars.as_str().to_string();
-                        // Allocate new strings via scheduler
+                        // Optimized: do all work in single scheduler callback
                         let head_dst_idx = head_dst as usize;
                         let tail_dst_idx = tail_dst as usize;
-                        self.scheduler.with_process_mut(pid, |proc| {
-                            let head_ptr = proc.heap.alloc_string(head_char.to_string());
+                        let result = self.scheduler.with_process_mut(pid, |proc| {
+                            // Extract head char and tail string in one pass
+                            let (head_str, tail_str) = match proc.heap.get_string(str_ptr) {
+                                Some(h) if !h.data.is_empty() => {
+                                    let mut chars = h.data.chars();
+                                    let head_char = chars.next().unwrap();
+                                    let tail_start = head_char.len_utf8();
+                                    (head_char.to_string(), h.data[tail_start..].to_string())
+                                }
+                                _ => return Err(()),
+                            };
+
+                            // Allocate strings
+                            let head_ptr = proc.heap.alloc_string(head_str);
                             let tail_ptr = proc.heap.alloc_string(tail_str);
+
                             if let Some(frame) = proc.frames.last_mut() {
                                 frame.registers[head_dst_idx] = GcValue::String(head_ptr);
                                 frame.registers[tail_dst_idx] = GcValue::String(tail_ptr);
                             }
+                            Ok(())
                         });
+                        if result.is_none() || result == Some(Err(())) {
+                            return Err(RuntimeError::Panic("Cannot decons empty string".to_string()));
+                        }
                     }
                     _ => return Err(RuntimeError::Panic("StringDecons expects string".to_string())),
                 }
@@ -3197,6 +3204,38 @@ impl Worker {
                     _ => return Err(RuntimeError::Panic("TestEmptyString expects string".to_string())),
                 };
                 set_reg!(dst, GcValue::Bool(is_empty));
+            }
+
+            Instruction::TestStringPrefix(result_dst, tail_dst, str_reg, prefix_idx) => {
+                let str_val = get_reg!(str_reg);
+                let prefix = match &constants[prefix_idx as usize] {
+                    Value::String(s) => s.as_str(),
+                    _ => return Err(RuntimeError::Panic("TestStringPrefix: expected string constant".to_string())),
+                };
+                match str_val {
+                    GcValue::String(str_ptr) => {
+                        let result_idx = result_dst as usize;
+                        let tail_idx = tail_dst as usize;
+                        self.scheduler.with_process_mut(pid, |proc| {
+                            let matches = match proc.heap.get_string(str_ptr) {
+                                Some(h) if h.data.starts_with(prefix) => {
+                                    // Create tail string (everything after prefix)
+                                    let tail_str = h.data[prefix.len()..].to_string();
+                                    let tail_ptr = proc.heap.alloc_string(tail_str);
+                                    if let Some(frame) = proc.frames.last_mut() {
+                                        frame.registers[tail_idx] = GcValue::String(tail_ptr);
+                                    }
+                                    true
+                                }
+                                _ => false,
+                            };
+                            if let Some(frame) = proc.frames.last_mut() {
+                                frame.registers[result_idx] = GcValue::Bool(matches);
+                            }
+                        });
+                    }
+                    _ => return Err(RuntimeError::Panic("TestStringPrefix expects string".to_string())),
+                }
             }
 
             // === Float comparisons ===

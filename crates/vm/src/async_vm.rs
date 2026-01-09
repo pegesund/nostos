@@ -4885,6 +4885,34 @@ impl AsyncProcess {
                 }
             }
 
+            TestStringPrefix(result_reg, tail_reg, str_reg, prefix_idx) => {
+                // Get the prefix string from constants
+                let prefix = match get_const!(prefix_idx) {
+                    Value::String(s) => s.clone(),
+                    _ => return Err(RuntimeError::Panic("TestStringPrefix: expected string constant".into())),
+                };
+
+                // Get the input string
+                let str_val = reg!(str_reg);
+                match str_val {
+                    GcValue::String(str_ptr) => {
+                        let s = self.heap.get_string(str_ptr).map(|h| h.data.clone()).unwrap_or_default();
+
+                        if s.starts_with(&*prefix) {
+                            // Match successful - set result true and tail to remainder
+                            let tail = &s[prefix.len()..];
+                            let tail_ptr = self.heap.alloc_string(tail.to_string());
+                            set_reg!(result_reg, GcValue::Bool(true));
+                            set_reg!(tail_reg, GcValue::String(tail_ptr));
+                        } else {
+                            // No match
+                            set_reg!(result_reg, GcValue::Bool(false));
+                        }
+                    }
+                    _ => return Err(RuntimeError::Panic("TestStringPrefix expects string".to_string())),
+                }
+            }
+
             // === Panic ===
             Panic(msg_reg) => {
                 let msg = reg!(msg_reg);

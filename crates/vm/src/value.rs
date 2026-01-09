@@ -924,6 +924,10 @@ pub enum Instruction {
     StringDecons(Reg, Reg, Reg),
     /// Test if string is empty: dst = str == ""
     TestEmptyString(Reg, Reg),
+    /// Fast string prefix match: tests if string starts with prefix from constants
+    /// If match: result_reg = true, tail_reg = remaining string after prefix
+    /// If no match: result_reg = false, tail_reg unchanged
+    TestStringPrefix(Reg, Reg, Reg, ConstIdx),
 
     // === Specialized Int64List operations (avoid GcValue boxing) ===
     /// Test if Int64List is empty: dst = list == []

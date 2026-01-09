@@ -1,0 +1,45 @@
+# String Pattern Matching Benchmark
+
+# Longer prefix = more StringDecons operations (16 chars)
+matchLongPrefix(["hello world test" | rest]) = 1
+matchLongPrefix(other) = 0
+
+# Build test strings
+makeStrings(0, acc) = acc
+makeStrings(n, acc) = {
+    s = "hello world test string number one two three four"
+    makeStrings(n - 1, [s | acc])
+}
+
+# Benchmark string prefix pattern
+benchPrefix([], acc) = acc
+benchPrefix([s | rest], acc) = benchPrefix(rest, acc + matchLongPrefix(s))
+
+main() = {
+    # Build test data - 500 strings, ~50 chars each
+    strings = makeStrings(500, [])
+
+    # Warmup
+    w = benchPrefix(strings, 0)
+
+    # Benchmark (10 iterations = 5000 pattern matches, 16 chars prefix = 80000 StringDecons)
+    t0 = Time.now()
+    r1 = benchPrefix(strings, 0)
+    r2 = benchPrefix(strings, 0)
+    r3 = benchPrefix(strings, 0)
+    r4 = benchPrefix(strings, 0)
+    r5 = benchPrefix(strings, 0)
+    r6 = benchPrefix(strings, 0)
+    r7 = benchPrefix(strings, 0)
+    r8 = benchPrefix(strings, 0)
+    r9 = benchPrefix(strings, 0)
+    r10 = benchPrefix(strings, 0)
+    t1 = Time.now()
+    patternTime = t1 - t0
+
+    println("=== String Pattern Benchmark ===")
+    println("Long prefix pattern (10x500 strings, 16-char prefix): " ++ show(patternTime) ++ " ms")
+    println("(~80000 StringDecons operations)")
+
+    if r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8 + r9 + r10 > 0 && w > 0 then 42 else 0
+}
