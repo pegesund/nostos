@@ -3608,6 +3608,18 @@ impl Compiler {
 
             // Record construction
             Expr::Record(type_name, fields, _) => {
+                // Handle Html(...) - transforms bare HTML tag names to stdlib.html.* calls
+                // Returns an Html tree. Use render(Html(...)) to get a String.
+                if type_name.node == "Html" && fields.len() == 1 {
+                    if let RecordField::Positional(inner_expr) = &fields[0] {
+                        // Transform the argument expression to use stdlib.html.* functions
+                        let transformed_arg = self.transform_html_expr(inner_expr);
+
+                        // Compile the transformed expression and return the Html tree
+                        return self.compile_expr_tail(&transformed_arg, is_tail);
+                    }
+                }
+
                 // Resolve type name (check imports)
                 let qualified_type = self.resolve_name(&type_name.node);
                 self.compile_record(&qualified_type, fields)
@@ -5816,6 +5828,16 @@ impl Compiler {
                 let dst = self.alloc_reg();
                 self.chunk.emit(Instruction::SelfPid(dst), line);
                 return Ok(dst);
+            }
+
+            // Handle Html(...) - transforms bare HTML tag names to stdlib.html.* calls
+            // Returns an Html tree. Use render(Html(...)) to get a String.
+            if name == "Html" && args.len() == 1 {
+                // Transform the argument expression to use stdlib.html.* functions
+                let transformed_arg = self.transform_html_expr(&args[0]);
+
+                // Compile the transformed expression and return the Html tree
+                return self.compile_expr_tail(&transformed_arg, is_tail);
             }
         }
 
@@ -10852,6 +10874,310 @@ impl Compiler {
         }
 
         None
+    }
+
+    /// HTML tag names and helper functions that should be resolved from stdlib.html
+    /// when inside an Html(...) scope.
+    const HTML_SCOPED_NAMES: &'static [&'static str] = &[
+        // Helpers
+        "text", "raw", "el", "empty", "render",
+        // Type constructors
+        "Element", "Text", "Raw", "Empty",
+        // Container tags
+        "div", "span", "p", "h1", "h2", "h3", "h4", "h5", "h6",
+        "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td",
+        "form", "nav", "header", "footer", "section", "article", "aside",
+        "head", "body", "button",
+        // Text variants (underscore suffix)
+        "div_", "span_", "p_", "h1_", "h2_", "h3_", "h4_", "h5_", "h6_",
+        "li_", "th_", "td_", "title_", "button_", "label_",
+        "strong", "em", "code_", "pre_", "small_",
+        // Self-closing tags
+        "br", "hr", "img", "input", "meta", "linkTag",
+        // Elements with required attrs
+        "a", "a_",
+    ];
+
+    /// Transform an expression inside Html(...) to resolve bare HTML tag names
+    /// to their qualified stdlib.html.* equivalents.
+    fn transform_html_expr(&self, expr: &Expr) -> Expr {
+        match expr {
+            // Transform bare identifiers that are HTML tag names
+            Expr::Var(ident) if Self::HTML_SCOPED_NAMES.contains(&ident.node.as_str()) => {
+                // Transform `div` to `stdlib.html.div`
+                let span = ident.span;
+                let stdlib_var = Expr::Var(Spanned::new("stdlib".to_string(), span));
+                let html_access = Expr::FieldAccess(
+                    Box::new(stdlib_var),
+                    Spanned::new("html".to_string(), span),
+                    span,
+                );
+                Expr::FieldAccess(
+                    Box::new(html_access),
+                    ident.clone(),
+                    span,
+                )
+            }
+
+            // Recursively transform function calls
+            Expr::Call(func, type_args, args, span) => {
+                let new_func = self.transform_html_expr(func);
+                let new_args: Vec<Expr> = args.iter().map(|a| self.transform_html_expr(a)).collect();
+                Expr::Call(Box::new(new_func), type_args.clone(), new_args, *span)
+            }
+
+            // Recursively transform method calls
+            Expr::MethodCall(obj, method, args, span) => {
+                let new_obj = self.transform_html_expr(obj);
+                let new_args: Vec<Expr> = args.iter().map(|a| self.transform_html_expr(a)).collect();
+                Expr::MethodCall(Box::new(new_obj), method.clone(), new_args, *span)
+            }
+
+            // Transform if expressions
+            Expr::If(cond, then_branch, else_branch, span) => {
+                Expr::If(
+                    Box::new(self.transform_html_expr(cond)),
+                    Box::new(self.transform_html_expr(then_branch)),
+                    Box::new(self.transform_html_expr(else_branch)),
+                    *span,
+                )
+            }
+
+            // Transform match expressions
+            Expr::Match(scrutinee, arms, span) => {
+                let new_scrutinee = self.transform_html_expr(scrutinee);
+                let new_arms: Vec<MatchArm> = arms.iter().map(|arm| {
+                    MatchArm {
+                        pattern: arm.pattern.clone(),
+                        guard: arm.guard.as_ref().map(|g| self.transform_html_expr(g)),
+                        body: self.transform_html_expr(&arm.body),
+                        span: arm.span,
+                    }
+                }).collect();
+                Expr::Match(Box::new(new_scrutinee), new_arms, *span)
+            }
+
+            // Transform lists
+            Expr::List(items, tail, span) => {
+                let new_items: Vec<Expr> = items.iter().map(|i| self.transform_html_expr(i)).collect();
+                let new_tail = tail.as_ref().map(|t| Box::new(self.transform_html_expr(t)));
+                Expr::List(new_items, new_tail, *span)
+            }
+
+            // Transform tuples
+            Expr::Tuple(items, span) => {
+                let new_items: Vec<Expr> = items.iter().map(|i| self.transform_html_expr(i)).collect();
+                Expr::Tuple(new_items, *span)
+            }
+
+            // Transform maps
+            Expr::Map(pairs, span) => {
+                let new_pairs: Vec<(Expr, Expr)> = pairs.iter().map(|(k, v)| {
+                    (self.transform_html_expr(k), self.transform_html_expr(v))
+                }).collect();
+                Expr::Map(new_pairs, *span)
+            }
+
+            // Transform sets
+            Expr::Set(items, span) => {
+                let new_items: Vec<Expr> = items.iter().map(|i| self.transform_html_expr(i)).collect();
+                Expr::Set(new_items, *span)
+            }
+
+            // Transform binary operations
+            Expr::BinOp(left, op, right, span) => {
+                Expr::BinOp(
+                    Box::new(self.transform_html_expr(left)),
+                    *op,
+                    Box::new(self.transform_html_expr(right)),
+                    *span,
+                )
+            }
+
+            // Transform unary operations
+            Expr::UnaryOp(op, operand, span) => {
+                Expr::UnaryOp(*op, Box::new(self.transform_html_expr(operand)), *span)
+            }
+
+            // Transform lambdas
+            Expr::Lambda(params, body, span) => {
+                Expr::Lambda(params.clone(), Box::new(self.transform_html_expr(body)), *span)
+            }
+
+            // Transform blocks
+            Expr::Block(stmts, span) => {
+                let new_stmts: Vec<Stmt> = stmts.iter().map(|stmt| {
+                    match stmt {
+                        Stmt::Expr(e) => Stmt::Expr(self.transform_html_expr(e)),
+                        Stmt::Let(binding) => Stmt::Let(Binding {
+                            mutable: binding.mutable,
+                            pattern: binding.pattern.clone(),
+                            ty: binding.ty.clone(),
+                            value: self.transform_html_expr(&binding.value),
+                            span: binding.span,
+                        }),
+                        Stmt::Assign(target, val, s) => {
+                            Stmt::Assign(target.clone(), self.transform_html_expr(val), *s)
+                        }
+                    }
+                }).collect();
+                Expr::Block(new_stmts, *span)
+            }
+
+            // Transform field access
+            Expr::FieldAccess(obj, field, span) => {
+                Expr::FieldAccess(Box::new(self.transform_html_expr(obj)), field.clone(), *span)
+            }
+
+            // Transform index access
+            Expr::Index(obj, idx, span) => {
+                Expr::Index(
+                    Box::new(self.transform_html_expr(obj)),
+                    Box::new(self.transform_html_expr(idx)),
+                    *span,
+                )
+            }
+
+            // Transform record construction
+            Expr::Record(name, fields, span) => {
+                let new_fields: Vec<RecordField> = fields.iter().map(|f| {
+                    match f {
+                        RecordField::Positional(e) => RecordField::Positional(self.transform_html_expr(e)),
+                        RecordField::Named(n, e) => RecordField::Named(n.clone(), self.transform_html_expr(e)),
+                    }
+                }).collect();
+                Expr::Record(name.clone(), new_fields, *span)
+            }
+
+            // Transform record update
+            Expr::RecordUpdate(name, base, fields, span) => {
+                let new_base = self.transform_html_expr(base);
+                let new_fields: Vec<RecordField> = fields.iter().map(|f| {
+                    match f {
+                        RecordField::Positional(e) => RecordField::Positional(self.transform_html_expr(e)),
+                        RecordField::Named(n, e) => RecordField::Named(n.clone(), self.transform_html_expr(e)),
+                    }
+                }).collect();
+                Expr::RecordUpdate(name.clone(), Box::new(new_base), new_fields, *span)
+            }
+
+            // Transform try expressions
+            Expr::Try(body, arms, finally, span) => {
+                let new_body = self.transform_html_expr(body);
+                let new_arms: Vec<MatchArm> = arms.iter().map(|arm| {
+                    MatchArm {
+                        pattern: arm.pattern.clone(),
+                        guard: arm.guard.as_ref().map(|g| self.transform_html_expr(g)),
+                        body: self.transform_html_expr(&arm.body),
+                        span: arm.span,
+                    }
+                }).collect();
+                let new_finally = finally.as_ref().map(|f| Box::new(self.transform_html_expr(f)));
+                Expr::Try(Box::new(new_body), new_arms, new_finally, *span)
+            }
+
+            // Transform while loops
+            Expr::While(cond, body, span) => {
+                Expr::While(
+                    Box::new(self.transform_html_expr(cond)),
+                    Box::new(self.transform_html_expr(body)),
+                    *span,
+                )
+            }
+
+            // Transform for loops
+            Expr::For(var, start, end, body, span) => {
+                Expr::For(
+                    var.clone(),
+                    Box::new(self.transform_html_expr(start)),
+                    Box::new(self.transform_html_expr(end)),
+                    Box::new(self.transform_html_expr(body)),
+                    *span,
+                )
+            }
+
+            // Transform break with value
+            Expr::Break(val, span) => {
+                Expr::Break(val.as_ref().map(|v| Box::new(self.transform_html_expr(v))), *span)
+            }
+
+            // Transform try? expressions
+            Expr::Try_(inner, span) => {
+                Expr::Try_(Box::new(self.transform_html_expr(inner)), *span)
+            }
+
+            // Transform send expressions
+            Expr::Send(pid, msg, span) => {
+                Expr::Send(
+                    Box::new(self.transform_html_expr(pid)),
+                    Box::new(self.transform_html_expr(msg)),
+                    *span,
+                )
+            }
+
+            // Transform spawn expressions
+            Expr::Spawn(kind, func, args, span) => {
+                let new_func = self.transform_html_expr(func);
+                let new_args: Vec<Expr> = args.iter().map(|a| self.transform_html_expr(a)).collect();
+                Expr::Spawn(*kind, Box::new(new_func), new_args, *span)
+            }
+
+            // Transform receive expressions
+            Expr::Receive(arms, timeout, span) => {
+                let new_arms: Vec<MatchArm> = arms.iter().map(|arm| {
+                    MatchArm {
+                        pattern: arm.pattern.clone(),
+                        guard: arm.guard.as_ref().map(|g| self.transform_html_expr(g)),
+                        body: self.transform_html_expr(&arm.body),
+                        span: arm.span,
+                    }
+                }).collect();
+                let new_timeout = timeout.as_ref().map(|(t, body)| {
+                    (Box::new(self.transform_html_expr(t)), Box::new(self.transform_html_expr(body)))
+                });
+                Expr::Receive(new_arms, new_timeout, *span)
+            }
+
+            // Transform do blocks
+            Expr::Do(stmts, span) => {
+                let new_stmts: Vec<DoStmt> = stmts.iter().map(|stmt| {
+                    match stmt {
+                        DoStmt::Expr(e) => DoStmt::Expr(self.transform_html_expr(e)),
+                        DoStmt::Bind(pat, e) => DoStmt::Bind(pat.clone(), self.transform_html_expr(e)),
+                    }
+                }).collect();
+                Expr::Do(new_stmts, *span)
+            }
+
+            // Transform quote expressions
+            Expr::Quote(inner, span) => {
+                Expr::Quote(Box::new(self.transform_html_expr(inner)), *span)
+            }
+
+            // Transform splice expressions
+            Expr::Splice(inner, span) => {
+                Expr::Splice(Box::new(self.transform_html_expr(inner)), *span)
+            }
+
+            // Transform string interpolations
+            Expr::String(lit, span) => {
+                match lit {
+                    StringLit::Plain(_) => expr.clone(),
+                    StringLit::Interpolated(parts) => {
+                        let new_parts: Vec<StringPart> = parts.iter().map(|p| {
+                            match p {
+                                StringPart::Lit(s) => StringPart::Lit(s.clone()),
+                                StringPart::Expr(e) => StringPart::Expr(self.transform_html_expr(e)),
+                            }
+                        }).collect();
+                        Expr::String(StringLit::Interpolated(new_parts), *span)
+                    }
+                }
+            }
+
+            // All other expressions pass through unchanged
+            _ => expr.clone(),
+        }
     }
 
 }
