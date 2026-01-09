@@ -252,16 +252,29 @@ impl ReplEngine {
                     return Err(format!("Compilation error: {}", e));
                 }
 
-                // Store newly defined functions in dynamic_functions for future evals
-                // Use the ACTUAL function name from the compiler (includes signature like "double/_")
+                // Store ONLY newly defined functions in dynamic_functions for future evals
+                // (not stdlib or previously eval'd functions that were pre-registered)
                 {
+                    let dyn_funcs_read = dynamic_functions.read();
+                    let stdlib_funcs = stdlib_functions.read();
+
+                    // Collect new functions (those not in stdlib or already in dynamic_functions)
+                    let new_funcs: Vec<_> = eval_compiler.get_all_functions()
+                        .into_iter()
+                        .filter(|(name, _)| {
+                            !name.starts_with("__") &&
+                            !stdlib_funcs.contains_key(name.as_str()) &&
+                            !dyn_funcs_read.contains_key(name.as_str())
+                        })
+                        .map(|(name, func)| (name.clone(), func.clone()))
+                        .collect();
+                    drop(dyn_funcs_read);
+                    drop(stdlib_funcs);
+
+                    // Now insert the new functions
                     let mut dyn_funcs = dynamic_functions.write();
-                    // Get all functions that were just compiled and add them
-                    for (name, func) in eval_compiler.get_all_functions() {
-                        // Skip internal functions like __eval_result__
-                        if !name.starts_with("__") {
-                            dyn_funcs.insert(name.clone(), func.clone());
-                        }
+                    for (name, func) in new_funcs {
+                        dyn_funcs.insert(name, func);
                     }
                 }
 
